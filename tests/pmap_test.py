@@ -33,6 +33,7 @@ import jax.numpy as jnp
 from jax import test_util as jtu
 from jax import tree_util
 from jax import lax
+from jax import mask
 from jax import random
 from jax.abstract_arrays import ShapedArray
 from jax.api import (pmap, soft_pmap, jit, vmap, jvp, grad, make_jaxpr,
@@ -1473,6 +1474,175 @@ class VmapOfPmapTest(jtu.JaxTestCase):
     self.assertAllClose(f(jax.pmap, jax.vmap)(x, x), y)
     self.assertAllClose(f(jax.vmap, jax.pmap)(x, x), y)
 
+
+class MaskOfPmapTest(jtu.JaxTestCase):
+
+  def testMaskOfPmap(self):
+    device_count = xla_bridge.device_count()
+    if device_count == 1:
+      raise SkipTest("test requires at least two devices")
+
+    rng = jtu.rand_default(self.rng())
+
+    @pmap
+    def fun(x):
+      return jnp.sum(x)
+
+    in_shapes = ['(b, n)']
+    out_shape = 'b'
+    padded_in_shapes = [(device_count, 3)]
+    logical_env = dict(b=device_count - 1, n=2)
+    with ignore_jit_of_pmap_warning():
+      jtu.check_masking(fun, in_shapes, out_shape, logical_env,
+                        padded_in_shapes, [np.float32], rng,
+                        skip_shapecheck=True)
+
+  def testMaskOfCollectives(self):
+    raise SkipTest("Not working yet - need avals with named axes for "
+                   "collective masking rules.")
+    device_count = xla_bridge.device_count()
+    if device_count == 1:
+      raise SkipTest("test requires at least two devices")
+
+    rng = jtu.rand_default(self.rng())
+
+    @partial(pmap, axis_name='i')
+    def fun(x):
+      t1 = lax.psum(x, 'i')
+      t2 = lax.pmax(x, 'i')
+      t3 = lax.pmin(x, 'i')
+      return jnp.sum(t1 + t2 + t3)
+
+    in_shapes = ['(b, n)']
+    out_shape = 'b'
+    padded_in_shapes = [(device_count, 3)]
+    logical_env = dict(b=device_count - 1, n=2)
+    with ignore_jit_of_pmap_warning():
+      jtu.check_masking(fun, in_shapes, out_shape, logical_env,
+                        padded_in_shapes, [np.float32], rng,
+                        skip_shapecheck=True)
+
+  def testPmapOfMaskCollectives(self):
+    device_count = xla_bridge.device_count()
+    if device_count == 1:
+      raise SkipTest("test requires at least two devices")
+
+    rng = jtu.rand_default(self.rng())
+
+    in_shapes = ['n']
+    out_shape = ''
+
+    def fun(x):
+      t1 = lax.psum(x, 'i')
+      t2 = lax.pmax(x, 'i')
+      t3 = lax.pmin(x, 'i')
+      return jnp.sum(t1 + t2 + t3)
+
+    @partial(pmap, axis_name='i')
+    def masked_fun(x_padded):
+      return mask(fun, in_shapes=in_shapes, out_shape=out_shape)(
+          [x_padded], logical_env)
+
+    padded_in_shapes = [(device_count, 3)]
+    padded_args = [rng(shape, float) for shape in padded_in_shapes]
+    logical_env = dict(n=2)
+
+    padded_out = masked_fun(*padded_args)
+    expected = pmap(fun, axis_name='i')(padded_args[0][:, :2])
+    self.assertAllClose(padded_out, expected)
+
+  def testMaskLastBatch(self):
+    device_count = xla_bridge.device_count()
+    if device_count == 1:
+      raise SkipTest("test requires at least two devices")
+
+    in_shapes = ['n']
+    out_shape = ''
+
+    @partial(pmap, axis_name='batch')
+    @partial(mask, in_shapes=in_shapes, out_shape=out_shape)
+    def fun(x):
+      return lax.psum(jnp.sum(x), 'batch')  # Sum out ragged dim first
+
+    args = [jnp.array([[1, 2], [5, 10]])]
+    logical_env = dict(n=jnp.array([2, 1])) # Batch size 3
+
+    padded_out = fun(args, logical_env)
+    self.assertAllClose(padded_out, jnp.array([8, 8]))
+
+    logical_env = dict(n=jnp.array([1, 0])) # Batch size 1
+    padded_out = fun(args, logical_env)
+    self.assertAllClose(padded_out, jnp.array([1, 1]))
+
+  def testRaggedPmapOfMaskCollectivesFailure(self):
+    device_count = xla_bridge.device_count()
+    if device_count == 1:
+      raise SkipTest("test requires at least two devices")
+
+    rng = jtu.rand_default(self.rng())
+
+    in_shapes = ['n']
+    out_shape = ''
+
+    @partial(pmap, axis_name='i')
+    @partial(mask, in_shapes=in_shapes, out_shape=out_shape)
+    def fun(x):
+      t1 = lax.psum(x, 'i')
+      t2 = lax.pmax(x, 'i')
+      t3 = lax.pmin(x, 'i')
+      return jnp.sum(t1 + t2 + t3)
+
+    padded_in_shapes = [(device_count, 3)]
+    padded_args = [rng(shape, float) for shape in padded_in_shapes]
+    logical_env = dict(n=jnp.minimum(jnp.arange(device_count, dtype=int), 3))
+
+    with self.assertRaisesRegex(
+        ValueError, "ragged batch.*not supported"):
+      fun(padded_args, logical_env)
+
+
+  def testMaskPostProcessMap(self):
+    device_count = xla_bridge.device_count()
+    if device_count == 1:
+      raise SkipTest("test requires at least two devices")
+
+    rng = jtu.rand_default(self.rng())
+
+    def fun(x):
+      @pmap
+      def fun2(y):
+        return jnp.sum(x + y) + x + y
+      return fun2(jnp.array([2., 3.]))
+
+    in_shapes = ['n']
+    out_shape = '(2, n)'
+    padded_in_shapes = [(3,)]
+    logical_env = dict(n=2)
+    with ignore_jit_of_pmap_warning():
+      jtu.check_masking(fun, in_shapes, out_shape, logical_env,
+                        padded_in_shapes, [np.float32], rng)
+
+  def testGradMaskPmap(self):
+    raise SkipTest("Mask of grad not working yet.")
+    device_count = xla_bridge.device_count()
+    if device_count == 1:
+      raise SkipTest("test requires at least two devices")
+
+    rng = jtu.rand_default(self.rng())
+
+    @pmap
+    def fun(x):
+      return jnp.sum(x ** 2)
+
+    fun_grad = grad(lambda x: jnp.sum(fun(x)))
+
+    in_shapes = ['n']
+    out_shape = 'n'
+    padded_in_shapes = [(2,)]
+    logical_env = dict(n=1)
+    with ignore_jit_of_pmap_warning():
+      jtu.check_masking(fun_grad, in_shapes, out_shape, logical_env,
+                        padded_in_shapes, [np.float32], rng)
 
 class PmapWithDevicesTest(jtu.JaxTestCase):
 

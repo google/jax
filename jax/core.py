@@ -1435,9 +1435,9 @@ axis_frame = None
 @no_type_check
 def omnistaging_enabler() -> None:
   global thread_local_state, call_bind, find_top_trace, initial_style_staging, \
-      new_master, reset_trace_state, extend_axis_env, axis_frame, \
-      axis_index, axis_index_p, new_base_master, eval_context, \
-      TraceStack, TraceState
+      new_master, reset_trace_state, extend_axis_env, extend_axis_env_poly, \
+      axis_frame, axis_frame_poly, axis_index, axis_index_p, new_base_master, \
+      eval_context, TraceStack, TraceState
   del initial_style_staging
 
   class TraceStack:
@@ -1472,17 +1472,20 @@ def omnistaging_enabler() -> None:
     trace_stack: TraceStack
     substack: List[Sublevel]
     axis_env: List[AxisEnvFrame]
+    axis_env_poly: List[AxisEnvFrame]
 
     def __init__(self) -> None:
       self.trace_stack = TraceStack()
       self.substack = [Sublevel(0)]
       self.axis_env = []
+      self.axis_env_poly = []
 
     def copy(self):
       new = self.__new__(TraceState)
       new.trace_stack = self.trace_stack.copy()
       new.substack = self.substack[:]
       new.axis_env = self.axis_env[:]
+      new.axis_env_poly = self.axis_env_poly[:]
       return new
 
   thread_local_state = ThreadLocalState()
@@ -1584,6 +1587,26 @@ def omnistaging_enabler() -> None:
 
   def axis_frame(axis_name):
     frames = thread_local_state.trace_state.axis_env
+    for frame in reversed(frames):
+      if frame.name == axis_name:
+        return frame
+    else:
+      raise NameError("unbound axis name: {}".format(axis_name))
+
+  @contextmanager
+  def extend_axis_env_poly(axis_name, size: int, tag: Any):
+    # TODO(j-towns): de-duplicate this code
+    frame = AxisEnvFrame(axis_name, size, tag)
+    thread_local_state.trace_state.axis_env_poly.append(frame)
+    try:
+      yield
+    finally:
+      frame_ = thread_local_state.trace_state.axis_env_poly.pop()
+      assert frame is frame_
+
+  def axis_frame_poly(axis_name):
+    # TODO(j-towns): de-duplicate this code
+    frames = thread_local_state.trace_state.axis_env_poly
     for frame in reversed(frames):
       if frame.name == axis_name:
         return frame

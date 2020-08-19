@@ -819,6 +819,11 @@ def _xla_call_jvp_update_params(params, nz_tangents):
   return dict(params, donated_invars=new_donated_invars)
 ad.call_param_updaters[xla_call_p] = _xla_call_jvp_update_params
 
+def _xla_call_masking_update_params(params, env_size):
+  donated_invars = params['donated_invars']
+  return dict(params, donated_invars=(False,) * env_size + donated_invars)
+masking.call_param_updaters[xla_call_p] = _xla_call_masking_update_params
+
 def _xla_call_transpose_update_params(params, undef_primals, nonzero_cts):
   donated_invars = params['donated_invars']
   donated_primals = [d for d, u in zip(donated_invars, undef_primals) if not u]

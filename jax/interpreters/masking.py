@@ -25,7 +25,7 @@ import numpy as np
 from .. import abstract_arrays
 from .. import core, dtypes
 from ..tree_util import tree_unflatten
-from ..core import Trace, Tracer
+from ..core import Trace, Tracer, mapped_aval, unmapped_aval
 from ..util import safe_map, safe_zip, unzip2, prod, wrap_name
 from ..abstract_arrays import ShapedArray
 from .. import linear_util as lu
@@ -101,11 +101,26 @@ def mask_subtrace(master, shapes, padded_env, *in_vals):
   out_vals, out_shapes = unzip2((t.val, t.polymorphic_shape) for t in out_tracers)
   yield out_vals, out_shapes
 
+@lu.transformation
+def poly_mapped_axis(axis_name, axis_size, *in_vals):
+  with core.extend_axis_env_poly(axis_name, axis_size, None):
+    outs = yield in_vals, {}
+  yield outs
+
+def mapped_mask_subtrace(f, master, axis_name, axis_size, shapes, padded_env):
+  # TODO(j-towns): if axis_size happens to be a constant then just use
+  # mask_subtrace here
+  return mask_subtrace(
+      poly_mapped_axis(f, axis_name, axis_size), master, shapes, padded_env)
+
 def eval_poly_shape(shape, values_dict):
   return tuple(eval_poly(dim, values_dict) for dim in shape)
 
 def eval_poly(poly, values_dict):
   return poly.evaluate(values_dict) if type(poly) is Poly else poly
+
+def eval_poly_logical(poly): return eval_poly(poly, shape_envs.logical)
+def eval_poly_padded(poly): return eval_poly(poly, shape_envs.padded)
 
 def _ensure_poly(p):
   if type(p) is Poly:
@@ -411,18 +426,17 @@ class MaskTrace(Trace):
     vals, shapes = unzip2((t.val, t.polymorphic_shape) for t in tracers)
     if not any(is_polymorphic(s) for s in shapes):
       return call_primitive.bind(f, *vals, **params)
-    else:
-      logical_env, padded_env = shape_envs
-      env_keys, padded_env_vals = unzip2(sorted(padded_env.items()))
-      logical_env_vals = tuple(logical_env[k] for k in env_keys)
-      # Make padded_env hashable
-      padded_env = (env_keys, padded_env_vals)
-      f, shapes_out = mask_subtrace(f, self.master, shapes, padded_env)
-      if 'donated_invars' in params:
-        params = dict(params, donated_invars=((False,) * len(logical_env_vals) +
-                                              params['donated_invars']))
-      vals_out = call_primitive.bind(f, *(logical_env_vals + vals), **params)
-      return [MaskTracer(self, v, s) for v, s in zip(vals_out, shapes_out())]
+    logical_env, padded_env = shape_envs
+    env_keys, padded_env_vals = unzip2(sorted(padded_env.items()))
+    logical_env_vals = tuple(logical_env[k] for k in env_keys)
+    # Make padded_env hashable
+    padded_env = (env_keys, padded_env_vals)
+    f, shapes_out = mask_subtrace(f, self.master, shapes, padded_env)
+    update_params = call_param_updaters.get(call_primitive)
+    if update_params:
+      params = update_params(params, len(env_keys))
+    vals_out = call_primitive.bind(f, *(logical_env_vals + vals), **params)
+    return [MaskTracer(self, v, s) for v, s in zip(vals_out, shapes_out())]
 
   def post_process_call(self, call_primitive, out_tracers, params):
     vals, shapes = unzip2((t.val, t.polymorphic_shape) for t in out_tracers)
@@ -430,6 +444,47 @@ class MaskTrace(Trace):
     def todo(vals):
       trace = MaskTrace(master, core.cur_sublevel())
       return map(partial(MaskTracer, trace), vals, shapes)
+    return vals, todo
+
+  def process_map(self, map_primitive, f, tracers, params):
+    vals, shapes = unzip2((t.val, t.polymorphic_shape) for t in tracers)
+    if not any(is_polymorphic(s) for s in shapes):
+      return map_primitive.bind(f, *vals, **params)
+    mapped_invars = params['mapped_invars']
+    logical_env, padded_env = shape_envs
+    poly_axis_size, = {s[0] for s, m in zip(shapes, mapped_invars) if m}
+    mapped_shape = lambda s: mapped_aval(
+        poly_axis_size, ShapedArray(s, None)).shape
+    unmapped_shape = lambda s: unmapped_aval(
+        poly_axis_size, ShapedArray(s, None)).shape
+    padded_axis_size = eval_poly(poly_axis_size, padded_env)
+    env_keys, padded_env_vals = unzip2(sorted(padded_env.items()))
+    params = dict(
+        params,
+        mapped_invars=((False,) * len(logical_env) + params['mapped_invars']),
+        axis_size=padded_axis_size)
+    shapes = tuple(
+        mapped_shape(s) if m else s for s, m in zip(shapes, mapped_invars))
+    logical_env_vals = tuple(logical_env[k] for k in env_keys)
+    padded_env = (env_keys, padded_env_vals)
+    f, shapes_out = mapped_mask_subtrace(f, self.master, params['axis_name'],
+                                         poly_axis_size, shapes, padded_env)
+    update_params = call_param_updaters.get(map_primitive)
+    if update_params:
+      params = update_params(params, len(env_keys))
+    vals_out = map_primitive.bind(f, *(logical_env_vals + vals), **params)
+    shapes_out = [unmapped_shape(s) for s in shapes_out()]
+    return [MaskTracer(self, v, s) for v, s in zip(vals_out, shapes_out)]
+
+  def post_process_map(self, map_primitive, out_tracers, params):
+    vals, shapes = unzip2((t.val, t.polymorphic_shape) for t in out_tracers)
+    unmapped_shape = lambda s: unmapped_aval(
+        params['axis_size'], ShapedArray(s, None)).shape
+    master = self.master
+    def todo(vals):
+      trace = MaskTrace(master, core.cur_sublevel())
+      return [MaskTracer(trace, val, unmapped_shape(shape))
+              for val, shape in zip(vals, shapes)]
     return vals, todo
 
 class UniqueId:
@@ -476,3 +531,5 @@ def check_shapes(specs, spec_tree, shapes, tree, message_prefix="Output"):
     specs = tree_unflatten(spec_tree, specs)
     shapes = tree_unflatten(tree, shapes)
     raise ShapeError(f"{message_prefix} shapes should be {specs} but are {shapes}.")
+
+call_param_updaters: Dict[core.Primitive, Callable] = {}

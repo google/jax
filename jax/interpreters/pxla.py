@@ -56,6 +56,7 @@ from . import batching
 from . import partial_eval as pe
 from . import xla
 from . import ad
+from . import masking
 
 
 xops = xc.ops
@@ -1121,6 +1122,8 @@ pe.staged_out_calls.add(xla_pmap_p)
 # Set param update handlers to update `donated_invars` just like xla_call_p
 pe.call_param_updaters[xla_pmap_p] = pe.call_param_updaters[xla.xla_call_p]
 ad.call_param_updaters[xla_pmap_p] = ad.call_param_updaters[xla.xla_call_p]
+masking.call_param_updaters[xla_pmap_p] = masking.call_param_updaters[
+    xla.xla_call_p]
 ad.call_transpose_param_updaters[xla_pmap_p] = \
     ad.call_transpose_param_updaters[xla.xla_call_p]
 

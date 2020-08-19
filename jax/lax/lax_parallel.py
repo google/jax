@@ -23,17 +23,20 @@ from jax import core
 from jax import dtypes
 from jax import tree_util
 from jax.lax import lax
-from jax.abstract_arrays import ShapedArray, raise_to_shaped
+from jax.abstract_arrays import ShapedArray, raise_to_shaped, ConcreteArray
 from jax.interpreters import ad
 from jax.interpreters import xla
 from jax.interpreters import pxla
 from jax.interpreters import batching
-from jax.util import partial, unzip2, prod
+from jax.interpreters import masking
+from jax.util import partial, unzip2, prod, safe_map
 from jax.lib import xla_client as xc
 from jax.config import config
 from jax.numpy import lax_numpy
 
 from jax.interpreters.pxla import axis_index
+
+map = safe_map
 
 xops = xc.ops
 
@@ -412,6 +415,33 @@ def _psum_transpose_rule(cts, axis_name, axis_index_groups):
                                axis_index_groups=axis_index_groups)
   return tree_util.tree_unflatten(treedef, nonzero_in_cts)
 
+def _allreduce_masking_rule(prim, identity, args, logical_shapes, axis_name,
+                            axis_index_groups):
+  # TODO(j-towns): refine this check once we have named axes in avals
+  if not all(isinstance(core.get_aval(d), ConcreteArray)
+             for shape in logical_shapes for d in shape):
+    raise ValueError('abstract logical shape detected, you may be attempting '
+                     'to perform a parallel collective over a ragged batch, '
+                     'which is not supported.')
+  if axis_index_groups is not None:
+    raise NotImplementedError('Masking rule not implemented for primitive {} '
+                              'with axis_index_groups'.format(prim))
+  if isinstance(axis_name, tuple):
+    raise NotImplementedError('Masking rule not yet implemented for primitive '
+                              '{} with tuple axis_name'.format(prim))
+  try:
+    _, axis_size_poly = core.axis_frame_poly(axis_name)
+  except NameError:
+    return prim.bind(*args, axis_name=axis_name,
+                     axis_index_groups=axis_index_groups)
+  axis_size_logical = masking.eval_poly_logical(axis_size_poly)
+  _, axis_size_padded = core.axis_frame(axis_name)
+  assert axis_size_padded == masking.eval_poly_padded(axis_size_poly)
+  mask = lambda a: lax.select(axis_index(axis_name) < axis_size_logical, a,
+                              lax.full_like(a, identity))
+  return prim.bind(*map(mask, args), axis_name=axis_name,
+                   axis_index_groups=axis_index_groups)
+
 psum_p = core.Primitive('psum')
 psum_p.multiple_results = True
 psum_p.def_impl(partial(pxla.apply_parallel_primitive, psum_p))
@@ -429,7 +459,7 @@ batching.collective_rules[psum_p] = \
           psum_p,
           lambda v, d: v.sum(d),
           lambda v, axis_size: axis_size * v)
-
+masking.masking_rules[psum_p] = partial(_allreduce_masking_rule, psum_p, 0)
 
 pmax_p = core.Primitive('pmax')
 pmax_p.def_abstract_eval(lambda x, **params: raise_to_shaped(x))
@@ -442,7 +472,7 @@ batching.collective_rules[pmax_p] = \
           pmax_p,
           lambda v, d: v.max(d),
           lambda v, axis_size: v)
-
+masking.masking_rules[pmax_p] = partial(_allreduce_masking_rule, pmax_p, -np.inf)
 
 pmin_p = core.Primitive('pmin')
 pmin_p.def_abstract_eval(lambda x, **params: raise_to_shaped(x))
@@ -455,7 +485,7 @@ batching.collective_rules[pmin_p] = \
           pmin_p,
           lambda v, d: v.min(d),
           lambda v, axis_size: v)
-
+masking.masking_rules[pmin_p] = partial(_allreduce_masking_rule, pmin_p, np.inf)
 
 def _ppermute_translation_rule(c, x, *, axis_name, axis_env, perm, platform):
   replica_groups = _replica_groups(axis_env, axis_name, None)

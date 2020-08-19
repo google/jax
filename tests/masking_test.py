@@ -22,17 +22,16 @@ from absl.testing import absltest, parameterized
 from jax import lax
 from jax import core
 from jax import test_util as jtu
+from jax.test_util import check_masking
 from jax.config import config
 from jax.numpy.lax_numpy import _polymorphic_slice_indices
 from jax.util import safe_map, safe_zip
-from jax.tree_util import tree_flatten
 
 import jax.numpy as jnp
 from jax.scipy.special import expit
 from jax import mask, vmap, jit, grad, shapecheck, make_jaxpr
 from jax.interpreters.masking import (
-    shape_as_value, ShapeError, parse_spec, Poly, Mon, finalize_spec,
-    eval_poly_shape, remap_ids, UniqueIds)
+    shape_as_value, ShapeError, parse_spec, Poly, Mon, remap_ids, UniqueIds)
 
 config.parse_flags_with_absl()
 
@@ -119,6 +118,7 @@ class PolyTest(jtu.JaxTestCase):
     n = Poly({Mon({'n': 1}): 1})
     assert -1 - n == -n - 1
 
+
 class MaskingTest(jtu.JaxTestCase):
   def test_sum(self):
     @partial(mask, in_shapes=['n'], out_shape='')
@@ -142,41 +142,9 @@ class MaskingTest(jtu.JaxTestCase):
     expected = np.array([0, 1, 2, 3, 4])
     self.assertAllClose(ans, expected, check_dtypes=False)
 
-  def check(self, fun, in_shapes, out_shape, logical_env, padded_in_shapes,
-            dtypes, rng, rtol=None, atol=None):
-    shapecheck(in_shapes, out_shape)(fun)
-    masked_fun = mask(fun, in_shapes, out_shape)
-    padded_args = [rng(shape, dtype)
-                   for shape, dtype in zip(padded_in_shapes, dtypes)]
-    padded_outs, outs_tree = tree_flatten(masked_fun(padded_args, logical_env))
-
-    out_specs, _ = tree_flatten(out_shape)
-    out_specs = map(parse_spec, out_specs)
-    out_specs = map(finalize_spec, out_specs, map(np.shape, padded_outs))
-    logical_out_shapes = [eval_poly_shape(s, logical_env)
-                          for s in out_specs]
-    logical_out_slices = [tuple(map(slice, s)) for s in logical_out_shapes]
-    logical_outs = [o[s] for o, s in zip(padded_outs, logical_out_slices)]
-
-    in_specs = map(parse_spec, in_shapes)
-    in_specs = map(finalize_spec, in_specs, padded_in_shapes)
-    logical_in_shapes = [eval_poly_shape(s, logical_env)
-                         for s in in_specs]
-    logical_in_slices = [tuple(map(slice, s)) for s in logical_in_shapes]
-    logical_args = [a[s] for a, s in zip(padded_args, logical_in_slices)]
-    logical_outs_expected, logical_outs_tree = tree_flatten(fun(*logical_args))
-    assert outs_tree == logical_outs_tree
-    self.assertAllClose(logical_outs, logical_outs_expected, check_dtypes=True,
-                        atol=atol, rtol=rtol)
-
-    # Check that abstract evaluation works
-    padded_outs_jit, _ = tree_flatten(jit(masked_fun)(padded_args, logical_env))
-    self.assertAllClose(padded_outs_jit, padded_outs, check_dtypes=True,
-                        atol=atol, rtol=rtol)
-
   def test_add(self):
-    self.check(lax.add, ['n', ''], 'n', {'n': 3}, [(4,), ()], ['float_', 'float_'],
-               jtu.rand_default(self.rng()))
+    check_masking(lax.add, ['n', ''], 'n', {'n': 3}, [(4,), ()],
+                  ['float_', 'float_'], jtu.rand_default(self.rng()))
     addvecs = mask(lax.add, in_shapes=['n', 'n'], out_shape='n')
 
     x = jnp.array([3, 1, 4, 1, 5, 9])
@@ -237,9 +205,8 @@ class MaskingTest(jtu.JaxTestCase):
   def test_mean(self):
     # TODO Shapecheck fails - shape_as_value can't deal with abstract eval yet
     raise SkipTest
-    self.check(lambda x: jnp.sum(x) / shape_as_value(x.shape)[0], ['n'], '',
-               {'n': 3}, [(4,)], ['float_'],
-               jtu.rand_default(self.rng()))
+    check_masking(lambda x: jnp.sum(x) / shape_as_value(x.shape)[0], ['n'], '',
+                  {'n': 3}, [(4,)], ['float_'], jtu.rand_default(self.rng()))
 
   def test_arithmetic(self):
     @partial(mask, in_shapes=['(n, m)', 'm'], out_shape='(n, m)')
@@ -383,17 +350,17 @@ class MaskingTest(jtu.JaxTestCase):
       rtol=2e-2 if jtu.device_under_test() == "tpu" else 1e-5)
 
   def test_concatenate(self):
-    self.check(lambda x, y, z: lax.concatenate([x, y, z], 0),
-               ['n', 'm', 'n'], 'm + 2 * n', {'n': 2, 'm': 3},
-               [(4,), (3,), (4,)], ['float_', 'float_', 'float_'],
-               jtu.rand_default(self.rng()))
+    check_masking(lambda x, y, z: lax.concatenate([x, y, z], 0),
+                  ['n', 'm', 'n'], 'm + 2 * n', {'n': 2, 'm': 3},
+                  [(4,), (3,), (4,)], ['float_', 'float_', 'float_'],
+                  jtu.rand_default(self.rng()))
 
   def test_dot(self):
-    self.check(lax.dot, ['(m, k)', '(k, n)'], '(m, n)',
-               dict(m=2, k=3, n=4), [(4, 5), (5, 7)], ['float_', 'float_'],
-               jtu.rand_default(self.rng()))
-    self.check(lax.dot, ['(m, n)', 'n'], 'm', dict(m=2, n=3), [(4, 5), (5,)],
-               ['float_', 'float_'], jtu.rand_default(self.rng()))
+    check_masking(lax.dot, ['(m, k)', '(k, n)'], '(m, n)', dict(m=2, k=3, n=4),
+                  [(4, 5), (5, 7)], ['float_', 'float_'],
+                  jtu.rand_default(self.rng()))
+    check_masking(lax.dot, ['(m, n)', 'n'], 'm', dict(m=2, n=3), [(4, 5), (5,)],
+                  ['float_', 'float_'], jtu.rand_default(self.rng()))
 
   # TODO(mattjj,j-towns): fix test failure and reenable.
   @jtu.skip_on_devices("tpu")
@@ -413,7 +380,6 @@ class MaskingTest(jtu.JaxTestCase):
     assert np.all(np.array([0, 1, 0, 1]) == out[:4])
 
   def test_jit2(self):
-    raise SkipTest("broken by omnistaging")  # TODO(mattjj): update
     # Trigger MaskTrace.post_process_call
     def fun(x):
       @jit
@@ -421,8 +387,8 @@ class MaskingTest(jtu.JaxTestCase):
         return lax.concatenate([x, y], 0)
       return concat(jnp.array([1., 2., 3.], dtype='float32'))
 
-    self.check(fun, ['n'], '(n+3,)', {'n': 2}, [(3,)], ['float32'],
-               jtu.rand_default(self.rng()))
+    check_masking(fun, ['n'], '(n+3,)', {'n': 2}, [(3,)], ['float32'],
+          jtu.rand_default(self.rng()))
 
   @parameterized.named_parameters({
       'testcase_name': "padding_config={}_shapes={}".format(padding_config,
@@ -448,9 +414,8 @@ class MaskingTest(jtu.JaxTestCase):
       linear_coeff = padding_config_[2] + 1
       const_coeff = sum(padding_config_[:2]) - padding_config_[2]
       out_shape = str(linear_coeff) + ' * h + ' + str(const_coeff)
-      self.check(pad, ['h'], out_shape, dict(h=shape[0]),
-                 [tuple(np.add(shape, 1))], ['float_'],
-                 jtu.rand_default(self.rng()))
+      check_masking(pad, ['h'], out_shape, dict(h=shape[0]),
+            [tuple(np.add(shape, 1))], ['float_'], jtu.rand_default(self.rng()))
 
 
   # TODO(mattjj,j-towns): fix test failure and reenable.
@@ -460,8 +425,8 @@ class MaskingTest(jtu.JaxTestCase):
     def numpy_pad(x):
       return jnp.pad(x, (0, 1), constant_values=5.)
 
-    self.check(numpy_pad, ['n'], 'n + 1', dict(n=2), [(3,)], ['float_'],
-               jtu.rand_default(self.rng()))
+    check_masking(numpy_pad, ['n'], 'n + 1', dict(n=2), [(3,)], ['float_'],
+          jtu.rand_default(self.rng()))
 
   @parameterized.named_parameters(jtu.cases_from_list(
       {'testcase_name': "padding={}_lhs_dilation={}_"
@@ -504,11 +469,11 @@ class MaskingTest(jtu.JaxTestCase):
 
     logical_env = dict(n=3, c=2, h=4, w=5, o=6)
 
-    self.check(conv, [lhs_shape, rhs_shape], out_shape,
-               logical_env, [tuple(np.take([4, 3, 6, 7], lhs_perm)),
-                             tuple(np.take([7, 3, 2, 3], rhs_perm))],
-               ['float_', 'float_'], jtu.rand_default(self.rng()), rtol=1e-4,
-               atol=1e-4)
+    check_masking(conv, [lhs_shape, rhs_shape], out_shape,
+          logical_env, [tuple(np.take([4, 3, 6, 7], lhs_perm)),
+                        tuple(np.take([7, 3, 2, 3], rhs_perm))],
+          ['float_', 'float_'], jtu.rand_default(self.rng()), rtol=1e-4,
+          atol=1e-4)
 
   @parameterized.named_parameters(jtu.cases_from_list(
       {'testcase_name': "padding={}_lhs_dilation={}_"
@@ -553,26 +518,26 @@ class MaskingTest(jtu.JaxTestCase):
 
     logical_env = dict(n=3, c=2, h=4, w=5, o=6)
 
-    self.check(conv, [lhs_shape, rhs_shape], out_shape,
-               logical_env, [lhs_shape_padded,
-                             tuple(np.take([7, 3, 2, 3], rhs_perm))],
-               ['float_', 'float_'], jtu.rand_default(self.rng()), rtol=1e-4,
-               atol=1e-4)
+    check_masking(conv, [lhs_shape, rhs_shape], out_shape,
+          logical_env, [lhs_shape_padded,
+                        tuple(np.take([7, 3, 2, 3], rhs_perm))],
+          ['float_', 'float_'], jtu.rand_default(self.rng()), rtol=1e-4,
+          atol=1e-4)
 
   def test_indexing(self):
     # Requires gather support
     raise SkipTest
-    self.check(lambda x: x[0], ['n'], '', {'n': 2}, [(3,)], ['float_'],
-               jtu.rand_default(self.rng()))
-    self.check(lambda x: x[-1], ['n'], '', {'n': 2}, [(3,)], ['float_'],
-               jtu.rand_default(self.rng()))
+    check_masking(lambda x: x[0], ['n'], '', {'n': 2}, [(3,)], ['float_'],
+          jtu.rand_default(self.rng()))
+    check_masking(lambda x: x[-1], ['n'], '', {'n': 2}, [(3,)], ['float_'],
+          jtu.rand_default(self.rng()))
 
   def test_slicing(self):
     raise SkipTest
     # Requires gather support
-    self.check(lambda x: x[1:], ['n'], 'n+-1', {'n': 2}, [(3,)], ['float_'])
-    self.check(lambda x: x[:-1], ['n'], 'n+-1', {'n': 2}, [(3,)], ['float_'])
-    self.check(lambda x: x[..., -1], ['(n,3)'], 'n', {'n': 2}, [(3, 4)], ['float_'])
+    check_masking(lambda x: x[1:], ['n'], 'n+-1', {'n': 2}, [(3,)], ['float_'])
+    check_masking(lambda x: x[:-1], ['n'], 'n+-1', {'n': 2}, [(3,)], ['float_'])
+    check_masking(lambda x: x[..., -1], ['(n,3)'], 'n', {'n': 2}, [(3, 4)], ['float_'])
 
   def test_rev(self):
     @shapecheck(['n'], 'n+-1')
@@ -584,30 +549,30 @@ class MaskingTest(jtu.JaxTestCase):
       return x[-2::-1]
 
     # TODO implement masking for rev_p:
-    # self.check(lambda x: x[:0:-1], ['n'], dict(n=jnp.array([2, 3])), 'n+-1')
-    # self.check(lambda x: x[-2::-1], ['n'], dict(n=jnp.array([2, 3])), 'n+-1')
+    # check_masking(lambda x: x[:0:-1], ['n'], dict(n=jnp.array([2, 3])), 'n+-1')
+    # check_masking(lambda x: x[-2::-1], ['n'], dict(n=jnp.array([2, 3])), 'n+-1')
 
   def test_lax_slice(self):
-    self.check(lambda x: lax.slice(x, (1,), (x.shape[0],)), ['n'], 'n+-1',
-               {'n': 2}, [(3,)], ['float_'], jtu.rand_default(self.rng()))
-    # TODO: self.check(lambda x: lax.slice(x, (x.shape[0] // 2,), (x.shape[0],)), ['2*n'], dict(n=jnp.array([2, 3])), 'n')
+    check_masking(lambda x: lax.slice(x, (1,), (x.shape[0],)), ['n'], 'n+-1',
+          {'n': 2}, [(3,)], ['float_'], jtu.rand_default(self.rng()))
+    # TODO: check_masking(lambda x: lax.slice(x, (x.shape[0] // 2,), (x.shape[0],)), ['2*n'], dict(n=jnp.array([2, 3])), 'n')
 
   def test_reshape(self):
     raise SkipTest
 
   def test_transpose(self):
-    self.check(lambda x: lax.transpose(x, (1, 0, 2)),
-               ['(a, b, c)'], 'b, a, c', dict(a=2, b=3, c=4), [(3, 4, 5)],
-               ['float_'], jtu.rand_default(self.rng()))
+    check_masking(lambda x: lax.transpose(x, (1, 0, 2)),
+          ['(a, b, c)'], 'b, a, c', dict(a=2, b=3, c=4), [(3, 4, 5)],
+          ['float_'], jtu.rand_default(self.rng()))
 
   def test_sum_2d(self):
-    self.check(jnp.sum, ['(m, n)'], '', dict(m=2, n=3), [(3, 4)], ['float_'],
-               jtu.rand_default(self.rng()))
+    check_masking(jnp.sum, ['(m, n)'], '', dict(m=2, n=3), [(3, 4)], ['float_'],
+          jtu.rand_default(self.rng()))
 
   def test_expit(self):
     raise SkipTest("custom_jvp doesn't work with masking yet")
-    self.check(expit, ['n'], 'n', dict(n=3), [(4,)], ['float_'],
-               jtu.rand_default(self.rng()))
+    check_masking(expit, ['n'], 'n', dict(n=3), [(4,)], ['float_'],
+          jtu.rand_default(self.rng()))
 
   @parameterized.named_parameters(jtu.cases_from_list(
     {"testcase_name": "_{}".format(dtype), "dtype": np.dtype(dtype).name}
@@ -624,26 +589,26 @@ class MaskingTest(jtu.JaxTestCase):
       key1, key2 = key
       return key1
 
-    self.check(d, ['2'], '', {}, [(2,)], ['int_'], jtu.rand_int(self.rng(), 0, 10))
+    check_masking(d, ['2'], '', {}, [(2,)], ['int_'], jtu.rand_int(self.rng(), 0, 10))
 
   # TODO(mattjj,j-towns): fix test failure and reenable.
   @jtu.skip_on_devices("tpu")
   def test_where(self):
-    self.check(lambda x: jnp.where(x < 0, x, 0. * x), ['n'], 'n',
-               {'n': 2}, [(3,)], ['float_'], jtu.rand_default(self.rng()))
+    check_masking(lambda x: jnp.where(x < 0, x, 0. * x), ['n'], 'n',
+          {'n': 2}, [(3,)], ['float_'], jtu.rand_default(self.rng()))
 
   def test_split(self):
-    self.check(lambda x: jnp.split(x, 2), ['2*n'], ['n', 'n'], dict(n=4),
-               [(8,)], ['float_'], jtu.rand_default(self.rng()))
-    self.check(lambda x: jnp.split(x, [10]), ['n'], ['10', 'n+-10'], dict(n=12),
-               [(12,)], ['float_'], jtu.rand_default(self.rng()))
+    check_masking(lambda x: jnp.split(x, 2), ['2*n'], ['n', 'n'], dict(n=4),
+          [(8,)], ['float_'], jtu.rand_default(self.rng()))
+    check_masking(lambda x: jnp.split(x, [10]), ['n'], ['10', 'n+-10'], dict(n=12),
+          [(12,)], ['float_'], jtu.rand_default(self.rng()))
 
   @parameterized.named_parameters(jtu.cases_from_list([{
     'testcase_name': "operator={}".format(operator.__name__), 'operator': operator}
     for operator in [jnp.sum, jnp.prod, jnp.max, jnp.min]]))
   def test_reduce(self, operator):
-    self.check(operator, ['(m, n)'], '', {'m': 3, 'n': 4}, [(4, 5)], ['float_'],
-               jtu.rand_default(self.rng()))
+    check_masking(operator, ['(m, n)'], '', {'m': 3, 'n': 4}, [(4, 5)],
+                  ['float_'], jtu.rand_default(self.rng()))
 
   def test_output_shape_error(self):
     def thunk():

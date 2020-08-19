@@ -34,9 +34,11 @@ from . import dtypes as _dtypes
 from . import lax
 from .config import flags, bool_env
 from .util import partial, prod
-from .tree_util import tree_multimap, tree_all, tree_map, tree_reduce
+from .tree_util import (tree_multimap, tree_all, tree_map, tree_reduce,
+                        tree_flatten)
 from .lib import xla_bridge
 from .interpreters import xla
+from .interpreters import masking
 
 
 FLAGS = flags.FLAGS
@@ -299,6 +301,39 @@ def check_grads(f, args, order,
 
   _check_grads(f, args, order)
 
+def check_masking(fun, in_shapes, out_shape, logical_env, padded_in_shapes,
+                  dtypes, rng, rtol=None, atol=None, skip_shapecheck=False):
+  if not skip_shapecheck:
+    api.shapecheck(in_shapes, out_shape)(fun)
+  masked_fun = api.mask(fun, in_shapes, out_shape)
+  padded_args = [rng(shape, dtype)
+                 for shape, dtype in zip(padded_in_shapes, dtypes)]
+  padded_outs, outs_tree = tree_flatten(masked_fun(padded_args, logical_env))
+
+  out_specs, _ = tree_flatten(out_shape)
+  out_specs = map(masking.parse_spec, out_specs)
+  out_specs = map(masking.finalize_spec, out_specs, map(np.shape, padded_outs))
+  logical_out_shapes = [masking.eval_poly_shape(s, logical_env)
+                        for s in out_specs]
+  logical_out_slices = [tuple(map(slice, s)) for s in logical_out_shapes]
+  logical_outs = [o[s] for o, s in zip(padded_outs, logical_out_slices)]
+
+  in_specs = map(masking.parse_spec, in_shapes)
+  in_specs = map(masking.finalize_spec, in_specs, padded_in_shapes)
+  logical_in_shapes = [masking.eval_poly_shape(s, logical_env)
+                       for s in in_specs]
+  logical_in_slices = [tuple(map(slice, s)) for s in logical_in_shapes]
+  logical_args = [a[s] for a, s in zip(padded_args, logical_in_slices)]
+  logical_outs_expected, logical_outs_tree = tree_flatten(fun(*logical_args))
+  assert outs_tree == logical_outs_tree
+  check_close(logical_outs, logical_outs_expected, atol=atol, rtol=rtol)
+  _check_dtypes_match(logical_outs, logical_outs_expected)
+
+  # Check that abstract evaluation works
+  padded_outs_jit, _ = tree_flatten(
+      api.jit(masked_fun)(padded_args, logical_env))
+  check_close(padded_outs_jit, padded_outs, atol=atol, rtol=rtol)
+  _check_dtypes_match(padded_outs_jit, padded_outs)
 
 @contextmanager
 def count_primitive_compiles():
