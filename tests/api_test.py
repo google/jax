@@ -3809,14 +3809,11 @@ class CustomVJPTest(jtu.JaxTestCase):
     self.assertRaisesRegex(
         TypeError,
         re.escape(
-            "Custom VJP rule must produce an output with the same container "
+            "Custom VJP bwd function must produce an output with the same container "
             "(pytree) structure as the args tuple of the primal function, "
             "and in particular must produce a tuple of length equal to the "
-            "number of arguments to the primal function, but got VJP output "
-            "structure {} for primal input structure {}.".format(
-                tree_util.tree_structure((1, 1)),
-                tree_util.tree_structure((1,)))
-        ),
+            "number of arguments to the primal function, but got bwd output "
+            "type <class 'tuple'> of length 2 for 1 inputs"),
         lambda: api.grad(f)(2.))
 
   def test_issue2511(self):
@@ -4048,7 +4045,7 @@ class CustomVJPTest(jtu.JaxTestCase):
       # we need a defined (non-float0) tangent to trigger the rule
       return x, (2., 1)
     def f_rev(*_):
-      return (2., 1)
+      return (2., np.zeros((), dtype=float0))
     f.defvjp(f_fwd, f_rev)
 
     x = 2.
@@ -4063,7 +4060,7 @@ class CustomVJPTest(jtu.JaxTestCase):
     def f_fwd(x):
       return x, (2., x)
     def f_rev(*_):
-      return ((2., 1),)
+      return ((2., np.zeros((), dtype=float0)),)
     f.defvjp(f_fwd, f_rev)
 
     def foo(x, y):

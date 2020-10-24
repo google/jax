@@ -20,7 +20,8 @@ from typing import Callable, Sequence, Tuple, Any
 
 from . import core
 from . import linear_util as lu
-from .tree_util import tree_flatten, tree_unflatten, tree_map, tree_multimap
+from .tree_util import (tree_flatten, tree_unflatten, tree_map, tree_multimap,
+                        treedef_children)
 from .util import safe_zip, safe_map, split_list
 from .api_util import flatten_fun_nokwargs, argnums_partial, wrap_hashably
 from .abstract_arrays import raise_to_shaped
@@ -526,28 +527,56 @@ def _flatten_bwd(in_tree, in_avals, out_trees, *args):
   py_res = tree_unflatten(res_tree, res)
   py_cts_out = tree_unflatten(out_tree, cts_out)
   py_cts_in = yield (py_res, py_cts_out), {}
+  if not isinstance(py_cts_in, (list, tuple)):
+    msg = ("Custom VJP bwd function must produce an output with the same "
+           "container (pytree) structure as the args tuple of the primal "
+           "function, and in particular must produce a tuple of length equal "
+           "to the number of arguments to the primal function, but got bwd "
+           f"output of type {type(py_cts_in)} for "
+           f"{len(treedef_children(in_tree))} inputs.")
+    raise TypeError(msg)
+  subtrees = treedef_children(in_tree)
+  if len(py_cts_in) != len(subtrees):
+    msg = ("Custom VJP bwd function must produce an output with the same "
+           "container (pytree) structure as the args tuple of the primal "
+           "function, and in particular must produce a tuple of length equal "
+           "to the number of arguments to the primal function, but got bwd "
+           f"output type {type(py_cts_in)} of length {len(py_cts_in)} for "
+           f"{len(treedef_children(in_tree))} inputs.")
+    raise TypeError(msg)
   # For each None in py_cts_in, indicating an argument for which the rule
   # produces no cotangent, we replace it with a pytree with the structure of the
-  # corresponding subtree of in_tree and with leaves of a non-pytree sentinel
-  # object, to be replaced with Nones in the final returned result.
-  zero = object()  # non-pytree sentinel to replace Nones in py_cts_in
-  py_cts_in_ = tuple(zero if ct is None else ct for ct in py_cts_in)
-  dummy = tree_unflatten(in_tree, [object()] * in_tree.num_leaves)
-  cts_in_flat = []
-  append_cts = lambda x, d: cts_in_flat.extend([x] * len(tree_flatten(d)[0]))
-  try:
-    tree_multimap(append_cts, py_cts_in_, dummy)
-  except ValueError:
-    _, in_tree2 = tree_flatten(py_cts_in)
-    msg = ("Custom VJP rule must produce an output with the same container "
-           "(pytree) structure as the args tuple of the primal function, "
-           "and in particular must produce a tuple of length equal to the "
-           "number of arguments to the primal function, but got VJP output "
-           "structure {} for primal input structure {}.")
-    raise TypeError(msg.format(in_tree2, in_tree)) from None
-  yield [zeros_like_aval(aval.at_least_vspace()) if ct is zero else ct
-         for aval, ct in zip(in_avals, cts_in_flat)]
-
+  # corresponding subtree of in_tree and with leaves of zeros matching in_avals.
+  in_avals_ = split_list(in_avals, [treedef.num_leaves for treedef in subtrees[:-1]])
+  result = []
+  for i, (ct_tree, expected_treedef, avals) in enumerate(zip(py_cts_in, subtrees, in_avals_)):
+    if ct_tree is None:
+      result.extend([zeros_like_aval(aval.at_least_vspace()) for aval in avals])
+    else:
+      cts_flat, ct_treedef = tree_flatten(ct_tree)
+      if ct_treedef != expected_treedef:
+        msg = ("Custom VJP bwd function must produce an output with the same "
+               "container (pytree) structure as the args tuple of the primal "
+               f"function, but for input at positional index {i} the bwd "
+               "function produced a tree structure of\n"
+               f"{ct_treedef}\n"
+               "where the corresponding primal input tree structure was\n"
+               f"{expected_treedef}")
+        raise TypeError(msg)
+      pair = next(((ct, aval) for (ct, aval) in zip(cts_flat, avals)
+                   if not core.typecheck(aval.at_least_vspace(), ct)), None)
+      if pair is not None:
+        ct, aval = pair
+        ct_aval = core.raise_to_shaped(core.get_aval(ct))
+        msg = ("Custom VJP bwd function must produce an output with "
+               "types corresponding to the tangent types of the primal "
+               "function's inputs, but got type "
+               f"{ct_aval.str_short()} where "
+               f"{aval.at_least_vspace().str_short()} was expected.")
+        raise TypeError(msg) from None
+      result.extend(cts_flat)
+  assert len(result) == in_tree.num_leaves
+  yield result
 
 class CustomVJPCallPrimitive(core.CallPrimitive):
   initial_style: core.Primitive
