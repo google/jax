@@ -276,7 +276,7 @@ def eigh(a, UPLO=None, symmetrize_input=True):
     raise ValueError(msg)
 
   a = _promote_arg_dtypes(jnp.asarray(a))
-  v, w = lax_linalg.eigh(a, lower=lower, symmetrize_input=symmetrize_input)
+  w, v = lax_linalg.eigh(a, lower=lower, symmetrize_input=symmetrize_input)
   return w, v
 
 

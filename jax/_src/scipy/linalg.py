@@ -87,7 +87,7 @@ def eigh(a, b=None, lower=True, eigvals_only=False, overwrite_a=False,
         "Only the eigvals=None case of eigh is implemented.")
 
   a = np_linalg._promote_arg_dtypes(jnp.asarray(a))
-  v, w = lax_linalg.eigh(a, lower=lower)
+  w, v = lax_linalg.eigh(a, lower=lower)
 
   if eigvals_only:
     return w

@@ -43,6 +43,8 @@ PLEASE REMEMBER TO CHANGE THE '..master' WITH AN ACTUAL TAG in GITHUB LINK.
     of array arguments: {func}`jax.numpy.pad`, :func`jax.numpy.ravel`,
     {func}`jax.numpy.repeat`, {func}`jax.numpy.reshape`.
     In general, {mod}`jax.numpy` functions should be used with scalars or array arguments.
+  * Reversed the order of {func}`jax.lax.linalg.eigh` and underlying primitives to be
+    consistent with documentation and `numpy` and `scipy` wrappers.
 
 ## jaxlib 0.1.62 (Unreleased)
 
@@ -569,7 +571,7 @@ PLEASE REMEMBER TO CHANGE THE '..master' WITH AN ACTUAL TAG in GITHUB LINK.
   >   > * Forward-mode automatic differentiation (`jvp`) of while loop
   >   ({jax-issue}`#1980`)
   > * New NumPy and SciPy functions:
-  >   
+  >
   >   * {py:func}`jax.numpy.fft.fft2`
   >   * {py:func}`jax.numpy.fft.ifft2`
   >   * {py:func}`jax.numpy.fft.rfft`

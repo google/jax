@@ -98,18 +98,18 @@ def eigh(x, lower: bool = True, symmetrize_input: bool = True):
       eigendecomposition by computing :math:`\\frac{1}{2}(x + x^H)`.
 
   Returns:
-    A tuple ``(v, w)``.
+    A tuple ``(w, v)``.
 
-    ``v`` is an array with the same dtype as ``x`` (or its real counterpart if
+    ``w`` is an array with the same dtype as ``x`` (or its real counterpart if
     complex) with shape ``[..., n]`` containing the eigenvalues of ``x``.
 
-    ``w`` is an array with the same dtype as ``x`` such that ``w[..., :, i]`` is
-    the eigenvector corresponding to ``v[..., i]``.
+    ``v`` is an array with the same dtype as ``x`` such that ``v[..., :, i]`` is
+    the eigenvector corresponding to ``w[..., i]``.
   """
   if symmetrize_input:
     x = symmetrize(x)
-  v, w = eigh_p.bind(x, lower=lower)
-  return v, w
+  w, v = eigh_p.bind(x, lower=lower)
+  return w, v
 
 def lu(x):
   """LU decomposition with partial pivoting.
@@ -448,8 +448,8 @@ ad.primitive_jvps[eig_p] = eig_jvp_rule
 # Symmetric/Hermitian eigendecomposition
 
 def eigh_impl(operand, lower):
-  v, w = xla.apply_primitive(eigh_p, operand, lower=lower)
-  return v, w
+  w, v = xla.apply_primitive(eigh_p, operand, lower=lower)
+  return w, v
 
 def eigh_translation_rule(c, operand, lower):
   shape = c.get_shape(operand)
@@ -474,8 +474,8 @@ def eigh_abstract_eval(operand, lower):
     w = operand.update(shape=batch_dims + (n,),
                        dtype=lax_internal._complex_basetype(operand.dtype))
   else:
-    v, w = operand, operand
-  return v, w
+    w = v = operand
+  return w, v
 
 def _eigh_cpu_gpu_translation_rule(syevd_impl, c, operand, lower):
   shape = c.get_shape(operand)
@@ -486,7 +486,7 @@ def _eigh_cpu_gpu_translation_rule(syevd_impl, c, operand, lower):
                            _nan_like(c, v))
   w = _broadcasting_select(c, xops.Reshape(ok, batch_dims + (1,)), w,
                            _nan_like(c, w))
-  return xops.Tuple(c, [v, w])
+  return xops.Tuple(c, [w, v])
 
 def _eigh_tpu_translation_rule(c, operand, lower):
   # Fail gracefully for complex dtype (unsupported on TPU).
@@ -508,7 +508,7 @@ def eigh_jvp_rule(primals, tangents, lower):
   a, = primals
   a_dot, = tangents
 
-  v, w_real = eigh_p.bind(symmetrize(a), lower=lower)
+  w_real, v = eigh_p.bind(symmetrize(a), lower=lower)
 
   # for complex numbers we need eigenvalues to be full dtype of v, a:
   w = w_real.astype(a.dtype)
@@ -521,7 +521,7 @@ def eigh_jvp_rule(primals, tangents, lower):
   vdag_adot_v = dot(dot(_H(v), a_dot), v)
   dv = dot(v, jnp.multiply(Fmat, vdag_adot_v))
   dw = jnp.real(jnp.diagonal(vdag_adot_v, axis1=-2, axis2=-1))
-  return (v, w_real), (dv, dw)
+  return (w_real, v), (dw, dv)
 
 def eigh_batching_rule(batched_args, batch_dims, lower):
   x, = batched_args
