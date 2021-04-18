@@ -890,16 +890,20 @@ def _xmap_translation_rule_spmd(c, axis_env,
 def _delete_aval_axes(aval, axes: AxisNamePos):
   assert isinstance(aval, core.ShapedArray)
   shape = list(aval.shape)
-  for i in sorted(axes.values(), reverse=True):
-    del shape[i]
-  return aval.update(shape=tuple(shape))
+  named_shape = dict(aval.named_shape)
+  for name, position in sorted(axes.items(), key=lambda x: x[1], reverse=True):
+    named_shape[name] = shape[position]
+    del shape[position]
+  return aval.update(shape=tuple(shape), named_shape=named_shape)
 
 def _insert_aval_axes(aval, axes: AxisNamePos, axis_sizes):
   assert isinstance(aval, core.ShapedArray)
   shape = list(aval.shape)
-  for name, axis in sorted(axes.items(), key=lambda x: x[1]):
-    shape.insert(axis, axis_sizes[name])
-  return aval.update(shape=tuple(shape))
+  named_shape = dict(aval.named_shape)
+  for name, position in sorted(axes.items(), key=lambda x: x[1]):
+    shape.insert(position, axis_sizes[name])
+    del named_shape[name]
+  return aval.update(shape=tuple(shape), named_shape=named_shape)
 
 
 class ResourceCount(namedtuple('ResourceCount', ['nglobal', 'nlocal'])):

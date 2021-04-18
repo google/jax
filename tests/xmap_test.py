@@ -376,6 +376,17 @@ class XMapTest(XMapTestCase):
     python_should_be_executing = False
     fm(x)
 
+  @ignore_xmap_warning()
+  @with_mesh([('x', 2)])
+  def testResourceConflict(self):
+    fm = xmap(lambda x, y: x + y,
+              in_axes=(['a', ...], ['b', ...]), out_axes=['a', 'b', ...],
+              axis_resources={'a': 'x', 'b': 'x'})
+    x = np.arange(6).reshape(2, 3)
+    y = np.arange(6).reshape(2, 3)
+    # with self.assertRaises(...):
+    print(fm(x, y))
+
   @parameterized.named_parameters(
     {"testcase_name": name, "mesh": mesh, "axis_resources": axis_resources}
     for name, mesh, axis_resources in (

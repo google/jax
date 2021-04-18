@@ -1705,14 +1705,30 @@ def subst_axis_names(primitive: Primitive, params: ParamDict, subst: AxisSubst) 
     new_params[name] = subst_axis_names_jaxpr(jaxpr, shadowed_subst)
   return new_params
 
+def subst_axis_names_var(v: Var, subst: AxisSubst):
+  names = [
+      name for orig_name in v.aval.named_shape for name in subst(orig_name)]
+  named_shape = {name: axis_frame(name).size for name in names}
+  # operate in-place because Var identity is load-bearing
+  v.aval = v.aval.update(named_shape=named_shape)
+  return v
+
+def subst_axis_names_eqn(eqn: JaxprEqn, subst: AxisSubst):
+  invars = [subst_axis_names_var(v, subst) for v in eqn.invars]
+  outvars = [subst_axis_names_var(v, subst) for v in eqn.outvars]
+  params = subst_axis_names(eqn.primitive, eqn.params, subst)
+  return JaxprEqn(invars, outvars, eqn.primitive, params, eqn.source_info)
+
 def subst_axis_names_jaxpr(jaxpr: Union[Jaxpr, ClosedJaxpr], subst: AxisSubst):
   consts = None
   if isinstance(jaxpr, ClosedJaxpr):
     consts = jaxpr.consts
     jaxpr = jaxpr.jaxpr
-  eqns = [eqn._replace(params=subst_axis_names(eqn.primitive, eqn.params, subst))
-          for eqn in jaxpr.eqns]
-  new_jaxpr = Jaxpr(jaxpr.constvars, jaxpr.invars, jaxpr.outvars, eqns)
+  invars = [subst_axis_names_var(v, subst) for v in jaxpr.invars]
+  outvars = [subst_axis_names_var(v, subst) for v in jaxpr.outvars]
+  constvars = [subst_axis_names_var(v, subst) for v in jaxpr.constvars]
+  eqns = [subst_axis_names_eqn(eqn, subst) for eqn in jaxpr.eqns]
+  new_jaxpr = Jaxpr(constvars, invars, outvars, eqns)
   if consts is not None:
     return ClosedJaxpr(new_jaxpr, consts)
   return new_jaxpr
