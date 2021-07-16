@@ -29,7 +29,6 @@
 # replica groups for collective operations.
 
 import sys
-from contextlib import contextmanager
 from collections import defaultdict, OrderedDict
 import itertools as it
 import operator as op
@@ -796,7 +795,7 @@ def parallel_callable(fun: lu.WrappedFun,
                                                     replicated=replicated_args,
                                                     partitions=arg_parts,
                                                     donated_invars=donated_invars)
-  with maybe_extend_axis_env(axis_name, global_axis_size, None):  # type: ignore
+  with core.extend_axis_env(axis_name, global_axis_size, None):  # type: ignore
     out_nodes = xla.jaxpr_subcomp(c, jaxpr, backend_name, axis_env, xla_consts,
                                   extend_name_stack(wrap_name(name, 'pmap')), *xla_args)
   build_out_tuple = partial(xops.Tuple, c, out_nodes)
@@ -1167,8 +1166,22 @@ xla_pmap_p = core.MapPrimitive('xla_pmap')
 xla_pmap = xla_pmap_p.bind
 xla_pmap_p.def_impl(xla_pmap_impl)
 
-# Set param update handlers to update `donated_invars` just like xla_call_p
-pe.call_param_updaters[xla_pmap_p] = pe.call_param_updaters[xla.xla_call_p]
+# Set param update handlers to update `donated_invars` just like xla_call_p, and
+# handle new mapped inputs/outputs from partial evaluation
+def _xla_pmap_peval_update_params(params, num_consts, num_env, in_unknowns, out_unknowns):
+  call_jaxpr = params['call_jaxpr']
+  donated_invars = params['donated_invars']
+  donated_invars = [d for d, uk in zip(donated_invars, in_unknowns) if uk]
+  new_donated_invars = ((False,) * (len(call_jaxpr.invars) - len(donated_invars))
+                        + tuple(donated_invars))
+  new_in_axes = ((0,) * num_consts + (None,) * num_env +
+                 tuple(d for d, uk in zip(params['in_axes'], in_unknowns) if uk))
+  new_out_axes = tuple(d for d, uk in zip(params['out_axes_thunk'](), out_unknowns) if uk)
+  new_params = dict(params, donated_invars=new_donated_invars, in_axes=new_in_axes,
+                    out_axes=new_out_axes)
+  del new_params['out_axes_thunk']
+  return new_params
+pe.call_param_updaters[xla_pmap_p] = _xla_pmap_peval_update_params
 ad.call_param_updaters[xla_pmap_p] = ad.call_param_updaters[xla.xla_call_p]
 ad.call_transpose_param_updaters[xla_pmap_p] = \
     ad.call_transpose_param_updaters[xla.xla_call_p]
@@ -1192,7 +1205,7 @@ def _pmap_translation_rule(c, axis_env,
     _xla_shard(c, aval, new_env, in_node, in_axis) if in_axis is not None else in_node
     for aval, in_node, in_axis in safe_zip(in_avals, in_nodes, in_axes))
 
-  with maybe_extend_axis_env(axis_name, global_axis_size, None):  # type: ignore
+  with core.extend_axis_env(axis_name, global_axis_size, None):  # type: ignore
     sharded_outs = xla.jaxpr_subcomp(
         c, call_jaxpr, backend, new_env, (),
         extend_name_stack(name_stack, wrap_name(name, 'pmap')), *in_nodes_sharded)
@@ -1649,11 +1662,6 @@ def mesh_sharding_specs(axis_sizes, axis_names):
       next_sharded_axis += 1
     return ShardingSpec(sharding, mesh_mapping)
   return mk_sharding_spec
-
-@contextmanager
-def maybe_extend_axis_env(*args, **kwargs):
-  with core.extend_axis_env(*args, **kwargs):
-    yield
 
 
 class DynamicAxisEnvFrame(object):

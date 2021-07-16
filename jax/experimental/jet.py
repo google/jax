@@ -142,17 +142,6 @@ class JetTrace(core.Trace):
     primals_out, series_out = tree_unflatten(out_tree_def(), result)
     return [JetTracer(self, p, ts) for p, ts in zip(primals_out, series_out)]
 
-  def post_process_call(self, call_primitive, out_tracers, params):
-    primals, series = unzip2((t.primal, t.terms) for t in out_tracers)
-    out, treedef = tree_flatten((primals, series))
-    del primals, series
-    main = self.main
-    def todo(x):
-      primals, series = tree_unflatten(treedef, x)
-      trace = JetTrace(main, core.cur_sublevel())
-      return map(partial(JetTracer, trace), primals, series)
-    return out, todo
-
   def process_custom_jvp_call(self, primitive, fun, jvp, tracers):
     # TODO(mattjj): don't just ignore custom jvp rules?
     del primitive, jvp  # Unused.

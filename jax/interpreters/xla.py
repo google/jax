@@ -917,17 +917,12 @@ xla_call_p: core.CallPrimitive = core.CallPrimitive('xla_call')
 xla_call = xla_call_p.bind
 xla_call_p.def_impl(_xla_call_impl)
 
-def _xla_call_partial_eval_update_params(params, in_unknowns):
+def _xla_call_partial_eval_update_params(params, _, __, in_unknowns, ___):
   call_jaxpr = params['call_jaxpr']
   donated_invars = params['donated_invars']
-  if not in_unknowns and donated_invars:
-    # JaxprTrace.post_process_call creates a call with no input tracers
-    new_donated_invars = (False,) * len(call_jaxpr.invars)
-  else:
-    # JaxprTrace.process_call drops known input tracers
-    donated_invars = [d for d, uk in zip(donated_invars, in_unknowns) if uk]
-    new_donated_invars = ((False,) * (len(call_jaxpr.invars) - len(donated_invars))
-                          + tuple(donated_invars))
+  donated_invars = [d for d, uk in zip(donated_invars, in_unknowns) if uk]
+  new_donated_invars = ((False,) * (len(call_jaxpr.invars) - len(donated_invars))
+                        + tuple(donated_invars))
   return dict(params, donated_invars=new_donated_invars)
 pe.call_param_updaters[xla_call_p] = _xla_call_partial_eval_update_params
 

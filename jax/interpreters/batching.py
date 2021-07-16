@@ -148,80 +148,42 @@ class BatchTrace(Trace):
     else:
       return BatchTracer(self, val_out, dim_out)
 
-  def process_call(self, call_primitive, f: lu.WrappedFun, tracers, params):
-    assert call_primitive.multiple_results
+  def process_call(self, call_primitive, f, tracers, params):
+    vals, dims = unzip2((t.val, t.batch_dim) for t in tracers)
     params = dict(params, name=wrap_name(params.get('name', f.__name__), 'vmap'))
-    vals, dims = unzip2((t.val, t.batch_dim) for t in tracers)
-    if all(bdim is not_mapped for bdim in dims):
-      return call_primitive.bind(f, *vals, **params)
-    else:
-      f, dims_out = batch_subtrace(f, self.main, dims)
-      vals_out = call_primitive.bind(f, *vals, **params)
+    f, dims_out = batch_subtrace(f, self.main, dims)
+    def todo(vals_out):
       return [BatchTracer(self, v, d) for v, d in zip(vals_out, dims_out())]
+    return f, vals, params, todo
 
-  def post_process_call(self, call_primitive, out_tracers, params):
-    vals, dims = unzip2((t.val, t.batch_dim) for t in out_tracers)
-    main = self.main
-    def todo(vals):
-      trace = main.with_cur_sublevel()
-      return map(partial(BatchTracer, trace), vals, dims)
-    return vals, todo
-
-  def process_map(self, map_primitive, f: lu.WrappedFun, tracers, params):
+  def process_map(self, map_primitive, f, tracers, params):
+    # Each input tracer might have a batch axis or not, and additionally each
+    # argument to the map primitive may be mapped along an axis or not.
+    # When both batch axis d and map primitive in_axis are not None then:
+    # - If `d <= in_axis`, we move the `in_axis` one dimension further;
+    # - If `d >  in_axis`, we decrement `d` (as `in_axis` will get removed).
     vals, dims = unzip2((t.val, t.batch_dim) for t in tracers)
-    if all(dim is not_mapped for dim in dims):
-      return map_primitive.bind(f, *vals, **params)
-    else:
-      assert len({x.shape[d] for x, d in zip(vals, dims) if d is not not_mapped}) == 1
-      # The logic for the dimension math below is as follows:
-      # ╔═════════════╦════════════════════════════════════════╦═══════════╗
-      # ║ d / in_axis ║ None                                   ║ int       ║
-      # ╠═════════════╬════════════════════════════════════════╩═══════════╣
-      # ║ None        ║ No extra axis, so in_axis unaffected               ║
-      # ╠═════════════╬════════════════════════════════════════╦═══════════╣
-      # ║ int         ║ Not mapped, so batching dim unaffected ║ See below ║
-      # ╚═════════════╩════════════════════════════════════════╩═══════════╝
-      # When both d and in_axis are defined then:
-      # - If `d <= in_axis`, we have to move the `in_axis` one dimension further;
-      # - If `d >  in_axis`, we have to decrement `d` (as `in_axis` will get removed).
-      def both_mapped(in_out_axis, d):
-        return in_out_axis is not None and d is not not_mapped
-      new_in_axes = tuple(
-        in_axis + 1 if both_mapped(in_axis, d) and d <= in_axis else in_axis
-        for d, in_axis in zip(dims, params['in_axes']))
-      new_dims = tuple(
-        d - 1 if both_mapped(in_axis, d) and in_axis < d else d
-        for d, in_axis in zip(dims, params['in_axes']))
-      f, dims_out = batch_subtrace(f, self.main, new_dims)
-      out_axes_thunk = params['out_axes_thunk']
-      # NOTE: This assumes that the choice of the dimensions over which outputs
-      #       are batched is entirely dependent on the function and not e.g. on the
-      #       data or its shapes.
-      @as_hashable_function(closure=out_axes_thunk)
-      def new_out_axes_thunk():
-        return tuple(out_axis + 1 if both_mapped(out_axis, d) and d < out_axis else out_axis
-                     for out_axis, d in zip(out_axes_thunk(), dims_out()))
-      new_params = dict(params, in_axes=new_in_axes, out_axes_thunk=new_out_axes_thunk)
-      vals_out = map_primitive.bind(f, *vals, **new_params)
-      dims_out = (d + 1 if both_mapped(out_axis, d) and out_axis <= d else d
-                  for d, out_axis in zip(dims_out(), out_axes_thunk()))
-      return [BatchTracer(self, v, d) for v, d in zip(vals_out, dims_out)]
+    in_axes, out_axes_thunk = params['in_axes'], params['out_axes_thunk']
+    both = lambda axis, d: axis is not None and d is not not_mapped
+    new_in_axes = [in_axis + 1 if both(in_axis, d) and d <= in_axis else in_axis
+                   for d, in_axis in zip(dims, in_axes)]
+    new_dims = [d - 1 if both(in_axis, d) and in_axis < d else d
+                for d, in_axis in zip(dims, in_axes)]
+    f, dims_out = batch_subtrace(f, self.main, tuple(new_dims))
 
-  def post_process_map(self, call_primitive, out_tracers, params):
-    vals, dims = unzip2((t.val, t.batch_dim) for t in out_tracers)
-    main = self.main
-    def both_mapped(in_out_axis, d):
-      return in_out_axis is not None and d is not not_mapped
-    def todo(vals):
-      trace = main.with_cur_sublevel()
-      return [BatchTracer(trace, v, d + 1 if both_mapped(out_axis, d) and out_axis <= d else d)
-              for v, d, out_axis in zip(vals, dims, params['out_axes_thunk']())]
-    if call_primitive.map_primitive:
-      def out_axes_transform(out_axes):
-        return tuple(out_axis + 1 if both_mapped(out_axis, d) and d < out_axis else out_axis
-                     for out_axis, d in zip(out_axes, dims))
-      todo = (todo, out_axes_transform)
-    return vals, todo
+    @as_hashable_function(closure=out_axes_thunk)
+    def new_out_axes_thunk():
+      return [out_axis + 1 if both(out_axis, d) and d < out_axis else out_axis
+              for d, out_axis in zip(dims_out(), out_axes_thunk())]
+
+    def todo(vals_out):
+      dims_out_ = [d + 1 if both(out_axis, d) and out_axis <= d else d
+                   for d, out_axis in zip(dims_out(), out_axes_thunk())]
+      return [BatchTracer(self, v, d) for v, d in zip(vals_out, dims_out_)]
+
+    new_params = dict(params, in_axes=tuple(new_in_axes),
+                      out_axes_thunk=new_out_axes_thunk)
+    return f, vals, new_params, todo
 
   def process_custom_jvp_call(self, prim, fun, jvp, tracers):
     in_vals, in_dims = unzip2((t.val, t.batch_dim) for t in tracers)
@@ -234,7 +196,7 @@ class BatchTrace(Trace):
       out_dims = out_dims[:len(out_dims) // 2]
     return [BatchTracer(self, v, d) for v, d in zip(out_vals, out_dims)]
 
-  def post_process_custom_jvp_call(self, out_tracers, params):
+  def post_process_custom_jvp_call(self, out_tracers):
     vals, dims = unzip2((t.val, t.batch_dim) for t in out_tracers)
     main = self.main
     def todo(vals):

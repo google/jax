@@ -521,14 +521,6 @@ class MaskTrace(Trace):
       vals_out = call_primitive.bind(f, *(logical_env_vals + vals), **params)
       return [MaskTracer(self, v, s) for v, s in zip(vals_out, shapes_out())]
 
-  def post_process_call(self, call_primitive, out_tracers, params):
-    vals, shapes = unzip2((t.val, t.polymorphic_shape) for t in out_tracers)
-    main = self.main
-    def todo(vals):
-      trace = MaskTrace(main, core.cur_sublevel())
-      return map(partial(MaskTracer, trace), vals, shapes)
-    return vals, todo
-
 class UniqueId:
   def __init__(self, name):
     self.name = name

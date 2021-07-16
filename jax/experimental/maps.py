@@ -809,17 +809,6 @@ class XMapPrimitive(core.MapPrimitive):  # Not really a map, but it gives us a f
   def __init__(self):
     super().__init__('xmap')
     self.def_impl(xmap_impl)
-    self.def_custom_bind(self.bind)
-
-  def bind(self, fun, *args, **params):
-    assert len(params['in_axes']) == len(args)
-    return core.call_bind(self, fun, *args, **params)  # type: ignore
-
-  def process(self, trace, fun, tracers, params):
-    return trace.process_xmap(self, fun, tracers, params)
-
-  def post_process(self, trace, out_tracers, params):
-    raise NotImplementedError
 
 xmap_p = XMapPrimitive()
 core.EvalTrace.process_xmap = core.EvalTrace.process_call  # type: ignore

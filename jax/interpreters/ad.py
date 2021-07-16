@@ -286,8 +286,7 @@ class JVPTrace(Trace):
     else:
       return JVPTracer(self, primal_out, tangent_out)
 
-  def process_call(self, call_primitive, f: lu.WrappedFun, tracers, params):
-    assert call_primitive.multiple_results
+  def process_call(self, primitive, f, tracers, params):
     primals, tangents = unzip2((t.primal, t.tangent) for t in tracers)
     nonzero_tangents, tangent_tree_def = tree_flatten(tangents)
     nz_tangents = [type(t) is not Zero for t in tangents]
@@ -295,51 +294,41 @@ class JVPTrace(Trace):
       params = dict(params, name=wrap_name(params['name'], 'jvp'))
     f_jvp = jvp_subtrace(f, self.main)
     f_jvp, nz_tangents_out = nonzero_tangent_outputs(f_jvp)
-    if isinstance(call_primitive, core.MapPrimitive):
-      in_axes = params['in_axes']
-      tangent_in_axes = [ax for ax, nz in zip(in_axes, nz_tangents) if nz]
-      out_axes_thunk = params['out_axes_thunk']
-      # The new thunk depends deterministically on the old thunk and the wrapped function.
-      # Any caching already has to include the wrapped function as part of the key, so we
-      # only use the previous thunk for equality checks.
-      # NOTE: This assumes that the output tangents being zero is a deterministic
-      #       function of which input tangents were zero.
-      @as_hashable_function(closure=(tuple(nz_tangents), out_axes_thunk))
-      def new_out_axes_thunk():
-        out_axes = out_axes_thunk()
-        return (*out_axes, *(ax for ax, nz in zip(out_axes, nz_tangents_out()) if nz))
-      params = dict(params,
-                    in_axes=(*in_axes, *tangent_in_axes),
-                    out_axes_thunk=new_out_axes_thunk)
     f_jvp, out_tree_def = traceable(f_jvp, len(primals), tangent_tree_def)
-    update_params = call_param_updaters.get(call_primitive)
+    update_params = call_param_updaters.get(primitive)
     new_params = (update_params(params, nz_tangents, nz_tangents_out)
                   if update_params else params)
-    result = call_primitive.bind(f_jvp, *primals, *nonzero_tangents, **new_params)
-    primal_out, tangent_out = tree_unflatten(out_tree_def(), result)
-    return [JVPTracer(self, p, t) for p, t in zip(primal_out, tangent_out)]
+    def todo(result):
+      primal_out, tangent_out = tree_unflatten(out_tree_def(), result)
+      return [JVPTracer(self, p, t) for p, t in zip(primal_out, tangent_out)]
+    return f_jvp, (*primals, *nonzero_tangents), new_params, todo
 
-  def post_process_call(self, call_primitive, out_tracers, params):
-    primals, tangents = unzip2((t.primal, t.tangent) for t in out_tracers)
-    out, treedef = tree_flatten((primals, tangents))
-    tangents_nz = [type(t) is not Zero for t in tangents]
-    del primals, tangents
-    main = self.main
-    def todo(x):
-      primals, tangents = tree_unflatten(treedef, x)
-      trace = JVPTrace(main, core.cur_sublevel())
-      return map(partial(JVPTracer, trace), primals, tangents)
-    if call_primitive.map_primitive:
-      def out_axes_transform(out_axes):
-        return (*out_axes, *(ax for ax, nz in zip(out_axes, tangents_nz) if nz))
-      todo = (todo, out_axes_transform)
-    return out, todo
+  def process_map(self, primitive, f, tracers, params):
+    primals, tangents = unzip2((t.primal, t.tangent) for t in tracers)
+    nonzero_tangents, tangent_tree_def = tree_flatten(tangents)
+    nz_tangents = [type(t) is not Zero for t in tangents]
+    params = dict(params, name=wrap_name(params['name'], 'jvp'))
+    f_jvp = jvp_subtrace(f, self.main)
+    f_jvp, nz_tangents_out = nonzero_tangent_outputs(f_jvp)
+    in_axes = params['in_axes']
+    tangent_in_axes = [ax for ax, nz in zip(in_axes, nz_tangents) if nz]
+    out_axes_thunk = params['out_axes_thunk']
 
-  # The only difference between process_map and process_call is that
-  # the `in_axes` and `out_axes_thunk` params must be updated;
-  # that's handled in process_call.
-  process_map = process_call
-  post_process_map = post_process_call
+    @as_hashable_function(closure=(tuple(nz_tangents), out_axes_thunk))
+    def new_out_axes_thunk():
+      out_axes = out_axes_thunk()
+      return (*out_axes, *(ax for ax, nz in zip(out_axes, nz_tangents_out()) if nz))
+
+    params = dict(params, in_axes=(*in_axes, *tangent_in_axes),
+                  out_axes_thunk=new_out_axes_thunk)
+    f_jvp, out_tree_def = traceable(f_jvp, len(primals), tangent_tree_def)
+    update_params = call_param_updaters.get(primitive)
+    new_params = (update_params(params, nz_tangents, nz_tangents_out)
+                  if update_params else params)
+    def todo(result):
+      primal_out, tangent_out = tree_unflatten(out_tree_def(), result)
+      return [JVPTracer(self, p, t) for p, t in zip(primal_out, tangent_out)]
+    return f_jvp, (*primals, *nonzero_tangents), new_params, todo
 
   def process_custom_jvp_call(self, _, __, f_jvp, tracers):
     primals_in, tangents_in = unzip2((t.primal, t.tangent) for t in tracers)
@@ -348,12 +337,12 @@ class JVPTrace(Trace):
     # Cast float0 to zeros with the primal dtype because custom jvp rules don't
     # currently handle float0s
     tangents_in = map(replace_float0s, primals_in, tangents_in)
-    outs = f_jvp.call_wrapped(*it.chain(primals_in, tangents_in))
+    outs = f_jvp.call_wrapped(*primals_in, *tangents_in)
     primals_out, tangents_out = split_list(outs, [len(outs) // 2])
     tangents_out = map(recast_to_float0, primals_out, tangents_out)
     return map(partial(JVPTracer, self), primals_out, tangents_out)
 
-  def post_process_custom_jvp_call(self, out_tracers, params):
+  def post_process_custom_jvp_call(self, out_tracers):
     raise CustomJVPException()
 
   def process_custom_vjp_call(self, _, __, fwd, bwd, tracers, *, out_trees):
@@ -369,7 +358,7 @@ class JVPTrace(Trace):
     tangents_out = map(recast_to_float0, primals_out, tangents_out)
     return map(partial(JVPTracer, self), primals_out, tangents_out)
 
-  def post_process_custom_vjp_call(self, out_tracers, params):
+  def post_process_custom_vjp_call(self, out_tracers):
     raise CustomVJPException()
 
   def join(self, xt, yt):

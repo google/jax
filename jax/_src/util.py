@@ -380,7 +380,7 @@ class HashableFunction:
     return f'<hashable {self.f.__name__} with closure={self.closure}>'
 
 def as_hashable_function(closure):
-  return lambda f: HashableFunction(f, closure)
+  return partial(HashableFunction, closure=closure)
 
 def maybe_named_axis(axis, if_pos, if_named):
   try:

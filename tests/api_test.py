@@ -2232,11 +2232,17 @@ class APITest(jtu.JaxTestCase):
       # Use the tracer
       return x + self._saved_tracer
 
+    # NOTE(mattjj): the error changed to a leaked tracer
+    # with self.assertRaisesRegex(
+    #     core.UnexpectedTracerError,
+    #     re.compile(
+    #       "Encountered an unexpected tracer.*Tracer not among input tracers",
+    #       re.DOTALL)):
+    #   api.jit(func1)(2.)
+
     with self.assertRaisesRegex(
         core.UnexpectedTracerError,
-        re.compile(
-          "Encountered an unexpected tracer.*Tracer not among input tracers",
-          re.DOTALL)):
+        re.compile("Encountered an unexpected tracer.*", re.DOTALL)):
       api.jit(func1)(2.)
 
   def test_escaped_tracer_omnistaging(self):
@@ -2876,8 +2882,8 @@ class RematTest(jtu.JaxTestCase):
     finally:
       lax.sin_p.def_impl(sin_impl)
       lax.cos_p.def_impl(cos_impl)
-    self.assertEqual(len(sin_calls), 1)
-    self.assertEqual(len(cos_calls), 2)
+    self.assertLen(sin_calls, 1)
+    self.assertLen(cos_calls, 2)
 
   def test_remat_freevars(self):
     def f1(x):

@@ -37,8 +37,8 @@ from . import linear_util as lu
 
 from jax._src import source_info_util
 from ._src.util import (safe_zip, safe_map, partial, curry, prod, partialmethod,
-                   tuple_insert, tuple_delete, as_hashable_function,
-                   HashableFunction)
+                        tuple_insert, tuple_delete, as_hashable_function,
+                        HashableFunction)
 from ._src.pprint_util import pp, vcat, PrettyPrint
 
 from ._src import traceback_util
@@ -431,6 +431,10 @@ class Trace:
            "to handle custom_vjp primitives")
     raise NotImplementedError(msg)
 
+  def process_remat_call(self, primitive, f, tracers, params):
+    return self.process_call(primitive, f, tracers, params)  # default
+
+
 def escaped_tracer_error(tracer, detail=None):
   num_frames = FLAGS.jax_tracer_error_num_traceback_frames
   msg = ("Encountered an unexpected tracer. Perhaps this tracer escaped "
@@ -660,6 +664,11 @@ class TraceStack:
 
   def pop(self) -> None:
     self.stack.pop()
+
+  @property
+  def active_stack(self) -> List[MainTrace]:
+    i, = (i for i, m in enumerate(self.stack) if m is self.dynamic)
+    return self.stack[i:]
 
   def __repr__(self) -> str:
     stack_str = map('  {}\n'.format, self.stack[::-1])
@@ -1498,95 +1507,49 @@ def apply_todos(todos, outs):
     outs = map(full_lower, todos_list.pop()(outs))
   return outs
 
-class _IgnoreElemList(list):
-  """Compares equal to all other _ignore_elem_lists."""
-  def __hash__(self): return 0
-  def __eq__(self, other):
-    return type(other) is _IgnoreElemList
-
-@lu.transformation_with_aux
-def process_env_traces(primitive: Union['CallPrimitive', 'MapPrimitive'],
-                       level: int, params_tuple: tuple, out_axes_transforms, *args):
-  outs = yield args, {}
-  params = dict(params_tuple)
-  todo = []
-  assert not out_axes_transforms
-  while True:
-    tracers = [x for x in outs if isinstance(x, Tracer)
-               and (level is None or x._trace.level > level)]
-    if tracers:
-      ans = max(tracers, key=lambda x: x._trace.level)
-    else:
-      break
-    trace = ans._trace.main.with_cur_sublevel()
-    outs = map(trace.full_raise, outs)
-    outs, cur_todo = primitive.post_process(trace, outs, params)
-    if isinstance(primitive, MapPrimitive):
-      cur_todo, out_axes_transform = cur_todo
-      out_axes_transforms.append(out_axes_transform)
-    todo.append(cur_todo)
-  yield outs, tuple(todo)  # Ensure the aux output is immutable
-
-def call_bind(primitive: Union['CallPrimitive', 'MapPrimitive'],
-              fun, *args, **params):
-  out_axes_transforms = _IgnoreElemList()
-  if primitive.map_primitive:
-    out_axes_thunk = params['out_axes_thunk']
-    # The new thunk depends deterministically on the old thunk and the wrapped function.
-    # Any caching already has to include the wrapped function as part of the key, so we
-    # only use the previous thunk for equality checks.
-    @as_hashable_function(closure=out_axes_thunk)
-    def new_out_axes_thunk():
-      out_axes = out_axes_thunk()
-      for t in out_axes_transforms:
-        out_axes = t(out_axes)
-      return out_axes
-    params = dict(params, out_axes_thunk=new_out_axes_thunk)
-  params_tuple = tuple(params.items())
-  top_trace = find_top_trace(args)
-  fun, env_trace_todo = process_env_traces(
-      fun, primitive, top_trace and top_trace.level,
-      params_tuple, out_axes_transforms)
-  tracers = map(top_trace.full_raise, args)
-  outs = primitive.process(top_trace, fun, tracers, params)
-  return map(full_lower, apply_todos(env_trace_todo(), outs))
-
-
 class CallPrimitive(Primitive):
   multiple_results = True
   call_primitive = True
 
   def bind(self, fun, *args, **params):
-    return call_bind(self, fun, *args, **params)
+    return final_style_bind(attrgetter('process_call'), self, fun, args, params)
 
-  def process(self, trace, fun, tracers, params):
-    return trace.process_call(self, fun, tracers, params)
+  def impl(self, f, *args, **params):
+    del params  # params parameterize the call primitive, not the function
+    with new_sublevel():
+      return f.call_wrapped(*args)
 
-  def post_process(self, trace, out_tracers, params):
-    return trace.post_process_call(self, out_tracers, params)
-
-def call_impl(f: lu.WrappedFun, *args, **params):
-  del params  # params parameterize the call primitive, not the function
-  with new_sublevel():
-    return f.call_wrapped(*args)
+def final_style_bind(process_method, prim, fun, args, params):
+  base, *mains = thread_local_state.trace_state.trace_stack.active_stack
+  callbacks = []
+  for m in reversed(mains):
+    trace = m.with_cur_sublevel()
+    fun, args, params, callback = process_method(trace)(
+        prim, fun, map(trace.full_raise, args), params)
+    callbacks.append(callback)
+  trace = base.with_cur_sublevel()
+  outs = process_method(trace)(prim, fun, map(trace.full_raise, args), params)
+  for c in reversed(callbacks):
+    outs = c(outs)
+  return map(full_lower, outs)
 
 call_p = CallPrimitive('call')
 call = call_p.bind
-call_p.def_impl(call_impl)
 
 named_call_p = CallPrimitive('named_call')
-named_call_p.def_impl(call_impl)
 
 # ------------------- Map -------------------
 
-def mapped_aval(size: int, axis: int, aval: AbstractValue) -> AbstractValue:
+def mapped_aval(size: int, axis: Optional[int], aval: AbstractValue) -> AbstractValue:
+  if axis is None: return aval
   handler, _ = aval_mapping_handlers.get(type(aval), (None, None))
   if handler is not None:
     return handler(size, axis, aval)
   else:
     raise TypeError(f"no mapping handler for {aval} of type {type(aval)}")
 
-def unmapped_aval(size: int, axis: int, aval: AbstractValue) -> AbstractValue:
+def unmapped_aval(size: int, axis: Optional[int], aval: AbstractValue) -> AbstractValue:
+  if axis is None: return aval
   _, handler = aval_mapping_handlers.get(type(aval), (None, None))
   if handler is not None:
     return handler(size, axis, aval)
@@ -1611,19 +1574,31 @@ aval_mapping_handlers: Dict[Type, AvalMapHandlerPair] = {
 }
 
 
+class _IgnoreElemList(list):
+  """Compares equal to all other _ignore_elem_lists."""
+  def __hash__(self): return 0
+  def __eq__(self, other):
+    return type(other) is _IgnoreElemList
+
 class MapPrimitive(Primitive):
   multiple_results = True
   map_primitive = True
 
   def bind(self, fun, *args, **params):
     assert len(params['in_axes']) == len(args)
-    return call_bind(self, fun, *args, **params)
-
-  def process(self, trace, fun, tracers, params):
-    return trace.process_map(self, fun, tracers, params)
-
-  def post_process(self, trace, out_tracers, params):
-    return trace.post_process_map(self, out_tracers, params)
+    out_axes_transforms = _IgnoreElemList()
+    out_axes_thunk = params['out_axes_thunk']
+    # The new thunk depends deterministically on the old thunk and the wrapped
+    # function. Any caching already has to include the wrapped function as part
+    # of the key, so we only use the previous thunk for equality checks.
+    @as_hashable_function(closure=out_axes_thunk)
+    def new_out_axes_thunk():
+      out_axes = out_axes_thunk()
+      for t in out_axes_transforms:
+        out_axes = t(out_axes)
+      return out_axes
+    params = dict(params, out_axes_thunk=new_out_axes_thunk)
+    return final_style_bind(attrgetter('process_map'), self, fun, args, params)
 
 @contextmanager
 def extend_axis_env(axis_name: AxisName, size: int, tag: Any):
