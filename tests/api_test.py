@@ -2783,6 +2783,7 @@ class APITest(jtu.JaxTestCase):
     for f in [f_jit, f_cond]:
       precision = config.jax_default_matmul_precision
       try:
+        FLAGS.jax_default_matmul_precision = None
         num_traces = 0
         x = jnp.zeros((2, 2))
         f(x)

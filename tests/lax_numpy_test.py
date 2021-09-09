@@ -5291,7 +5291,9 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     ones_3d = np.ones((2, 2, 2))
     HIGHEST = lax.Precision.HIGHEST
 
-    jtu.assert_dot_precision(None, jnp.dot, ones_1d, ones_1d)
+    jtu.assert_dot_precision(lax.Precision.HIGHEST, jnp.dot, ones_1d, ones_1d)
+    with jax.default_matmul_precision('tensorfloat32'):
+      jtu.assert_dot_precision(lax.Precision.HIGH, jnp.dot, ones_1d, ones_1d)
     jtu.assert_dot_precision(
         HIGHEST,
         partial(jnp.dot, precision=HIGHEST),

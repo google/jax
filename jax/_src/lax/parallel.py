@@ -395,11 +395,13 @@ def axis_index(axis_name):
   return axis_index_p.bind(axis_name=axis_name)
 
 
-def pdot(x, y, axis_name, pos_contract=((), ()), pos_batch=((), ())):
+def pdot(x, y, axis_name, pos_contract=((), ()), pos_batch=((), ()),
+         precision=None):
   if not isinstance(axis_name, (list, tuple)):
     axis_name = (axis_name,)
   return pdot_p.bind(x, y, axis_name=axis_name,
-                     pos_contract=pos_contract, pos_batch=pos_batch)
+                     pos_contract=pos_contract, pos_batch=pos_batch,
+                     precision=lax._canonicalize_precision(precision))
 
 
 def xeinsum(spec: str, x, y):
@@ -1346,12 +1348,12 @@ pdot_p = core.AxisPrimitive('pdot')
 core.axis_substitution_rules[pdot_p] = partial(_subst_all_names_in_param, 'axis_name')
 
 @pdot_p.def_impl
-def _pdot_impl(x, y, *, axis_name, pos_contract, pos_batch):
+def _pdot_impl(x, y, *, axis_name, pos_contract, pos_batch, precision):
   if axis_name: raise NameError(f"unbound axis name: {axis_name[0]}")
-  return lax.dot_general(x, y, [pos_contract, pos_batch])
+  return lax.dot_general(x, y, [pos_contract, pos_batch], precision=precision)
 
 @pdot_p.def_abstract_eval
-def _pdot_abstract_eval(x, y, *, axis_name, pos_contract, pos_batch):
+def _pdot_abstract_eval(x, y, *, axis_name, pos_contract, pos_batch, precision):
   # TODO(frostig,mattjj,jekbradbury): check inputs have given axis names?
   if not len(set(axis_name)) == len(axis_name): raise ValueError
   pos_aval = lax.dot_general_p.abstract_eval(
@@ -1364,7 +1366,7 @@ def _pdot_abstract_eval(x, y, *, axis_name, pos_contract, pos_batch):
   return pos_aval.update(named_shape=named_shape)
 
 def _pdot_vmap_collective_rule(frame, vals_in, dims_in, *, axis_name,
-                               pos_contract, pos_batch):
+                               pos_contract, pos_batch, precision):
   x, y = vals_in
   x_dim, y_dim = dims_in
   x_pos_contract, y_pos_contract = pos_contract
@@ -1376,24 +1378,24 @@ def _pdot_vmap_collective_rule(frame, vals_in, dims_in, *, axis_name,
   remaining_axis_names = tuple(n for n in axis_name if n != frame.name)
   out = pdot_p.bind(x, y, axis_name=remaining_axis_names,
                     pos_contract=[x_pos_contract, y_pos_contract],
-                    pos_batch=[x_pos_batch, y_pos_batch])
+                    pos_batch=[x_pos_batch, y_pos_batch], precision=precision)
   return out, None
 batching.collective_rules[pdot_p] = _pdot_vmap_collective_rule
 
 def _pdot_vmap_batching_rule(vals_in, dims_in, *, axis_name, pos_contract,
-                             pos_batch):
+                             pos_batch, precision):
   x, y = vals_in
   (pos_contract, pos_batch), result_batch_dim = lax._dot_general_batch_dim_nums(
       (x.ndim, y.ndim), dims_in, [pos_contract, pos_batch])
   out = pdot_p.bind(x, y, axis_name=axis_name, pos_contract=pos_contract,
-                    pos_batch=pos_batch)
+                    pos_batch=pos_batch, precision=precision)
   return out, result_batch_dim
 batching.primitive_batchers[pdot_p] = _pdot_vmap_batching_rule
 
 def _pdot_translation_rule(c, x, y, *, axis_name, pos_contract, pos_batch,
-                           axis_env, platform):
+                           precision, axis_env, platform):
   local_out = lax._dot_general_translation_rule(
-      c, x, y, dimension_numbers=[pos_contract, pos_batch], precision=None,
+      c, x, y, dimension_numbers=[pos_contract, pos_batch], precision=precision,
       preferred_element_type=None)
   if axis_name:
     out_tup = xla.parallel_translations[psum_p](
@@ -1405,15 +1407,15 @@ def _pdot_translation_rule(c, x, y, *, axis_name, pos_contract, pos_batch,
   return out
 xla.parallel_translations[pdot_p] = _pdot_translation_rule
 
-def _pdot_transpose_lhs(g, y, *, axis_name, pos_contract, pos_batch):
+def _pdot_transpose_lhs(g, y, *, axis_name, pos_contract, pos_batch, precision):
   # TODO: avals with names, call pbroadcast with axis_name
   return lax._dot_general_transpose_lhs(
-      g, y, dimension_numbers=[pos_contract, pos_batch], precision=None,
+      g, y, dimension_numbers=[pos_contract, pos_batch], precision=precision,
       preferred_element_type=None)
-def _pdot_transpose_rhs(g, x, *, axis_name, pos_contract, pos_batch):
+def _pdot_transpose_rhs(g, x, *, axis_name, pos_contract, pos_batch, precision):
   # TODO: avals with names, call pbroadcast with axis_name
   return lax._dot_general_transpose_rhs(
-      g, x, dimension_numbers=[pos_contract, pos_batch], precision=None,
+      g, x, dimension_numbers=[pos_contract, pos_batch], precision=precision,
       preferred_element_type=None)
 ad.defbilinear(pdot_p, _pdot_transpose_lhs, _pdot_transpose_rhs)
 

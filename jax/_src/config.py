@@ -568,7 +568,7 @@ numpy_rank_promotion = config.define_enum_state(
 default_matmul_precision = config.define_enum_state(
     name='jax_default_matmul_precision',
     enum_values=['bfloat16', 'tensorfloat32', 'float32'],
-    default=None,
+    default='float32',
     help=('Control the default matmul and conv precision for 32bit inputs.\n\n'
 
           'Some platforms, like TPU, offer configurable precision levels for '
