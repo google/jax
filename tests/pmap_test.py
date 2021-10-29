@@ -163,11 +163,15 @@ class PythonPmapTest(jtu.JaxTestCase):
     ans = f(x)
     self.assertAllClose(ans, expected, check_dtypes=False)
 
-  def testGather(self):
+  @parameterized.named_parameters(
+      {"testcase_name": f"_dtype={np.dtype(dtype).name}", "dtype": dtype}
+      for dtype in [np.float32, np.bool_])
+  def testGather(self, dtype):
     f = self.pmap(lambda x: lax.all_gather(x, 'i'), axis_name='i')
 
     shape = (jax.device_count(), 4)
-    x = np.arange(prod(shape), dtype=np.float32).reshape(shape)
+    rng = jtu.rand_default(self.rng())
+    x = rng(shape, dtype)
     expected = np.array([x] * jax.device_count())
     ans = f(x)
     self.assertAllClose(ans, expected, check_dtypes=False)

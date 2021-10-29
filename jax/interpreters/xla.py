@@ -559,11 +559,6 @@ def jaxpr_subcomp(ctx: TranslationContext, jaxpr: core.Jaxpr,
   _partitionmap(write, jaxpr.constvars, consts)
   _partitionmap(write, jaxpr.invars, args)
   for eqn in jaxpr.eqns:
-    op_metadata = make_op_metadata(
-        eqn.primitive, eqn.params, name_stack=ctx.name_stack,
-        source_info=eqn.source_info)
-    ctx.builder.set_op_metadata(op_metadata)
-    in_nodes = _flatmap(read, eqn.invars)
     if (ctx.platform is not None and
         eqn.primitive in _backend_specific_translations[ctx.platform]):
       rule = _backend_specific_translations[ctx.platform][eqn.primitive]
@@ -573,15 +568,38 @@ def jaxpr_subcomp(ctx: TranslationContext, jaxpr: core.Jaxpr,
       raise NotImplementedError(
           f"XLA translation rule for primitive '{eqn.primitive.name}' not found")
 
+    in_nodes = _flatmap(read, eqn.invars)
+    avals_out = map(aval, eqn.outvars)
+    op_metadata = make_op_metadata(
+        eqn.primitive, eqn.params, name_stack=ctx.name_stack,
+        source_info=eqn.source_info)
+    ctx.builder.set_op_metadata(op_metadata)
     with source_info_util.user_context(eqn.source_info):
-      ans = rule(ctx, map(aval, eqn.invars), map(aval, eqn.outvars),
-                 *in_nodes, **eqn.params)
+      ans = rule(ctx, map(aval, eqn.invars), avals_out, *in_nodes, **eqn.params)
+    ctx.builder.clear_op_metadata()
 
     assert isinstance(ans, collections.abc.Sequence), (ans, eqn)
     assert all(isinstance(x, xe.XlaOp) for x in ans), (ans, eqn)
-    map(ctx.builder.get_shape, ans)  # force xla to do shape error checking
-    ctx.builder.clear_op_metadata()
-    _partitionmap(write, eqn.outvars, ans)
+    expected_shapes = [aval_to_xla_shapes(aval) for aval in avals_out]
+    partitioned_ans = _partition_outputs([len(xs) for xs in expected_shapes],
+                                         ans)
+    # Check the XLA shapes match what we would expect from the output avals.
+    for xs, shapes in zip(partitioned_ans, expected_shapes):
+      for x, expected_shape in zip(xs, shapes):
+        # force xla to do its own shape checking
+        actual_shape = ctx.builder.get_shape(x)
+        # TODO(phawkins): the dtype canonicalization here is incorrect and
+        # is a work around for x64-mode problems. Remove it.
+        if (dtypes.canonicalize_dtype(actual_shape.numpy_dtype()) !=
+            dtypes.canonicalize_dtype(expected_shape.numpy_dtype()) or
+            actual_shape.dimensions() != expected_shape.dimensions()):
+          raise TypeError(
+              "Type mismatch in outputs of XLA translation rule for "
+              f"primitive '{eqn.primitive.name}'. Expected shape "
+              f"{expected_shape}, got shape {actual_shape}. This is a bug in "
+              "JAX or in a user-provided XLA translation rule; "
+              "please report it.")
+    map(write, eqn.outvars, partitioned_ans)
   return _flatmap(read, jaxpr.outvars)
 
 
