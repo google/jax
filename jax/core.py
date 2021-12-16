@@ -319,6 +319,15 @@ def extract_call_jaxpr(
     del new_params["call_jaxpr"]
     return (params["call_jaxpr"], new_params)
 
+# We can optionally set a Jaxpr rewriter that can be applied just before
+# compilation. This mechanism is used for compiling id_tap, we can
+# remove it once we bring the id_tap implementation into the core.
+outfeed_rewriter: Optional[Callable[[Jaxpr], Jaxpr]] = None
+def apply_outfeed_rewriter(jaxpr: Jaxpr) -> Jaxpr:
+  if outfeed_rewriter is not None:
+    return outfeed_rewriter(jaxpr)
+  else:
+    return jaxpr
 
 # TODO(mattjj): replace this approach with a primitive-keyed table of rules
 def traverse_jaxpr_params(f, params):

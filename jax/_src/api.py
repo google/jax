@@ -880,7 +880,7 @@ def xla_computation(fun: Callable,
       for axis_name, size in axis_env or []:
         stack.enter_context(core.extend_axis_env(axis_name, size, None))
       jaxpr, out_avals, consts = pe.trace_to_jaxpr_dynamic(jaxtree_fun, avals)
-      jaxpr = dispatch.apply_outfeed_rewriter(jaxpr)
+      jaxpr = core.apply_outfeed_rewriter(jaxpr)
       axis_env_ = make_axis_env(dispatch.jaxpr_replicas(jaxpr))
       if out_parts is None:
         out_parts_flat = None

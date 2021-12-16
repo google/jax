@@ -874,7 +874,7 @@ def stage_parallel_callable(
                                    "for pmap in {elapsed_time} sec"):
       jaxpr, out_sharded_avals, consts = pe.trace_to_jaxpr_final(
           fun, global_sharded_avals, pe.debug_info_final(fun, "pmap"))
-  jaxpr = dispatch.apply_outfeed_rewriter(jaxpr)
+  jaxpr = core.apply_outfeed_rewriter(jaxpr)
 
   assert len(out_sharded_avals) == len(pci.out_axes), (
       len(out_sharded_avals), len(pci.out_axes))
@@ -1959,7 +1959,7 @@ def lower_mesh_computation(
   _sanitize_mesh_jaxpr(jaxpr)
   if mesh.is_multi_process:
     check_multihost_collective_allowlist(jaxpr)
-  jaxpr = dispatch.apply_outfeed_rewriter(jaxpr)
+  jaxpr = core.apply_outfeed_rewriter(jaxpr)
 
   # 3. Build up the HLO
   tuple_args = len(in_jaxpr_avals) > 100  # pass long arg lists as tuple for TPU

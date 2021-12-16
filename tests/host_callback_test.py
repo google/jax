@@ -34,7 +34,9 @@ from jax import dtypes
 from jax.experimental import host_callback as hcb
 from jax.experimental import PartitionSpec as P
 from jax.experimental import maps
+from jax.interpreters import partial_eval as pe
 from jax.experimental import pjit
+from jax.interpreters import xla
 from jax import lax
 from jax import numpy as jnp
 from jax._src import test_util as jtu
@@ -550,6 +552,47 @@ class HostCallbackTapTest(jtu.JaxTestCase):
       self.assertEqual(func(10, what), transformed)
     hcb.barrier_wait()  # Wait for receivers to be done
     self.assertEqual(3, tap_count)
+
+  def test_tap_xla_computation(self):
+    def fun(x):
+      return hcb.id_print(x * 2, output_stream=testing_stream)
+
+    # Ensure that xla_computation has the tokens
+    res = jax.xla_computation(fun)(1.).as_hlo_text()
+    self.assertIn("token", res)
+
+  def test_tap_lower_fun(self):
+    class Prim(jax.core.Primitive):
+      def __init__(self):
+        super(Prim, self).__init__("prim")
+        self.multiple_results = True
+
+        def _abstract(*flat_avals, **params):
+          return pe.abstract_eval_fun(self.impl, *flat_avals, **params)
+
+        self.def_abstract_eval(_abstract)
+
+        def _xla(c, *xla_args, **params):
+          translation = xla.lower_fun(self.impl, multiple_results=True,
+                                      backend="cpu")
+          return translation(c, *xla_args, **params)
+
+        xla.translations[self] = _xla
+
+      def impl(self, *args):
+        x, = args
+        ret = hcb.id_print(x * 3., output_stream=testing_stream)
+        return ret,
+
+    @jax.jit
+    def fn(x):
+      return Prim().bind(x)[0]
+
+    res = fn(jnp.asarray(1.))
+    self.assertEqual(res, 3.)
+    hcb.barrier_wait()  # Wait for receivers to be done
+    assertMultiLineStrippedEqual(self, """
+        3.00""", testing_stream.output)
 
   @parameterized.named_parameters(
       jtu.cases_from_list(

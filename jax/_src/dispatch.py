@@ -206,7 +206,7 @@ def lower_xla_callable(fun: lu.WrappedFun, device, backend, name,
       x for i, x in enumerate(donated_invars) if i in kept_var_idx
   ]
   map(prefetch, itertools.chain(consts, jaxpr_literals(jaxpr)))
-  jaxpr = apply_outfeed_rewriter(jaxpr)
+  jaxpr = core.apply_outfeed_rewriter(jaxpr)
 
   nreps = jaxpr_replicas(jaxpr)
   device = _xla_callable_device(nreps, backend, device, arg_devices)
@@ -309,17 +309,6 @@ def _prune_unused_inputs(
       (i, v) for i, v in enumerate(jaxpr.invars) if v in used)
   new_jaxpr = core.Jaxpr(new_constvars, new_invars, jaxpr.outvars, jaxpr.eqns)
   return new_jaxpr, set(kept_const_idx), set(kept_var_idx)
-
-
-# We can optionally set a Jaxpr rewriter that can be applied just before
-# compilation. This mechanism is used for compiling id_tap, we can
-# remove it once we bring the id_tap implementation into the core.
-outfeed_rewriter: Optional[Callable[[core.Jaxpr], core.Jaxpr]] = None
-def apply_outfeed_rewriter(jaxpr: core.Jaxpr) -> core.Jaxpr:
-  if outfeed_rewriter is not None:
-    return outfeed_rewriter(jaxpr)
-  else:
-    return jaxpr
 
 
 def jaxpr_replicas(jaxpr) -> int:

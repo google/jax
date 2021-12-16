@@ -613,6 +613,8 @@ def lower_fun(fun: Callable, multiple_results: bool = True) -> Callable:
     wrapped_fun = lu.wrap_init(f, params)
     with core.extend_axis_env_nd(zip(ctx.axis_env.names, ctx.axis_env.sizes)):
       jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(wrapped_fun, avals_in)
+    # TODO(issue #8853): not quite right, does not pass the tokens properly
+    jaxpr = core.apply_outfeed_rewriter(jaxpr)
     return jaxpr_subcomp(ctx, jaxpr, _ir_consts(consts),
                          *map(wrap_singleton_ir_values, args))
 

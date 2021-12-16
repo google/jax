@@ -1741,7 +1741,7 @@ id_p.def_impl(lambda *args: args)
 id_p.def_abstract_eval(lambda *args: args)
 xla.register_translation(id_p, lambda ctx, avals_in, avals_out, *args: args)
 
-dispatch.outfeed_rewriter = lambda j: _rewrite_jaxpr(j, False, False)
+core.outfeed_rewriter = lambda j: _rewrite_jaxpr(j, False, False)
 
 
 class CallbackException(Exception):
