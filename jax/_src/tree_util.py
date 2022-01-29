@@ -267,6 +267,21 @@ register_pytree_node(
   lambda s, values: collections.defaultdict(s[0], safe_zip(s[1], values)))  # type: ignore[index]
 
 
+class _HashableCallableShim:
+  """Object that delegates __call__, __hash__, and __eq__ to another object."""
+  def __init__(self, fun):
+    self.fun = fun
+
+  def __call__(self, *args, **kw):
+    return self.fun(*args, **kw)
+
+  def __hash__(self):
+    return hash(self.fun)
+
+  def __eq__(self, other):
+    return self.fun == other.fun
+
+
 class Partial(functools.partial):
   """A version of functools.partial that works in pytrees.
 
@@ -314,20 +329,35 @@ class Partial(functools.partial):
   0
   >>> call_func(print_zero)
   Traced<ShapedArray(int32[], weak_type=True)>with<DynamicJaxprTrace(level=0/1)>
+
+  Unlike ``functools.partial`` hash and equality of a ``Partial`` object are
+  defined by hash and equality of the underlying function and the partially
+  applied arguments, rather than object-identity hash and equality.
   """
   def __new__(klass, func, *args, **kw):
     # In Python 3.10+, if func is itself a functools.partial instance,
     # functools.partial.__new__ would merge the arguments of this Partial
-    # instance with the arguments of the func. We box func in another lambda to
-    # avoid this optimization since it would change which arguments are
-    # considered part of the pytree.
+    # instance with the arguments of the func. We box func in a class that does
+    # not (yet) have a `func` attribute to defeat this optimization, since we
+    # care exactly which arguments are considered part of the pytree.
     if isinstance(func, functools.partial):
       original_func = func
-      func = lambda *args, **kw: original_func(*args, **kw)
+      func = _HashableCallableShim(original_func)
+      out = super(Partial, klass).__new__(klass, func, *args, **kw)
       func.func = original_func.func
       func.args = original_func.args
       func.keywords = original_func.keywords
-    return super(Partial, klass).__new__(klass, func, *args, **kw)
+      return out
+    else:
+      return super(Partial, klass).__new__(klass, func, *args, **kw)
+
+  def __eq__(self, other):
+    return (self.func == other.func and self.args == other.args
+            and self.keywords == other.keywords)
+
+  def __hash__(self):
+    return (hash(self.func) ^ hash(self.args) ^
+            hash(tuple(self.keywords.items())))
 
 
 register_pytree_node(

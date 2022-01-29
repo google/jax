@@ -188,8 +188,10 @@ class TreeTest(jtu.JaxTestCase):
   def testRoundtripPartial(self, inputs):
     xs, tree = tree_util.tree_flatten(inputs)
     actual = tree_util.tree_unflatten(tree, xs)
-    # functools.partial does not support equality comparisons:
-    # https://stackoverflow.com/a/32786109/809705
+    # Unlike functools.partial, tree_util.Partial supports value-based hash and
+    # equality.
+    self.assertEqual(actual, inputs)
+    self.assertEqual(hash(actual), hash(inputs))
     self.assertEqual(actual.func, inputs.func)
     self.assertEqual(actual.args, inputs.args)
     self.assertEqual(actual.keywords, inputs.keywords)

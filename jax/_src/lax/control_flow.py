@@ -53,6 +53,7 @@ from jax._src.lib import xla_client
 from jax._src.traceback_util import api_boundary
 from jax._src.util import (unzip2, unzip3, safe_map, safe_zip,
                            split_list, cache, extend_name_stack, wrap_name)
+from jax import tree_util
 from jax.tree_util import (tree_flatten, tree_unflatten, treedef_is_leaf,
                            treedef_children, treedef_tuple, tree_multimap,
                            tree_leaves, tree_structure)
@@ -2490,25 +2491,66 @@ def _split_linear_solve_args(args, const_lengths):
   return _LinearSolveTuple(*params_list[:-1]), params_list[-1]
 
 
-def _transpose_one_output(linear_fun, primals):
-  transpose_fun = jax.linear_transpose(linear_fun, primals)
-  def transposed_fun(x):
-    (y,) = transpose_fun(x)
+class _TransposeOneOutput:
+  def __init__(self, linear_fun, primal_avals, primal_treedef):
+    self.key = (linear_fun, primal_avals, primal_treedef)
+    self.transpose_fun = jax.linear_transpose(
+        linear_fun, tree_util.tree_unflatten(primal_treedef, primal_avals))
+
+  def __call__(self, x):
+    (y,) = self.transpose_fun(x)
     return y
-  return transposed_fun
+
+  def __eq__(self, other):
+    return self.key == other.key
+
+  def __hash__(self):
+    return hash(self.key)
+
+
+def _transpose_one_output(
+    linear_fun, primal_avals: Tuple[core.AbstractValue, ...],
+    primal_treedef: tree_util.PyTreeDef):
+  return _TransposeOneOutput(linear_fun, primal_avals, primal_treedef)
 
 
 def _flatten(args):
   return [x for arg in args for x in arg]
 
 
-def _check_shapes(func_name, expected_name, actual, expected):
-  actual_shapes = _map(np.shape, tree_leaves(actual))
-  expected_shapes = _map(np.shape, tree_leaves(expected))
+def _check_shapes(func_name, expected_name, actual, expected_shapes):
+  actual_shapes = tuple(_map(np.shape, tree_leaves(actual)))
   if actual_shapes != expected_shapes:
     raise ValueError(
         f"{func_name}() output shapes must match {expected_name}, "
         f"got {actual_shapes} and {expected_shapes}")
+
+
+
+class _ShapeChecked:
+  def __init__(self, fun, name, has_aux, expected_shapes):
+    self.fun = fun
+    self.name = name
+    self.has_aux = has_aux
+    self.expected_shapes = expected_shapes
+
+  def __call__(self, x):
+    if self.has_aux:
+      y, aux = self.fun(x)
+      _check_shapes(self.name, "b", y, self.expected_shapes)
+      return y, aux
+    else:
+      y = self.fun(x)
+      _check_shapes(self.name, "b", y, self.expected_shapes)
+      return y
+
+  def __eq__(self, other):
+    return (self.fun == other.fun and self.name == other.name and
+            self.has_aux == other.has_aux and
+            self.expected_shapes == other.expected_shapes)
+
+  def __hash__(self):
+    return hash((self.fun, self.name, self.has_aux, self.expected_shapes))
 
 
 @api_boundary
@@ -2552,22 +2594,15 @@ def custom_linear_solve(
     transpose_solve = solve
 
   b_flat, in_args_tree = tree_flatten((b,))
+  _, b_tree = tree_flatten(b)
   b_avals = tuple(_map(_abstractify, b_flat))
 
   tree, = treedef_children(in_args_tree)
 
+  expected_shapes = tuple(_map(np.shape, tree_leaves(b_flat)))
+
   def _shape_checked(fun, name, has_aux):
-    def f(x):
-      y = fun(x)
-      _check_shapes(name, "b", y, b_flat)
-      return y
-
-    def f_aux(x):
-      y, aux = fun(x)
-      _check_shapes(name, "b", y, b_flat)
-      return y, aux
-
-    return f_aux if has_aux else f
+    return _ShapeChecked(fun, name, has_aux, expected_shapes)
 
   # no auxiliary data assumed for matvec
   matvec_jaxpr, matvec_consts, out_tree = _initial_style_jaxpr(
@@ -2576,7 +2611,8 @@ def custom_linear_solve(
   _check_tree("matvec", "b", out_tree, tree, False)
 
   solve_jaxpr, solve_consts, out_tree = _initial_style_jaxpr(
-      _shape_checked(partial(solve, matvec), "solve", has_aux), in_args_tree, b_avals,
+      _shape_checked(tree_util.Partial(solve, matvec), "solve", has_aux),
+      in_args_tree, b_avals,
       'custom_linear_solve')
   _check_tree("solve", "b", out_tree, tree, has_aux)
 
@@ -2589,13 +2625,14 @@ def custom_linear_solve(
       vecmat_jaxpr = matvec_jaxpr
       vecmat_consts = matvec_consts
     else:
-      vecmat = _transpose_one_output(matvec, b)
+      vecmat = _transpose_one_output(matvec, b_avals, b_tree)
       vecmat_jaxpr, vecmat_consts, out_tree = _initial_style_jaxpr(
           vecmat, in_args_tree, b_avals, 'custom_linear_solve')
       assert out_tree == tree
 
     tr_solve_jaxpr, tr_solve_consts, out_tree = _initial_style_jaxpr(
-        _shape_checked(partial(transpose_solve, vecmat), "transpose_solve", has_aux),
+        _shape_checked(tree_util.Partial(transpose_solve, vecmat),
+                       "transpose_solve", has_aux),
         in_args_tree, b_avals, 'custom_linear_solve')
     _check_tree("transpose_solve", "b", out_tree, tree, has_aux)
 

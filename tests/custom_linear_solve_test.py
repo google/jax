@@ -92,7 +92,6 @@ class CustomLinearSolveTest(jtu.JaxTestCase):
       {"testcase_name": "nonsymmetric", "symmetric": False},
       {"testcase_name": "symmetric", "symmetric": True},
   )
-  @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def test_custom_linear_solve(self, symmetric):
 
     def explicit_jacobian_solve(matvec, b):
@@ -111,7 +110,8 @@ class CustomLinearSolveTest(jtu.JaxTestCase):
     if symmetric:
       a = a + a.T
     b = rng.randn(3)
-    jtu.check_grads(linear_solve, (a, b), order=2, rtol=3e-3)
+    jit_linear_solve = jax.jit(linear_solve)
+    jtu.check_grads(jit_linear_solve, (a, b), order=2, rtol=3e-3)
 
     expected = jnp.linalg.solve(a, b)
     actual = jax.jit(linear_solve)(a, b)
@@ -122,7 +122,6 @@ class CustomLinearSolveTest(jtu.JaxTestCase):
     actual = jax.vmap(linear_solve, (None, 1), 1)(a, c)
     self.assertAllClose(expected, actual)
 
-  @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def test_custom_linear_solve_aux(self):
     def explicit_jacobian_solve_aux(matvec, b):
       x = lax.stop_gradient(jnp.linalg.solve(jax.jacobian(matvec)(b), b))
@@ -166,8 +165,6 @@ class CustomLinearSolveTest(jtu.JaxTestCase):
     jtu.check_eq(expected_aux, vmap_aux)
 
 
-  @jtu.skip_on_flag("jax_skip_slow_tests", True)
-  @unittest.skip("Test is too slow (> 1 minute at time of writing)")
   def test_custom_linear_solve_zeros(self):
     def explicit_jacobian_solve(matvec, b):
       return lax.stop_gradient(jnp.linalg.solve(jax.jacobian(matvec)(b), b))
@@ -176,6 +173,7 @@ class CustomLinearSolveTest(jtu.JaxTestCase):
       return lax.custom_linear_solve(matvec, b, explicit_jacobian_solve,
                                      explicit_jacobian_solve)
 
+    @jax.jit
     def linear_solve(a, b):
       return matrix_free_solve(partial(high_precision_dot, a), b)
 
@@ -184,10 +182,10 @@ class CustomLinearSolveTest(jtu.JaxTestCase):
     b = rng.randn(3)
     jtu.check_grads(lambda x: linear_solve(x, b), (a,), order=2,
                     rtol={np.float32: 5e-3})
+
     jtu.check_grads(lambda x: linear_solve(a, x), (b,), order=2,
                     rtol={np.float32: 5e-3})
 
-  @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def test_custom_linear_solve_iterative(self):
 
     def richardson_iteration(matvec, b, omega=0.1, tolerance=1e-6):
@@ -256,6 +254,7 @@ class CustomLinearSolveTest(jtu.JaxTestCase):
 
   def test_custom_linear_solve_complex(self):
 
+    @jax.jit
     def solve(a, b):
       def solve(matvec, x):
         return jsp.linalg.solve(a, x)
@@ -269,9 +268,9 @@ class CustomLinearSolveTest(jtu.JaxTestCase):
     b = 0.5 * rng.randn(2) + 0.5j * rng.randn(2)
     jtu.check_grads(solve, (a, b), order=2, rtol=1e-2)
 
-  @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def test_custom_linear_solve_lu(self):
 
+    @jax.jit
     def linear_solve(a, b):
       a_factors = jsp.linalg.lu_factor(a)
       at_factors = jsp.linalg.lu_factor(a.T)
@@ -290,13 +289,8 @@ class CustomLinearSolveTest(jtu.JaxTestCase):
     actual = linear_solve(a, b)
     self.assertAllClose(expected, actual)
 
-    jtu.check_grads(linear_solve, (a, b), order=2, rtol=2e-3)
+    jtu.check_grads(linear_solve, (a, b), order=2, rtol={np.float32: 2e-3})
 
-    # regression test for https://github.com/google/jax/issues/1536
-    jtu.check_grads(jax.jit(linear_solve), (a, b), order=2,
-                    rtol={np.float32: 2e-3})
-
-  @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def test_custom_linear_solve_without_transpose_solve(self):
 
     def explicit_jacobian_solve(matvec, b):
@@ -319,8 +313,7 @@ class CustomLinearSolveTest(jtu.JaxTestCase):
     with self.assertRaisesRegex(TypeError, "transpose_solve required"):
       jax.grad(loss)(a, b)
 
-  @jtu.skip_on_flag("jax_skip_slow_tests", True)
-  @unittest.skip("Test is too slow (> 2 minutes at time of writing)")
+  @unittest.skip("Test is slow")
   def test_custom_linear_solve_pytree(self):
     """Test custom linear solve with inputs and outputs that are pytrees."""
 
@@ -349,9 +342,11 @@ class CustomLinearSolveTest(jtu.JaxTestCase):
 
     def custom_unrolled_lower_tri_solve(mat, b):
       return lax.custom_linear_solve(
+          # The use of `partial` here is problematic because it forces a lot of
+          # retracing.
           partial(unrolled_matvec, mat), b,
-          partial(unrolled_substitution_solve, lower_tri=True),
-          partial(unrolled_substitution_solve, lower_tri=False))
+          tree_util.Partial(unrolled_substitution_solve, lower_tri=True),
+          tree_util.Partial(unrolled_substitution_solve, lower_tri=False))
 
     mat = [[1.0, None, None, None, None, None, None],
            [1.0, 1.0, None, None, None, None, None],
