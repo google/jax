@@ -14,7 +14,7 @@
 
 
 from functools import partial
-from typing import Callable, Iterator, NamedTuple, Sequence
+from typing import Callable, Iterator, NamedTuple, Sequence, Optional
 import warnings
 
 import numpy as np
@@ -25,6 +25,7 @@ from jax import numpy as jnp
 from jax import tree_util
 from jax.config import config
 from jax.dtypes import float0
+from jax.errors import KeyReuseError
 from jax.interpreters import batching
 from jax.interpreters import xla
 from jax._src.api import jit, vmap
@@ -34,6 +35,7 @@ from jax._src.numpy.lax_numpy import (
     _canonicalize_tuple_index, _eliminate_deprecated_list_indexing,
     _expand_bool_indices, _register_stackable)
 import jax._src.pretty_printer as pp
+from jax._src import source_info_util
 from jax._src.util import prod
 
 
@@ -100,6 +102,7 @@ class PRNGKeyArray:
 
   impl: PRNGImpl
   _keys: jnp.ndarray
+  _consumed_source_info: Optional[source_info_util.SourceInfo]
 
   def __init__(self, impl, key_data: jnp.ndarray):
     # key_data might be a placeholder python `object` or `bool`
@@ -110,6 +113,7 @@ class PRNGKeyArray:
           f'Invalid PRNG key data {key_data} for PRNG implementation {impl}')
     self.impl = impl
     self._keys = key_data
+    self._consumed_source_info = None
 
   def tree_flatten(self):
     return (self._keys,), self.impl
@@ -177,13 +181,35 @@ class PRNGKeyArray:
     idx = _canonicalize_tuple_index(ndim, idx, array_name='PRNGKeyArray')
     return PRNGKeyArray(self.impl, self._keys[idx])
 
+  def consume(self):
+    if not config.jax_debug_prng_key_reuse:
+      return
+
+    if self._consumed_source_info:
+      summary = source_info_util.summarize(self._consumed_source_info)
+      raise KeyReuseError('Re-used a key, the key was previously used'
+                          f' at {summary}.')
+    self._consumed_source_info = source_info_util.current()
+    return self
+
   def _fold_in(self, data: int) -> 'PRNGKeyArray':
     return PRNGKeyArray(self.impl, self.impl.fold_in(self._keys, data))
 
   def _random_bits(self, bit_width, shape) -> jnp.ndarray:
+    # TODO(lenamartens): call self.consume() here
+    # Calling _random_bits should also consume self, just like _split does.
+    # For technical reasons, this consume call is lifted to the jax.random
+    # functions which internally call _random_bits (eg. see jax.random.normal).
+    # If consume was called here as well, any call to those random functions
+    # would consume the key twice and error.
+    # If consume was not called at the top-level in jax.random, the consume
+    # flag would not be persisted across the jit boundary of their wrapper
+    # functions due to the transformation boundary limitation of the current
+    # approach.
     return self.impl.random_bits(self._keys, bit_width, shape)
 
   def _split(self, num: int) -> 'PRNGKeyArray':
+    self.consume()
     return PRNGKeyArray(self.impl, self.impl.split(self._keys, num))
 
   def reshape(self, newshape, order=None):

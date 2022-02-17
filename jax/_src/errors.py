@@ -546,3 +546,43 @@ class UnexpectedTracerError(JAXTypeError):
 
   def __init__(self, msg: str):
     super().__init__(msg)
+
+
+class KeyReuseError(JAXTypeError):
+  """This error occurs when you re-use a PRNGKey.
+
+  .. note::
+    This feature is experimental (it does not catch all cases of key re-use,
+    most importantly around JAX control-flow and across JAX transformation
+    boundaries).
+    It needs the `jax_enable_custom_prng` flag to be set to True.
+
+  JAX's random API uses explicit PRNG keys which are passed into random calls.
+  This means it's possible to re-use a PRNG key, and without realizing it get
+  the same random bits out of two separate calls to a random function::
+
+    >>> from jax import random
+    >>> key = random.PRNGKey(123)
+    >>> random_bits0 = random.normal(key, ())
+    >>> random_bits1 = random.normal(key, ())
+    >>> random_bits0 == random_bits1
+    DeviceArray(True, dtype=bool)
+
+  See also the
+  `documentation here about JAX PRNG <https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html#jax-prng>`_
+  on why this is a common pitfall.
+
+  With PRNG re-use checking enabled the above would fail. Currently this check
+  is behind a debug flag (by setting jax_debug_prng_key_reuse to True), or you
+  can use it as a context manager::
+
+    >>> from jax import random
+    >>> with jax.enable_custom_prng(True):
+    ...   with jax.debug_prng_key_reuse(True):
+    ...     key = random.PRNGKey(123)
+    ...     random_bits0 = random.uniform(key)
+    ...     random_bits1 = random.uniform(key)  # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    KeyReuseError: Re-used a key, the key was previously used at [...]
+  """

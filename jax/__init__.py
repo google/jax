@@ -44,6 +44,7 @@ from jax._src.config import (
   checking_leaks as checking_leaks,
   enable_custom_prng as enable_custom_prng,
   debug_nans as debug_nans,
+  debug_prng_key_reuse as debug_prng_key_reuse,
   debug_infs as debug_infs,
   log_compiles as log_compiles,
   default_matmul_precision as default_matmul_precision,
