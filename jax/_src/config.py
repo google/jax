@@ -528,6 +528,14 @@ debug_infs = config.define_bool_state(
           'version in an attempt to more precisely identify the operation '
           'which produced the inf.'))
 
+debug_prng_key_reuse = config.define_bool_state(
+    name='jax_debug_prng_key_reuse',
+    default=False,
+    help=('Enables check which throws an error if a PRNG key is re-used.'
+          'This is a very experimental feature: it does not catch every case of'
+          ' key re-use (especially around JAX control-flow) and only works if'
+          ' `jax_enable_custom_prng` is set to True.'))
+
 log_compiles = config.define_bool_state(
     name='jax_log_compiles',
     default=False,

@@ -17,6 +17,7 @@ from jax._src.errors import (
   JAXTypeError as JAXTypeError,
   JAXIndexError as JAXIndexError,
   ConcretizationTypeError as ConcretizationTypeError,
+  KeyReuseError as KeyReuseError,
   NonConcreteBooleanIndexError as NonConcreteBooleanIndexError,
   TracerArrayConversionError as TracerArrayConversionError,
   TracerIntegerConversionError as TracerIntegerConversionError,
