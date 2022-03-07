@@ -29,7 +29,7 @@ from jax import linear_util as lu
 from jax._src.api import Lowered, _check_callable, _check_arg
 from jax._src import dispatch
 from jax.tree_util import (tree_flatten, tree_unflatten, all_leaves, tree_map,
-                           tree_leaves)
+                           tree_leaves, treedef_tuple)
 from jax._src.tree_util import _replace_nones
 from jax._src.api_util import (flatten_fun_nokwargs, flatten_axes,
                                _ensure_index_tuple, donation_vector,
@@ -659,8 +659,12 @@ def xmap(fun: Callable,
         params['resource_env'], params['backend'], params['spmd_in_axes'],
         params['spmd_out_axes_thunk'], params['in_positional_semantics'],
         params['out_positional_semantics'], *avals_flat)
+
+    in_tree = treedef_tuple([in_tree, tree_flatten({})[1]])
+    in_avals = in_tree.unflatten(avals_flat)
     return Lowered(
-        computation, in_tree, out_tree(), donate_argnums, no_kwargs=True)
+        computation, in_tree, in_avals, out_tree(), donate_argnums,
+        no_kwargs=True)
 
   fun_mapped = wraps(fun)(decorate_serial(fun_mapped))
   fun_mapped.lower = decorate_serial(lower)

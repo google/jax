@@ -159,13 +159,17 @@ class PythonPmapTest(jtu.JaxTestCase):
     shape = (jax.device_count(), 4)
     x = np.arange(prod(shape), dtype=np.float32).reshape(shape)
     expected = f(x)
-    f_exe = f.lower(x).compile()
-    ans = f_exe(x)
+    lowered = f.lower(x)
+    compiled = lowered.compile()
+    ans = compiled(x)
+
     self.assertAllClose(ans, expected)
 
     # It's a pair of: (positional args, as a tuple of their structures, kwargs).
-    self.assertFalse(f_exe._no_kwargs)
-    self.assertEqual(f_exe.in_tree, jax.tree_flatten(((0,), {}))[1])
+    self.assertFalse(compiled._no_kwargs)
+    self.assertEqual(compiled.in_tree, jax.tree_flatten(((0,), {}))[1])
+    self.assertEqual(lowered.in_avals,
+                    ((jax.ShapedArray(x.shape, x.dtype),), {}))
 
   def testLowerCompileInTreeMismatch(self):
     f = self.pmap(lambda x: x - lax.pmean(x, 'i'), axis_name='i')

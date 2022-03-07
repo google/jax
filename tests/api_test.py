@@ -761,6 +761,11 @@ class CPPJitTest(jtu.BufferDonationTestCase):
     f_low = f_jit.lower(1.)
     f_exe = f_low.compile()
     self.assertAllClose(f_exe(1.), 2.)
+    self.assertEqual(f_low.in_avals, f_exe.in_avals)
+    expected_dtype = np.float64 if config.x64_enabled else np.float32
+    self.assertEqual(
+        f_low.in_avals,
+        ((jax.ShapedArray([], expected_dtype, weak_type=True),), {}))
 
     self.assertEqual(f_exe.in_tree, jax.tree_flatten(((0,), {}))[1])
 
@@ -3362,8 +3367,8 @@ class APITest(jtu.JaxTestCase):
 
     @jax.jit
     def loss(A, x):
-        h = jax.nn.sigmoid(A * x)
-        return jnp.sum((h - x)**2)
+      h = jax.nn.sigmoid(A * x)
+      return jnp.sum((h - x)**2)
 
     with jax.checking_leaks():
       _ = jax.grad(loss)(A, x)  # doesn't crash
@@ -5357,44 +5362,44 @@ class CustomJVPTest(jtu.JaxTestCase):
 
     @jax.custom_jvp
     def f(mat, aux):
-        num_rows, num_cols = mat.shape
-        return jnp.ones((num_rows, 1)) / num_cols
+      num_rows, num_cols = mat.shape
+      return jnp.ones((num_rows, 1)) / num_cols
 
     @f.defjvp
     def f_jvp(primals, tangents):
-        mat, aux = primals
-        vec, _ = tangents
-        output = f(*primals)
-        num_rows, num_cols = mat.shape
-        size = num_rows * num_cols
-        # -----
-        bd_mat = mat.reshape(1, 1, num_rows, num_cols)
-        bd_mat = jnp.tile(bd_mat, reps=(num_rows, num_cols))
-        bd_mat = bd_mat.reshape(size, num_rows, num_cols)
-        # -----
-        rowsum = jnp.sum(mat, axis=1, keepdims=True)
-        colsum = jnp.sum(mat, axis=0, keepdims=True)
-        bd_rowsum = jnp.tile(rowsum, reps=(1, num_rows))
-        bd_colsum = jnp.tile(colsum, reps=(num_cols, 1))
-        # -----
-        bd_vec = vec.reshape(size, 1)
-        # -----
-        def operate(mx, val):
-            buf = 0
-            for i in range(2):
-                buf = buf + jnp.matmul(mx, bd_colsum) / jnp.power(aux, i)
-            buf = jnp.matmul(bd_rowsum, buf)
-            return buf * val[None, :]
-        # -----
-        # Vertorizing will raise shape error
-        bd_buf = jax.vmap(operate, in_axes=(0, 0), out_axes=0)(bd_mat, bd_vec)
-        # -----
-        bd_buf = bd_buf / aux
-        jvp = jnp.sum(bd_buf, axis=0)
-        jvp = jnp.mean(jvp, axis=1, keepdims=True)
-        # -----
-        # JVP ends successfully, but still raise an error
-        return (output, jvp)
+      mat, aux = primals
+      vec, _ = tangents
+      output = f(*primals)
+      num_rows, num_cols = mat.shape
+      size = num_rows * num_cols
+      # -----
+      bd_mat = mat.reshape(1, 1, num_rows, num_cols)
+      bd_mat = jnp.tile(bd_mat, reps=(num_rows, num_cols))
+      bd_mat = bd_mat.reshape(size, num_rows, num_cols)
+      # -----
+      rowsum = jnp.sum(mat, axis=1, keepdims=True)
+      colsum = jnp.sum(mat, axis=0, keepdims=True)
+      bd_rowsum = jnp.tile(rowsum, reps=(1, num_rows))
+      bd_colsum = jnp.tile(colsum, reps=(num_cols, 1))
+      # -----
+      bd_vec = vec.reshape(size, 1)
+      # -----
+      def operate(mx, val):
+        buf = 0
+        for i in range(2):
+          buf = buf + jnp.matmul(mx, bd_colsum) / jnp.power(aux, i)
+        buf = jnp.matmul(bd_rowsum, buf)
+        return buf * val[None, :]
+      # -----
+      # Vertorizing will raise shape error
+      bd_buf = jax.vmap(operate, in_axes=(0, 0), out_axes=0)(bd_mat, bd_vec)
+      # -----
+      bd_buf = bd_buf / aux
+      jvp = jnp.sum(bd_buf, axis=0)
+      jvp = jnp.mean(jvp, axis=1, keepdims=True)
+      # -----
+      # JVP ends successfully, but still raise an error
+      return (output, jvp)
 
     jax.grad(lambda mat, aux: jnp.sum(f(mat, aux)))(mat, 0.5)  # doesn't crash
 
@@ -6330,17 +6335,17 @@ class CustomVJPTest(jtu.JaxTestCase):
     def mul(x, coeff): return x * coeff
     def mul_fwd(x, coeff): return mul(x, coeff), (x, coeff)
     def mul_bwd(res, g):
-        x, coeff = res
-        g_x = g * coeff
-        g_coeff = (x * g).sum()
-        return g_x, g_coeff
+      x, coeff = res
+      g_x = g * coeff
+      g_coeff = (x * g).sum()
+      return g_x, g_coeff
     mul.defvjp(mul_fwd, mul_bwd)
 
     def scan_over_mul(x, coeff):
-        def f_(x, t):
-            return mul(x, coeff), None
-        y, _ = jax.lax.scan(f_, x, jnp.arange(3))
-        return y
+      def f_(x, t):
+        return mul(x, coeff), None
+      y, _ = jax.lax.scan(f_, x, jnp.arange(3))
+      return y
 
     key = jax.random.PRNGKey(0)
     key1, key2 = jax.random.split(key, 2)

@@ -443,21 +443,17 @@ def _cpp_jit(
         # This is if we have already executed this code-path (most-recent entry
         # has been reset to None). Thus, we do not support the fast-path.
         execute is not None and
-        execute.func is dispatch._execute_compiled and  # not trivial, not pmap
+        isinstance(execute, dispatch._ExecuteCompiled) and  # not trivial, not pmap
         # Not supported: ShardedDeviceArray
         all(device_array.type_is_device_array(x) for x in out_flat))
     ### If we can use the fastpath, we return required info to the caller.
     if use_fastpath:
-      _, xla_executable, _, result_handlers, kept_var_idx = execute.args
-      sticky_device = None
-      avals = []
-      lazy_exprs = [None] * len(result_handlers)
-      for result_handler in result_handlers:
-        aval, sticky_device = result_handler.args
-        avals.append(aval)
+      sticky_device = execute.out_handlers.sticky_device
+      lazy_exprs = [None] * len(execute.out_handlers.out_avals)
+      avals = execute.out_handlers.out_avals
       assert len(avals) == len(out_flat)
-      kept_var_bitvec = [i in kept_var_idx for i in range(len(args_flat))]
-      fastpath_data = _FastpathData(xla_executable, out_pytree_def,
+      kept_var_bitvec = [i in execute.kept_var_idx for i in range(len(args_flat))]
+      fastpath_data = _FastpathData(execute.compiled, out_pytree_def,
                                     sticky_device, avals, lazy_exprs,
                                     kept_var_bitvec)
     else:
@@ -499,14 +495,18 @@ class Lowered:
   querying properties of lowered computations across JAX's various
   lowering paths (``jit``, ``pmap``, etc.).
   """
-  __slots__ = ['in_tree', 'out_tree', 'donate_argnums', '_lowering',
-               '_no_kwargs']
+  __slots__ = [
+      "in_tree", "in_avals", "out_tree", "donate_argnums", "_lowering",
+      "_no_kwargs"
+  ]
 
   # The PyTreeDef of the (positional arguments, keyword arguments).
   #
   # To get the individual PyTreeDef for the positional an keyword arguments,
   # use `in_tree.children() which will return you a sequence of 2 PyTreeDef.
   in_tree: PyTreeDef
+  # The nested input tree of abstract values as `Tree[ShapedArray]`.
+  in_avals: Any
   out_tree: PyTreeDef
   donate_argnums: Tuple[int]
   _lowering: Union[dispatch.XlaComputation,
@@ -514,25 +514,33 @@ class Lowered:
                    pxla.PmapComputation]
   _no_kwargs: bool
 
-  def __init__(self, lowering, in_tree, out_tree, donate_argnums,
-               no_kwargs=False):
+  def __init__(self,
+               lowering,
+               in_tree: PyTreeDef,
+               in_avals,
+               out_tree: PyTreeDef,
+               donate_argnums: Tuple[int],
+               no_kwargs: bool = False):
+    """Initializer.
+
+    Args:
+      in_tree: The `PyTreeDef` of (args, kwargs).
+      out_tree: The `PyTreeDef` of the outputs.
+      no_kwargs: If `True` the transformation, and the `Compiled` returned from
+        this object will not support keyword arguments (an error will be raised
+        if some are provided).
+    """
     self._lowering = lowering
-
-    # If `_no_kwargs is True`, `in_tree` is the PyTreeDef of the positional
-    # arguments only. It will be the PyTreeDef of (args, kwargs) otherwise.
-    if no_kwargs:
-      self.in_tree = treedef_tuple([in_tree, tree_flatten({})[1]])
-    else:
-      self.in_tree = in_tree
-
+    self.in_tree = in_tree
+    self.in_avals = in_avals
     self.out_tree = out_tree
     self.donate_argnums = donate_argnums
     self._no_kwargs = no_kwargs
 
   def compile(self) -> 'Compiled':
     return Compiled(
-        self._lowering.compile(), self.in_tree, self.out_tree,
-        self.donate_argnums, self._no_kwargs)
+        self._lowering.compile(), self.in_tree, self.in_avals,
+        self.out_tree, self.donate_argnums, self._no_kwargs)
 
   def compiler_ir(self, dialect: Optional[str] = None):
     if dialect is None or dialect == "mhlo":
@@ -555,11 +563,16 @@ class Compiled:
   common API for querying properties of compiled computations across
   JAX's various compilation paths and backends.
   """
-  __slots__ = ['in_tree', 'out_tree', 'donate_argnums', '_executable',
-               '_no_kwargs']
+  __slots__ = [
+      "in_tree", "in_avals", "out_tree", "donate_argnums", "_executable",
+      "_no_kwargs"
+  ]
+
 
   # The PyTreeDef of the (positional arguments, keyword arguments).
   in_tree: PyTreeDef
+  # The nested input tree of abstract values as `Tree[ShapedArray]`.
+  in_avals: Any
   out_tree: PyTreeDef
   donate_argnums: Tuple[int]
   _executable: Union[dispatch.XlaCompiledComputation,
@@ -567,10 +580,11 @@ class Compiled:
                      pxla.PmapExecutable]
   _no_kwargs: bool
 
-  def __init__(self, executable, in_tree, out_tree, donate_argnums,
+  def __init__(self, executable, in_tree, in_avals, out_tree, donate_argnums,
                no_kwargs=False):
     self._executable = executable
     self.in_tree = in_tree
+    self.in_avals = in_avals
     self.out_tree = out_tree
     self.donate_argnums = donate_argnums
     self._no_kwargs = no_kwargs
@@ -657,10 +671,17 @@ def _jit_lower(fun, static_argnums, static_argnames, device, backend,
         fun, static_argnums, static_argnames, donate_argnums, args, kwargs)
     flat_fun, out_tree = flatten_fun(closed_fun, in_tree)
     name = flat_fun.__name__
-    arg_specs = unsafe_map(arg_spec, args_flat)
-    computation = dispatch.lower_xla_callable(
-        flat_fun, device, backend, name, donated_invars, *arg_specs)
-    return Lowered(computation, in_tree, out_tree(), donate_argnums)
+    arg_specs_and_device = list(unsafe_map(arg_spec, args_flat))
+    # Only do this if the list is not empty
+    if arg_specs_and_device:
+      arg_specs = zip(*arg_specs_and_device)[0]
+    else:
+      arg_specs = []
+    computation = dispatch.lower_xla_callable(flat_fun, device, backend, name,
+                                              donated_invars,
+                                              *arg_specs_and_device)
+    return Lowered(computation, in_tree, in_tree.unflatten(arg_specs),
+                   out_tree(), donate_argnums)
 
   return lower
 
@@ -2169,7 +2190,7 @@ def _pmap_lower(fun, axis_name, in_axes, out_axes, static_broadcasted_tuple,
     p = _prepare_pmap(
         fun, in_axes, out_axes, static_broadcasted_tuple, donate_tuple,
         global_arg_shapes, args, kwargs)
-    abstract_args = map(xla.abstractify, p.flat_args)
+    abstract_args = list(map(xla.abstractify, p.flat_args))
     computation = pxla.lower_parallel_callable(
         p.flat_fun, backend, axis_name,
         axis_size=p.local_axis_size, global_axis_size=axis_size,
@@ -2180,7 +2201,8 @@ def _pmap_lower(fun, axis_name, in_axes, out_axes, static_broadcasted_tuple,
         donated_invars=p.donated_invars,
         global_arg_shapes=p.global_arg_shapes_flat,
         avals=abstract_args)
-    return Lowered(computation, p.in_tree, p.out_tree(), donate_tuple)
+    return Lowered(computation, p.in_tree, p.in_tree.unflatten(abstract_args),
+                   p.out_tree(), donate_tuple)
 
   return lower
 
@@ -2870,7 +2892,7 @@ def device_put_replicated(x: Any, devices: Sequence[xc.Device]):
   def _device_put_replicated(x):
     aval = core.unmapped_aval(len(devices), core.no_axis_name, 0,
                               core.raise_to_shaped(core.get_aval(x)))
-    assert (isinstance(aval, core.ShapedArray) and
+    assert (isinstance(aval, ShapedArray) and
             len(xla.aval_to_xla_shapes(aval)) == 1)
     buf, = dispatch.device_put(x, devices[0])
     rest_bufs = [buf.copy_to_device(d) for d in devices[1:]]

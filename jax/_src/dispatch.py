@@ -435,39 +435,75 @@ def _check_special(name, xla_shape, buf):
       raise FloatingPointError(f"invalid value (inf) encountered in {name}")
 
 
-def _execute_compiled(name: str, compiled: XlaExecutable,
-                      output_buffer_counts: Optional[Sequence[int]],
-                      result_handlers, kept_var_idx, *args):
-  device, = compiled.local_devices()
-  input_bufs = util.flatten(
-      device_put(x, device) for i, x in enumerate(args) if i in kept_var_idx)
-  out_bufs = compiled.execute(input_bufs)
-  check_special(name, out_bufs)
-  if output_buffer_counts is None:
-    return (result_handlers[0](*out_bufs),)
-  return tuple(
-      handler(*bs) for handler, bs in
-      unsafe_zip(result_handlers, util.unflatten(out_bufs, output_buffer_counts)))
+class _OutHandlers:
+  __slots__ = ("sticky_device", "out_avals", "handlers")
+
+  def __init__(self, sticky_device, out_avals):
+    self.sticky_device = sticky_device
+    self.out_avals = out_avals
+    self.handlers = map(
+        partial(aval_to_result_handler, sticky_device), out_avals)
 
 
-def _execute_replicated(name: str, compiled: XlaExecutable,
+class _ExecuteCompiled:
+  """Executes the underlying XLA executable on a single device."""
+  __slots__ = ['name', 'compiled', 'output_buffer_counts', 'out_handlers', 'kept_var_idx', '__weakref__']
+
+  def __init__(self, name: str, compiled: XlaExecutable,
+               output_buffer_counts: Optional[Sequence[int]],
+               out_handlers: _OutHandlers, kept_var_idx):
+    self.name = name
+    self.compiled = compiled
+    self.output_buffer_counts = output_buffer_counts
+    self.out_handlers = out_handlers
+    self.kept_var_idx = kept_var_idx
+
+  def __call__(self, *args):
+    device, = self.compiled.local_devices()
+    input_bufs = util.flatten(
+        device_put(x, device) for i, x in enumerate(args) if i in self.kept_var_idx)
+    out_bufs = self.compiled.execute(input_bufs)
+    check_special(self.name, out_bufs)
+    if self.output_buffer_counts is None:
+      return (self.out_handlers.handlers[0](*out_bufs),)
+    return tuple(
+        handler(*bs) for handler, bs in unsafe_zip(
+            self.out_handlers.handlers,
+            util.unflatten(out_bufs, self.output_buffer_counts)))
+
+
+class _ExecuteReplicated:
+  """The logic to shard inputs, execute a replicated model, returning outputs."""
+  __slots__ = ['name', 'compiled', 'output_buffer_counts', 'out_handlers', 'kept_var_idx', '__weakref__']
+
+  def __init__(self, name, compiled: XlaExecutable,
                         output_buffer_counts: Optional[Sequence[int]],
-                        result_handlers, kept_var_idx, *args):
-  input_bufs = [
-      util.flatten(
-        device_put(x, device) for i, x in enumerate(args) if i in kept_var_idx)
-      for device in compiled.local_devices()
-  ]
-  out_bufs = [
-      buf[0] for buf in compiled.execute_sharded_on_local_devices(
-          list(zip(*input_bufs)))
-  ]
-  check_special(name, out_bufs)
-  if output_buffer_counts is None:
-    return (result_handlers[0](*out_bufs),)
-  return tuple(
-      handler(*bs) for handler, bs in
-      unsafe_zip(result_handlers, util.unflatten(out_bufs, output_buffer_counts)))
+                        out_handlers: _OutHandlers, kept_var_idx):
+    self.name = name
+    self.compiled = compiled
+    self.output_buffer_counts = output_buffer_counts
+    self.out_handlers = out_handlers
+    self.kept_var_idx = kept_var_idx
+
+  def __call__(self, *args):
+    # [num_devices, num_args] lists.
+    input_bufs = [
+        util.flatten(
+          device_put(x, device) for i, x in enumerate(args) if i in self.kept_var_idx)
+        for device in self.compiled.local_devices()
+    ]
+    out_bufs = [
+        buf[0] for buf in self.compiled.execute_sharded_on_local_devices(
+            # Converts to [num_args, num_devices].
+            list(zip(*input_bufs)))
+    ]
+    check_special(self.name, out_bufs)
+    if self.output_buffer_counts is None:
+      return (self.out_handlers.handlers[0](*out_bufs),)
+    return tuple(
+        handler(*bs) for handler, bs in unsafe_zip(
+            self.out_handlers.handlers,
+            util.unflatten(out_bufs, self.output_buffer_counts)))
 
 
 def _execute_trivial(jaxpr, device: Optional[Device], consts, avals, handlers,
@@ -602,8 +638,7 @@ class XlaCompiledComputation:
       out_avals,
       kept_var_idx) -> 'XlaCompiledComputation':
     sticky_device = device
-    result_handlers = map(partial(aval_to_result_handler, sticky_device),
-                          out_avals)
+    out_handlers = _OutHandlers(sticky_device, out_avals)
     options = xb.get_compile_options(
         num_replicas=nreps,
         num_partitions=1,
@@ -614,9 +649,9 @@ class XlaCompiledComputation:
       compiled = compile_or_get_cached(backend, xla_computation, options)
     buffer_counts = (None if len(out_avals) == 1 else
                      [aval_to_num_buffers(aval) for aval in out_avals])
-    execute = _execute_compiled if nreps == 1 else _execute_replicated
-    unsafe_call = partial(execute, name, compiled, buffer_counts,
-                          result_handlers, kept_var_idx)
+    execute = _ExecuteCompiled if nreps == 1 else _ExecuteReplicated
+    unsafe_call = execute(name, compiled, buffer_counts, out_handlers,
+                          kept_var_idx)
     return XlaCompiledComputation(compiled, in_avals, kept_var_idx, unsafe_call)
 
   def is_trivial(self):

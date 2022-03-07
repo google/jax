@@ -41,7 +41,7 @@ from jax.interpreters import partial_eval as pe
 from jax.interpreters.sharded_jit import PartitionSpec
 from jax._src.lib import xla_client as xc
 from jax.tree_util import (tree_map, tree_flatten, tree_unflatten,
-                           treedef_is_leaf, tree_structure)
+                           treedef_is_leaf, tree_structure, treedef_tuple)
 from jax._src.tree_util import prefix_errors
 from jax._src.util import (extend_name_stack, HashableFunction, safe_zip,
                          wrap_name, wraps, distributed_debug_log,
@@ -255,25 +255,30 @@ def pjit(fun: Callable,
         name=getattr(flat_fun, '__name__', '<unnamed function>'),
         in_positional_semantics=in_positional_semantics,
         out_positional_semantics=out_positional_semantics)
-    return args_flat, params, in_tree, out_tree(), donate_argnums
+    return (args_flat, local_in_avals, params, in_tree, out_tree(),
+            donate_argnums)
 
   @wraps(fun)
   def wrapped(*args, **kwargs):
-    args_flat, params, _, out_tree, _ = infer_params(*args, **kwargs)
+    args_flat, _, params, _, out_tree, _ = infer_params(*args, **kwargs)
     for arg in args_flat:
       _check_arg(arg)
     out = pjit_p.bind(*args_flat, **params)
     return tree_unflatten(out_tree, out)
 
   def lower(*args, **kwargs):
-    args_flat, params, in_tree, out_tree, donate_argnums = \
-        infer_params(*args, **kwargs)
+    (args_flat, flat_local_in_avals, params, in_tree, out_tree,
+     donate_argnums) = infer_params(*args, **kwargs)
     lowering = _pjit_lower(
         params['jaxpr'], params['in_axis_resources'],
         params['out_axis_resources'], params['resource_env'],
         params['donated_invars'], params['name'],
         params['in_positional_semantics'], params['out_positional_semantics'])
-    return Lowered(lowering, in_tree, out_tree, donate_argnums, no_kwargs=True)
+
+    args_kwargs_in_tree = treedef_tuple([in_tree, tree_flatten({})[1]])
+    local_in_avals = args_kwargs_in_tree.unflatten(flat_local_in_avals)
+    return Lowered(lowering, args_kwargs_in_tree, local_in_avals, out_tree,
+                   donate_argnums, no_kwargs=True)
 
   wrapped.lower = lower
   return wrapped
