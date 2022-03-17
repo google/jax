@@ -1725,7 +1725,12 @@ def _mhlo_unshard(aval, axis_env, out_axis, xs, platform):
                     and platform in ('cpu', 'gpu'))
     if convert_bool:
       aval = aval.update(dtype=np.dtype(np.float32))
-      x = mhlo.ConvertOp(mlir.aval_to_ir_type(aval), x).result
+      if _xla_extension_version < 51:
+        x = mhlo.ConvertOp(mlir.aval_to_ir_type(aval), x).result
+      else:
+        x = mhlo.ConvertOp(
+            mlir.aval_to_ir_type(aval), x,
+            ir.StringAttr.get("ROUND_TOWARD_ZERO")).result
 
     dims = list(aval.shape)
     padded_aval = aval.update(shape=[axis_env.sizes[-1]] + dims)

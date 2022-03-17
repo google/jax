@@ -2643,12 +2643,22 @@ def _dot_general_lower(ctx, lhs, rhs, *, dimension_numbers,
   if ctx.module_context.platform == "cpu":
     if lhs_aval.dtype == np.float16:
       f32 = mlir.dtype_to_ir_type(np.dtype(np.float32))
-      lhs = mhlo.ConvertOp(ir.RankedTensorType.get(lhs_aval.shape, f32),
-                           lhs).result
+      if xc._version < 51:
+        lhs = mhlo.ConvertOp(ir.RankedTensorType.get(lhs_aval.shape, f32),
+                             lhs).result
+      else:
+        lhs = mhlo.ConvertOp(
+            ir.RankedTensorType.get(lhs_aval.shape, f32), lhs,
+            ir.StringAttr.get('ROUND_TO_NEAREST_TIES_TO_EVEN')).result
     if rhs_aval.dtype == np.float16:
       f32 = mlir.dtype_to_ir_type(np.dtype(np.float32))
-      rhs = mhlo.ConvertOp(ir.RankedTensorType.get(rhs_aval.shape, f32),
-                           rhs).result
+      if xc._version < 51:
+        rhs = mhlo.ConvertOp(ir.RankedTensorType.get(rhs_aval.shape, f32),
+                             rhs).result
+      else:
+        rhs = mhlo.ConvertOp(
+            ir.RankedTensorType.get(rhs_aval.shape, f32), rhs,
+            ir.StringAttr.get('ROUND_TO_NEAREST_TIES_TO_EVEN')).result
   dot_dnums = mhlo.DotDimensionNumbers.get(
       lhs_batching_dimensions=list(lhs_batch),
       rhs_batching_dimensions=list(rhs_batch),

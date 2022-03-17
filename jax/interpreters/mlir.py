@@ -838,11 +838,12 @@ min_mhlo = partial(_minmax_mhlo, mhlo.MinOp, "LT")
 max_mhlo = partial(_minmax_mhlo, mhlo.MaxOp, "GT")
 
 
-def convert_mhlo(x, aval_in, aval_out):
+def convert_mhlo(x, aval_in, aval_out, rounding_mode: str = "ROUND_DEFAULT"):
   """Variant of convert that has XLA HLO semantics.
 
   In particular, treat casts to boolean as x != 0, rather than truncating
-  integer values (b/209440332)."""
+  integer values (b/209440332).
+  """
   if aval_out.dtype == np.dtype(np.bool_):
     if dtypes.issubdtype(aval_in.dtype, np.inexact):
       compare_type = "FLOAT"
@@ -853,7 +854,16 @@ def convert_mhlo(x, aval_in, aval_out):
     return mhlo.CompareOp(
         aval_to_ir_type(aval_out), x, full_like_aval(0, aval_in),
         ir.StringAttr.get("NE"), ir.StringAttr.get(compare_type)).result
-  return mhlo.ConvertOp(aval_to_ir_type(aval_out), x).result
+  if xc._version < 49:
+    return mhlo.ConvertOp(aval_to_ir_type(aval_out), x).result
+  else:
+    if rounding_mode == "ROUND_DEFAULT":
+      if dtypes.issubdtype(aval_out.dtype, np.integer):
+        rounding_mode = "ROUND_TOWARD_ZERO"
+      else:
+        rounding_mode = "ROUND_TO_NEAREST_TIES_TO_EVEN"
+    return mhlo.ConvertOp(
+        aval_to_ir_type(aval_out), x, ir.StringAttr.get(rounding_mode)).result
 
 def _wrap_with_spmd_op(name: str,
                        result_type: ir.Type,
