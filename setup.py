@@ -84,6 +84,7 @@ setup(
         # Python versions < 3.10. Can be dropped when 3.10 is the minimum
         # required Python version.
         'importlib_metadata>=4.6;python_version<"3.10"',
+        'typing_extensions>=4.5.0',
     ],
     extras_require={
         # Minimum jaxlib version; used in testing.

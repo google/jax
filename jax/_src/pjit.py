@@ -22,11 +22,14 @@ import itertools as it
 import logging
 import operator as op
 import weakref
-from typing import Callable, cast, NamedTuple, Any, Union, Optional
+from typing import (cast, Callable, NamedTuple, Any, Generic, Optional,
+                    TypeVar, TYPE_CHECKING, Union)
 import threading
 import warnings
 
 import numpy as np
+if TYPE_CHECKING:
+  from typing_extensions import ParamSpec
 
 from jax._src import api
 from jax._src import api_util
@@ -653,7 +656,13 @@ def _flat_axes_specs(abstracted_axes, *args, **kwargs
   return broadcast_prefix(abstracted_axes, args, ax_leaf)
 
 
-class JitWrapped(stages.Wrapped):
+
+V_co = TypeVar("V_co", covariant=True)
+if TYPE_CHECKING:
+  P = ParamSpec("P")
+
+
+class JitWrapped(stages.Wrapped[P, V_co], Generic[P, V_co]):
 
   def eval_shape(self, *args, **kwargs):
     """See ``jax.eval_shape``."""

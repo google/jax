@@ -32,8 +32,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Protocol, Union
+from typing import Any, Generic, NamedTuple, Protocol, TypeVar, Union
 import warnings
+
+from typing_extensions import ParamSpec
 
 import jax
 
@@ -707,7 +709,11 @@ class Lowered(Stage):
       return None
 
 
-class Wrapped(Protocol):
+V_co = TypeVar("V_co", covariant=True)
+P = ParamSpec("P")
+
+
+class Wrapped(Protocol, Generic[P, V_co]):
   """A function ready to be specialized, lowered, and compiled.
 
   This protocol reflects the output of functions such as
@@ -716,7 +722,7 @@ class Wrapped(Protocol):
   to compilation, and the result compiled prior to execution.
   """
 
-  def __call__(self, *args, **kwargs):
+  def __call__(self, *args: P.args, **kwargs: P.kwargs) -> V_co:
     """Executes the wrapped function, lowering and compiling as needed."""
     raise NotImplementedError
 
