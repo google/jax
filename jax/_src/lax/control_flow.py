@@ -24,7 +24,7 @@ import inspect
 import itertools
 import operator
 import os
-from typing import Any, Callable, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Callable, Optional, Sequence, Tuple, List, TypeVar
 
 import numpy as np
 
@@ -51,8 +51,8 @@ from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import mhlo
 from jax._src.lib import xla_client
 from jax._src.traceback_util import api_boundary
-from jax._src.util import (unzip2, unzip3, safe_map, safe_zip,
-                           split_list, cache, extend_name_stack, wrap_name)
+from jax._src.util import (unzip2, unzip3, safe_map, safe_zip, split_list,
+                           extend_name_stack, wrap_name, weakref_lru_cache)
 from jax.tree_util import (tree_flatten, tree_unflatten, treedef_is_leaf,
                            treedef_children, treedef_tuple, tree_map,
                            tree_leaves, tree_structure)
@@ -69,7 +69,7 @@ T = TypeVar('T')
 Array = Any
 BooleanNumeric = Any  # A bool, or a Boolean array.
 
-@cache()
+@weakref_lru_cache
 def _initial_style_open_jaxpr(fun: Callable, in_tree, in_avals,
                               primitive_name: Optional[str] = None):
   wrapped_fun, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
@@ -77,7 +77,7 @@ def _initial_style_open_jaxpr(fun: Callable, in_tree, in_avals,
   jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(wrapped_fun, in_avals, debug)
   return jaxpr, consts, out_tree()
 
-@cache()
+@weakref_lru_cache
 def _initial_style_jaxpr(fun: Callable, in_tree, in_avals,
                          primitive_name: Optional[str] = None):
   jaxpr, consts, out_tree = _initial_style_open_jaxpr(
@@ -85,9 +85,14 @@ def _initial_style_jaxpr(fun: Callable, in_tree, in_avals,
   closed_jaxpr = core.ClosedJaxpr(pe.convert_constvars_jaxpr(jaxpr), ())
   return closed_jaxpr, consts, out_tree
 
-@cache()
+class WeakRefSequence:
+  lst: List[Any]
+  def __init__(self, lst):
+    self.lst = list(lst)
+
+@weakref_lru_cache
 def _initial_style_jaxprs_with_common_consts(
-    funs: Sequence[Callable], in_tree, in_avals, primitive_name: str):
+    funs_: WeakRefSequence, in_tree, in_avals, primitive_name: str):
   # When staging the branches of a conditional into jaxprs, constants are
   # extracted from each branch and converted to jaxpr arguments. To use the
   # staged jaxprs as the branches to a conditional *primitive*, we need for
@@ -95,6 +100,7 @@ def _initial_style_jaxprs_with_common_consts(
   # for each one, it makes another that accepts *all* constants, but only uses
   # those that it needs (dropping the rest).
 
+  funs: List[Callable] = funs_.lst
   jaxprs, all_consts, all_out_trees = \
       unzip3(_initial_style_open_jaxpr(fun, in_tree, in_avals, primitive_name)
              for fun in funs)
@@ -137,14 +143,14 @@ def _fori_cond_fun(loop_carry):
   i, upper, _ = loop_carry
   return lax.lt(i, upper)
 
-@cache()
+@weakref_lru_cache
 def _fori_body_fun(body_fun):
   def while_body_fun(loop_carry):
     i, upper, x = loop_carry
     return lax.add(i, lax._const(i, 1)), upper, body_fun(i, x)
   return while_body_fun
 
-@cache()
+@weakref_lru_cache
 def _fori_scan_body_fun(body_fun):
   def scanned_fun(loop_carry, _):
     i, x = loop_carry
@@ -791,7 +797,7 @@ def switch(index, branches: Sequence[Callable], *operands,
   ops_avals = tuple(_map(_abstractify, ops))
 
   jaxprs, consts, out_trees = _initial_style_jaxprs_with_common_consts(
-      branches, ops_tree, ops_avals, primitive_name='switch')
+      WeakRefSequence(branches), ops_tree, ops_avals, primitive_name='switch')
 
   for i, (out_tree, jaxpr) in enumerate(zip(out_trees[1:], jaxprs[1:])):
     _check_tree_and_avals(f"branch 0 and {i + 1} outputs",
@@ -874,7 +880,7 @@ def _cond(pred, true_fun: Callable, false_fun: Callable, *operands,
   ops_avals = tuple(_map(_abstractify, ops))
 
   jaxprs, consts, out_trees = _initial_style_jaxprs_with_common_consts(
-      (true_fun, false_fun), ops_tree, ops_avals, 'cond')
+      WeakRefSequence((true_fun, false_fun)), ops_tree, ops_avals, 'cond')
   true_jaxpr, false_jaxpr = jaxprs
   out_tree, false_out_tree = out_trees
 

@@ -29,7 +29,8 @@ from jax._src.ad_util import (add_jaxvals, add_jaxvals_p, zeros_like_jaxval,
 from jax import linear_util as lu
 from jax._src.util import (unzip2, unzip3, safe_map, safe_zip, wrap_name,
                            split_list, canonicalize_axis, moveaxis,
-                           as_hashable_function, curry, memoize, cache)
+                           as_hashable_function, curry, memoize,
+                           weakref_lru_cache)
 from jax.interpreters import partial_eval as pe
 
 map = safe_map
@@ -466,9 +467,9 @@ def batch_jaxpr_axes(closed_jaxpr, axis_size, in_axes, out_axes_dest, axis_name,
   return _batch_jaxpr_axes(closed_jaxpr, axis_size, tuple(in_axes),
                            tuple(out_axes_dest), axis_name, main_type)
 
-@cache()
-def _batch_jaxpr_axes(closed_jaxpr, axis_size, in_axes, out_axes_dest, axis_name,
-                     main_type):
+@weakref_lru_cache
+def _batch_jaxpr_axes(closed_jaxpr, axis_size, in_axes, out_axes_dest,
+                      axis_name, main_type):
   f = lu.wrap_init(core.jaxpr_as_fun(closed_jaxpr))
   f, out_batched = _batch_jaxpr_inner(f, axis_size, out_axes_dest)
   f = _batch_jaxpr_outer(f, axis_name, axis_size, in_axes, main_type)

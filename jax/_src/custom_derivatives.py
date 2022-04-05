@@ -26,7 +26,8 @@ from jax.tree_util import (tree_flatten, tree_unflatten, tree_map, treedef_is_le
                            treedef_tuple, register_pytree_node_class)
 from jax._src import custom_api_util
 from jax._src import dtypes
-from jax._src.util import cache, safe_zip, safe_map, split_list, Unhashable
+from jax._src.util import (weakref_lru_cache, safe_zip, safe_map, split_list,
+                           Unhashable)
 from jax._src.api_util import flatten_fun_nokwargs, argnums_partial
 from jax.core import raise_to_shaped
 from jax.errors import UnexpectedTracerError
@@ -970,7 +971,7 @@ def _maybe_perturbed(x: Any) -> bool:
   else:
     return True  # We can't be sure!
 
-@cache()
+@weakref_lru_cache
 def _closure_convert_for_avals(fun, in_tree, in_avals):
   wrapped_fun, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
   jaxpr, out_pvals, consts = pe.trace_to_jaxpr_dynamic(wrapped_fun, in_avals)
