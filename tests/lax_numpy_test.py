@@ -1872,12 +1872,13 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
             mode="constant",
             constant_values=(4, 6)))
 
-  def testPadWeakType(self):
-    x = jnp.array(1.0)[None]
-    for mode in ['constant', 'edge', 'linear_ramp', 'maximum', 'mean', 'median',
-                 'minimum', 'reflect', 'symmetric', 'wrap', 'empty']:
-      y = jnp.pad(x, 0, mode=mode)
-      self.assertTrue(dtypes.is_weakly_typed(y))
+  # we think we can skip this behavior...
+  # def testPadWeakType(self):
+  #   x = jnp.array(1.0)[None]
+  #   for mode in ['constant', 'edge', 'linear_ramp', 'maximum', 'mean', 'median',
+  #                'minimum', 'reflect', 'symmetric', 'wrap', 'empty']:
+  #     y = jnp.pad(x, 0, mode=mode)
+  #     self.assertTrue(dtypes.is_weakly_typed(y))
 
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_shape=[{}]_reps={}".format(
@@ -3026,7 +3027,8 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
   def testSearchsorted(self, ashape, vshape, side, dtype):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [np.sort(rng(ashape, dtype)), rng(vshape, dtype)]
-    np_fun = lambda a, v: np.searchsorted(a, v, side=side)
+    np_fun = jtu.with_jax_dtype_defaults(
+        lambda a, v: np.searchsorted(a, v, side=side))
     jnp_fun = lambda a, v: jnp.searchsorted(a, v, side=side)
     self._CheckAgainstNumpy(np_fun, jnp_fun, args_maker)
     self._CompileAndCheck(jnp_fun, args_maker)

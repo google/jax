@@ -1789,7 +1789,8 @@ def array(object, dtype=None, copy=True, order="K", ndmin=0):
   # Here we make a judgment call: we only return a weakly-typed array when the
   # input object itself is weakly typed. That ensures asarray(x) is a no-op whenever
   # x is weak, but avoids introducing weak types with something like array([1, 2, 3])
-  weak_type = dtype is None and dtypes.is_weakly_typed(object)
+  # weak_type = dtype is None and dtypes.is_weakly_typed(object)
+  weak_type = False
 
   # For Python scalar literals, call coerce_to_array to catch any overflow errors.
   # We don't use dtypes.is_python_scalar because we don't want this triggering for
@@ -1803,13 +1804,21 @@ def array(object, dtype=None, copy=True, order="K", ndmin=0):
   if dtype is None:
     # Use lattice_result_type rather than result_type to avoid canonicalization.
     # Otherwise, weakly-typed inputs would have their dtypes canonicalized.
-    try:
-      dtype = dtypes._lattice_result_type(*leaves)[0] if leaves else dtypes.float_
-    except TypeError:
-      # This happens if, e.g. one of the entries is a memoryview object.
-      # This is rare, so we only handle it if the normal path fails.
-      leaves = [_convert_to_array_if_dtype_fails(leaf) for leaf in leaves]
-      dtype = dtypes._lattice_result_type(*leaves)[0]
+    if not leaves:
+      dtype = dtypes.float_
+    else:
+      try:
+        dtype, weak_type = dtypes._lattice_result_type(*leaves)
+      except TypeError:
+        # This happens if, e.g. one of the entries is a memoryview object.
+        # This is rare, so we only handle it if the normal path fails.
+        leaves = [_convert_to_array_if_dtype_fails(leaf) for leaf in leaves]
+        dtype, weak_type = dtypes._lattice_result_type(*leaves)
+      if weak_type:
+        dtype = dtypes._default_types['f' if dtype == dtypes._bfloat16_dtype
+                                      else dtype.kind]
+        weak_type = False
+  assert not weak_type
 
   if not weak_type:
     dtype = dtypes.canonicalize_dtype(dtype)
@@ -3490,7 +3499,7 @@ def _rewriting_take(arr, idx, indices_are_sorted=False, unique_indices=False,
   # Computes arr[idx].
   # All supported cases of indexing can be implemented as an XLA gather,
   # followed by an optional reverse and broadcast_in_dim.
-  arr = asarray(arr)
+  arr = asarray(arr) if not isinstance(arr, ndarray) else arr
   treedef, static_idx, dynamic_idx = _split_index_for_jit(idx, arr.shape)
   return _gather(arr, treedef, static_idx, dynamic_idx, indices_are_sorted,
                  unique_indices, mode, fill_value)
@@ -4280,7 +4289,7 @@ def _searchsorted(a, v, side):
     return (where(go_left, low, mid), where(go_left, mid, high))
 
   n_levels = int(np.ceil(np.log2(len(a) + 1)))
-  return lax.fori_loop(0, n_levels, body_fun, (0, len(a)))[1]
+  return lax.fori_loop(0, n_levels, body_fun, (int_(0), int_(len(a))))[1]
 
 
 @_wraps(np.searchsorted, skip_params=['sorter'])
