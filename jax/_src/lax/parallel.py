@@ -721,12 +721,7 @@ def _allreduce_lowering(prim, pos_fn, ctx, *args, axes, axis_index_groups):
       _replica_groups(ctx.module_context.axis_env, named_axes,
                       axis_index_groups))
   def all_reduce(x_dtype, x):
-    if jax._src.lib.mlir_api_version >= 17:
-      op = mhlo.AllReduceOp(
-          x.type, x, replica_groups=replica_groups, channel_handle=None)
-    else:
-      op = mhlo.AllReduceOp(
-          x, replica_groups=replica_groups, channel_handle=None)
+    op = mhlo.AllReduceOp(x, replica_groups=replica_groups, channel_handle=None)
     scalar_aval = core.ShapedArray((), x_dtype)
     scalar_type = mlir.aval_to_ir_type(scalar_aval)
     reducer_block = op.regions[0].blocks.append(scalar_type, scalar_type)
