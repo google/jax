@@ -1438,13 +1438,12 @@ def emit_python_callback(
     # are done). We'd like to send back a 0-shaped array to avoid unnecessary
     # copies but that currently doesn't work with the transfer
     # manager as well.
-    # TODO(b/238239458): enable sending back a 0-dim array
     # TODO(b/238239928): avoid interleaving sends in the transfer manager
     def _wrapped_callback(*args, **kwargs):
       callback(*args, **kwargs)
-      return (np.zeros(1, np.float32),)
+      return (np.zeros(0, np.float32),)
 
-    dummy_recv_aval = core.ShapedArray((1,), np.float32)
+    dummy_recv_aval = core.ShapedArray((0,), np.float32)
     result_shapes = [*result_shapes, xla.aval_to_xla_shapes(dummy_recv_aval)[0]]
     token, _ = receive_from_host(recv_channel, token, dummy_recv_aval,
                                  callback.__name__, sharding=sharding)
