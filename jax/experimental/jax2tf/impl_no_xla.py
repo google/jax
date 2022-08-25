@@ -27,7 +27,7 @@ from jax._src import util
 from jax.experimental.jax2tf import jax2tf
 
 import numpy as np
-import tensorflow as tf  # type: ignore[import]
+import jax.experimental.jax2tf._tf_deps as tf  # type: ignore[import]
 
 
 # Implementation rules for primitives when XLA is not linked in. These
@@ -300,7 +300,7 @@ def _conv_general_dilated(
     # [filter_height, filter_width, in_channels, channel_multiplier].
     new_rhs_shape = tuple(rhs_spatial_shapes) + (in_channels,
                                                  rhs_out_channel // in_channels)
-    output = tf.nn.depthwise_conv2d(
+    output = tf.nn_depthwise_conv2d(
         input=lhs,
         filter=tf.reshape(rhs, jax2tf._eval_shape(new_rhs_shape)),
         strides=tf_window_strides,
@@ -320,7 +320,7 @@ def _conv_general_dilated(
       tf_out_shape = tuple(out_shape[i] for i in output_perm)
     # Then transpose "NCHW" to "NHWC".
     tf_out_shape = tuple(tf_out_shape[i] for i in (0, 2, 3, 1))
-    output = tf.nn.conv2d_transpose(
+    output = tf.nn_conv2d_transpose(
         input=lhs,
         filters=rhs_t,
         output_shape=jax2tf._eval_shape(tf_out_shape),
@@ -328,7 +328,7 @@ def _conv_general_dilated(
         padding=padding_type)
 
   else:
-    output = tf.nn.conv2d(
+    output = tf.nn_conv2d(
         input=lhs,
         filters=rhs,
         strides=tf_window_strides,
@@ -356,7 +356,7 @@ def _dot_general(lhs, rhs, *, dimension_numbers,
                  preferred_element_type: Optional[DType],
                  _in_avals: Sequence[core.ShapedArray],
                  _out_aval: core.ShapedArray):
-  """Implementation of lax.dot_general_p in terms of tf.linalg.einsum."""
+  """Implementation of lax.dot_general_p in terms of tf.einsum."""
   # Unused arguments.
   del precision
   del preferred_element_type
@@ -378,7 +378,7 @@ def _dot_general(lhs, rhs, *, dimension_numbers,
       1 <= rhs_ndim - len(rhs_batch) <= 2 and
       lhs_contracting == (len(lhs.shape) - 1,) and
       rhs_contracting == (len(lhs_batch),)):
-    # All the inputs to tf.linalg.matmul must have 2 inner dimensions,
+    # All the inputs to tf.matmul must have 2 inner dimensions,
     # after their batch dimensions, so we need to expand the dimensions
     # appropriately. We can get to this branch with three combinations of
     # inner shapes:
@@ -386,16 +386,16 @@ def _dot_general(lhs, rhs, *, dimension_numbers,
     #   - in this case, the resulting inner shape is [a, c];
     # - lhs.inner_shape == [b]   , rhs.inner_shape == [b, c]
     #   - in this case, we need to expand lhs to [1, b], and the resulting
-    #     shape is [c]. We need to squeeze the result of tf.linalg.matmul
+    #     shape is [c]. We need to squeeze the result of tf.matmul
     #     as it will have shape [1, c];
     # - lhs.shape == [batch] + [a, b], rhs.shape == [batch] + [b]
     #   - in this case, we need to expand rhs to [b, 1], and the resulting
-    #     shape is [a]. We need to squeeze the result of tf.linalg.matmul
+    #     shape is [a]. We need to squeeze the result of tf.matmul
     #     as it will have shape [a, 1];
     # - lhs.shape == [batch] + [b]   , rhs.shape == [batch] + [b]
     #   - in this case, we need to expand lhs to [1, b] and rhs to [b, 1],
     #     and the resulting shape is (). We need to squeeze the result of
-    #     tf.linalg.matmul as it will have shape [1, 1].
+    #     tf.matmul as it will have shape [1, 1].
     squeeze_idxs = []
     if lhs_ndim - len(lhs_batch) == 1:
       lhs = tf.expand_dims(lhs, lhs_ndim - 1)
@@ -403,7 +403,7 @@ def _dot_general(lhs, rhs, *, dimension_numbers,
     if rhs_ndim - len(rhs_batch) == 1:
       rhs = tf.expand_dims(rhs, rhs_ndim)
       squeeze_idxs.append(len(rhs.shape) - 1)
-    result = tf.linalg.matmul(lhs, rhs)
+    result = tf.matmul(lhs, rhs)
     if len(squeeze_idxs) != 0:
       assert all([result.shape[i] == 1 for i in squeeze_idxs])
       result = tf.squeeze(result, squeeze_idxs)
@@ -437,7 +437,7 @@ def _dot_general(lhs, rhs, *, dimension_numbers,
   assert lhs.dtype == rhs.dtype
   spec = "{},{}->{}".format("".join(lhs_axis_ids), "".join(rhs_axis_ids),
                             "".join(out_axis_ids))
-  return tf.linalg.einsum(spec, lhs, rhs)
+  return tf.einsum(spec, lhs, rhs)
 
 
 tf_impl_no_xla[lax.dot_general_p] = _dot_general
@@ -509,7 +509,7 @@ def _argminmax(is_min: bool, operand: TfVal, axes: Sequence[int],
   if dtypes.iinfo(index_dtype).bits > 32:
     output_type = tf.int64
   # TODO(phawkins): handle axes larger than 2^31.
-  fn = tf.math.argmin if is_min else tf.math.argmax
+  fn = tf.math_argmin if is_min else tf.math_argmax
   result = fn(operand, axis=axis, output_type=output_type)
   return tf.cast(result, jax2tf._to_tf_dtype(index_dtype))
 
@@ -635,7 +635,7 @@ def _reduce_monoid(operand, window_dimensions, window_strides, padding,
       has_only_spatial_dims=has_only_spatial_dims)
 
   def tf_pool(inputs, pooling_type):
-    result = tf.nn.pool(
+    result = tf.nn_pool(
         inputs,
         window_shape=window_dimensions,
         pooling_type=pooling_type,
@@ -999,8 +999,8 @@ def _dynamic_update_slice(operand, update, *start_indices,
   scattered_indices = tf.strided_slice(id_tensor, start_indices, end_indices)
 
   # Create an array containing updates at scattered_indices and zeros otherwise.
-  flat_indices = tf.expand_dims(tf.nest.flatten(scattered_indices), -1)
-  flat_update = tf.nest.flatten(update)
+  flat_indices = tf.expand_dims(tf.nest_flatten(scattered_indices), -1)
+  flat_update = tf.nest_flatten(update)
   update = tf.scatter_nd(flat_indices, flat_update, (op_size,))
   update = tf.reshape(update, op_shape)
 
@@ -1134,9 +1134,9 @@ def convert_scatter_jax_to_tf(update_op, unsorted_segment_op=None):
   return sparse_scatter
 
 tf_impl_no_xla[lax.scatter_p] = convert_scatter_jax_to_tf(lambda x,y: y) # just replace with the update
-tf_impl_no_xla[lax.scatter_add_p] = convert_scatter_jax_to_tf(tf.add,      tf.math.unsorted_segment_sum)
-tf_impl_no_xla[lax.scatter_mul_p] = convert_scatter_jax_to_tf(tf.multiply, tf.math.unsorted_segment_prod)
-tf_impl_no_xla[lax.scatter_min_p] = convert_scatter_jax_to_tf(tf.minimum,  tf.math.unsorted_segment_min)
-tf_impl_no_xla[lax.scatter_max_p] = convert_scatter_jax_to_tf(tf.maximum,  tf.math.unsorted_segment_max)
+tf_impl_no_xla[lax.scatter_add_p] = convert_scatter_jax_to_tf(tf.add,      tf.math_unsorted_segment_sum)
+tf_impl_no_xla[lax.scatter_mul_p] = convert_scatter_jax_to_tf(tf.multiply, tf.math_unsorted_segment_prod)
+tf_impl_no_xla[lax.scatter_min_p] = convert_scatter_jax_to_tf(tf.minimum,  tf.math_unsorted_segment_min)
+tf_impl_no_xla[lax.scatter_max_p] = convert_scatter_jax_to_tf(tf.maximum,  tf.math_unsorted_segment_max)
 
 tf_impl_no_xla[lax.sort_p] = _unimplemented("sort")

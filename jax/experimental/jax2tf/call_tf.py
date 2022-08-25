@@ -42,7 +42,7 @@ from jax._src.lib import xla_client
 from jax.experimental.jax2tf import jax2tf as jax2tf_internal
 
 import numpy as np
-import tensorflow as tf  # type: ignore[import]
+import jax.experimental.jax2tf._tf_deps as tf  # type: ignore[import]
 
 map = util.safe_map
 zip = util.safe_zip
@@ -155,19 +155,19 @@ def call_tf(callable_tf: Callable) -> Callable:
           # replace it with a float0)
           return tf.zeros((), dtype=tf.float32)
 
-      watched_args_tf = tf.nest.map_structure(replace_non_float, args_tf)
+      watched_args_tf = tf.nest_map_structure(replace_non_float, args_tf)
       with tf.GradientTape(persistent=True) as tape:
         tape.watch(watched_args_tf)
         res = callable_tf(*args_tf)
 
-      tf.nest.assert_same_structure(res, ct_res_tf)
+      tf.nest_assert_same_structure(res, ct_res_tf)
       dres_darg = tape.gradient(
-          tf.nest.map_structure(replace_non_float, res),
+          tf.nest_map_structure(replace_non_float, res),
           sources=watched_args_tf,
           output_gradients=ct_res_tf,
-          unconnected_gradients=tf.UnconnectedGradients.ZERO)
+          unconnected_gradients=tf.UnconnectedGradients_ZERO)
 
-      tf.nest.assert_same_structure(dres_darg, args_tf)
+      tf.nest_assert_same_structure(dres_darg, args_tf)
       return dres_darg
 
     # Use call_tf to call the VJP function
@@ -199,7 +199,7 @@ def _call_tf_impl(*args_jax_flat, callable_flat_tf, **_):
         arg_jax.device_buffer.client.platform in _DLPACK_PLATFORMS and
         arg_jax.dtype in dlpack.SUPPORTED_DTYPES):
       arg_dlpack = jax.dlpack.to_dlpack(arg_jax, take_ownership=False)
-      return tf.experimental.dlpack.from_dlpack(arg_dlpack)
+      return tf.experimental_dlpack_from_dlpack(arg_dlpack)
     # The following avoids copies to the host on CPU, always for DeviceArray
     # and even for ndarray if they are sufficiently aligned.
     # TODO(necula): on TPU this copies to the host!
@@ -213,10 +213,10 @@ def _call_tf_impl(*args_jax_flat, callable_flat_tf, **_):
   def _res_tf_to_jax(res_tf: TfVal):
     res_tf, _ = jax2tf_internal._tfval_to_tensor_jax_dtype(res_tf)
     if isinstance(res_tf, tf.Tensor) and res_tf.dtype in dlpack.SUPPORTED_DTYPES:
-      res_tf_platform = tf.DeviceSpec.from_string(res_tf.backing_device).device_type
+      res_tf_platform = tf.DeviceSpec_from_string(res_tf.backing_device).device_type
       res_jax_platform = res_tf_platform.lower()
       if res_jax_platform in _DLPACK_PLATFORMS:
-        res_dlpack = tf.experimental.dlpack.to_dlpack(res_tf)
+        res_dlpack = tf.experimental_dlpack_to_dlpack(res_tf)
         return jax.dlpack.from_dlpack(res_dlpack)
 
     return jax.device_put(np.asarray(res_tf))

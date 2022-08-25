@@ -43,5 +43,16 @@ py_library(
     srcs_version = "PY3",
     deps = [
         "//jax",
-    ] + py_deps("numpy") + py_deps("tensorflow") + jax2tf_deps,
+        ":_tf_deps",
+    ] + py_deps("numpy") + jax2tf_deps,
+)
+
+py_library(
+    name = "_tf_deps",
+    srcs = ["_tf_deps.py"],
+    srcs_version = "PY3",
+    deps = [
+        "//third_party/py/absl/logging",
+        "@org_tensorflow//tensorflow/python:jax2tf_support",
+    ],
 )
