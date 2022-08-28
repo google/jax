@@ -262,7 +262,7 @@ class PmapSharding(XLACompatibleSharding):
   def devices_indices_map(
       self, global_shape: Shape) -> Mapping[Device, Optional[Index]]:
     indices = pxla.spec_to_indices(global_shape, self.sharding_spec)
-    return {d: i for d, i in safe_zip(self.devices.flat, indices)}  # type: ignore
+    return {d: i for d, i in safe_zip(self.devices.flat, indices)}
 
   def device_replica_id_map(self, global_shape: Shape) -> Mapping[Device, int]:
     return _device_replica_id_map(self, global_shape)
