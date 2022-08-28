@@ -52,6 +52,21 @@ CusolverType DtypeToCusolverType(const py::dtype& np_type) {
   return it->second;
 }
 
+cudaDataType DtypeToCudaDataType(const py::dtype& np_type) {
+  static auto* types =
+      new absl::flat_hash_map<std::pair<char, int>, cudaDataType>(
+          {{{'f', 4}, CUDA_R_32F},
+           {{'f', 8}, CUDA_R_64F},
+           {{'c', 8}, CUDA_C_32F},
+           {{'c', 16}, CUDA_C_64F}});
+  auto it = types->find({np_type.kind(), np_type.itemsize()});
+  if (it == types->end()) {
+    throw std::invalid_argument(
+        absl::StrFormat("Unsupported data dtype: %s", py::repr(np_type)));
+  }
+  return it->second;
+}
+
 // potrf: Cholesky decomposition
 
 // Returns the workspace size and a descriptor for a potrf operation.
@@ -471,6 +486,36 @@ std::pair<int, py::bytes> BuildGesvdjDescriptor(const py::dtype& dtype,
                      GesvdjDescriptor{type, batch, m, n, lwork, jobz, econ})};
 }
 
+// Singular value decomposition using qdwh-based polar decomposition: gesvdp
+
+// Returns the workspace sizes and a descriptor for a gesvdp operation.
+std::pair<std::pair<size_t, size_t>, py::bytes> BuildGesvdpDescriptor(
+    const py::dtype& dtype, int batch, int m, int n, bool compute_uv,
+    int econ) {
+  cudaDataType cuda_dtype = DtypeToCudaDataType(dtype);
+  auto h = SolverHandlePool::Borrow();
+  JAX_THROW_IF_ERROR(h.status());
+  auto& handle = *h;
+  cusolverEigMode_t jobz =
+      compute_uv ? CUSOLVER_EIG_MODE_VECTOR : CUSOLVER_EIG_MODE_NOVECTOR;
+  size_t workspaceInBytesOnDevice = 0;
+  size_t workspaceInBytesOnHost = 0;
+
+  JAX_THROW_IF_ERROR(JAX_AS_STATUS(cusolverDnXgesvdp_bufferSize(
+      handle.get(), /*params=*/NULL, jobz, econ, (int64_t)m, (int64_t)n,
+      /*dataTypeA=*/cuda_dtype, /*A=*/nullptr, /*lda=*/(int64_t)m,
+      /*dataTypeS=*/cuda_dtype, /*S=*/nullptr, /*dataTypeU=*/cuda_dtype,
+      /*U=*/nullptr, /*ldu=*/(int64_t)m, /*dataTypeV=*/cuda_dtype,
+      /*V=*/nullptr,
+      /*ldv=*/(int64_t)n, /*computeType=*/cuda_dtype, &workspaceInBytesOnDevice,
+      &workspaceInBytesOnHost)));
+
+  return {{workspaceInBytesOnDevice, workspaceInBytesOnHost},
+          PackDescriptor(GesvdpDescriptor{cuda_dtype, batch, m, n, jobz, econ,
+                                          workspaceInBytesOnDevice,
+                                          workspaceInBytesOnHost})};
+}
+
 py::dict Registrations() {
   py::dict dict;
   dict["cusolver_potrf"] = EncapsulateFunction(Potrf);
@@ -482,6 +527,7 @@ py::dict Registrations() {
   dict["cusolver_syevj"] = EncapsulateFunction(Syevj);
   dict["cusolver_gesvd"] = EncapsulateFunction(Gesvd);
   dict["cusolver_gesvdj"] = EncapsulateFunction(Gesvdj);
+  dict["cusolver_gesvdp"] = EncapsulateFunction(Gesvdp);
   return dict;
 }
 
@@ -496,6 +542,7 @@ PYBIND11_MODULE(_cusolver, m) {
   m.def("build_syevj_descriptor", &BuildSyevjDescriptor);
   m.def("build_gesvd_descriptor", &BuildGesvdDescriptor);
   m.def("build_gesvdj_descriptor", &BuildGesvdjDescriptor);
+  m.def("build_gesvdp_descriptor", &BuildGesvdpDescriptor);
 }
 
 }  // namespace

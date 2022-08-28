@@ -84,6 +84,21 @@ static int SizeOfCusolverType(CusolverType type) {
   }
 }
 
+static int SizeOfCudaDataType(cudaDataType type) {
+  switch (type) {
+    case CUDA_R_32F:
+      return sizeof(float);
+    case CUDA_R_64F:
+      return sizeof(double);
+    case CUDA_C_32F:
+      return sizeof(cuComplex);
+    case CUDA_C_64F:
+      return sizeof(cuDoubleComplex);
+    default:
+      return -1;
+  }
+}
+
 // potrf: Cholesky decomposition
 
 static absl::Status Potrf_(cudaStream_t stream, void** buffers,
@@ -860,8 +875,8 @@ static absl::Status Gesvdj_(cudaStream_t stream, void** buffers,
         float* u = static_cast<float*>(buffers[3]);
         float* v = static_cast<float*>(buffers[4]);
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverDnSgesvdj(
-            handle.get(), d.jobz, d.econ, d.m, d.n, a, d.m, s, u, d.m, v,
-            d.n, static_cast<float*>(work), d.lwork, info, params)));
+            handle.get(), d.jobz, d.econ, d.m, d.n, a, d.m, s, u, d.m, v, d.n,
+            static_cast<float*>(work), d.lwork, info, params)));
         break;
       }
       case CusolverType::F64: {
@@ -870,8 +885,8 @@ static absl::Status Gesvdj_(cudaStream_t stream, void** buffers,
         double* u = static_cast<double*>(buffers[3]);
         double* v = static_cast<double*>(buffers[4]);
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverDnDgesvdj(
-            handle.get(), d.jobz, d.econ, d.m, d.n, a, d.m, s, u, d.m, v,
-            d.n, static_cast<double*>(work), d.lwork, info, params)));
+            handle.get(), d.jobz, d.econ, d.m, d.n, a, d.m, s, u, d.m, v, d.n,
+            static_cast<double*>(work), d.lwork, info, params)));
         break;
       }
       case CusolverType::C64: {
@@ -880,8 +895,8 @@ static absl::Status Gesvdj_(cudaStream_t stream, void** buffers,
         cuComplex* u = static_cast<cuComplex*>(buffers[3]);
         cuComplex* v = static_cast<cuComplex*>(buffers[4]);
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverDnCgesvdj(
-            handle.get(), d.jobz, d.econ, d.m, d.n, a, d.m, s, u, d.m, v,
-            d.n, static_cast<cuComplex*>(work), d.lwork, info, params)));
+            handle.get(), d.jobz, d.econ, d.m, d.n, a, d.m, s, u, d.m, v, d.n,
+            static_cast<cuComplex*>(work), d.lwork, info, params)));
         break;
       }
       case CusolverType::C128: {
@@ -890,8 +905,8 @@ static absl::Status Gesvdj_(cudaStream_t stream, void** buffers,
         cuDoubleComplex* u = static_cast<cuDoubleComplex*>(buffers[3]);
         cuDoubleComplex* v = static_cast<cuDoubleComplex*>(buffers[4]);
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverDnZgesvdj(
-            handle.get(), d.jobz, d.econ, d.m, d.n, a, d.m, s, u, d.m, v,
-            d.n, static_cast<cuDoubleComplex*>(work), d.lwork, info, params)));
+            handle.get(), d.jobz, d.econ, d.m, d.n, a, d.m, s, u, d.m, v, d.n,
+            static_cast<cuDoubleComplex*>(work), d.lwork, info, params)));
         break;
       }
     }
@@ -946,6 +961,122 @@ static absl::Status Gesvdj_(cudaStream_t stream, void** buffers,
 void Gesvdj(cudaStream_t stream, void** buffers, const char* opaque,
             size_t opaque_len, XlaCustomCallStatus* status) {
   auto s = Gesvdj_(stream, buffers, opaque, opaque_len);
+  if (!s.ok()) {
+    XlaCustomCallStatusSetFailure(status, std::string(s.message()).c_str(),
+                                  s.message().length());
+  }
+}
+
+// Singular value decomposition using qdwh-based polar decomposition: gesvdp
+
+static absl::Status Gesvdp_(cudaStream_t stream, void** buffers,
+                            const char* opaque, size_t opaque_len) {
+  auto descriptor = UnpackDescriptor<GesvdpDescriptor>(opaque, opaque_len);
+  JAX_RETURN_IF_ERROR(descriptor.status());
+  const GesvdpDescriptor& d = **descriptor;
+  auto h = SolverHandlePool::Borrow(stream);
+  JAX_RETURN_IF_ERROR(h.status());
+  auto& handle = *h;
+  JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cudaMemcpyAsync(
+      buffers[1], buffers[0],
+      SizeOfCudaDataType(d.type) * static_cast<std::int64_t>(d.batch) *
+          static_cast<std::int64_t>(d.m) * static_cast<std::int64_t>(d.n),
+      cudaMemcpyDeviceToDevice, stream)));
+  void* bufferOnDevice = static_cast<void*>(buffers[5]);
+  void* bufferOnHost = static_cast<void*>(buffers[6]);
+  int* d_info = static_cast<int*>(buffers[7]);
+  double* h_err_sigma = static_cast<double*>(buffers[8]);
+
+  int k = std::min(d.m, d.n);
+  int num_u_cols = d.econ ? k : d.m;
+  int num_v_cols = d.econ ? k : d.n;
+
+  if (d.type == CUDA_R_32F) {
+    float* a = static_cast<float*>(buffers[1]);
+    float* s = static_cast<float*>(buffers[2]);
+    float* u = static_cast<float*>(buffers[3]);
+    float* v = static_cast<float*>(buffers[4]);
+    for (int i = 0; i < d.batch; ++i) {
+      JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverDnXgesvdp(
+          handle.get(), /*params=*/NULL, d.jobz, d.econ, d.m, d.n,
+          /*dataTypeA=*/d.type, a, /*lda=*/d.m, /*dataTypeS=*/d.type, s,
+          /*dataTypeU=*/d.type, u, /*ldu=*/d.m, /*dataTypeV=*/d.type, v,
+          /*ldv=*/d.n, /*computeType=*/d.type, bufferOnDevice,
+          d.workspaceInBytesOnDevice, bufferOnHost, d.workspaceInBytesOnHost,
+          d_info, h_err_sigma)));
+      a += d.m * d.n;
+      s += k;
+      u += d.m * num_u_cols;
+      v += d.n * num_v_cols;
+      ++d_info;
+    }
+  } else if (d.type == CUDA_R_64F) {
+    double* a = static_cast<double*>(buffers[1]);
+    double* s = static_cast<double*>(buffers[2]);
+    double* u = static_cast<double*>(buffers[3]);
+    double* v = static_cast<double*>(buffers[4]);
+    for (int i = 0; i < d.batch; ++i) {
+      JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverDnXgesvdp(
+          handle.get(), /*params=*/NULL, d.jobz, d.econ, d.m, d.n,
+          /*dataTypeA=*/d.type, a, /*lda=*/d.m, /*dataTypeS=*/d.type, s,
+          /*dataTypeU=*/d.type, u, /*ldu=*/d.m, /*dataTypeV=*/d.type, v,
+          /*ldv=*/d.n, /*computeType=*/d.type, bufferOnDevice,
+          d.workspaceInBytesOnDevice, bufferOnHost, d.workspaceInBytesOnHost,
+          d_info, h_err_sigma)));
+      a += d.m * d.n;
+      s += k;
+      u += d.m * num_u_cols;
+      v += d.n * num_v_cols;
+      ++d_info;
+    }
+  } else if (d.type == CUDA_C_32F) {
+    cuComplex* a = static_cast<cuComplex*>(buffers[1]);
+    cuComplex* s = static_cast<cuComplex*>(buffers[2]);
+    cuComplex* u = static_cast<cuComplex*>(buffers[3]);
+    cuComplex* v = static_cast<cuComplex*>(buffers[4]);
+    for (int i = 0; i < d.batch; ++i) {
+      JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverDnXgesvdp(
+          handle.get(), /*params=*/NULL, d.jobz, d.econ, d.m, d.n,
+          /*dataTypeA=*/d.type, a, /*lda=*/d.m, /*dataTypeS=*/d.type, s,
+          /*dataTypeU=*/d.type, u, /*ldu=*/d.m, /*dataTypeV=*/d.type, v,
+          /*ldv=*/d.n, /*computeType=*/d.type, bufferOnDevice,
+          d.workspaceInBytesOnDevice, bufferOnHost, d.workspaceInBytesOnHost,
+          d_info, h_err_sigma)));
+      a += d.m * d.n;
+      s += k;
+      u += d.m * num_u_cols;
+      v += d.n * num_v_cols;
+      ++d_info;
+    }
+  } else if (d.type == CUDA_C_64F) {
+    cuDoubleComplex* a = static_cast<cuDoubleComplex*>(buffers[1]);
+    cuDoubleComplex* s = static_cast<cuDoubleComplex*>(buffers[2]);
+    cuDoubleComplex* u = static_cast<cuDoubleComplex*>(buffers[3]);
+    cuDoubleComplex* v = static_cast<cuDoubleComplex*>(buffers[4]);
+    for (int i = 0; i < d.batch; ++i) {
+      JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverDnXgesvdp(
+          handle.get(), /*params=*/NULL, d.jobz, d.econ, d.m, d.n,
+          /*dataTypeA=*/d.type, a, /*lda=*/d.m, /*dataTypeS=*/d.type, s,
+          /*dataTypeU=*/d.type, u, /*ldu=*/d.m, /*dataTypeV=*/d.type, v,
+          /*ldv=*/d.n, /*computeType=*/d.type, bufferOnDevice,
+          d.workspaceInBytesOnDevice, bufferOnHost, d.workspaceInBytesOnHost,
+          d_info, h_err_sigma)));
+      a += d.m * d.n;
+      s += k;
+      u += d.m * num_u_cols;
+      v += d.n * num_v_cols;
+      ++d_info;
+    }
+  } else {
+    return absl::InvalidArgumentError("Invalid cudaDataType for gesvdp. "
+      "Valid types are CUDA_R_32F, CUDA_R_64F, CUDA_C_32F, and CUDA_C_64F.");
+  }
+  return absl::OkStatus();
+}
+
+void Gesvdp(cudaStream_t stream, void** buffers, const char* opaque,
+            size_t opaque_len, XlaCustomCallStatus* status) {
+  auto s = Gesvdp_(stream, buffers, opaque, opaque_len);
   if (!s.ok()) {
     XlaCustomCallStatusSetFailure(status, std::string(s.message()).c_str(),
                                   s.message().length());

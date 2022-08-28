@@ -99,7 +99,6 @@ cc_library(
         "//jaxlib:handle_pool",
         "//jaxlib:kernel_helpers",
         "@org_tensorflow//tensorflow/compiler/xla/service:custom_call_status",
-        "@org_tensorflow//tensorflow/stream_executor/cuda:cusolver_lib",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
