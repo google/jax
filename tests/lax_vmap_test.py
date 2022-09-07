@@ -722,6 +722,59 @@ class LaxVmapTest(jtu.JaxTestCase):
                         [dtype, idxs.dtype, dtype], jtu.rand_default(self.rng()),
                         rtol={np.float16: 5e-3, dtypes.bfloat16: 3e-2})
 
+  @parameterized.named_parameters(
+      jtu.cases_from_list({
+          "testcase_name":
+              "_shape={}_idxs={}_update={}_dnums={}_bdims={}".format(
+                  jtu.format_shape_dtype_string(arg_shape, dtype), idxs,
+                  update_shape, dnums, bdims),
+          "arg_shape":
+              arg_shape,
+          "dtype":
+              dtype,
+          "idxs":
+              idxs,
+          "update_shape":
+              update_shape,
+          "dnums":
+              dnums,
+          "bdims":
+              bdims
+      } for dtype in float_dtypes for arg_shape, idxs, update_shape, dnums in [
+          ((5,), np.array([[0], [2]]), (2,),
+           lax.ScatterDimensionNumbers(
+               update_window_dims=(),
+               inserted_window_dims=(0,),
+               scatter_dims_to_operand_dims=(0,))),
+          ((10,), np.array([[0], [0], [0]]), (3, 2),
+           lax.ScatterDimensionNumbers(
+               update_window_dims=(1,),
+               inserted_window_dims=(),
+               scatter_dims_to_operand_dims=(0,))),
+          ((
+              10,
+              5,
+          ), np.array([[0], [2], [1]]), (3, 3),
+           lax.ScatterDimensionNumbers(
+               update_window_dims=(1,),
+               inserted_window_dims=(0,),
+               scatter_dims_to_operand_dims=(0,))),
+      ] for bdims in all_bdims(arg_shape, idxs.shape, update_shape)))
+  def testScatterReduce(self, arg_shape, dtype, idxs, update_shape, dnums,
+                        bdims):
+    fun = partial(
+        lax.scatter_reduce, computation=jnp.logaddexp, dimension_numbers=dnums)
+    self._CheckBatching(
+        fun,
+        5,
+        bdims, [arg_shape, idxs.shape, update_shape],
+        [dtype, idxs.dtype, dtype],
+        jtu.rand_default(self.rng()),
+        rtol={
+            np.float16: 5e-3,
+            dtypes.bfloat16: 3e-2
+        })
+
   def testShapeUsesBuiltinInt(self):
     x = lax.iota(np.int32, 3) + 1
     self.assertIsInstance(x.shape[0], int)  # not np.int64

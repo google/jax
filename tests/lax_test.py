@@ -2462,6 +2462,55 @@ class LaxTest(jtu.JaxTestCase):
     fun = partial(lax.scatter, dimension_numbers=dnums)
     self._CompileAndCheck(fun, args_maker)
 
+  @parameterized.named_parameters(
+      jtu.cases_from_list({
+          "testcase_name":
+              "_shape={}_idxs={}_update={}_dnums={}".format(
+                  jtu.format_shape_dtype_string(arg_shape, dtype), idxs,
+                  update_shape, dnums),
+          "arg_shape":
+              arg_shape,
+          "dtype":
+              dtype,
+          "idxs":
+              idxs,
+          "update_shape":
+              update_shape,
+          "dnums":
+              dnums
+      } for dtype in float_dtypes for arg_shape, idxs, update_shape, dnums in [
+          ((5,), np.array([[0], [2]]), (2,),
+           lax.ScatterDimensionNumbers(
+               update_window_dims=(),
+               inserted_window_dims=(0,),
+               scatter_dims_to_operand_dims=(0,))),
+          ((10,), np.array([[0], [0], [0]]), (3, 2),
+           lax.ScatterDimensionNumbers(
+               update_window_dims=(1,),
+               inserted_window_dims=(),
+               scatter_dims_to_operand_dims=(0,))),
+          ((
+              10,
+              5,
+          ), np.array([[0], [2], [1]]), (3, 3),
+           lax.ScatterDimensionNumbers(
+               update_window_dims=(1,),
+               inserted_window_dims=(0,),
+               scatter_dims_to_operand_dims=(0,))),
+      ]))
+  def testScatterReduce(self, arg_shape, dtype, idxs, update_shape, dnums):
+    rng = jtu.rand_default(self.rng())
+    rng_idx = jtu.rand_int(self.rng(), high=max(arg_shape))
+    rand_idxs = lambda: rng_idx(idxs.shape, idxs.dtype)
+    args_maker = lambda: [
+        rng(arg_shape, dtype),
+        rand_idxs(),
+        rng(update_shape, dtype)
+    ]
+    fun = partial(
+        lax.scatter_reduce, computation=jnp.logaddexp, dimension_numbers=dnums)
+    self._CompileAndCheck(fun, args_maker)
+
   # These tests are adapted from the corresponding tests in
   # tensorflow/compiler/xla/service/shape_inference_test.cc with slight
   # variations to account for the implicit setting of index_vector_dim in JAX.

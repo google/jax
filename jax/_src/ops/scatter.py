@@ -31,10 +31,10 @@ from jax._src.numpy import lax_numpy as jnp
 
 Array = Any
 if sys.version_info >= (3, 10):
-    from types import EllipsisType
-    SingleIndex = Union[None, int, slice, Sequence[int], Array, EllipsisType]
+  from types import EllipsisType
+  SingleIndex = Union[None, int, slice, Sequence[int], Array, EllipsisType]
 else:
-    SingleIndex = Union[None, int, slice, Sequence[int], Array]
+  SingleIndex = Union[None, int, slice, Sequence[int], Array]
 Index = Union[SingleIndex, Tuple[SingleIndex, ...]]
 Scalar = Union[complex, float, int, np.number]
 Numeric = Union[Array, Scalar]
@@ -149,6 +149,8 @@ def _segment_update(name: str,
                     data: Array,
                     segment_ids: Array,
                     scatter_op: Callable,
+                    *,
+                    identity: Optional[Array] = None,
                     num_segments: Optional[int] = None,
                     indices_are_sorted: bool = False,
                     unique_indices: bool = False,
@@ -166,12 +168,13 @@ def _segment_update(name: str,
   if num_segments is not None and num_segments < 0:
     raise ValueError("num_segments must be non-negative.")
 
+  if identity is None:
+    identity = _get_identity(scatter_op, dtype)
 
   num_buckets = 1 if bucket_size is None \
                   else util.ceil_of_ratio(segment_ids.size, bucket_size)
   if num_buckets == 1:
-    out = jnp.full((num_segments,) + data.shape[1:],
-                   _get_identity(scatter_op, dtype), dtype=dtype)
+    out = jnp.full((num_segments,) + data.shape[1:], identity, dtype=dtype)
     return _scatter_update(
       out, segment_ids, data, scatter_op, indices_are_sorted,
       unique_indices, normalize_indices=False, mode=mode)
@@ -179,8 +182,8 @@ def _segment_update(name: str,
   # Bucketize indices and perform segment_update on each bucket to improve
   # numerical stability for operations like product and sum.
   assert reducer is not None
-  out = jnp.full((num_buckets, num_segments) + data.shape[1:],
-                 _get_identity(scatter_op, dtype), dtype=dtype)
+  out = jnp.full(
+      (num_buckets, num_segments) + data.shape[1:], identity, dtype=dtype)
   out = _scatter_update(
     out, np.index_exp[lax.div(jnp.arange(segment_ids.shape[0]), bucket_size),
                       segment_ids[None, :]],
@@ -240,8 +243,16 @@ def segment_sum(data: Array,
     DeviceArray([1, 5, 4], dtype=int32)
   """
   return _segment_update(
-      "segment_sum", data, segment_ids, lax.scatter_add, num_segments,
-      indices_are_sorted, unique_indices, bucket_size, jnp.sum, mode=mode)
+      "segment_sum",
+      data,
+      segment_ids,
+      lax.scatter_add,
+      num_segments=num_segments,
+      indices_are_sorted=indices_are_sorted,
+      unique_indices=unique_indices,
+      bucket_size=bucket_size,
+      reducer=jnp.sum,
+      mode=mode)
 
 
 def segment_prod(data: Array,
@@ -296,8 +307,16 @@ def segment_prod(data: Array,
     DeviceArray([ 0,  6, 20], dtype=int32)
   """
   return _segment_update(
-      "segment_prod", data, segment_ids, lax.scatter_mul, num_segments,
-      indices_are_sorted, unique_indices, bucket_size, jnp.prod, mode=mode)
+      "segment_prod",
+      data,
+      segment_ids,
+      lax.scatter_mul,
+      num_segments=num_segments,
+      indices_are_sorted=indices_are_sorted,
+      unique_indices=unique_indices,
+      bucket_size=bucket_size,
+      reducer=jnp.prod,
+      mode=mode)
 
 
 def segment_max(data: Array,
@@ -351,8 +370,16 @@ def segment_max(data: Array,
     DeviceArray([1, 3, 5], dtype=int32)
   """
   return _segment_update(
-      "segment_max", data, segment_ids, lax.scatter_max, num_segments,
-      indices_are_sorted, unique_indices, bucket_size, jnp.max, mode=mode)
+      "segment_max",
+      data,
+      segment_ids,
+      lax.scatter_max,
+      num_segments=num_segments,
+      indices_are_sorted=indices_are_sorted,
+      unique_indices=unique_indices,
+      bucket_size=bucket_size,
+      reducer=jnp.max,
+      mode=mode)
 
 
 def segment_min(data: Array,
@@ -406,5 +433,104 @@ def segment_min(data: Array,
     DeviceArray([0, 2, 4], dtype=int32)
   """
   return _segment_update(
-      "segment_min", data, segment_ids, lax.scatter_min, num_segments,
-      indices_are_sorted, unique_indices, bucket_size, jnp.min, mode=mode)
+      "segment_min",
+      data,
+      segment_ids,
+      lax.scatter_min,
+      num_segments=num_segments,
+      indices_are_sorted=indices_are_sorted,
+      unique_indices=unique_indices,
+      bucket_size=bucket_size,
+      reducer=jnp.min,
+      mode=mode)
+
+
+def segment_reduce(data: Array,
+                   segment_ids: Array,
+                   init_value: Array,
+                   computation: Callable[[Array, Array], Array],
+                   num_segments: Optional[int] = None,
+                   indices_are_sorted: bool = False,
+                   unique_indices: bool = False,
+                   bucket_size: Optional[int] = None,
+                   reducer: Optional[Callable] = None,
+                   mode: Optional[lax.GatherScatterMode] = None) -> Array:
+  """Computes a custom reduction within segments of an array.
+
+  ``init_value`` and ``computation`` together must form a `monoid
+  <https://en.wikipedia.org/wiki/Monoid>`_
+  for correctness. That is ``init_value`` must be an identity of
+  ``computation``, and ``computation`` must be associative. If either is
+  violated the result is undefined.
+
+  Args:
+    data: an array with the values to be reduced.
+    segment_ids: an array with integer dtype that indicates the segments of
+      `data` (along its leading axis) to be reduced. Values can be repeated and
+      need not be sorted. Values outside of the range [0, num_segments) are
+      dropped and do not contribute to the result.
+    init_value: identity value for `computation`, i.e. default value for
+      zero-sized segments.
+    computation: reduction computation.
+    num_segments: optional, an int with nonnegative value indicating the number
+      of segments. The default is set to be the minimum number of segments that
+      would support all indices in ``segment_ids``, calculated as
+      ``max(segment_ids) + 1``. Since `num_segments` determines the size of the
+      output, a static value must be provided to use ``segment_min`` in a
+      ``jit``-compiled function.
+    indices_are_sorted: whether ``segment_ids`` is known to be sorted.
+    unique_indices: whether `segment_ids` is known to be free of duplicates.
+    bucket_size: size of bucket to group indices into. ``segment_min`` is
+      performed on each bucket separately. Default ``None`` means no bucketing.
+      If not None, `reducer` must be specified.
+    reducer: reducer function for combining bucketing outputs, e.g.
+      ``jax.nn.logsumexp``. Should take as input the output and an ``axis``
+      keyword argument.
+    mode: a :class:`jax.lax.GatherScatterMode` value describing how
+      out-of-bounds indices should be handled. By default, values outside of the
+      range [0, num_segments) are dropped and do not contribute to the sum.
+
+  Returns:
+    An array with shape :code:`(num_segments,) + data.shape[1:]` representing
+    the segment minimums.
+
+  Examples:
+    Simple 1D segment logsumexp:
+
+    >>> data = jnp.array([-jnp.inf, 1, 2])
+    >>> segment_ids = jnp.array([0, 0, 2])
+    >>> segment_reduce(data, segment_ids, -jnp.inf, jnp.logaddexp)
+    DeviceArray([  1., -inf,   2.], dtype=float32)
+
+
+    Using JIT requires static `computation` and `num_segments`:
+
+    >>> from jax import jit
+    >>> jit(segment_reduce, static_argnums=(3, 4))(data, segment_ids, -jnp.inf, jnp.logaddexp, 3)
+    DeviceArray([  1., -inf,   2.], dtype=float32)
+  """
+
+  def scatter_op(operand, scatter_indices, updates, dimension_numbers, *,
+                 indices_are_sorted, unique_indices, mode):
+    return lax.scatter_reduce(
+        operand,
+        scatter_indices,
+        updates,
+        computation,
+        dimension_numbers,
+        indices_are_sorted=indices_are_sorted,
+        unique_indices=unique_indices,
+        mode=mode)
+
+  return _segment_update(
+      "segment_reduce",
+      data,
+      segment_ids,
+      scatter_op,
+      identity=init_value,
+      num_segments=num_segments,
+      indices_are_sorted=indices_are_sorted,
+      unique_indices=unique_indices,
+      bucket_size=bucket_size,
+      reducer=reducer,
+      mode=mode)

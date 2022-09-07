@@ -1119,6 +1119,10 @@ def _update_tol(op):
     tol = {np.complex128: 1e-14}
   return tol
 
+# For use with testSegmentReduction.
+_segment_reduce_add = partial(
+    ops.segment_reduce, init_value=0, computation=jnp.add, reducer=jnp.sum)
+_segment_reduce_add.__name__ = 'segment_reduce_add'
 
 class IndexedUpdateTest(jtu.JaxTestCase):
 
@@ -1359,7 +1363,7 @@ class IndexedUpdateTest(jtu.JaxTestCase):
       (ops.segment_min, np.minimum, True),
       (ops.segment_max, np.maximum, False),
     ]))
-  def testSegmentReduceBoolean(self, shape, dtype, reducer, op, identity, num_segments, bucket_size):
+  def testSegmentReductionBoolean(self, shape, dtype, reducer, op, identity, num_segments, bucket_size):
     rng = jtu.rand_default(self.rng())
     idx_rng = jtu.rand_int(self.rng(), low=-2, high=3)
     args_maker = lambda: [rng(shape, dtype), idx_rng(shape[:1], jnp.int32)]
@@ -1403,8 +1407,9 @@ class IndexedUpdateTest(jtu.JaxTestCase):
       (ops.segment_prod, np.multiply, 1),
       (ops.segment_min, np.minimum, float('inf')),
       (ops.segment_max, np.maximum, -float('inf')),
+      (_segment_reduce_add, np.add, 0),
     ]))
-  def testSegmentReduce(self, shape, dtype, reducer, op, identity, num_segments, bucket_size):
+  def testSegmentReduction(self, shape, dtype, reducer, op, identity, num_segments, bucket_size):
     rng = jtu.rand_default(self.rng())
     idx_rng = jtu.rand_int(self.rng(), low=-2, high=3)
     args_maker = lambda: [rng(shape, dtype), idx_rng(shape[:1], jnp.int32)]

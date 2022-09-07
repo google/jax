@@ -611,6 +611,66 @@ def scatter(
       indices_are_sorted=indices_are_sorted, unique_indices=unique_indices,
       mode=GatherScatterMode.from_any(mode))
 
+
+def scatter_reduce(
+    operand: Array,
+    scatter_indices: Array,
+    updates: Array,
+    computation: Callable[[Array, Array], Array],
+    dimension_numbers: ScatterDimensionNumbers,
+    *,
+    indices_are_sorted: bool = False,
+    unique_indices: bool = False,
+    mode: Optional[Union[str, GatherScatterMode]] = None) -> Array:
+  """Scatter-reduce operator.
+
+  Wraps `XLA's Scatter operator
+  <https://www.tensorflow.org/xla/operation_semantics#scatter>`_, where the
+  custom `computation` function is used to combine updates and values from
+  `operand`.
+
+  The semantics of scatter are complicated, and its API might change in the
+  future. For most use cases, you should prefer the
+  :attr:`jax.numpy.ndarray.at` property on JAX arrays which uses
+  the familiar NumPy indexing syntax.
+
+  Args:
+    operand: an array to which the scatter should be applied
+    scatter_indices: an array that gives the indices in `operand` to which each
+      update in `updates` should be applied.
+    updates: the updates that should be scattered onto `operand`.
+    computation: the reduction function for computing a new value given a
+      current value from `operand` and a corresponding update value from
+      `updates`.
+    dimension_numbers: a `lax.ScatterDimensionNumbers` object that describes how
+      dimensions of `operand`, `start_indices`, `updates` and the output relate.
+    indices_are_sorted: whether `scatter_indices` is known to be sorted. If
+      true, may improve performance on some backends.
+    unique_indices: whether the indices to be updated in ``operand`` are
+      guaranteed to not overlap with each other. If true, may improve
+      performance on some backends.
+    mode: how to handle indices that are out of bounds: when set to 'clip',
+      indices are clamped so that the slice is within bounds, and when set to
+      'fill' or 'drop' out-of-bounds updates are dropped. The behavior for
+      out-of-bounds indices when set to 'promise_in_bounds' is
+      implementation-defined.
+
+  Returns:
+    An array containing the sum of `operand` and the scattered updates.
+  """
+  jaxpr, consts = lax._reduction_jaxpr(computation,
+                                       lax._abstractify(lax._const(operand, 0)))
+  return scatter_reduce_p.bind(
+      operand,
+      scatter_indices,
+      updates,
+      update_jaxpr=jaxpr,
+      update_consts=consts,
+      dimension_numbers=dimension_numbers,
+      indices_are_sorted=indices_are_sorted,
+      unique_indices=unique_indices,
+      mode=GatherScatterMode.from_any(mode))
+
 def index_take(src: Array, idxs: Array, axes: Sequence[int]) -> Array:
   indices = lax.concatenate([lax.expand_dims(i, (1,)) for i in idxs], 1)
   indices = indices % np.array([src.shape[ax] for ax in axes])
@@ -1933,6 +1993,43 @@ batching.primitive_batchers[scatter_p] = (
   partial(_scatter_batching_rule, scatter))
 
 
+# TODO(wuke): Implement _scatter_reduce_jvp_rule.
+def _scatter_reduce_batching_rule(batched_args, batch_dims, *, update_jaxpr,
+                                  update_consts, dimension_numbers,
+                                  indices_are_sorted, unique_indices, mode):
+
+  def scatter_op(operand, scatter_indices, updates, dimension_numbers, *,
+                 indices_are_sorted, unique_indices, mode):
+    return scatter_reduce_p.bind(
+        operand,
+        scatter_indices,
+        updates,
+        update_jaxpr=update_jaxpr,
+        update_consts=update_consts,
+        dimension_numbers=dimension_numbers,
+        indices_are_sorted=indices_are_sorted,
+        unique_indices=unique_indices,
+        mode=GatherScatterMode.from_any(mode))
+
+  return _scatter_batching_rule(
+      scatter_op,
+      batched_args,
+      batch_dims,
+      update_jaxpr=update_jaxpr,
+      update_consts=update_consts,
+      dimension_numbers=dimension_numbers,
+      indices_are_sorted=indices_are_sorted,
+      unique_indices=unique_indices,
+      mode=mode)
+
+
+scatter_reduce_p = standard_primitive(
+    _scatter_shape_rule,
+    _scatter_dtype_rule,
+    "scatter-reduce",
+    weak_type_rule=_argnum_weak_type(0))
+batching.primitive_batchers[scatter_reduce_p] = _scatter_reduce_batching_rule
+
 
 def _scatter_lower(ctx, operand, indices, updates, *,
                    update_jaxpr, update_consts, dimension_numbers,
@@ -1977,6 +2074,7 @@ mlir.register_lowering(scatter_add_p, _scatter_lower)
 mlir.register_lowering(scatter_mul_p, _scatter_lower)
 mlir.register_lowering(scatter_min_p, _scatter_lower)
 mlir.register_lowering(scatter_max_p, _scatter_lower)
+mlir.register_lowering(scatter_reduce_p, _scatter_lower)
 
 
 def _real_dtype(dtype): return np.finfo(dtype).dtype

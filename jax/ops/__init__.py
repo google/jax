@@ -17,4 +17,5 @@ from jax._src.ops.scatter import (
   segment_prod as segment_prod,
   segment_min as segment_min,
   segment_max as segment_max,
+  segment_reduce as segment_reduce,
 )
