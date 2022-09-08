@@ -613,7 +613,7 @@ def _broadcast_in_dim_sparse(spenv, *spvalues, shape, broadcast_dimensions):
 
 sparse_rules[lax.broadcast_in_dim_p] = _broadcast_in_dim_sparse
 
-def _concatenate_sparse(spenv, *spvalues, dimension):
+def _concatenate_sparse(spenv, *spvalues, dimension, **_):
   operands = spvalues_to_arrays(spenv, spvalues)
   result = sparse.bcoo_concatenate(operands, dimension=dimension)
   return arrays_to_spvalues(spenv, (result,))

@@ -2834,7 +2834,7 @@ def _make_concatenate_harness(name,
   define(
       lax.concatenate_p,
       f"{name}_shapes={shapes_str}_dimension={dimension}",
-      lambda *args: lax.concatenate_p.bind(*args, dimension=dimension),
+      lambda *args: lax.concatenate(args, dimension=dimension),
       [RandArg(shape, dtype) for shape in shapes],
       shapes=shapes,
       dtype=dtype,

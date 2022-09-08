@@ -176,6 +176,9 @@ def _extract_tracers_dyn_shape(
   else:
     return [], list(shape)  # type: ignore
 
+def _nr_dynamic_dimensions(static_shape: Sequence[Optional[int]]) -> int:
+  return len([d for d in static_shape if d is None])
+
 def _merge_dyn_shape(
     static_shape: Sequence[Optional[int]],
     dyn_shape: Sequence[Any],
@@ -629,10 +632,31 @@ def concatenate(operands: Sequence[Array], dimension: int) -> Array:
   Returns:
     An array containing the concatenation.
   """
-  if len(operands) == 0:
-    raise ValueError("concatenate requires a non-empty sequences of arrays")
-  return concatenate_p.bind(*operands, dimension=dimension)
+  if not operands:
+    msg = "concatenate expects at least one operand, got 0."
+    raise TypeError(msg)
+  if len({operand.ndim for operand in operands}) != 1:
+    msg = "Cannot concatenate arrays with different numbers of dimensions: got {}."
+    raise TypeError(msg.format(", ".join(str(o.shape) for o in operands)))
+  if not 0 <= dimension < operands[0].ndim:
+    msg = "concatenate dimension out of bounds: dimension {} for shapes {}."
+    raise TypeError(msg.format(dimension, ", ".join([str(o.shape) for o in operands])))
+  shapes = [operand.shape[:dimension] + operand.shape[dimension+1:]
+            for operand in operands]
+  if not shapes[:-1] == shapes[1:]:
+    msg = ("Cannot concatenate arrays with shapes that differ in dimensions "
+           "other than the one being concatenated: concatenating along "
+           "dimension {} for shapes {}.")
+    shapes = [operand.shape for operand in operands]
+    raise TypeError(msg.format(dimension, ", ".join(map(str, shapes))))
 
+  concat_size = sum(o.shape[dimension] for o in operands)
+  ex_shape = operands[0].shape
+  shape = ex_shape[:dimension] + (concat_size,) + ex_shape[dimension+1:]
+  dynamic_shape = [d for d in shape if isinstance(d, core.Tracer)]
+  static_shape = [None if isinstance(d, core.Tracer) else d for d in shape]
+  return concatenate_p.bind(*operands, *dynamic_shape,
+                            dimension=dimension, shape=tuple(static_shape))
 
 class _enum_descriptor:
   def __init__(self, val):
@@ -2969,39 +2993,16 @@ else:
       clamp_p, partial(_nary_lower_mhlo, mhlo.ClampOp))
 pe.def_trivial_padding(clamp_p)
 
-def _concatenate_shape_rule(*operands, **kwargs):
-  dimension = kwargs.pop('dimension')
-  if not operands:
-    msg = "concatenate expects at least one operand, got 0."
-    raise TypeError(msg)
-  if not all(isinstance(operand, UnshapedArray) for operand in operands):
-    msg = "All objects to concatenate must be arrays, got {}."
-    op = next(op for op in operands if not isinstance(op, UnshapedArray))
-    raise TypeError(msg.format(type(op)))
-  if len({operand.ndim for operand in operands}) != 1:
-    msg = "Cannot concatenate arrays with different numbers of dimensions: got {}."
-    raise TypeError(msg.format(", ".join(str(o.shape) for o in operands)))
-  if not 0 <= dimension < operands[0].ndim:
-    msg = "concatenate dimension out of bounds: dimension {} for shapes {}."
-    raise TypeError(msg.format(dimension, ", ".join([str(o.shape) for o in operands])))
-  shapes = [operand.shape[:dimension] + operand.shape[dimension+1:]
-            for operand in operands]
-  if not shapes[:-1] == shapes[1:]:
-    msg = ("Cannot concatenate arrays with shapes that differ in dimensions "
-           "other than the one being concatenated: concatenating along "
-           "dimension {} for shapes {}.")
-    shapes = [operand.shape for operand in operands]
-    raise TypeError(msg.format(dimension, ", ".join(map(str, shapes))))
-
-  concat_size = sum(o.shape[dimension] for o in operands)
-  ex_shape = operands[0].shape
-  return ex_shape[:dimension] + (concat_size,) + ex_shape[dimension+1:]
+def _concatenate_shape_rule(*operands, shape, **kwargs):
+  return shape
 
 def _concatenate_dtype_rule(*operands, **kwargs):
   _check_same_dtypes('concatenate', False, *(o.dtype for o in operands))
   return operands[0].dtype
 
-def _concatenate_transpose_rule(t, *operands, dimension):
+def _concatenate_transpose_rule(t, *operands, dimension, shape):
+  if _nr_dynamic_dimensions(shape) > 0:
+    raise NotImplementedError()
   operand_shapes = [o.aval.shape if ad.is_undefined_primal(o) else o.shape
                     for o in operands]
   if type(t) is ad_util.Zero:
@@ -3021,7 +3022,9 @@ def _concatenate_transpose_rule(t, *operands, dimension):
     return [slicing.slice(t, start, limit) if ad.is_undefined_primal(o)
             else None for o, start, limit in zip(operands, starts, limits)]
 
-def _concatenate_batch_rule(batched_args, batch_dims, *, dimension):
+def _concatenate_batch_rule(batched_args, batch_dims, *, dimension, shape):
+  if _nr_dynamic_dimensions(shape) > 0:
+    raise NotImplementedError()
   size = next(op.shape[bdim] for op, bdim in zip(batched_args, batch_dims)
               if bdim is not None)
   operands = [batching.moveaxis(op, bdim, 0) if bdim is not None
@@ -3035,8 +3038,34 @@ ad.deflinear2(concatenate_p, _concatenate_transpose_rule)
 ad.primitive_transposes[concatenate_p] = _concatenate_transpose_rule
 batching.primitive_batchers[concatenate_p] = _concatenate_batch_rule
 
-def _concatenate_lower(ctx, *xs, dimension):
-  return mhlo.ConcatenateOp(xs, mlir.i64_attr(dimension)).results
+def _concatenate_staging_rule(
+    trace, *args, dimension, shape):
+  dyn = args[len(args) - _nr_dynamic_dimensions(shape):]
+  params = dict(dimension=dimension, shape=shape)
+  if not dyn:
+    return trace.default_process_primitive(concatenate_p, args, params)
+  aval = core.DShapedArray(_merge_dyn_shape(shape, dyn), args[0].dtype, args[0].weak_type)
+  return _dyn_shape_staging_rule(trace, concatenate_p, aval, *args, **params)
+pe.custom_staging_rules[concatenate_p] = _concatenate_staging_rule
+
+def _concatenate_typecheck_rule(*args, dimension, shape):
+  nr_dynamic_dimensions = _nr_dynamic_dimensions(shape)
+  if not nr_dynamic_dimensions:
+    out_aval, effects = concatenate_p.abstract_eval(
+        *(a.aval for a in args), dimension=dimension, shape=shape)
+    return [out_aval], effects
+  else:
+    dyn_shape = args[len(args) - nr_dynamic_dimensions:]
+    out_shape = _merge_dyn_shape(shape, dyn_shape)
+    out_shape = [x.val if type(x) is core.Literal else x for x in out_shape]
+    out_aval = core.DShapedArray(tuple(out_shape), args[0].aval.dtype, args[0].aval.weak_type)
+    return [out_aval], core.no_effects
+core.custom_typechecks[concatenate_p] = _concatenate_typecheck_rule
+
+def _concatenate_lower(ctx, *xs, dimension, shape):
+  array_xs = xs[:len(xs) - _nr_dynamic_dimensions(shape)]
+  return mhlo.ConcatenateOp(array_xs, mlir.i64_attr(dimension)).results
+
 mlir.register_lowering(concatenate_p, _concatenate_lower)
 
 

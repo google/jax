@@ -619,7 +619,7 @@ class DynamicShapeTest(jtu.JaxTestCase):
     self.assertAllClose(f(4), np.ones(4, dtype='float32'), check_dtypes=True)
     self.assertEqual(count, 1)
 
-  @unittest.skip('TODO: need typechecking rule for concatenate')
+  @unittest.skipIf(jtu.device_under_test() != 'iree', "iree test")
   def test_concatenate(self):
     @partial(jax.jit, abstracted_axes=({0: 'n'},))
     def f(x):  # x: f32[n, 4]
