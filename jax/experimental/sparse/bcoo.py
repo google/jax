@@ -263,9 +263,9 @@ def bcoo_fromdense(mat, *, nse=None, n_batch=0, n_dense=0, index_dtype=jnp.int32
 
   Args:
     mat : array to be converted to BCOO.
-    nse : number of specified elements in each batch
+    nse : number of stored elements in each batch
     n_batch : number of batch dimensions (default: 0)
-    n_dense : number of block_dimensions (default: 0)
+    n_dense : number of dense dimensions (default: 0)
     index_dtype : dtype of sparse indices (default: int32)
 
   Returns:
@@ -284,9 +284,9 @@ def _bcoo_fromdense(mat, *, nse, n_batch=0, n_dense=0, index_dtype=jnp.int32):
 
   Args:
     mat : array to be converted to BCOO, with ``ndim = n_batch + n_sparse + n_dense``.
-    nse : number of specified elements in each batch
+    nse : number of stored elements in each batch
     n_batch : number of batch dimensions (default: 0)
-    n_dense : number of block_dimensions (default: 0)
+    n_dense : number of dense dimensions (default: 0)
     index_dtype : dtype of sparse indices (default: int32)
 
   Returns:
@@ -299,31 +299,35 @@ def _bcoo_fromdense(mat, *, nse, n_batch=0, n_dense=0, index_dtype=jnp.int32):
   return bcoo_fromdense_p.bind(mat, nse=nse, n_batch=n_batch, n_dense=n_dense,
                                index_dtype=index_dtype)
 
-@bcoo_fromdense_p.def_impl
-def _bcoo_fromdense_impl(mat, *, nse, n_batch, n_dense, index_dtype):
+def _bcoo_fromdense_helper(mat, *, nse, n_batch, n_dense, index_dtype):
   mat = jnp.asarray(mat)
-  n_sparse = mat.ndim - n_dense - n_batch
   mask = (mat != 0)
   if n_dense > 0:
     mask = mask.any([-(i + 1) for i in range(n_dense)])
-  def _nonzero(a):
-    if a.ndim:
-      return jnp.nonzero(a, size=nse, fill_value=a.shape[:n_sparse])
-    return ()
+  nonzero = lambda a: jnp.nonzero(a, size=nse) if a.ndim else ()
   for _ in range(n_batch):
-    _nonzero = vmap(_nonzero, 0)
-  indices = _nonzero(mask)
+    nonzero = vmap(nonzero, 0)
+  indices = nonzero(mask)
   if not indices:
     indices = jnp.zeros(mask.shape[:n_batch] + (nse, 0), index_dtype)
   else:
     indices = jnp.moveaxis(jnp.array(indices, index_dtype), 0, n_batch + 1)
   data = bcoo_extract(indices, mat)
 
-  true_nse = mask.sum(list(range(n_batch, mask.ndim)))[..., None]
-  true_nonzeros = lax.broadcasted_iota(true_nse.dtype, (1,) * n_batch + (nse,), n_batch) < true_nse
-  true_nonzeros = true_nonzeros[(n_batch + 1) * (slice(None),) + n_dense * (None,)]
-  data = jnp.where(true_nonzeros, data, 0)
+  # TODO(tianjianlu): Use expand_dims instead of broadcast_arrays.
+  lhs_to_compare = jnp.arange(nse)
+  rhs_to_compare = mask.sum(list(range(n_batch, mask.ndim)))[..., None]
+  lhs_to_compare, rhs_to_compare = jnp.broadcast_arrays(lhs_to_compare,
+                                                        rhs_to_compare)
+  true_nonzeros = lhs_to_compare < rhs_to_compare
+  data = jnp.where(true_nonzeros[(...,) + n_dense * (None,)], data, 0)
 
+  return data, indices, true_nonzeros
+
+@bcoo_fromdense_p.def_impl
+def _bcoo_fromdense_impl(mat, *, nse, n_batch, n_dense, index_dtype):
+  data, indices, _ = _bcoo_fromdense_helper(mat,
+      nse=nse, n_batch=n_batch, n_dense=n_dense, index_dtype=index_dtype)
   return data, indices
 
 @bcoo_fromdense_p.def_abstract_eval
@@ -2266,7 +2270,7 @@ class BCOO(JAXSparse):
       n_dense = self.n_dense
       dtype = self.dtype
       shape = list(self.shape)
-    except:
+    except Exception:  # pylint: disable=broad-except
       repr_ = f"{name}(<invalid>)"
     else:
       extra = f", nse={nse}"
