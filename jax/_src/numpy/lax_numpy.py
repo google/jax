@@ -78,6 +78,7 @@ from jax._src.numpy.vectorize import vectorize
 from jax._src.ops import scatter
 from jax._src.util import (unzip2, prod as _prod, subvals, safe_zip, ceil_of_ratio,
                            canonicalize_axis as _canonicalize_axis)
+from jax._src.typing import DTypeLike
 from jax.experimental.array import Array
 
 newaxis = None
@@ -2889,11 +2890,16 @@ _EINSUM_DOC = _PRECISION_DOC + """\
 A tuple ``precision`` does not necessarily map to multiple arguments of ``einsum()``;
 rather, the specified ``precision`` is forwarded to each ``dot_general`` call used in
 the implementation.
+
+For further control, also supports 'preferred_element_type' - which is similarly forwarded
+to each dot_general call. This may be either None, which means the default accumulation 
+type for the input types, or a datatype, indicating to accumulate results to and 
+return a result with that datatype.
 """
 
 @_wraps(np.einsum, lax_description=_EINSUM_DOC, skip_params=['out'])
 def einsum(*operands, out=None, optimize='optimal', precision=None,
-           _use_xeinsum=False):
+           _use_xeinsum=False, preferred_element_type = None):
   if out is not None:
     raise NotImplementedError("The 'out' argument to jnp.einsum is not supported.")
 
@@ -2922,7 +2928,7 @@ def einsum(*operands, out=None, optimize='optimal', precision=None,
 
   _einsum_computation = jax.named_call(
       _einsum, name=spec) if spec is not None else _einsum
-  return _einsum_computation(operands, contractions, precision)
+  return _einsum_computation(operands, contractions, precision, preferred_element_type)
 
 # Enable other modules to override einsum_contact_path.
 # Indexed by the type of the non constant dimension
@@ -2945,10 +2951,10 @@ def einsum_path(subscripts, *operands, optimize='greedy'):
 def _removechars(s, chars):
   return s.translate(str.maketrans(dict.fromkeys(chars)))
 
-@partial(jit, static_argnums=(1, 2))
+@partial(jit, static_argnums=(1, 2, 3))
 def _einsum(operands: Sequence,
             contractions: Sequence[Tuple[Tuple[int, ...], FrozenSet[str], str]],
-            precision):
+            precision, preferred_element_type):
   operands = list(_promote_dtypes(*operands))
   def sum(x, axes):
     return lax.reduce(x, np.array(0, x.dtype),
@@ -3062,11 +3068,11 @@ def _einsum(operands: Sequence,
       names = batch_names_str + remaining_rhs_names + remaining_lhs_names
       if names == result_names:
         dimension_numbers = ((rhs_cont, lhs_cont), (rhs_batch, lhs_batch))
-        operand = lax.dot_general(rhs, lhs, dimension_numbers, precision)
+        operand = lax.dot_general(rhs, lhs, dimension_numbers, precision, preferred_element_type)
       else:
         names = batch_names_str + remaining_lhs_names + remaining_rhs_names
         dimension_numbers = ((lhs_cont, rhs_cont), (lhs_batch, rhs_batch))
-        operand = lax.dot_general(lhs, rhs, dimension_numbers, precision)
+        operand = lax.dot_general(lhs, rhs, dimension_numbers, precision, preferred_element_type)
     else:
       raise NotImplementedError  # if this is actually reachable, open an issue!
 
