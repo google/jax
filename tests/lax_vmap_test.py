@@ -788,7 +788,6 @@ class LaxVmapTest(jtu.JaxTestCase):
         self._CheckBatching(fun, 5, bdims, (shape,) * arity,
                             (np.float32,) * arity, rng)
 
-
   # TODO Concatenate
   # TODO Reverse
   # TODO DynamicSlice
@@ -826,6 +825,24 @@ class LaxVmapTest(jtu.JaxTestCase):
     output = jax.vmap(normpool)(inpt[None, ...])  # doesn't crash
     expected = jnp.array([[[2.0, 2.0, 0.0], [3.0, 0.0, 1.0]]])
     self.assertAllClose(output, expected, check_dtypes=False)
+
+  @parameterized.named_parameters(
+      jtu.cases_from_list(
+          {"testcase_name": "{}_bdims={}".format(
+              jtu.format_test_name_suffix(
+                  "tridiagonal_solve", shapes,
+                  itertools.repeat(jnp.dtype('float32'))), bdims),
+           "shapes": shapes, "bdims": bdims}
+          for shapes in [
+              [(3,), (3,), (3,), (3, 2)],
+              [(4,), (4,), (4,), (4, 5)],
+          ]
+          for bdims in all_bdims(*shapes)))
+  def test_tridiagonal_solve(self, shapes, bdims):
+    rng = jtu.rand_default(self.rng())
+    dtypes = [jnp.dtype('float32')] * len(shapes)
+    self._CheckBatching(lax.linalg.tridiagonal_solve, 5, bdims, shapes, dtypes,
+                        rng, atol=1e-4, rtol=1e-4)
 
 
 if __name__ == '__main__':

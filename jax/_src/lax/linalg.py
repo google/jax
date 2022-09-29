@@ -1725,17 +1725,18 @@ mlir.register_lowering(
 
 mlir.register_lowering(svd_p, _svd_tpu_lowering_rule)
 
-def _tridiagonal_solve_gpu_lowering(lowering, ctx, dl, d, du, b, *, m, n, ldb, t):
-  return [lowering(dl, d, du, b, m=m, n=n, ldb=ldb,
-                   t=dtypes.canonicalize_dtype(t))]
-
 tridiagonal_solve_p = Primitive('tridiagonal_solve')
 tridiagonal_solve_p.multiple_results = False
 tridiagonal_solve_p.def_impl(
     functools.partial(xla.apply_primitive, tridiagonal_solve_p))
-tridiagonal_solve_p.def_abstract_eval(lambda dl, d, du, b, *, m, n, ldb, t: b)
+tridiagonal_solve_p.def_abstract_eval(
+    lambda dl, d, du, b, *, m, n, ldb, t:
+    ShapedArray(b.shape, b.dtype, b.weak_type))
 # TODO(tomhennigan): Consider AD rules using lax.custom_linear_solve?
 
+def _tridiagonal_solve_gpu_lowering(lowering, ctx, dl, d, du, b, *, m, n, ldb, t):
+  return [lowering(dl, d, du, b, m=m, n=n, ldb=ldb,
+                   t=dtypes.canonicalize_dtype(t))]
 mlir.register_lowering(
     tridiagonal_solve_p,
     partial(_tridiagonal_solve_gpu_lowering, gpu_sparse.cuda_gtsv2),
@@ -1748,6 +1749,7 @@ mlir.register_lowering(
 
 def _tridiagonal_solve_jax(dl, d, du, b, **kw):
   """Pure JAX implementation of `tridiagonal_solve`."""
+  del kw
   prepend_zero = lambda x: jnp.append(jnp.zeros([1], dtype=x.dtype), x[:-1])
   fwd1 = lambda tu_, x: x[1] / (x[0] - x[2] * tu_)
   fwd2 = lambda b_, x: (x[0] - x[3] * b_) / (x[1] - x[3] * x[2])
@@ -1773,9 +1775,13 @@ def _tridiagonal_solve_jax(dl, d, du, b, **kw):
 
   return x_[::-1]
 
-
 mlir.register_lowering(tridiagonal_solve_p, mlir.lower_fun(
     _tridiagonal_solve_jax, multiple_results=False))
+
+
+def _tridiagonal_solve_vmap(batched_args, batch_dims, **_):
+  return jax.vmap(_tridiagonal_solve_jax, in_axes=batch_dims)(*batched_args), 0
+batching.primitive_batchers[tridiagonal_solve_p] = _tridiagonal_solve_vmap
 
 
 def tridiagonal_solve(dl, d, du, b):
