@@ -467,16 +467,13 @@ def lower_xla_callable(
     has_outfeed = core.jaxpr_uses_outfeed(jaxpr)
     jaxpr = apply_outfeed_rewriter(jaxpr)
 
-  if not keep_unused:
-    jaxpr, kept_const_idx, kept_var_idx = _prune_unused_inputs(jaxpr)
-    consts = [c for i, c in enumerate(consts) if i in kept_const_idx]
-    abstract_args, arg_devices = util.unzip2(
-        [a for i, a in enumerate(arg_specs) if i in kept_var_idx])
-    donated_invars = [x for i, x in enumerate(donated_invars)
-                      if i in kept_var_idx]
-    del kept_const_idx
-  else:
-    kept_var_idx = set(range(len(fun.in_type)))
+  jaxpr, kept_const_idx, kept_var_idx = _dce_helper(jaxpr, keep_unused)
+  consts = [c for i, c in enumerate(consts) if i in kept_const_idx]
+  abstract_args, arg_devices = util.unzip2(
+      [a for i, a in enumerate(arg_specs) if i in kept_var_idx])
+  donated_invars = [x for i, x in enumerate(donated_invars)
+                    if i in kept_var_idx]
+  del kept_const_idx
 
   nreps = jaxpr_replicas(jaxpr)
   device = _xla_callable_device(nreps, backend, device, arg_devices)
@@ -570,10 +567,11 @@ def jaxpr_has_bints(jaxpr: core.Jaxpr) -> bool:
               for j in itertools.chain([jaxpr], core.subjaxprs(jaxpr))
               for e in j.eqns for v in e.outvars))
 
-def _prune_unused_inputs(
-    jaxpr: core.Jaxpr) -> Tuple[core.Jaxpr, Set[int], Set[int]]:
+def _dce_helper(jaxpr: core.Jaxpr, keep_unused: bool,
+                ) -> Tuple[core.Jaxpr, Set[int], Set[int]]:
   used_outputs = [True] * len(jaxpr.outvars)
-  new_jaxpr, used_consts, used_inputs = pe.dce_jaxpr_consts(jaxpr, used_outputs)
+  new_jaxpr, used_consts, used_inputs = pe.dce_jaxpr_consts(
+      jaxpr, used_outputs, instantiate=keep_unused)
   kept_const_idx = {i for i, b in enumerate(used_consts) if b}
   kept_var_idx = {i for i, b in enumerate(used_inputs) if b}
   return new_jaxpr, kept_const_idx, kept_var_idx

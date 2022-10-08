@@ -2754,16 +2754,13 @@ def lower_sharding_computation(
   assert len(out_shardings) == len(global_out_avals), (
       len(out_shardings), len(global_out_avals))  # type: ignore
 
-  if keep_unused:
-    kept_var_idx = set(range(len(global_in_avals)))
-  else:
-    jaxpr, kept_const_idx, kept_var_idx = dispatch._prune_unused_inputs(jaxpr)
-    consts = [c for i, c in enumerate(consts) if i in kept_const_idx]
-    global_in_avals = tuple(a for i, a in enumerate(global_in_avals) if i in kept_var_idx)
-    in_shardings = tuple(s for i, s in enumerate(in_shardings) if i in kept_var_idx)
-    in_is_global = tuple(g for i, g in enumerate(in_is_global) if i in kept_var_idx)
-    donated_invars = tuple(x for i, x in enumerate(donated_invars) if i in kept_var_idx)
-    del kept_const_idx
+  jaxpr, kept_const_idx, kept_var_idx = dispatch._dce_helper(jaxpr, keep_unused)
+  consts = [c for i, c in enumerate(consts) if i in kept_const_idx]
+  global_in_avals = tuple(a for i, a in enumerate(global_in_avals) if i in kept_var_idx)
+  in_shardings = tuple(s for i, s in enumerate(in_shardings) if i in kept_var_idx)
+  in_is_global = tuple(g for i, g in enumerate(in_is_global) if i in kept_var_idx)
+  donated_invars = tuple(x for i, x in enumerate(donated_invars) if i in kept_var_idx)
+  del kept_const_idx
 
   process_index = xb.process_index()
   local_device_assignment = [d for d in device_assignment
