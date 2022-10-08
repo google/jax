@@ -1207,6 +1207,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
           ((4, 4), (4,)),
           ((4, 4), (4, 3)),
           ((2, 8, 8), (2, 8, 10)),
+          ((32, 4, 4, 4), (32, 4, 4, 3)),
+          ((8, 32, 5, 5), (8, 32, 5, 15)),
       ]
       for dtype in float_types))
   def testSolveTriangular(self, lower, transpose_a, unit_diagonal, lhs_shape,
@@ -1237,7 +1239,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
         unit_diagonal=unit_diagonal)
 
     self.assertAllClose(np_ans, ans,
-                        rtol={np.float32: 1e-4, np.float64: 1e-11})
+                        rtol={np.float32: 1e-4, np.float64: 1e-11},
+                        atol={np.float32: 3e-4})
 
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name":
