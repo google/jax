@@ -231,3 +231,12 @@ pytype_library(
         ":jax",
     ],
 )
+
+pytype_library(
+    name = "experimental_program_eviction",
+    srcs = ["experimental/program_eviction.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":jax",
+    ],
+)

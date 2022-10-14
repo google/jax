@@ -89,8 +89,10 @@ _XLA_EXTENSION_STUBS = [
     "profiler.pyi",
     "pytree.pyi",
     "transfer_guard_lib.pyi",
+    "program_eviction_lib.pyi",
 ]
 _OPTIONAL_XLA_EXTENSION_STUBS = [
+    "program_eviction_lib.pyi",  # Will be required on xla_extension_version >= 85.
 ]
 
 

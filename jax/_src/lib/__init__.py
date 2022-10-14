@@ -137,3 +137,6 @@ if not os.path.isdir(cuda_path):
   cuda_path = None
 
 transfer_guard_lib = xla_client._xla.transfer_guard_lib
+
+if xla_extension_version >= 85:
+  program_eviction_lib = xla_client._xla.program_eviction_lib
