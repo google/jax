@@ -1,4 +1,4 @@
-# Copyright 2018 The JAX Authors.
+# Copyright 2022 The JAX Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,9 +11,24 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
 
-from .version import __version__  # noqa: F401
+import jax
+import add_one
 
-def get_include():
-  return os.path.join(os.path.dirname(os.path.abspath(__file__)), "include")
+from jax._src import custom_call
+
+add_one_call = custom_call.custom_call("add_one")
+
+add_one_call.register(add_one.get_function(), platform="cpu")
+
+def f(x):
+  descriptor = add_one.get_descriptor(4.)
+  return add_one_call(x, descriptor=descriptor, out_shape_dtype=x)
+
+print(jax.jit(f)(4.))
+
+def g(x):
+  descriptor = add_one.get_descriptor(-1.)
+  return add_one_call(x, descriptor=descriptor, out_shape_dtype=x)
+
+print(jax.jit(g)(4.))

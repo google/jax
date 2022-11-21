@@ -89,6 +89,8 @@ import jaxlib.lapack as lapack
 
 import jaxlib.ducc_fft as ducc_fft
 
+import jaxlib.jax_custom_call as custom_call_lib
+
 xla_extension = xla_client._xla
 pytree = xla_client._xla.pytree
 jax_jit = xla_client._xla.jax_jit

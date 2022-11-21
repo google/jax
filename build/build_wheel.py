@@ -173,6 +173,8 @@ def prepare_wheel(sources_path):
   copy_to_jaxlib("__main__/jaxlib/ducc_fft.py")
   copy_to_jaxlib("__main__/jaxlib/gpu_prng.py")
   copy_to_jaxlib("__main__/jaxlib/gpu_linalg.py")
+  copy_to_jaxlib(f"__main__/jaxlib/_jax_custom_call.{pyext}")
+  copy_to_jaxlib("__main__/jaxlib/jax_custom_call.py")
   copy_to_jaxlib("__main__/jaxlib/gpu_solver.py")
   copy_to_jaxlib("__main__/jaxlib/gpu_sparse.py")
   copy_to_jaxlib("__main__/jaxlib/version.py")
@@ -251,6 +253,11 @@ def prepare_wheel(sources_path):
   if exists("org_tensorflow/tensorflow/compiler/xla/python/tpu_driver/client/tpu_client_extension.so"):
     copy_to_jaxlib("org_tensorflow/tensorflow/compiler/xla/python/tpu_driver/client/tpu_client_extension.so")
     patch_copy_tpu_client_py(jaxlib_dir)
+
+  jaxlib_include_dir = os.path.join(jaxlib_dir, "include")
+  os.makedirs(jaxlib_include_dir)
+
+  copy_to_jaxlib("__main__/jaxlib/jax_custom_call.h", dst_dir=jaxlib_include_dir)
 
 
 def edit_jaxlib_version(sources_path):

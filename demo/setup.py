@@ -1,4 +1,4 @@
-# Copyright 2018 The JAX Authors.
+# Copyright 2022 The JAX Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,9 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
 
-from .version import __version__  # noqa: F401
+from setuptools import setup, Extension
+import pybind11
+import jaxlib
 
-def get_include():
-  return os.path.join(os.path.dirname(os.path.abspath(__file__)), "include")
+setup(
+    packages = ["add_one"],
+    ext_modules = [
+      Extension(
+        name="add_one.add_one_lib",
+        sources=["lib/add_one_lib.cc"],
+        include_dirs = [
+          pybind11.get_include(), 
+          jaxlib.get_include()], 
+        )])

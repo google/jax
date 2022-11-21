@@ -1,4 +1,4 @@
-# Copyright 2018 The JAX Authors.
+# Copyright 2022 The JAX Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,9 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import os
 
-from .version import __version__  # noqa: F401
+from add_one.add_one_lib import get_descriptor
+from add_one.add_one_lib import get_function
 
-def get_include():
-  return os.path.join(os.path.dirname(os.path.abspath(__file__)), "include")

@@ -34,12 +34,16 @@ py_library(
         "gpu_solver.py",
         "gpu_sparse.py",
         "init.py",
+        "jax_custom_call.py",
         "lapack.py",
         "mhlo_helpers.py",
         ":version",
         ":xla_client",
     ],
-    data = [":xla_extension"],
+    data = [
+        "jax_custom_call.h",
+        ":xla_extension",
+    ],
     deps = [
         ":cpu_feature_guard",
         "//jaxlib/cpu:_ducc_fft",
@@ -162,4 +166,18 @@ cc_library(
         "//jaxlib/cuda:cuda_gpu_kernels",
     ],
     alwayslink = 1,
+)
+
+pybind_extension(
+    name = "_jax_custom_call",
+    srcs = ["jax_custom_call.cc"],
+    hdrs = [
+        "jax_custom_call.h",
+        "jax_custom_call_internal.h",
+    ],
+    deps = [
+        "@org_tensorflow//tensorflow/compiler/xla/service:custom_call_status",
+        "@org_tensorflow//tensorflow/compiler/xla/service:custom_call_target_registry",
+        "@pybind11",
+    ],
 )
