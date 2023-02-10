@@ -826,9 +826,12 @@ class XMapPrimitive(core.MapPrimitive):
     self.def_impl(xmap_impl)
     self.def_custom_bind(self.bind)
 
-  def bind(self, fun, *args, in_axes, **params):
+  def bind(self, fun, *args, in_axes, in_positional_semantics, **params):
     assert len(in_axes) == len(args), (in_axes, args)
-    return core.map_bind(self, fun, *args, in_axes=in_axes, **params)
+    assert len(in_positional_semantics) == len(args)
+    return core.map_bind(self, fun, *args, in_axes=in_axes, 
+                         in_positional_semantics=in_positional_semantics, 
+                         **params)
 
   def process(self, trace, fun, tracers, params):
     return trace.process_xmap(self, fun, tracers, params)
@@ -874,7 +877,18 @@ core.axis_substitution_rules[xmap_p] = _xmap_axis_subst
 # NOTE: We don't have to handle spmd_{in|out}_axes here, because
 # SPMD batching always gets involved as the last transform before XLA translation
 ad.JVPTrace.process_xmap = ad.JVPTrace.process_call  # type: ignore
-ad.call_param_updaters[xmap_p] = ad.call_param_updaters[xla.xla_call_p]
+def _xmap_call_jvp_update_params(params, nz_tangents):
+  donated_invars = params['donated_invars']
+  in_positional_semantics = params['in_positional_semantics']
+  donated_tangents = [d for d, nz in zip(donated_invars, nz_tangents) if nz]
+  new_donated_invars = (*donated_invars, *donated_tangents)
+  in_positional_tangents = [d for d, nz 
+                            in zip(in_positional_semantics, nz_tangents) if nz]
+  new_in_positional_semantics = (
+      *in_positional_semantics, *in_positional_tangents)
+  return dict(params, donated_invars=new_donated_invars,
+              in_positional_semantics=new_in_positional_semantics)
+ad.call_param_updaters[xmap_p] = _xmap_call_jvp_update_params
 
 def _xmap_transpose(params, call_jaxpr, args, cts_in, cts_in_avals, reduce_axes):
   all_args, in_tree_def = tree_flatten(((), args, cts_in))  # empty consts
@@ -885,8 +899,17 @@ def _xmap_transpose(params, call_jaxpr, args, cts_in, cts_in_avals, reduce_axes)
   fun, out_tree = flatten_fun_nokwargs(fun, in_tree_def)
   # Preserve axis for primal arguments, skip tangents (represented as undefined primals).
   in_axes, out_axes = params['in_axes'], params['out_axes']
+  in_positional_semantics = params["in_positional_semantics"]
+  out_positional_semantics = params["out_positional_semantics"]
   new_in_axes = (*(axis for axis, x in zip(in_axes, args) if not ad.is_undefined_primal(x)),
                  *(axis for axis, x in zip(out_axes, cts_in) if type(x) is not ad.Zero))
+  assert len(in_positional_semantics) == len(args)
+  new_in_positional_semantics = (
+      *(pos_sem for pos_sem, x in zip(in_positional_semantics, args)
+        if not ad.is_undefined_primal(x)),
+      *((out_positional_semantics,) * len(out_axes)))
+  assert all(s is _PositionalSemantics.GLOBAL for s in in_positional_semantics)
+  new_out_positional_semantics = _PositionalSemantics.GLOBAL
   # NOTE: This assumes that the output cotangents being zero is a deterministic
   #       function of which input cotangents were zero.
   @as_hashable_function(closure=(in_axes, tuple(type(c) is ad.Zero for c in cts_in)))
@@ -897,7 +920,9 @@ def _xmap_transpose(params, call_jaxpr, args, cts_in, cts_in_avals, reduce_axes)
                     in_axes=new_in_axes,
                     out_axes_thunk=out_axes_thunk,
                     donated_invars=(False,) * len(new_in_axes),
-                    spmd_out_axes_thunk=None)
+                    spmd_out_axes_thunk=None,
+                    in_positional_semantics=new_in_positional_semantics,
+                    out_positional_semantics=new_out_positional_semantics)
   del new_params['out_axes']
   del new_params['spmd_out_axes']
   out_flat = xmap_p.bind(fun, *all_args, **new_params)
@@ -1108,6 +1133,7 @@ def _jaxpr_trace_process_xmap(self, primitive, f: lu.WrappedFun, tracers, params
   donated_invars = params['donated_invars']
   global_axis_sizes = params['global_axis_sizes']
   out_axes_thunk = params['out_axes_thunk']
+  assert len(params["in_positional_semantics"]) == len(tracers)
 
   # Adjust input tracers' pvals for mapped axes, and unpack.
   in_pvals = [t.pval if t.pval.is_known() else
@@ -1143,7 +1169,9 @@ def _jaxpr_trace_process_xmap(self, primitive, f: lu.WrappedFun, tracers, params
   known_params = dict(
       params, in_axes=tuple(a for a, k in zip(in_axes, in_knowns) if k),
       donated_invars=tuple(d for d, k in zip(donated_invars, in_knowns) if k),
-      out_axes_thunk=new_out_axes_thunk)
+      out_axes_thunk=new_out_axes_thunk,
+      in_positional_semantics=tuple(
+          a for a, k in zip(params["in_positional_semantics"], in_knowns) if k))
 
   # Run the known part.
   out = primitive.bind(f, *in_consts, **known_params)
@@ -1162,7 +1190,12 @@ def _jaxpr_trace_process_xmap(self, primitive, f: lu.WrappedFun, tracers, params
       donated_invars=(*(False for _ in res),
                       *(d for d, k in zip(donated_invars, in_knowns) if not k)),
       in_axes=(*res_axes(), *(None for _ in env),
-               *(a for a, k in zip(in_axes, in_knowns) if not k)))
+               *(a for a, k in zip(in_axes, in_knowns) if not k)),
+      in_positional_semantics=(*((_PositionalSemantics.GLOBAL,) * len(res)),
+                               *((_PositionalSemantics.GLOBAL,) * len(env)),
+                               *(a for a, k in zip(
+                                   params["in_positional_semantics"], in_knowns)
+                                 if not k)))
   del unknown_params['out_axes_thunk']
   del unknown_params['spmd_out_axes_thunk']
   # Create input tracers for unknown part.
@@ -1180,6 +1213,8 @@ def _jaxpr_trace_process_xmap(self, primitive, f: lu.WrappedFun, tracers, params
   out_pvals = [pe.PartialVal.unknown(_insert_aval_axes(a, ax, local_axis_sizes))
                for a, ax in zip(out_avals, out_axes_unknown)]
   unknown_tracers_out = [pe.JaxprTracer(self, pval, None) for pval in out_pvals]
+  assert len(unknown_params["in_positional_semantics"]) == (len(unknown_arg_tracers) + len(res_tracers) + len(env_tracers))
+
   # Build eqn to be staged out and attach it to unknown output tracers.
   eqn = pe.new_eqn_recipe((*res_tracers, *env_tracers, *unknown_arg_tracers),
                           unknown_tracers_out, primitive, unknown_params,
