@@ -24,7 +24,6 @@ import warnings
 import numpy as np
 
 from jax import tree_util
-from jax.interpreters import mlir
 from jax.interpreters import pxla
 from jax.interpreters import xla
 
@@ -34,6 +33,7 @@ from jax._src import util
 from jax._src.core import ShapedArray, AxisName, raise_to_shaped
 from jax._src.interpreters import ad
 from jax._src.interpreters import batching
+from jax._src.interpreters import mlir
 from jax._src.lax import lax
 from jax._src.lax import slicing
 from jax._src.lib.mlir import ir
@@ -724,10 +724,10 @@ def _allreduce_abstract_eval(*args, axes, axis_index_groups):
           for arg, named_shape in zip(args, named_shapes)]
 
 def _allreduce_lowering(prim, pos_fn, ctx, *args, axes, axis_index_groups):
-  if axis_index_groups is not None and ctx.module_context.platform == "tpu":
+  if axis_index_groups is not None and "tpu" in ctx.module_context.platforms:
     len_0 = len(axis_index_groups[0])
     if any(len(g) != len_0 for g in axis_index_groups):
-      raise ValueError("axis_index_groups must all be the same size")
+      raise ValueError("axis_index_groups must all be the same size for TPU")
   named_axes, positional_axes = axes_partition = [], []
   for axis in axes:
     axes_partition[isinstance(axis, int)].append(axis)
@@ -971,9 +971,12 @@ def _all_to_all_lowering(ctx, x, *,
                                    axis_index_groups)
   if len(replica_groups[0]) == 1:
     return [x]
-  elif ((ctx.module_context.platform == "tpu") or
-        ((ctx.module_context.platform in ("cuda", "rocm"))
-         and (split_axis == 0) and (concat_axis == 0))):
+
+  platforms_to_lower_with_all_to_all = ["tpu"]
+  if (split_axis == 0) and (concat_axis == 0):
+    platforms_to_lower_with_all_to_all.extend(["cuda", "rocm"])
+
+  def lower_with_all_to_all_op(ctx, x):
     split_count = len(replica_groups[0])
     if not all(split_count == len(g) for g in replica_groups):
       raise ValueError('Replica groups must be equally sized')
@@ -996,7 +999,8 @@ def _all_to_all_lowering(ctx, x, *,
         split_count=mlir.i64_attr(split_count),
         replica_groups=_replica_groups_hlo(replica_groups),
         **other_args).results
-  else:
+
+  def lower_with_gather(ctx, x):
     warnings.warn(
         "all_to_all (and pswapaxes) are only implemented properly for TPUs and GPUs (if "
         "split_axis and concat_axis are both 0). All other backends emulate it using a "
@@ -1009,6 +1013,10 @@ def _all_to_all_lowering(ctx, x, *,
                     split_axis=split_axis,
                     concat_axis=concat_axis,
                     axis_index_groups=axis_index_groups)
+
+  return mlir.lower_multi_platform(ctx, "all_to_all",
+    [(platforms_to_lower_with_all_to_all, lower_with_all_to_all_op),
+     (None, lower_with_gather)], x)
 
 def _all_to_all_transpose_rule(cts, x, axis_name, split_axis, concat_axis, axis_index_groups):
   return (all_to_all(
@@ -1210,9 +1218,12 @@ def _all_gather_lowering(ctx, x, *, all_gather_dimension, axis_name,
   axis_context = ctx.module_context.axis_context
   is_spmd = isinstance(axis_context,
                        (mlir.SPMDAxisContext, mlir.ShardingContext))
-  if (ctx.module_context.platform == 'tpu' or
-      ctx.module_context.platform in ('cuda', 'rocm')
-      and all_gather_dimension == 0):
+
+  platforms_with_all_gather_op = ['tpu']
+  if all_gather_dimension == 0:
+    platforms_with_all_gather_op.extend(['cuda', 'rocm'])
+
+  def lower_with_all_gather_op(ctx, x):
     if not tiled:
       new_shape = list(x_aval.shape)
       new_shape.insert(all_gather_dimension, 1)
@@ -1238,12 +1249,17 @@ def _all_gather_lowering(ctx, x, *, all_gather_dimension, axis_name,
         x, all_gather_dim=mlir.i64_attr(all_gather_dimension),
         replica_groups=_replica_groups_hlo(replica_groups),
         **other_args).results
-  else:
+
+  def lower_with_psum(ctx, x):
     lowering = mlir.lower_fun(_all_gather_via_psum, multiple_results=False)
     return lowering(
         ctx, x, all_gather_dimension=all_gather_dimension,
         axis_name=axis_name, axis_index_groups=axis_index_groups,
         axis_size=axis_size, tiled=tiled)
+
+  return mlir.lower_multi_platform(ctx, "all_gather",
+    [(platforms_with_all_gather_op, lower_with_all_gather_op),
+     (None, lower_with_psum)], x)
 
 def _all_gather_abstract_eval(x, *, all_gather_dimension, axis_name, axis_index_groups, axis_size, tiled):
   if not isinstance(axis_name, (list, tuple)):
@@ -1344,7 +1360,9 @@ def _reduce_scatter_via_reducer(x, *, reducer, scatter_dimension, axis_name,
 def _reduce_scatter_lowering(prim, reducer, ctx, x,
                              *, scatter_dimension, axis_name,
                              axis_index_groups, axis_size, tiled):
-  if ctx.module_context.platform in ("tpu", "cuda", "rocm"):
+
+  platforms_with_reduce_scatter_op = ["tpu", "cuda", "rocm"]
+  def lower_with_reduce_scatter_op(ctx, x):
     x_aval, = ctx.avals_in
     aval_out, = ctx.avals_out
     scalar_aval = x_aval.update(shape=())
@@ -1387,7 +1405,8 @@ def _reduce_scatter_lowering(prim, reducer, ctx, x,
       return op.results
     else:
       return hlo.ReshapeOp(mlir.aval_to_ir_type(aval_out), op.result).results
-  else:
+
+  def lower_with_reducer(ctx, x):
     return mlir.lower_fun(_reduce_scatter_via_reducer, multiple_results=False)(
         ctx, x,
         reducer=reducer,
@@ -1397,6 +1416,9 @@ def _reduce_scatter_lowering(prim, reducer, ctx, x,
         axis_size=axis_size,
         tiled=tiled)
 
+  return mlir.lower_multi_platform(ctx, "reduce_scatter",
+    [(platforms_with_reduce_scatter_op, lower_with_reduce_scatter_op),
+     (None, lower_with_reducer)], x)
 
 def _reduce_scatter_abstract_eval(x, *, axis_name, scatter_dimension,
                                   axis_index_groups, axis_size, tiled):

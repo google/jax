@@ -1498,7 +1498,7 @@ def lower_parallel_callable(
         unordered_effects,
         ordered_effects,
         backend,
-        backend.platform,
+        (backend.platform,),
         mlir.ReplicaAxisContext(axis_env),
         name_stack,
         donated_invars,
@@ -2244,14 +2244,18 @@ def _hlo_shard(aval, axis_env, xs, in_axis):
 
 
 # TODO(b/110096942): more efficient gather
-def _hlo_unshard(ctx: mlir.LoweringRuleContext, aval, axis_env, out_axis, xs, platform):
+def _hlo_unshard(ctx: mlir.LoweringRuleContext, aval, axis_env, out_axis, xs, platforms):
   if aval is core.abstract_token:
     return xs
-  elif isinstance(aval, core.ShapedArray):
-    x, = xs
+  elif not isinstance(aval, core.ShapedArray):
+    raise TypeError(aval)
+
+  x, = xs
+
+  def do_lower(ctx, x, is_cpu_or_gpu=False):
     # TODO(mattjj): remove this logic when AllReduce PRED supported on CPU / GPU
-    convert_bool = (np.issubdtype(aval.dtype, np.bool_)
-                    and platform in ('cpu', 'gpu'))
+    nonlocal aval
+    convert_bool = (np.issubdtype(aval.dtype, np.bool_) and is_cpu_or_gpu)
     if convert_bool:
       aval = aval.update(dtype=np.dtype(np.float32))
       x = hlo.ConvertOp(mlir.aval_to_ir_type(aval), x).result
@@ -2285,8 +2289,10 @@ def _hlo_unshard(ctx: mlir.LoweringRuleContext, aval, axis_env, out_axis, xs, pl
           hlo.ComparisonDirectionAttr.get("NE"),
           compare_type=hlo.ComparisonTypeAttr.get("FLOAT")).result
     return out
-  else:
-    raise TypeError(aval)
+
+  return mlir.lower_multi_platform(ctx, "hlo_unshard",
+      [(["cpu", "rocm", "cuda"], partial(do_lower, is_cpu_or_gpu=True)),
+       (["tpu"], partial(do_lower, is_cpu_or_gpu=False))], x)
 
 
 def _pmap_lowering(ctx, *in_nodes, axis_name,
@@ -2295,7 +2301,8 @@ def _pmap_lowering(ctx, *in_nodes, axis_name,
                    donated_invars, global_arg_shapes,
                    is_explicit_global_axis_size):
   del donated_invars  # Unused.
-  xla.check_backend_matches(backend, ctx.module_context.platform)
+  # TODO(necula): why do we need this check?
+  # xla.check_backend_matches(backend, ctx.module_context.platform)
   # We in-line here rather than generating a Call HLO as in the xla_call
   # translation rule just because the extra tuple stuff is a pain.
   if ctx.module_context.axis_env.names and devices is not None:
@@ -2319,7 +2326,7 @@ def _pmap_lowering(ctx, *in_nodes, axis_name,
                                          dim_var_values=ctx.dim_var_values)
   out_avals = [v.aval for v in call_jaxpr.outvars]
   outs = [_hlo_unshard(ctx, aval, new_env, out_axis, shard,
-                        platform=ctx.module_context.platform)
+                        platforms=ctx.module_context.platforms)
           for aval, out_axis, shard in zip(out_avals, out_axes, sharded_outs)]
   return outs
 
@@ -2843,7 +2850,8 @@ def lower_sharding_computation(
     in_is_global: Sequence[bool],
     keep_unused: bool,
     always_lower: bool,
-    devices_from_context: Optional[Sequence[xc.Device]] = None
+    devices_from_context: Optional[Sequence[xc.Device]] = None,
+    lowering_platforms_override: Optional[str] = None,
 ) -> MeshComputation:
   """Lowers a computation to XLA. It can take arbitrary shardings as input.
 
@@ -3011,7 +3019,7 @@ def lower_sharding_computation(
       unordered_effects,
       ordered_effects,
       backend,
-      backend.platform,
+      lowering_platforms_override or (backend.platform,),
       axis_ctx,
       name_stack,
       donated_invars,
@@ -3066,7 +3074,8 @@ def lower_mesh_computation(
     spmd_lowering: bool,
     global_in_avals: Sequence[core.ShapedArray],
     tiling_method: Optional[TilingMethod],
-    in_is_global: Sequence[bool]) -> MeshComputation:
+    in_is_global: Sequence[bool],
+    lowering_platforms_override: Sequence[str] = ()) -> MeshComputation:
   assert not mesh.empty
   backend = xb.get_device_backend(mesh.devices.flat[0])
   name_stack = new_name_stack(wrap_name(fun_name, api_name))
@@ -3185,7 +3194,7 @@ def lower_mesh_computation(
         unordered_effects,
         ordered_effects,
         backend,
-        backend.platform,
+        lowering_platforms_override or (backend.platform,),
         axis_ctx,
         name_stack,
         donated_invars,

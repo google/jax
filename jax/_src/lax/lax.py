@@ -2740,14 +2740,15 @@ def precision_attr(precision: PrecisionType) -> ir.ArrayAttr:
 
 
 def _dot_general_lower(ctx, lhs, rhs, *, dimension_numbers,
-                       precision, preferred_element_type: Optional[np.dtype]):
+                       precision, preferred_element_type: Optional[np.dtype],
+                       workaround_slow_float16: bool = False):
   del preferred_element_type  # Implied by the output aval
   lhs_aval, rhs_aval = ctx.avals_in
   aval_out, = ctx.avals_out
   (lhs_contracting, rhs_contracting), (lhs_batch, rhs_batch) = dimension_numbers
 
   # TODO(b/195364460): Work around slow XLA/CPU implementation of float16 matmul
-  if ctx.module_context.platform == "cpu":
+  if workaround_slow_float16:
     if lhs_aval.dtype == np.float16:
       f32 = mlir.dtype_to_ir_type(np.dtype(np.float32))
       lhs = hlo.ConvertOp(ir.RankedTensorType.get(lhs_aval.shape, f32),
@@ -2770,7 +2771,10 @@ def _dot_general_lower(ctx, lhs, rhs, *, dimension_numbers,
           precision_config=precision_attr(precision)).result
   ]
 
+
 mlir.register_lowering(dot_general_p, _dot_general_lower)
+mlir.register_lowering(dot_general_p, partial(_dot_general_lower,
+                                              workaround_slow_float16=True), "cpu")
 
 
 def _broadcast_in_dim_shape_rule(operand, *, shape, broadcast_dimensions):

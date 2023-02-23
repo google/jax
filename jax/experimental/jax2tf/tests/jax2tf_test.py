@@ -1075,14 +1075,11 @@ class Jax2TfTest(tf_test_util.JaxToTfTestCase):
     self.ConvertAndCompare(jnp.sin, jnp.zeros((2, 3), jnp.float32))
 
   def test_randint(self):
-    if jtu.device_under_test() == "gpu" and config.jax2tf_default_experimental_native_lowering:
-      raise unittest.SkipTest("randint on GPU uses custom calls; not supported")
-
-    def randint():
+    def randint(x):
       return jax.random.randint(
-          jax.random.PRNGKey(42), shape=(), minval=0, maxval=1)
+          jax.random.PRNGKey(42), shape=x.shape, minval=0, maxval=1)
 
-    self.ConvertAndCompare(randint)
+    self.ConvertAndCompare(randint, np.ones((3, 4)))
 
   def test_op_metadata_simple(self):
     self.skipTest("include_xla_op_metadata not yet enabled")

@@ -1497,6 +1497,7 @@ def _while_lowering(ctx, *args, cond_jaxpr, body_jaxpr, cond_nconsts,
     if batched:
       pred_ctx = mlir.LoweringRuleContext(
           module_context=ctx.module_context,
+          platforms=ctx.module_context.platforms,
           primitive=None,
           avals_in=[pred_aval],
           avals_out=[pred_aval.update(shape=())],

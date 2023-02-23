@@ -235,11 +235,14 @@ pytype_aval_mappings.update(
     (t, partial(_make_abstract_python_scalar, t)) for t in _scalar_types)
 
 
-def primitive_subcomputation(platform: str, axis_env: 'AxisEnv',
+def primitive_subcomputation(platforms: Sequence[str], axis_env: 'AxisEnv',
                              prim: core.Primitive,
                              avals_in: Sequence[core.AbstractValue],
                              avals_out: Sequence[core.AbstractValue],
                              **params):
+  if len(platforms) > 1:
+    raise NotImplementedError(f"primitive_subcomputation {prim=}")
+  platform = platforms[0]
   c = xc.XlaBuilder(f"primitive_computation_{prim.name}")
   counts = it.count()
   xla_args = [parameter(c, next(counts), xla_shape)

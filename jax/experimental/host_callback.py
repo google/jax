@@ -1040,6 +1040,9 @@ def _outside_call_translation_rule(ctx,
                                    device_index,
                                    flat_results_aval=(),
                                    **params):
+  if len(ctx.module_context.platforms) > 1:
+    raise NotImplementedError("multi-platform lowering for outside_call")
+  platform = ctx.module_context.platforms[0]
   # We expect the current tokens at the end, inserted by _rewrite_jaxpr.
   assert has_token
   current_token = args_op[-2]
@@ -1062,7 +1065,7 @@ def _outside_call_translation_rule(ctx,
   send_infeed = use_outfeed and need_callback_results_on_device
   generated_infeed = False  # Keep track if we emitted an infeed op
   if use_outfeed:
-    _raise_if_using_outfeed_with_pjrt_c_api(xb.get_backend(ctx.platform))
+    _raise_if_using_outfeed_with_pjrt_c_api(xb.get_backend(platform))
     callback_id = _register_callback(
         functools.partial(
             _outside_call_run_callback,
@@ -1193,7 +1196,9 @@ def _outside_call_lowering(ctx: mlir.LoweringRuleContext,
                            flat_results_aval=(),
                            **params):
   """MLIR Lowering for `CustomCall`-based HCB."""
-  platform = ctx.module_context.platform
+  if len(ctx.module_context.platforms) > 1:
+    raise NotImplementedError("multi-platform lowering for outside call")
+  platform = ctx.module_context.platforms[0]
   use_outfeed = _use_outfeed(platform)
   if use_outfeed:
     # Fall back to XLA path if we are using the outfeed

@@ -1465,7 +1465,7 @@ class APITest(jtu.JaxTestCase):
     foo_p.def_abstract_eval(lambda x: x)
 
     jtu.check_raises_regexp(lambda: jit(foo)(1.0), NotImplementedError,
-                     ".* rule for primitive 'foo' not found.*")
+                     ".* rule for .* not found.*")
 
     foo_p.def_impl(lambda x: x)
     ad.defjvp(foo_p, lambda g, x: foo(g))

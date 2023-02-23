@@ -376,7 +376,7 @@ def inspect_sharding_partition(shapes, arg_shardings, result_shape,
   jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(fun, in_avals)
   closed_jaxpr = core.ClosedJaxpr(jaxpr, consts)
   trivial_comp = mlir.build_xla_computation_helper(closed_jaxpr,
-      name="tmp_xla_computation", platform=module_context.platform,
+      name="tmp_xla_computation", platforms=module_context.platforms,
       backend_or_name=module_context.backend_or_name,
       axis_context=module_context.axis_context)
   # The trivial computation built here has a dummy tuple as the result,

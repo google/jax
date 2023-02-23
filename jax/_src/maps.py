@@ -1324,7 +1324,8 @@ def _xmap_lowering_rule_replica(ctx, *in_nodes,
                                 spmd_in_axes, spmd_out_axes,
                                 in_positional_semantics, out_positional_semantics,
                                 axis_resources, resource_env, backend):
-  xla.check_backend_matches(backend, ctx.module_context.platform)
+  # TODO(necula): why do we need this check?
+  # xla.check_backend_matches(backend, ctx.module_context.platform)
   # The only way for any of those two assertions to be violated is when xmap
   # is using the SPMD lowering, but then this rule shouldn't even trigger.
   assert spmd_in_axes is None and spmd_out_axes is None
@@ -1386,7 +1387,7 @@ def _xmap_lowering_rule_replica(ctx, *in_nodes,
   outs = [
       mlir.lower_fun(
           partial(_untile, out_axes=ans_out_axes, axis_sizes=local_mesh_shape,
-                  platform=ctx.module_context.platform),
+                  platforms=ctx.module_context.platforms),
           multiple_results=False)(
               ctx.replace(primitive=None,
                           avals_in=[vectorized_outvar.aval],
@@ -1403,7 +1404,8 @@ def _xmap_lowering_rule_spmd(ctx, *global_in_nodes,
                              spmd_out_axes, in_positional_semantics,
                              out_positional_semantics, axis_resources,
                              resource_env, backend):
-  xla.check_backend_matches(backend, ctx.module_context.platform)
+  # TODO(necula): why do we need this check?
+  # xla.check_backend_matches(backend, ctx.module_context.platform)
   plan = EvaluationPlan.from_axis_resources(
       axis_resources, resource_env, global_axis_sizes, in_positional_semantics)
 
@@ -1468,7 +1470,8 @@ def _xmap_lowering_rule_spmd_manual(ctx, *global_in_nodes,
                                     resource_env, backend):
   assert spmd_in_axes is None and spmd_out_axes is None
   # This first part (up to vtile_manual) is shared with non-MANUAL SPMD rule.
-  xla.check_backend_matches(backend, ctx.module_context.platform)
+  # TODO(necula): why do we need this check?
+  # xla.check_backend_matches(backend, ctx.module_context.platform)
   plan = EvaluationPlan.from_axis_resources(
       axis_resources, resource_env, global_axis_sizes, in_positional_semantics)
   manual_mesh_axes = frozenset(it.chain.from_iterable(plan.physical_axis_resources.values()))
@@ -1538,8 +1541,11 @@ def _tile(x, in_axes, axis_sizes):
 
 
 # TODO(b/110096942): more efficient gather
-def _untile(x, out_axes, axis_sizes, platform):
+def _untile(x, out_axes, axis_sizes, platforms):
   # TODO(mattjj): remove this logic when AllReduce PRED supported on CPU / GPU
+  if len(platforms) > 1:
+    raise NotImplementedError("multi-platform lowering for _untile")
+  platform = platforms[0]
   convert_bool = (np.issubdtype(x.dtype, np.bool_)
                   and platform in ('cpu', 'gpu'))
   if convert_bool:

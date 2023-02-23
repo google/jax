@@ -144,7 +144,7 @@ class JaxPrimitiveTest(tf_test_util.JaxToTfTestCase):
         logging.warning("Supressing error %s", e)
         raise unittest.SkipTest("b/264596006: custom calls in native lowering fail in TF")
       else:
-        raise e
+        raise
 
   def test_primitive_coverage(self):
     """Fail if there are JAX primitives that are not implemented."""

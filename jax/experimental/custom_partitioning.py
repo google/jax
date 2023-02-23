@@ -101,7 +101,7 @@ def _custom_partitioning_partition(arg_shapes, arg_shardings, result_shape,
   built = mlir.build_xla_computation_helper(
       closed_jaxpr,
       name="tmp_xla_computation",
-      platform=module_context.platform,
+      platforms=module_context.platforms,
       backend_or_name=module_context.backend_or_name,
       axis_context=axis_context.extend_manual(frozenset(info.mesh.axis_names)))
   return built, arg_shardings, result_sharding
