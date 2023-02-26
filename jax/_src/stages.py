@@ -32,10 +32,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Generic, NamedTuple, Protocol, TypeVar, Union
+from typing import (Any, Generic, NamedTuple, Protocol, TypeVar, Union,
+                    TYPE_CHECKING)
 import warnings
 
-from typing_extensions import ParamSpec
+if TYPE_CHECKING:
+  from typing_extensions import ParamSpec
 
 import jax
 
@@ -710,7 +712,10 @@ class Lowered(Stage):
 
 
 V_co = TypeVar("V_co", covariant=True)
-P = ParamSpec("P")
+if TYPE_CHECKING:
+  P = ParamSpec("P")
+else:
+  P = TypeVar("P")
 
 
 class Wrapped(Protocol, Generic[P, V_co]):

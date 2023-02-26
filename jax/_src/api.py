@@ -28,11 +28,13 @@ from contextlib import contextmanager, ExitStack
 from functools import partial
 import inspect
 import math
-from typing import Any, Callable, Literal, NamedTuple, TypeVar, cast, overload
+from typing import (Any, Callable, Literal, NamedTuple, TypeVar, cast,
+                    overload, TYPE_CHECKING)
 import weakref
 
 import numpy as np
-from typing_extensions import ParamSpec
+if TYPE_CHECKING:
+  from typing_extensions import ParamSpec
 
 from jax._src import linear_util as lu
 from jax._src import stages
@@ -96,7 +98,10 @@ F = TypeVar("F", bound=Callable)
 T = TypeVar("T")
 U = TypeVar("U")
 V_co = TypeVar("V_co", covariant=True)
-P = ParamSpec("P")
+if TYPE_CHECKING:
+  P = ParamSpec("P")
+else:
+  P = TypeVar("P")
 
 
 map, unsafe_map = safe_map, map

@@ -660,6 +660,8 @@ def _flat_axes_specs(abstracted_axes, *args, **kwargs
 V_co = TypeVar("V_co", covariant=True)
 if TYPE_CHECKING:
   P = ParamSpec("P")
+else:
+  P = TypeVar("P")
 
 
 class JitWrapped(stages.Wrapped[P, V_co], Generic[P, V_co]):
