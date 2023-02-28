@@ -284,14 +284,20 @@ def _uniform(key, shape, dtype, minval, maxval) -> Array:
   if nbits not in (16, 32, 64):
     raise TypeError("uniform only accepts 32- or 64-bit dtypes.")
 
-  bits = _random_bits(key, nbits, shape)
+  # Request the smallest number of bits that is at least as large as the
+  # mantissa and also is number type that we know
+  nmant_request = next((n for n in (8, 16, 32, 64) if n >= nmant))
+
+  bits = _random_bits(key, nmant_request, shape)
+  bits = lax.convert_element_type(bits, UINT_DTYPES[nbits])
 
   # The strategy here is to randomize only the mantissa bits with an exponent of
   # 1 (after applying the bias), then shift and scale to the desired range. The
   # bit-level transformation we use relies on Numpy and XLA having bit-for-bit
   # equivalent float representations, which might not be true on all platforms.
   float_bits = lax.bitwise_or(
-      lax.shift_right_logical(bits, np.array(nbits - nmant, lax.dtype(bits))),
+      lax.shift_right_logical(bits,
+                              np.array(nmant_request - nmant, lax.dtype(bits))),
       np.array(1., dtype).view(UINT_DTYPES[nbits]))
   floats = lax.bitcast_convert_type(float_bits, dtype) - np.array(1., dtype)
   return lax.max(

@@ -4351,14 +4351,15 @@ def _rng_bit_generator_lowering(
   # also polymorphically allow a u64[2] for backward compatibility.
   #
   # Separately, xops.RngBitGenerator doesn't support generating u8 or
-  # u16, so we request u32 and truncate in that case.
+  # u16 except on TPU, so we request u32 and truncate in that case.
   u32_type = ir.IntegerType.get_unsigned(32)
   u64_type = ir.IntegerType.get_unsigned(64)
   assert ((key_shape == [4] and key_etype == u32_type) or
           (key_shape == [2] and key_etype == u64_type)), (key_shape, key_etype)
   dtype = np.dtype(dtype)
   etype = mlir.dtype_to_ir_type(dtype)
-  if dtype == np.dtype('uint32') or dtype == np.dtype('uint64'):
+  if ctx.module_context.platform == 'tpu' or (
+      dtype == np.dtype('uint32') or dtype == np.dtype('uint64')):
     rbg_etype = etype
   else:
     rbg_etype = u32_type
