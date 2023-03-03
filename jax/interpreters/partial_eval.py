@@ -1819,39 +1819,28 @@ class DynamicJaxprTrace(core.Trace):
   def post_process_call(self, call_primitive, out_tracers, params):
     assert False  # unreachable
 
-  def process_map(self, map_primitive, f, tracers, params):
-    in_avals = [t.aval for t in tracers]
-    axis_name, axis_size = params['axis_name'], params['axis_size']
-    reduced_in_avals = [core.mapped_aval(axis_size, in_axis, a)
-                        if in_axis is not None else a
-                        for a, in_axis in zip(in_avals, params['in_axes'])]
-    with core.extend_axis_env(axis_name, params["global_axis_size"], None):  # type: ignore
+  def process_map(self, map_primitive, f, in_tracers, params):
+    in_avals = map_primitive.map_avals([t.aval for t in in_tracers], **params)
+    debug_info = debug_info_final(f, map_primitive.name)
+    with map_primitive.extend_axis_env(**params):
       with core.new_sublevel():
-        jaxpr, reduced_out_avals, consts = trace_to_subjaxpr_dynamic(
-            f, self.main, reduced_in_avals, debug_info=debug_info_final(f, map_primitive.name))
-      ordered_effects = effects.ordered_effects.filter_in(jaxpr.effects)
-      if ordered_effects:
-        raise ValueError("Ordered effects not supported for "
-                         f"map primitives: {ordered_effects}")
-      out_axes = params['out_axes_thunk']()
-      out_avals = [core.unmapped_aval(axis_size, axis_name, out_axis, a)
-                  if out_axis is not None else a
-                  for a, out_axis in zip(reduced_out_avals, out_axes)]
-      source_info = source_info_util.current()
-      out_tracers = [DynamicJaxprTracer(self, a, source_info) for a in out_avals]
-      invars = map(self.getvar, tracers)
-      constvars = map(self.getvar, map(self.instantiate_const, consts))
-      outvars = map(self.makevar, out_tracers)
-      new_in_axes = (None,) * len(consts) + params['in_axes']
-      new_params = dict(params, in_axes=new_in_axes, out_axes=out_axes,
-                        call_jaxpr=convert_constvars_jaxpr(jaxpr))
-      del new_params['out_axes_thunk']
-      update_params = call_param_updaters.get(map_primitive)
-      if update_params:
-        new_params = update_params(new_params, [True] * len(tracers), len(consts))
-      eqn = new_jaxpr_eqn([*constvars, *invars], outvars, map_primitive,
-                          new_params, jaxpr.effects, source_info)
-      self.frame.add_eqn(eqn)
+        jaxpr, out_avals_body, consts = trace_to_subjaxpr_dynamic(
+            f, self.main, in_avals, debug_info=debug_info)
+      jaxpr = convert_constvars_jaxpr(jaxpr)
+    ordered_effects = effects.ordered_effects.filter_in(jaxpr.effects)
+    if ordered_effects:
+      raise ValueError("Ordered effects not supported for "
+                       f"map primitives: {ordered_effects}")
+    params = map_primitive.get_staged_params(jaxpr, **params)
+    out_avals = map_primitive.unmap_avals(out_avals_body, **params)
+    src_info = source_info_util.current()
+    out_tracers = [DynamicJaxprTracer(self, a, src_info) for a in out_avals]
+    invars = map(self.getvar, in_tracers)
+    constvars = map(self.getvar, map(self.instantiate_const, consts))
+    outvars = map(self.makevar, out_tracers)
+    eqn = new_jaxpr_eqn([*constvars, *invars], outvars, map_primitive, params,
+                        jaxpr.effects, src_info)
+    self.frame.add_eqn(eqn)
     return out_tracers
 
   def post_process_map(self, map_primitive, out_tracers, params):

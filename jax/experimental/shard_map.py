@@ -58,6 +58,8 @@ map, unsafe_map = util.safe_map, map
 zip, unsafe_zip = util.safe_zip, zip
 traceback_util.register_exclusion(__file__)
 
+unsplat_kwargs = lambda f: lambda *args, **kwargs: f(*args, kwargs)
+
 # API
 
 Specs = Any  # PyTree[PartitionSpec]
@@ -290,7 +292,8 @@ MaybeTracer = Union[JaxType, Tracer]
 class ShardMapPrimitive(core.Primitive):
   multiple_results = True
 
-  def bind(self, fun: lu.WrappedFun, *args: MaybeTracer, mesh: Mesh,
+  @staticmethod
+  def bind(fun: lu.WrappedFun, *args: MaybeTracer, mesh: Mesh,
            in_names: Tuple[AxisNames, ...],
            out_names_thunk: Callable[[], Tuple[AxisNames, ...]],
            check_rep: bool) -> Sequence[MaybeTracer]:
@@ -313,13 +316,39 @@ class ShardMapPrimitive(core.Primitive):
     todos, _ = env_todo()
     return map(core.full_lower, core.apply_todos(todos, outs))
 
-  def get_bind_params(self, params):
+  @staticmethod
+  def get_staged_params(jaxpr, *, mesh, in_names, out_names_thunk, check_rep):
+    num_consts = len(jaxpr.invars) - len(in_names)
+    new_in_names = (*({},) * num_consts, *in_names)
+    out_names = out_names_thunk()
+    _check_names(out_names, [v.aval for v in jaxpr.outvars])
+    if check_rep:
+      in_rep = map(partial(_in_names_to_rep, mesh), new_in_names)
+      out_rep = _output_rep(mesh, jaxpr, in_rep)
+      _check_reps(mesh, out_names, out_rep)
+    return dict(jaxpr=jaxpr, mesh=mesh, in_names=new_in_names,
+                out_names=tuple(out_names), check_rep=check_rep)
+
+  @staticmethod
+  def get_bind_params(params):
     new_params = dict(params)
     jaxpr = new_params.pop('jaxpr')
     subfun = lu.hashable_partial(lu.wrap_init(core.eval_jaxpr), jaxpr, ())
     axes = new_params.pop('out_names')
     new_params['out_names_thunk'] = HashableFunction(lambda: axes, closure=axes)
     return [subfun], new_params
+
+  @staticmethod
+  def map_avals(in_avals, *, mesh, in_names, **_):
+    return map(partial(_shard_aval, mesh), in_names, in_avals)
+
+  @staticmethod
+  def unmap_avals(out_avals_body, *, mesh, out_names, **_):
+    return map(partial(_unshard_aval, mesh), out_names, out_avals_body)
+
+  @staticmethod
+  def extend_axis_env(*, mesh, **_):
+    return core.extend_axis_env_nd(mesh.shape.items())
 
 shard_map_p = ShardMapPrimitive('shard_map')
 
@@ -345,40 +374,8 @@ def process_env_traces(level: int, mesh, in_names, out_names_thunk, check_rep,
 
 # Staging
 
-def _shard_map_staging(
-    trace: pe.DynamicJaxprTrace, prim: core.Primitive, fun: lu.WrappedFun,
-    in_tracers: Sequence[pe.DynamicJaxprTracer], *, mesh: Mesh,
-    in_names: Tuple[AxisNames, ...],
-    out_names_thunk: Callable[[], Tuple[AxisNames, ...]],
-    check_rep: bool,
-  ) -> Sequence[pe.DynamicJaxprTracer]:
-  in_avals = [t.aval for t in in_tracers]
-  in_avals_ = map(partial(_shard_aval, mesh), in_names, in_avals)
-  with core.new_sublevel(), core.extend_axis_env_nd(mesh.shape.items()):
-    jaxpr, out_avals_, consts = pe.trace_to_subjaxpr_dynamic(
-        fun, trace.main, in_avals_)
-  _check_names(out_names_thunk(), out_avals_)
-  if check_rep:
-    in_rep = map(partial(_in_names_to_rep, mesh), in_names)
-    out_rep = _output_rep(mesh, jaxpr, in_rep)
-    _check_reps(mesh, out_names_thunk(), out_rep)
-  out_avals = map(partial(_unshard_aval, mesh), out_names_thunk(), out_avals_)
-  source_info = source_info_util.current()
-  out_tracers = [pe.DynamicJaxprTracer(trace, a, source_info) for a in out_avals]
-  invars = map(trace.getvar, in_tracers)
-  constvars = map(trace.getvar, map(trace.instantiate_const, consts))
-  outvars = map(trace.makevar, out_tracers)
-  in_names_staged = ({},) * len(consts) + tuple(in_names)  # type: ignore
-  with core.extend_axis_env_nd(mesh.shape.items()):
-    jaxpr = pe.convert_constvars_jaxpr(jaxpr)
-  params = dict(mesh=mesh, in_names=in_names_staged,
-                out_names=tuple(out_names_thunk()), jaxpr=jaxpr,
-                check_rep=check_rep)
-  eqn = pe.new_jaxpr_eqn([*constvars, *invars], outvars, prim, params,
-                         jaxpr.effects, source_info)
-  trace.frame.add_eqn(eqn)
-  return out_tracers
-pe.DynamicJaxprTrace.process_shard_map = _shard_map_staging
+pe.DynamicJaxprTrace.process_shard_map = \
+    unsplat_kwargs(pe.DynamicJaxprTrace.process_map)
 
 def _shard_aval(mesh: Mesh, names: AxisNames, aval: core.AbstractValue
                 ) -> core.AbstractValue:

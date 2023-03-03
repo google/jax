@@ -503,6 +503,9 @@ fun_specs = [
                         x1.shape[-1] == x2.shape[-2 if x2.ndim > 1 else 0]),
              ),
     FunSpec(
+        'dot_const', 1, lambda x: jnp.dot(x, np.ones(x.shape[-1:], x.dtype)),
+        lambda r: r),
+    FunSpec(
         'sin_dot_sin', 2,
         lambda x1, x2: jnp.sin(jnp.dot(jnp.sin(x1), x2)),
         lambda r1, r2: r1 & r2,
@@ -688,7 +691,6 @@ def partitions(s: Sequence[T], k: int) -> Iterator[List[List[T]]]:
 def powerset(s: Iterable[T]) -> Iterator[Sequence[T]]:
   s = list(s)
   return it.chain.from_iterable(it.combinations(s, r) for r in range(len(s)+1))
-
 
 
 class ShardMapSystematicTest(jtu.JaxTestCase):

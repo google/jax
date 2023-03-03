@@ -840,7 +840,51 @@ class XMapPrimitive(core.MapPrimitive):
       raise NotImplementedError
     return post_process(self, out_tracers, params)
 
-  def get_bind_params(self, params):
+  @staticmethod
+  def map_avals(in_avals, *, global_axis_sizes, in_axes, **_):
+    return [_delete_aval_axes(a, a_in_axes, global_axis_sizes)
+            for a, a_in_axes in zip(in_avals, in_axes)]
+
+  @staticmethod
+  def unmap_avals(mapped_out_avals, *, axis_resources, resource_env,
+                  in_positional_semantics, out_positional_semantics, out_axes,
+                  global_axis_sizes, **_):
+    axis_resource_count = _get_axis_resource_count(axis_resources, resource_env,
+                                                   in_positional_semantics)
+    local_axis_sizes = {
+        axis: axis_resource_count[axis].to_local(out_positional_semantics,
+                                                 global_size)
+        for axis, global_size in global_axis_sizes.items()}
+    out_avals = [_insert_aval_axes(a, a_out_axes, local_axis_sizes)
+                 for a, a_out_axes in zip(mapped_out_avals, out_axes)]
+    _check_out_avals_vs_out_axes(out_avals, out_axes, global_axis_sizes)
+    return out_avals
+
+  @staticmethod
+  def extend_axis_env(*, global_axis_sizes, **_):
+    return core.extend_axis_env_nd(global_axis_sizes.items())
+
+  @staticmethod
+  def get_staged_params(jaxpr, *, in_axes, out_axes_thunk, donated_invars,
+                        spmd_in_axes, spmd_out_axes_thunk,
+                        in_positional_semantics, **params):
+    num_consts = len(jaxpr.invars) - len(in_axes)
+    new_in_axes = (AxisNamePos(user_repr='{}'),) * num_consts + in_axes
+    out_axes = out_axes_thunk()
+    new_spmd_in_axes = (((None,) * num_consts + spmd_in_axes)
+                        if spmd_in_axes is not None else None)
+    spmd_out_axes = spmd_out_axes_thunk and spmd_out_axes_thunk()
+    new_donated_invars = (False,) * num_consts + donated_invars
+    new_in_positional_semantics = ((_PositionalSemantics.GLOBAL,) * num_consts +
+                                   in_positional_semantics)
+    return dict(params, in_axes=new_in_axes, out_axes=out_axes,
+                donated_invars=new_donated_invars,
+                spmd_in_axes=new_spmd_in_axes, spmd_out_axes=spmd_out_axes,
+                in_positional_semantics=new_in_positional_semantics,
+                call_jaxpr=jaxpr)
+
+  @staticmethod
+  def get_bind_params(params):
     new_params = dict(params)
     jaxpr = new_params.pop('call_jaxpr')
     subfun = lu.hashable_partial(lu.wrap_init(core.eval_jaxpr), jaxpr, ())
@@ -993,64 +1037,7 @@ def _resource_typing_xmap(avals,
             f"named shape contains {pxla.show_axes(partitioning_axes)}")
 pxla.custom_resource_typing_rules[xmap_p] = _resource_typing_xmap
 
-
-# This is DynamicJaxprTrace.process_map with some very minor modifications
-def _dynamic_jaxpr_process_xmap(self, primitive, f, tracers, params):
-  from jax.interpreters.partial_eval import (
-    trace_to_subjaxpr_dynamic, DynamicJaxprTracer,
-    convert_constvars_jaxpr, new_jaxpr_eqn)
-  assert primitive is xmap_p
-  in_avals = [t.aval for t in tracers]
-  global_axis_sizes = params['global_axis_sizes']
-  mapped_in_avals = [_delete_aval_axes(a, a_in_axes, global_axis_sizes)
-                     for a, a_in_axes in zip(in_avals, params['in_axes'])]
-  with core.extend_axis_env_nd(global_axis_sizes.items()):
-    with core.new_sublevel():
-      jaxpr, mapped_out_avals, consts = trace_to_subjaxpr_dynamic(
-          f, self.main, mapped_in_avals)
-  out_axes = params['out_axes_thunk']()
-  if params['spmd_out_axes_thunk'] is not None:
-    spmd_out_axes = params['spmd_out_axes_thunk']()
-  else:
-    spmd_out_axes = None
-  axis_resource_count = _get_axis_resource_count(
-      params['axis_resources'], params['resource_env'],
-      params['in_positional_semantics'])
-  local_axis_sizes = {
-      axis: axis_resource_count[axis].to_local(params['out_positional_semantics'], global_size)
-      for axis, global_size in global_axis_sizes.items()
-  }
-  out_avals = [_insert_aval_axes(a, a_out_axes, local_axis_sizes)
-               for a, a_out_axes in zip(mapped_out_avals, out_axes)]
-  _check_out_avals_vs_out_axes(out_avals, out_axes, params['global_axis_sizes'])
-  source_info = source_info_util.current()
-  out_tracers = [DynamicJaxprTracer(self, a, source_info) for a in out_avals]
-  invars = map(self.getvar, tracers)
-  constvars = map(self.getvar, map(self.instantiate_const, consts))
-  outvars = map(self.makevar, out_tracers)
-  new_in_axes = (AxisNamePos(user_repr='{}'),) * len(consts) + params['in_axes']
-  if params['spmd_in_axes'] is None:
-    new_spmd_in_axes = None
-  else:
-    new_spmd_in_axes = (None,) * len(consts) + params['spmd_in_axes']
-  new_donated_invars = (False,) * len(consts) + params['donated_invars']
-  with core.extend_axis_env_nd(global_axis_sizes.items()):
-    call_jaxpr = convert_constvars_jaxpr(jaxpr)
-  new_params = dict(params, in_axes=new_in_axes, out_axes=out_axes,
-                    donated_invars=new_donated_invars,
-                    spmd_in_axes=new_spmd_in_axes,
-                    spmd_out_axes=spmd_out_axes,
-                    in_positional_semantics=(
-                        *( _PositionalSemantics.GLOBAL,) * len(constvars),
-                        *params['in_positional_semantics']),
-                    call_jaxpr=call_jaxpr)
-  del new_params['out_axes_thunk']
-  del new_params['spmd_out_axes_thunk']
-  eqn = new_jaxpr_eqn([*constvars, *invars], outvars, primitive,
-                      new_params, call_jaxpr.effects, source_info)
-  self.frame.add_eqn(eqn)
-  return out_tracers
-pe.DynamicJaxprTrace.process_xmap = _dynamic_jaxpr_process_xmap  # type: ignore
+pe.DynamicJaxprTrace.process_xmap = pe.DynamicJaxprTrace.process_map  # type: ignore
 
 def _xmap_partial_eval_custom_params_updater(
     unks_in: Sequence[bool], inst_in: Sequence[bool],

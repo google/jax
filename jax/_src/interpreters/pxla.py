@@ -2178,7 +2178,40 @@ class ExecuteReplicated:
       return self.out_handler(out_bufs)
 
 
-xla_pmap_p = core.MapPrimitive('xla_pmap')
+class PmapPrimitive(core.MapPrimitive):
+
+  @staticmethod
+  def map_avals(in_avals, *, axis_size, in_axes, **_):
+    return map(partial(core.mapped_aval, axis_size), in_axes, in_avals)
+
+  @staticmethod
+  def unmap_avals(out_avals_body, *, axis_size, axis_name, out_axes, **_):
+    return map(partial(core.unmapped_aval, axis_size, axis_name), out_axes,
+               out_avals_body)
+
+  @staticmethod
+  def extend_axis_env(axis_name, global_axis_size, **_):
+    return core.extend_axis_env(axis_name, global_axis_size, None)
+
+  @staticmethod
+  def get_staged_params(jaxpr, *, in_axes, out_axes_thunk, donated_invars,
+                        **params):
+    num_consts = len(jaxpr.invars) - len(in_axes)
+    new_in_axes = (None,) * num_consts + in_axes
+    new_donated_invars = (False,) * num_consts + donated_invars
+    return dict(params, in_axes=new_in_axes, out_axes=out_axes_thunk(),
+                call_jaxpr=jaxpr, donated_invars=new_donated_invars)
+
+  @staticmethod
+  def get_bind_params(params):
+    new_params = dict(params)
+    jaxpr = new_params.pop('call_jaxpr')
+    subfun = lu.hashable_partial(lu.wrap_init(core.eval_jaxpr), jaxpr, ())
+    axes = new_params.pop('out_axes')
+    new_params['out_axes_thunk'] = HashableFunction(lambda: axes, closure=axes)
+    return [subfun], new_params
+
+xla_pmap_p = PmapPrimitive('xla_pmap')
 xla_pmap = xla_pmap_p.bind
 xla_pmap_p.def_impl(xla_pmap_impl)
 

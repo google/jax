@@ -2239,13 +2239,25 @@ class MapPrimitive(Primitive):
   def post_process(self, trace, out_tracers, params):
     return trace.post_process_map(self, out_tracers, params)
 
-  def get_bind_params(self, params):
-    new_params = dict(params)
-    jaxpr = new_params.pop('call_jaxpr')
-    subfun = lu.hashable_partial(lu.wrap_init(eval_jaxpr), jaxpr, ())
-    axes = new_params.pop('out_axes')
-    new_params['out_axes_thunk'] = HashableFunction(lambda: axes, closure=axes)
-    return [subfun], new_params
+  @staticmethod
+  def map_avals(in_avals, **params):
+    raise NotImplementedError("must override")
+
+  @staticmethod
+  def unmap_avals(out_avals_body, **params):
+    raise NotImplementedError("must override")
+
+  @staticmethod
+  def extend_axis_env(**params):
+    raise NotImplementedError("must override")
+
+  @staticmethod
+  def get_staged_params(jaxpr, **params):
+    raise NotImplementedError("must override")
+
+  @staticmethod
+  def get_bind_params(params):
+    raise NotImplementedError("must override")
 
 
 def map_bind_with_continuation(primitive: MapPrimitive, fun, *args,
