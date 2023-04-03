@@ -33,6 +33,8 @@ from __future__ import annotations
 import warnings
 
 from dataclasses import dataclass
+import io
+import pickle
 from typing import Any, Dict, List, NamedTuple, Optional, Protocol, Sequence, Tuple
 
 import jax
@@ -532,6 +534,33 @@ class Compiled(Stage):
     outs, _, _ = Compiled.call(self._params, *args, **kwargs)
     return outs
 
+  def serialize(self) -> bytes:
+    """Serializes to bytes in a format with no stability garuntees."""
+
+    unloaded_executable = getattr(self._executable,
+                                  '_unloaded_executable', None)
+    if unloaded_executable is None:
+      raise ValueError("Compilation does not support serialization")
+    args_info_flat, in_tree = jax.tree_util.tree_flatten(self.args_info)
+
+    with io.BytesIO() as file:
+      _JaxPjrtPickler(file).dump(
+          (unloaded_executable, args_info_flat,
+           self._no_kwargs, in_tree, self.out_tree))
+      return file.getvalue()
+
+  def load(self, backend=None) -> Compiled:
+    """Loads a Compiled object onto a concrete backend."""
+    raise NotImplementedError
+
+  @classmethod
+  def deserialize(cls, blob: bytes) -> _DeserializedCompiled:
+    """Deserializes a Compiled object.
+
+    The deserialized object is unusable and must be loaded via load().
+    """
+    return _DeserializedCompiled(blob)
+
 
 class Lowered(Stage):
   """Lowering of a function specialized to argument types and values.
@@ -676,3 +705,63 @@ class Wrapped(Protocol):
       A ``Lowered`` instance representing the lowering.
     """
     raise NotImplementedError
+
+
+class _JaxPjrtPickler(pickle.Pickler):
+  device_types = (xc.Device,)
+  client_types = (xc.Client,)
+
+  def persistent_id(self, obj):
+    if isinstance(obj, xc.LoadedExecutable):
+      return ('exec', obj.client.serialize_executable(obj),
+              obj.compile_options())
+    if isinstance(obj, xc._xla.Executable):
+      return ('exec', obj.serialize(), obj.compile_options())
+    if isinstance(obj, self.device_types):
+      return ('device', obj.id)
+    if isinstance(obj, self.client_types):
+      return ('client',)
+
+
+class _JaxPjrtUnpickler(pickle.Unpickler):
+
+  def __init__(self, file, backend):
+    super().__init__(file)
+    self.backend = backend
+    self.devices_by_id = {d.id: d for d in backend.devices()}
+
+  def persistent_load(self, pid):
+    if pid[0] == 'exec':
+      return self.backend.deserialize_executable(pid[1], pid[2])
+    if pid[0] == 'device':
+      return self.devices_by_id[pid[1]]
+    if pid[0] == 'client':
+      return self.backend
+    raise pickle.UnpicklingError
+
+
+class _DeserializedCompiled:
+  """Represents a Compiled object that has been deserialized and not loaded.
+
+  Because of the fact that we can only currently deserialize using the concrete
+  backend with physical devices attached, this is not a Compiled() object itself
+  and can only be loaded. When that restriction is lifted, this class can be
+  deleted in favor of Compiled.
+  """
+
+  def __init__(self, blob):
+    self.blob = blob
+
+  def load(self, backend=None) -> Compiled:
+    """Loads a Compiled object onto a concrete backend."""
+    if backend is None or isinstance(backend, str):
+      backend = jax.devices(backend)[0].client
+    (unloaded_executable, args_info_flat,
+     no_kwargs, in_tree, out_tree) = _JaxPjrtUnpickler(io.BytesIO(self.blob), backend).load()
+
+    args_info = in_tree.unflatten(args_info_flat)
+
+    loaded_compiled_obj = unloaded_executable.load()
+
+    return Compiled(
+        loaded_compiled_obj, args_info, out_tree, no_kwargs=no_kwargs)

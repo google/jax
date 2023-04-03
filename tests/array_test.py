@@ -31,8 +31,6 @@ from jax._src.lib import xla_client as xc
 from jax._src.util import safe_zip
 from jax.interpreters import pxla
 from jax.experimental.pjit import pjit
-from jax.experimental.serialize_executable import (
-    serialize, deserialize_and_load)
 from jax.experimental import multihost_utils
 from jax.sharding import PartitionSpec as P
 from jax._src import array
@@ -1041,8 +1039,8 @@ class RngShardingTest(jtu.JaxTestCase):
       ).lower(core.ShapedArray(shape=(8, 8), dtype=np.float32))
 
     def verify_serialization(lowered):
-      serialized, in_tree, out_tree = serialize(lowered.compile())
-      compiled = deserialize_and_load(serialized, in_tree, out_tree)
+      serialized = lowered.compile().serialize()
+      compiled = jax.stages.Compiled.deserialize(serialized).load()
       self.assertEqual(compiled.as_text(), lowered.compile().as_text())
 
     verify_serialization(lowered)
