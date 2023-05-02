@@ -240,9 +240,40 @@ def _check_shape(name: str, shape: Union[Shape, NamedShape], *param_shapes) -> N
       raise ValueError(msg.format(name, shape_, shape))
 
 
+def _check_dtype(name: str, dtype: Optional[DTypeLike], *params,
+                 default_to_int: bool = False,
+                 require_inexact: bool = False,
+                 require_float: bool = False,
+                 require_int: bool = False) -> np.dtype:
+  if require_float:
+    require_inexact = True
+  if require_int:
+    default_to_int = True
+  dtypes.check_user_dtype_supported(dtype, name)
+  if dtype is None:
+    if params:
+      dtype = dtypes.result_type(*params)
+      if require_int:
+        dtype = dtypes.to_numeric_dtype(dtype)
+      if require_inexact:
+        dtype = dtypes.to_inexact_dtype(dtype)
+    elif default_to_int and not require_inexact:
+      dtype = dtypes.default_int()
+    else:
+      dtype = dtypes.default_float()
+  dtype = dtypes.canonicalize_dtype(dtype)
+  if require_int and not dtypes.issubdtype(dtype, np.integer):
+    raise ValueError(f"dtype argument to `{name}` must be an int dtype, got {dtype}")
+  if require_float and not dtypes.issubdtype(dtype, np.floating):
+    raise ValueError(f"dtype argument to `{name}` must be a float dtype, got {dtype}")
+  if require_inexact and not dtypes.issubdtype(dtype, np.inexact):
+    raise ValueError(f"dtype argument to `{name}` must be an inexact dtype, got {dtype}")
+  return np.dtype(dtype)
+
+
 def uniform(key: KeyArray,
             shape: Union[Shape, NamedShape] = (),
-            dtype: DTypeLikeFloat = dtypes.float_,
+            dtype: Optional[DTypeLikeFloat] = None,
             minval: RealArray = 0.,
             maxval: RealArray = 1.) -> Array:
   """Sample uniform random values in [minval, maxval) with given shape/dtype.
@@ -260,19 +291,13 @@ def uniform(key: KeyArray,
     A random array with the specified shape and dtype.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `uniform` must be a float dtype, "
-                     f"got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("uniform", dtype, minval, maxval, require_float=True)
   shape = core.as_named_shape(shape)
   return _uniform(key, shape, dtype, minval, maxval)  # type: ignore
 
 @partial(jit, static_argnums=(1, 2), inline=True)
 def _uniform(key, shape, dtype, minval, maxval) -> Array:
   _check_shape("uniform", shape)
-  if not jnp.issubdtype(dtype, np.floating):
-    raise TypeError("uniform only accepts floating point dtypes.")
-
   minval = lax.convert_element_type(minval, dtype)
   maxval = lax.convert_element_type(maxval, dtype)
   minval = lax.broadcast_to_rank(minval, shape.positional_rank)
@@ -310,7 +335,7 @@ def randint(key: KeyArray,
             shape: Shape,
             minval: IntegerArray,
             maxval: IntegerArray,
-            dtype: DTypeLikeInt = dtypes.int_) -> Array:
+            dtype: Optional[DTypeLikeInt] = None) -> Array:
   """Sample uniform random values in [minval, maxval) with given shape/dtype.
 
   Args:
@@ -327,16 +352,13 @@ def randint(key: KeyArray,
     A random array with the specified shape and dtype.
   """
   key, _ = _check_prng_key(key)
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("randint", dtype, minval, maxval, require_int=True)
   shape = core.canonicalize_shape(shape)
   return _randint(key, shape, minval, maxval, dtype)
 
 @partial(jit, static_argnums=(1, 4), inline=True)
 def _randint(key, shape, minval, maxval, dtype) -> Array:
   _check_shape("randint", shape, np.shape(minval), np.shape(maxval))
-  if not jnp.issubdtype(dtype, np.integer):
-    raise TypeError(f"randint only accepts integer dtypes, got {dtype}")
-
   check_arraylike("randint", minval, maxval)
   minval = jnp.asarray(minval)
   maxval = jnp.asarray(maxval)
@@ -550,7 +572,7 @@ def choice(key: KeyArray,
 
 def normal(key: KeyArray,
            shape: Union[Shape, NamedShape] = (),
-           dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+           dtype: Optional[DTypeLike] = None) -> Array:
   r"""Sample standard normal random values with given shape and float dtype.
 
   The values are returned according to the probability density function:
@@ -571,10 +593,7 @@ def normal(key: KeyArray,
     A random array with the specified shape and dtype.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.inexact):
-    raise ValueError(f"dtype argument to `normal` must be a float or complex dtype, "
-                     f"got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("normal", dtype, require_inexact=True)
   shape = core.as_named_shape(shape)
   return _normal(key, shape, dtype)  # type: ignore
 
@@ -604,7 +623,7 @@ def multivariate_normal(key: KeyArray,
                         mean: RealArray,
                         cov: RealArray,
                         shape: Optional[Shape] = None,
-                        dtype: DTypeLikeFloat = None,
+                        dtype: Optional[DTypeLike] = None,
                         method: str = 'cholesky') -> Array:
   r"""Sample multivariate normal random values with given mean and covariance.
 
@@ -637,14 +656,9 @@ def multivariate_normal(key: KeyArray,
     ``broadcast_shapes(mean.shape[:-1], cov.shape[:-2]) + mean.shape[-1:]``.
   """
   key, _ = _check_prng_key(key)
-  mean, cov = promote_dtypes_inexact(mean, cov)
+  dtype = _check_dtype("multivariate_normal", dtype, mean, cov, require_float=True)
   if method not in {'svd', 'eigh', 'cholesky'}:
     raise ValueError("method must be one of {'svd', 'eigh', 'cholesky'}")
-  if dtype is None:
-    dtype = mean.dtype
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `multivariate_normal` must be a float "
-                     f"dtype, got {dtype}")
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   return _multivariate_normal(key, mean, cov, shape, dtype, method)  # type: ignore
@@ -686,7 +700,7 @@ def truncated_normal(key: KeyArray,
                      lower: RealArray,
                      upper: RealArray,
                      shape: Optional[Union[Shape, NamedShape]] = None,
-                     dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+                     dtype: Optional[DTypeLike] = None) -> Array:
   r"""Sample truncated standard normal random values with given shape and dtype.
 
   The values are returned according to the probability density function:
@@ -715,10 +729,7 @@ def truncated_normal(key: KeyArray,
     Returns values in the open interval ``(lower, upper)``.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `truncated_normal` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("truncated_normal", dtype, lower, upper, require_float=True)
   if shape is not None:
     shape = core.as_named_shape(shape)
   return _truncated_normal(key, lower, upper, shape, dtype)  # type: ignore
@@ -735,8 +746,6 @@ def _truncated_normal(key, lower, upper, shape, dtype) -> Array:
   upper = lax.convert_element_type(upper, dtype)
   a = lax.erf(lower / sqrt2)
   b = lax.erf(upper / sqrt2)
-  if not jnp.issubdtype(dtype, np.floating):
-    raise TypeError("truncated_normal only accepts floating point dtypes.")
   u = uniform(key, shape, dtype, minval=a, maxval=b)
   out = sqrt2 * lax.erf_inv(u)
   # Clamp the value to the open interval (lower, upper) to make sure that
@@ -749,7 +758,8 @@ def _truncated_normal(key, lower, upper, shape, dtype) -> Array:
 
 def bernoulli(key: KeyArray,
               p: RealArray = np.float32(0.5),
-              shape: Optional[Union[Shape, NamedShape]] = None) -> Array:
+              shape: Optional[Union[Shape, NamedShape]] = None,
+              dtype: Optional[DTypeLike] = None) -> Array:
   r"""Sample Bernoulli random values with given shape and mean.
 
   The values are distributed according to the probability mass function:
@@ -796,7 +806,7 @@ def beta(key: KeyArray,
          a: RealArray,
          b: RealArray,
          shape: Optional[Shape] = None,
-         dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+         dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample Beta random values with given shape and float dtype.
 
   The values are distributed according to the probability density function:
@@ -823,10 +833,7 @@ def beta(key: KeyArray,
     ``shape`` is not None, or else by broadcasting ``a`` and ``b``.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `beta` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("bernoulli", dtype, a, b, require_float=True)
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   return _beta(key, a, b, shape, dtype)
@@ -854,7 +861,7 @@ def _beta(key, a, b, shape, dtype) -> Array:
 
 def cauchy(key: KeyArray,
            shape: Shape = (),
-           dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+           dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample Cauchy random values with given shape and float dtype.
 
   The values are distributed according to the probability density function:
@@ -875,10 +882,7 @@ def cauchy(key: KeyArray,
     A random array with the specified shape and dtype.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `cauchy` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("cauchy", dtype, require_float=True)
   shape = core.canonicalize_shape(shape)
   return _cauchy(key, shape, dtype)
 
@@ -893,7 +897,7 @@ def _cauchy(key, shape, dtype) -> Array:
 def dirichlet(key: KeyArray,
               alpha: RealArray,
               shape: Optional[Shape] = None,
-              dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+              dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample Dirichlet random values with given shape and float dtype.
 
   The values are distributed according the the probability density function:
@@ -926,10 +930,7 @@ def dirichlet(key: KeyArray,
     ``alpha.shape``.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `dirichlet` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("dirichlet", dtype, alpha, require_float=True)
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   return _dirichlet(key, alpha, shape, dtype)
@@ -963,7 +964,7 @@ def _softmax(x, axis) -> Array:
 
 def exponential(key: KeyArray,
                 shape: Shape = (),
-                dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+                dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample Exponential random values with given shape and float dtype.
 
   The values are distributed according the the probability density function:
@@ -984,10 +985,7 @@ def exponential(key: KeyArray,
     A random array with the specified shape and dtype.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `exponential` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("exponential", dtype, require_float=True)
   shape = core.canonicalize_shape(shape)
   return _exponential(key, shape, dtype)
 
@@ -1134,7 +1132,7 @@ batching.primitive_batchers[random_gamma_p] = _gamma_batching_rule
 def gamma(key: KeyArray,
           a: RealArray,
           shape: Optional[Shape] = None,
-          dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+          dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample Gamma random values with given shape and float dtype.
 
   The values are distributed according the the probability density function:
@@ -1168,10 +1166,7 @@ def gamma(key: KeyArray,
       accuracy for small values of ``a``.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `gamma` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("gamma", dtype, a, require_float=True)
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   return _gamma(key, a, shape=shape, dtype=dtype)
@@ -1180,7 +1175,7 @@ def gamma(key: KeyArray,
 def loggamma(key: KeyArray,
              a: RealArray,
              shape: Optional[Shape] = None,
-             dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+             dtype: Optional[DTypeLikeFloat] = None) -> Array:
   """Sample log-gamma random values with given shape and float dtype.
 
   This function is implemented such that the following will hold for a
@@ -1209,10 +1204,7 @@ def loggamma(key: KeyArray,
     gamma : standard gamma sampler.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `gamma` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("loggamma", dtype, a, require_float=True)
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   return _gamma(key, a, shape=shape, dtype=dtype, log_space=True)
@@ -1321,7 +1313,7 @@ def _poisson(key, lam, shape, dtype) -> Array:
 def poisson(key: KeyArray,
             lam: RealArray,
             shape: Optional[Shape] = None,
-            dtype: DTypeLikeInt = dtypes.int_) -> Array:
+            dtype: Optional[DTypeLikeInt] = None) -> Array:
   r"""Sample Poisson random values with given shape and integer dtype.
 
   The values are distributed according to the probability mass function:
@@ -1351,7 +1343,7 @@ def poisson(key: KeyArray,
     raise NotImplementedError(
         '`poisson` is only implemented for the threefry2x32 RNG, '
         f'not {key_impl}')
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("poisson", dtype, require_int=True)
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   else:
@@ -1363,7 +1355,7 @@ def poisson(key: KeyArray,
 
 def gumbel(key: KeyArray,
            shape: Shape = (),
-           dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+           dtype: Optional[DTypeLikeFloat] = None) -> Array:
   """Sample Gumbel random values with given shape and float dtype.
 
   The values are distributed according to the probability density function:
@@ -1382,10 +1374,7 @@ def gumbel(key: KeyArray,
     A random array with the specified shape and dtype.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `gumbel` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("gumbel", dtype, require_float=True)
   shape = core.canonicalize_shape(shape)
   return _gumbel(key, shape, dtype)
 
@@ -1440,7 +1429,7 @@ def categorical(key: KeyArray,
 
 def laplace(key: KeyArray,
             shape: Shape = (),
-            dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+            dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample Laplace random values with given shape and float dtype.
 
   The values are distributed according to the probability density function:
@@ -1459,10 +1448,7 @@ def laplace(key: KeyArray,
     A random array with the specified shape and dtype.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `laplace` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("laplace", dtype, require_float=True)
   shape = core.canonicalize_shape(shape)
   return _laplace(key, shape, dtype)
 
@@ -1476,7 +1462,7 @@ def _laplace(key, shape, dtype) -> Array:
 
 def logistic(key: KeyArray,
              shape: Shape = (),
-             dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+             dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample logistic random values with given shape and float dtype.
 
   The values are distributed according to the probability density function:
@@ -1495,10 +1481,7 @@ def logistic(key: KeyArray,
     A random array with the specified shape and dtype.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `logistic` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("logistic", dtype, require_float=True)
   shape = core.canonicalize_shape(shape)
   return _logistic(key, shape, dtype)
 
@@ -1512,7 +1495,7 @@ def _logistic(key, shape, dtype):
 def pareto(key: KeyArray,
            b: RealArray,
            shape: Optional[Shape] = None,
-           dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+           dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample Pareto random values with given shape and float dtype.
 
   The values are distributed according to the probability density function:
@@ -1537,10 +1520,7 @@ def pareto(key: KeyArray,
     ``shape`` is not None, or else by ``b.shape``.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `pareto` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("pareto", dtype, b, require_float=True)
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   return _pareto(key, b, shape, dtype)
@@ -1560,7 +1540,7 @@ def _pareto(key, b, shape, dtype) -> Array:
 def t(key: KeyArray,
       df: RealArray,
       shape: Shape = (),
-      dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+      dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample Student's t random values with given shape and float dtype.
 
   The values are distributed according to the probability density function:
@@ -1573,7 +1553,7 @@ def t(key: KeyArray,
   Args:
     key: a PRNG key used as the random key.
     df: a float or array of floats broadcast-compatible with ``shape``
-      representing the degrees of freedom parameter of the distribution.
+      representing the parameter of the distribution.
     shape: optional, a tuple of nonnegative integers specifying the result
       shape. Must be broadcast-compatible with ``df``. The default (None)
       produces a result shape equal to ``df.shape``.
@@ -1585,10 +1565,7 @@ def t(key: KeyArray,
     ``shape`` is not None, or else by ``df.shape``.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `t` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("t", dtype, df, require_float=True)
   shape = core.canonicalize_shape(shape)
   return _t(key, df, shape, dtype)
 
@@ -1611,7 +1588,7 @@ def _t(key, df, shape, dtype) -> Array:
 def chisquare(key: KeyArray,
               df: RealArray,
               shape: Optional[Shape] = None,
-              dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+              dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample Chisquare random values with given shape and float dtype.
 
   The values are distributed according to the probability density function:
@@ -1637,10 +1614,7 @@ def chisquare(key: KeyArray,
     ``shape`` is not None, or else by ``df.shape``.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError("dtype argument to `chisquare` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("chisquare", dtype, df, require_float=True)
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   return _chisquare(key, df, shape, dtype)
@@ -1663,7 +1637,7 @@ def f(key: KeyArray,
       dfnum: RealArray,
       dfden: RealArray,
       shape: Optional[Shape] = None,
-      dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+      dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample F-distribution random values with given shape and float dtype.
 
   The values are distributed according to the probability density function:
@@ -1694,10 +1668,7 @@ def f(key: KeyArray,
     ``shape`` is not None, or else by ``df.shape``.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError("dtype argument to `f` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("f", dtype, dfnum, dfden, require_float=True)
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   return _f(key, dfnum, dfden, shape, dtype)
@@ -1724,7 +1695,7 @@ def _f(key, dfnum, dfden, shape, dtype) -> Array:
 
 def rademacher(key: KeyArray,
                shape: Shape,
-               dtype: DTypeLikeInt = dtypes.int_) -> Array:
+               dtype: Optional[DTypeLike] = None) -> Array:
   r"""Sample from a Rademacher distribution.
 
   The values are distributed according to the probability mass function:
@@ -1745,7 +1716,7 @@ def rademacher(key: KeyArray,
 
   """
   key, _ = _check_prng_key(key)
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("rademacher", dtype, default_to_int=True)
   shape = core.canonicalize_shape(shape)
   return _rademacher(key, shape, dtype)
 
@@ -1758,7 +1729,7 @@ def _rademacher(key, shape, dtype) -> Array:
 
 def maxwell(key: KeyArray,
             shape: Shape = (),
-            dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+            dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample from a one sided Maxwell distribution.
 
   The values are distributed according to the probability density function:
@@ -1780,10 +1751,7 @@ def maxwell(key: KeyArray,
   # Generate samples using:
   # sqrt(X^2 + Y^2 + Z^2), X,Y,Z ~N(0,1)
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `maxwell` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("maxwell", dtype, require_float=True)
   shape = core.canonicalize_shape(shape)
   return _maxwell(key, shape, dtype)
 
@@ -1799,7 +1767,7 @@ def double_sided_maxwell(key: KeyArray,
                          loc: RealArray,
                          scale: RealArray,
                          shape: Shape = (),
-                         dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+                         dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample from a double sided Maxwell distribution.
 
   The values are distributed according to the probability density function:
@@ -1822,10 +1790,7 @@ def double_sided_maxwell(key: KeyArray,
 
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `double_sided_maxwell` must be a float"
-                     f" dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("double_sided_maxwell", dtype, loc, scale, require_float=True)
   shape = core.canonicalize_shape(shape)
   return _double_sided_maxwell(key, loc, scale, shape, dtype)
 
@@ -1850,7 +1815,7 @@ def weibull_min(key: KeyArray,
                 scale: RealArray,
                 concentration: RealArray,
                 shape: Shape = (),
-                dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+                dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample from a Weibull distribution.
 
   The values are distributed according to the probability density function:
@@ -1873,10 +1838,7 @@ def weibull_min(key: KeyArray,
 
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError(f"dtype argument to `weibull_min` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("weibull_min", dtype, scale, concentration, require_float=True)
   shape = core.canonicalize_shape(shape)
   return _weibull_min(key, scale, concentration, shape, dtype)
 
@@ -1903,7 +1865,7 @@ def orthogonal(
   key: KeyArray,
   n: int,
   shape: Shape = (),
-  dtype: DTypeLikeFloat = dtypes.float_
+  dtype: Optional[DTypeLike] = None
 ) -> Array:
   """Sample uniformly from the orthogonal group O(n).
 
@@ -1922,6 +1884,7 @@ def orthogonal(
   key, _ = _check_prng_key(key)
   _check_shape("orthogonal", shape)
   n = core.concrete_or_error(index, n, "The error occurred in jax.random.orthogonal()")
+  dtype = _check_dtype("orthogonal", dtype, require_inexact=True)
   z = normal(key, (*shape, n, n), dtype)
   q, r = jnp.linalg.qr(z)
   d = jnp.diagonal(r, 0, -2, -1)
@@ -1931,7 +1894,7 @@ def generalized_normal(
   key: KeyArray,
   p: float,
   shape: Shape = (),
-  dtype: DTypeLikeFloat = dtypes.float_
+  dtype: Optional[DTypeLikeFloat] = None
 ) -> Array:
   r"""Sample from the generalized normal distribution.
 
@@ -1955,6 +1918,7 @@ def generalized_normal(
   """
   key, _ = _check_prng_key(key)
   _check_shape("generalized_normal", shape)
+  dtype = _check_dtype("generalized_normal", dtype, p, require_float=True)
   keys = split(key)
   g = gamma(keys[0], 1/p, shape, dtype)
   r = rademacher(keys[1], shape, dtype)
@@ -1965,7 +1929,7 @@ def ball(
   d: int,
   p: float = 2,
   shape: Shape = (),
-  dtype: DTypeLikeFloat = dtypes.float_
+  dtype: Optional[DTypeLikeFloat] = None
 ):
   """Sample uniformly from the unit Lp ball.
 
@@ -1984,6 +1948,7 @@ def ball(
   """
   key, _ = _check_prng_key(key)
   _check_shape("ball", shape)
+  dtype = _check_dtype("ball", dtype, p, require_float=True)
   d = core.concrete_or_error(index, d, "The error occurred in jax.random.ball()")
   k1, k2 = split(key)
   g = generalized_normal(k1, p, (*shape, d), dtype)
@@ -1994,7 +1959,7 @@ def ball(
 def rayleigh(key: KeyArray,
              scale: RealArray,
              shape: Optional[Shape] = None,
-             dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+             dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample Rayleigh random values with given shape and float dtype.
 
   The values are returned according to the probability density function:
@@ -2020,10 +1985,7 @@ def rayleigh(key: KeyArray,
     ``shape`` is not None, or else by ``scale.shape``.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError("dtype argument to `rayleigh` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("rayleigh", dtype, scale, require_float=True)
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   return _rayleigh(key, scale, shape, dtype)
@@ -2046,7 +2008,7 @@ def _rayleigh(key, scale, shape, dtype) -> Array:
 def wald(key: KeyArray,
          mean: RealArray,
          shape: Optional[Shape] = None,
-         dtype: DTypeLikeFloat = dtypes.float_) -> Array:
+         dtype: Optional[DTypeLikeFloat] = None) -> Array:
   r"""Sample Wald random values with given shape and float dtype.
 
   The values are returned according to the probability density function:
@@ -2073,10 +2035,7 @@ def wald(key: KeyArray,
     ``shape`` is not None, or else by ``mean.shape``.
   """
   key, _ = _check_prng_key(key)
-  if not dtypes.issubdtype(dtype, np.floating):
-    raise ValueError("dtype argument to `wald` must be a float "
-                     f"dtype, got {dtype}")
-  dtype = dtypes.canonicalize_dtype(dtype)
+  dtype = _check_dtype("wald", dtype, mean, require_float=True)
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   return _wald(key, mean, shape, dtype)

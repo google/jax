@@ -627,6 +627,15 @@ def dtype(x: Any, *, canonicalize: bool = False) -> DType:
                     "type. Only arrays of numeric types are supported by JAX.")
   return canonicalize_dtype(dt, allow_opaque_dtype=True) if canonicalize else dt
 
+def default_int():
+  return canonicalize_dtype(int_)
+
+def default_float():
+  return canonicalize_dtype(float_)
+
+def default_complex():
+  return canonicalize_dtype(complex_)
+
 def _lattice_result_type(*args: Any) -> Tuple[DType, bool]:
   dtypes, weak_types = zip(*(_dtype_and_weaktype(arg) for arg in args))
   if len(dtypes) == 1:

@@ -1011,7 +1011,7 @@ class LaxRandomTest(jtu.JaxTestCase):
 
   @jtu.sample_product(
     lam=[0.5, 3, 9, 11, 50, 500],
-    dtype=[np.int16, np.int32, np.int64],
+    dtype=jtu.dtypes.integer,
   )
   def testPoisson(self, lam, dtype):
     key = self.seed_prng(0)
