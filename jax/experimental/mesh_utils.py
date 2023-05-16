@@ -285,24 +285,33 @@ def create_device_mesh(
     device_mesh = np.asarray(devices).reshape(mesh_shape)
     return device_mesh
 
-def create_hybrid_device_mesh(mesh_shape: Sequence[int],
-                              dcn_mesh_shape: Sequence[int],
-                              devices: Optional[Sequence[Any]] = None, *,
-                              process_is_granule: bool = False) -> np.ndarray:
+
+def create_hybrid_device_mesh(
+    mesh_shape: Sequence[int],
+    dcn_mesh_shape: Sequence[int],
+    devices: Optional[Sequence[Any]] = None,
+    *,
+    process_is_granule: bool = False,
+    contiguous_submeshes: bool = False,
+) -> np.ndarray:
   """Creates a device mesh for hybrid (e.g., ICI and DCN) parallelism.
 
   Args:
     mesh_shape: shape of the logical mesh for the faster/inner network, ordered
       by increasing network intensity, e.g. [replica, data, mdl] where mdl has
       the most network communication requirements.
-    dcn_mesh_shape: shape of the logical mesh for the slower/outer network,
-      in the same order as mesh_shape.
+    dcn_mesh_shape: shape of the logical mesh for the slower/outer network, in
+      the same order as mesh_shape.
     devices: optionally, the devices to construct a mesh for. Defaults to
       jax.devices().
     process_is_granule: if True, this function will treat processes as the units
       of the slower/outer network. Otherwise it will look for slice_index
       attributes on devices and use slices as the units. Enabling this is meant
       as a fallback for platforms (e.g., GPU) that don't set slice_index.
+    contiguous_submeshes: if True, this function will attempt to create a mesh
+      where each process's local devices form a contiguous submesh. This is
+      required when passing host local inputs to `pjit`. A ValueError will be
+      raised if this function can't produce a suitable mesh.
 
   Returns:
     A np.ndarray of JAX devices with mesh_shape * dcn_mesh_shape as its shape
@@ -319,8 +328,12 @@ def create_hybrid_device_mesh(mesh_shape: Sequence[int],
   if np.prod(dcn_mesh_shape) != len(granules):
     raise ValueError(
         'Number of slices must equal the product of dcn_mesh_shape')
-  per_granule_meshes = [create_device_mesh(mesh_shape, granule)
-                        for granule in granules]
+  per_granule_meshes = [
+      create_device_mesh(
+          mesh_shape, granule, contiguous_submeshes=contiguous_submeshes
+      )
+      for granule in granules
+  ]
   # TODO(jekbradbury): handle non-uniform DCN topologies
   granule_mesh = np.arange(len(granules)).reshape(dcn_mesh_shape)
   blocks = np.vectorize(
