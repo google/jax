@@ -343,7 +343,7 @@ class PJitTest(jtu.BufferDonationTestCase):
 
     hlo = f.lower(np.ones(shape)).compiler_ir()
     # Annotation from with_sharding_constraint
-    self.assertIn('sharding = "{devices=[2,1]0,1}"', str(hlo))
+    self.assertIn('sharding = "{devices=[2,1]<=[2]}"', str(hlo))
     # Annotation from pjit
     self.assertIn('sharding = "{replicated}"', str(hlo))
 
@@ -367,7 +367,7 @@ class PJitTest(jtu.BufferDonationTestCase):
 
     hlo = f.lower(np.ones(shape)).compiler_ir(dialect="hlo")
     # Annotation from with_sharding_constraint
-    self.assertIn("sharding={devices=[2,1]0,1}", hlo.as_hlo_text())
+    self.assertIn('sharding={devices=[2,1]<=[2]}', hlo.as_hlo_text())
     # Annotation from pjit
     self.assertIn("sharding={replicated}", hlo.as_hlo_text())
 
@@ -392,7 +392,7 @@ class PJitTest(jtu.BufferDonationTestCase):
 
     hlo = f.lower(np.ones(shape)).compiler_ir(dialect="hlo")
     # Annotation from with_sharding_constraint
-    self.assertIn("sharding={devices=[2,1]0,1}", hlo.as_hlo_text())
+    self.assertIn('sharding={devices=[2,1]<=[2]}', hlo.as_hlo_text())
     # Annotation from pjit
     self.assertIn("sharding={replicated}", hlo.as_hlo_text())
 
@@ -419,7 +419,7 @@ class PJitTest(jtu.BufferDonationTestCase):
 
     hlo = f.lower(np.ones(shape)).compiler_ir(dialect="hlo")
     # Annotation from with_sharding_constraint
-    self.assertIn("sharding={devices=[2,1]0,1}", hlo.as_hlo_text())
+    self.assertIn('sharding={devices=[2,1]<=[2]}', hlo.as_hlo_text())
     # Annotation from pjit
     self.assertIn("sharding={replicated}", hlo.as_hlo_text())
 
@@ -444,8 +444,8 @@ class PJitTest(jtu.BufferDonationTestCase):
 
     hlo = f.lower(x).compiler_ir(dialect="hlo")
     # Annotations from with_sharding_constraint
-    self.assertIn("sharding={devices=[2,1]0,1}", hlo.as_hlo_text())
-    self.assertIn("sharding={devices=[1,2]0,1}", hlo.as_hlo_text())
+    self.assertIn('sharding={devices=[2,1]<=[2]}', hlo.as_hlo_text())
+    self.assertIn('sharding={devices=[1,2]<=[2]}', hlo.as_hlo_text())
     # Annotation from pjit
     self.assertIn("sharding={replicated}", hlo.as_hlo_text())
 
@@ -475,8 +475,8 @@ class PJitTest(jtu.BufferDonationTestCase):
 
     hlo = f.lower(x).compiler_ir(dialect="hlo")
     # Annotations from with_sharding_constraint
-    self.assertIn("sharding={devices=[2,1]0,1}", hlo.as_hlo_text())
-    self.assertIn("sharding={devices=[1,2]0,1}", hlo.as_hlo_text())
+    self.assertIn('sharding={devices=[2,1]<=[2]}', hlo.as_hlo_text())
+    self.assertIn('sharding={devices=[1,2]<=[2]}', hlo.as_hlo_text())
     # Annotation from pjit
     self.assertIn("sharding={replicated}", hlo.as_hlo_text())
 
@@ -671,7 +671,8 @@ class PJitTest(jtu.BufferDonationTestCase):
     op = constraint_eqn.params['sharding']._op_sharding
     self.assertEqual(op.type, xc.OpSharding.Type.OTHER)
     self.assertListEqual(op.tile_assignment_dimensions, [1, 2])
-    self.assertListEqual(op.tile_assignment_devices, [0, 1])
+    self.assertListEqual(op.iota_reshape_dims, [2])
+    self.assertListEqual(op.iota_transpose_perm, [0])
     self.assertFalse(op_shardings.is_op_sharding_replicated(op))
 
   @jtu.with_mesh([('x', 2)])
@@ -691,7 +692,8 @@ class PJitTest(jtu.BufferDonationTestCase):
     op = constraint_eqn.params['sharding']._op_sharding
     self.assertEqual(op.type, xc.OpSharding.Type.OTHER)
     self.assertListEqual(op.tile_assignment_dimensions, [2, 1])
-    self.assertListEqual(op.tile_assignment_devices, [0, 1])
+    self.assertListEqual(op.iota_reshape_dims, [2])
+    self.assertListEqual(op.iota_transpose_perm, [0])
     self.assertFalse(op_shardings.is_op_sharding_replicated(op))
 
   @jtu.with_mesh([('x', 2), ('y', 1)])
@@ -2131,7 +2133,8 @@ class ArrayPjitTest(jtu.JaxTestCase):
     op = xc.OpSharding()
     op.type = xc.OpSharding.Type.OTHER
     op.tile_assignment_dimensions = [8]
-    op.tile_assignment_devices = [0, 1, 2, 3, 4, 5, 6, 7]
+    op.iota_reshape_dims = [8]
+    op.iota_transpose_perm = [0]
     gs = GSPMDSharding(tuple(mesh.devices.flat), op)
     b = jax.device_put(x, gs)
     self.assertIsInstance(b, jax.random.KeyArray)
@@ -3870,43 +3873,71 @@ class UtilTest(jtu.JaxTestCase):
     op1 = xc.OpSharding()
     op1.type = xc.OpSharding.Type.OTHER
     op1.tile_assignment_dimensions = [2, 2]
-    op1.tile_assignment_devices = [0, 1, 2, 3]
+    op1.iota_reshape_dims = [4]
+    op1.iota_transpose_perm = [0]
+
+    op1_v1 = xc.OpSharding()
+    op1_v1.type = xc.OpSharding.Type.OTHER
+    op1_v1.tile_assignment_dimensions = [2, 2]
+    op1_v1.tile_assignment_devices = [0, 1, 2, 3]
 
     op2 = xc.OpSharding()
     op2.type = xc.OpSharding.Type.OTHER
     op2.tile_assignment_dimensions = [2, 2]
-    op2.tile_assignment_devices = [0, 1, 2, 3]
+    op2.iota_reshape_dims = [4]
+    op2.iota_transpose_perm = [0]
 
     op3 = xc.OpSharding()
     op3.type = xc.OpSharding.Type.OTHER
     op3.tile_assignment_dimensions = [4, 2]
-    op3.tile_assignment_devices = [0, 1, 2, 3, 4, 5, 6, 7]
+    op3.iota_reshape_dims = [8]
+    op3.iota_transpose_perm = [0]
 
+    op3_v1 = xc.OpSharding()
+    op3_v1.type = xc.OpSharding.Type.OTHER
+    op3_v1.tile_assignment_dimensions = [4, 2]
+    op3_v1.tile_assignment_devices = [0, 1, 2, 3, 4, 5, 6, 7]
+
+    self.assertTrue(op_shardings.are_op_shardings_equal(op1, op1_v1))
     self.assertTrue(op_shardings.are_op_shardings_equal(op1, op2))
     self.assertFalse(op_shardings.are_op_shardings_equal(op1, op3))
     self.assertFalse(op_shardings.are_op_shardings_equal(op2, op3))
+    self.assertTrue(op_shardings.are_op_shardings_equal(op3, op3_v1))
 
     hs1 = xc.HloSharding.from_proto(op1)
+    hs1_v1 = xc.HloSharding.from_proto(op1_v1)
     hs2 = xc.HloSharding.from_proto(op2)
     hs3 = xc.HloSharding.from_proto(op3)
+    hs3_v1 = xc.HloSharding.from_proto(op3_v1)
 
     self.assertEqual(hash(hs1), hash(hs2))
+    self.assertEqual(hash(hs1), hash(hs1_v1))
     self.assertNotEqual(hash(hs1), hash(hs3))
     self.assertNotEqual(hash(hs2), hash(hs3))
+    self.assertEqual(hash(hs3), hash(hs3_v1))
 
   def test_op_sharding_partial_sharding(self):
     op1 = xc.OpSharding()
     op1.type = xc.OpSharding.Type.OTHER
     op1.tile_assignment_dimensions = [4, 1]
-    op1.tile_assignment_devices = [0, 1, 2, 3]
+    op1.iota_reshape_dims = [4]
+    op1.iota_transpose_perm = [0]
     op1.last_tile_dims = [xc.OpSharding.Type.REPLICATED]
+
+    op1_v1 = xc.OpSharding()
+    op1_v1.type = xc.OpSharding.Type.OTHER
+    op1_v1.tile_assignment_dimensions = [4, 1]
+    op1_v1.tile_assignment_devices = [0, 1, 2, 3]
+    op1_v1.last_tile_dims = [xc.OpSharding.Type.REPLICATED]
 
     op2 = xc.OpSharding()
     op2.type = xc.OpSharding.Type.OTHER
     op2.tile_assignment_dimensions = [4, 1]
-    op2.tile_assignment_devices = [0, 1, 2, 3]
+    op2.iota_reshape_dims = [4]
+    op2.iota_transpose_perm = [0]
     op2.last_tile_dims = [xc.OpSharding.Type.REPLICATED]
 
+    self.assertTrue(op_shardings.are_op_shardings_equal(op1, op1_v1))
     self.assertTrue(op_shardings.are_op_shardings_equal(op1, op2))
 
     hs1 = xc.HloSharding.from_proto(op1)
@@ -3917,13 +3948,15 @@ class UtilTest(jtu.JaxTestCase):
     top1 = xc.OpSharding()
     top1.type = xc.OpSharding.Type.OTHER
     top1.tile_assignment_dimensions = [4, 1]
-    top1.tile_assignment_devices = [0, 1, 2, 3]
+    top1.iota_reshape_dims = [4]
+    top1.iota_transpose_perm = [0]
     top1.replicate_on_last_tile_dim = True
 
     top2 = xc.OpSharding()
     top2.type = xc.OpSharding.Type.OTHER
     top2.tile_assignment_dimensions = [2, 2]
-    top2.tile_assignment_devices = [0, 1, 2, 3]
+    top2.iota_reshape_dims = [4]
+    top2.iota_transpose_perm = [0]
     top2.replicate_on_last_tile_dim = True
 
     op1 = xc.OpSharding()
@@ -3944,7 +3977,8 @@ class UtilTest(jtu.JaxTestCase):
     op1 = xc.OpSharding()
     op1.type = xc.OpSharding.Type.OTHER
     op1.tile_assignment_dimensions = [1, 1, 2, 1]
-    op1.tile_assignment_devices = [0, 1]
+    op1.iota_reshape_dims = [2]
+    op1.iota_transpose_perm = [0]
     op1.last_tile_dims = [xc.OpSharding.Type.REPLICATED, xc.OpSharding.Type.MANUAL]
 
     op2 = xc.OpSharding()
@@ -3974,7 +4008,8 @@ class UtilTest(jtu.JaxTestCase):
     op1 = xc.OpSharding()
     op1.type = xc.OpSharding.Type.OTHER
     op1.tile_assignment_dimensions = [1, 1, 2]
-    op1.tile_assignment_devices = [0, 1]
+    op1.iota_reshape_dims = [2]
+    op1.iota_transpose_perm = [0]
     op1.last_tile_dims = [xc.OpSharding.Type.REPLICATED]
 
     op2 = xc.OpSharding()
@@ -4003,13 +4038,15 @@ class UtilTest(jtu.JaxTestCase):
     op1 = xc.OpSharding()
     op1.type = xc.OpSharding.Type.OTHER
     op1.tile_assignment_dimensions = [1, 1, 2, 1]
-    op1.tile_assignment_devices = [0, 1]
+    op1.iota_reshape_dims = [2]
+    op1.iota_transpose_perm = [0]
     op1.last_tile_dims = [xc.OpSharding.Type.REPLICATED, xc.OpSharding.Type.MANUAL]
 
     op2 = xc.OpSharding()
     op2.type = xc.OpSharding.Type.OTHER
     op2.tile_assignment_dimensions = [1, 1, 1, 2]
-    op2.tile_assignment_devices = [0, 1]
+    op1.iota_reshape_dims = [2]
+    op1.iota_transpose_perm = [0]
     op2.last_tile_dims = [xc.OpSharding.Type.MANUAL, xc.OpSharding.Type.REPLICATED]
 
     op3 = xc.OpSharding()

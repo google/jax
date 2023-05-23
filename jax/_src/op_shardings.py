@@ -16,6 +16,7 @@
 import itertools
 from typing import List, Sequence, Tuple, Union
 
+import math
 import numpy as np
 
 from jax._src.lib import xla_client as xc
@@ -69,7 +70,10 @@ def op_sharding_to_numpy_indices(
     indices.fill((slice(None),) * len(shape))
     return indices
 
-  assert num_devices == len(op_sharding.tile_assignment_devices)
+  if op_sharding.tile_assignment_devices:
+    assert num_devices == len(op_sharding.tile_assignment_devices)
+  else:
+    assert num_devices == math.prod(op_sharding.iota_reshape_dims)
 
   partitions, num_replicas = get_num_ways_dim_sharded(op_sharding)
   assert len(partitions) == len(shape), (len(partitions), len(shape))
@@ -86,7 +90,16 @@ def op_sharding_to_numpy_indices(
     else:
       raise AssertionError('Unrecognized number of shards. Please file a bug!')
 
-  device_it = iter(op_sharding.tile_assignment_devices)
+  if op_sharding.tile_assignment_devices:
+    device_it = iter(op_sharding.tile_assignment_devices)
+  else:
+    tad = (
+        np.arange(num_devices)
+        .reshape(op_sharding.iota_reshape_dims)
+        .transpose(op_sharding.iota_transpose_perm)
+        .flat
+    )
+    device_it = iter(tad)
   for i, idxs in enumerate(itertools.product(*axis_indices)):
     for _ in range(num_replicas):
       indices[next(device_it)] = idxs

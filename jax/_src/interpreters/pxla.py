@@ -1628,11 +1628,11 @@ def manual_proto(
   tad_shape.append(math.prod([named_mesh_shape[a] for a in replicated_axes]))
   tad_shape.append(math.prod([named_mesh_shape[a] for a in manual_axes]))
 
-  raw_mesh = np.arange(math.prod(mesh_shape)).reshape(mesh_shape)
   proto = xc.OpSharding()
   proto.type = xc.OpSharding.Type.OTHER
   proto.tile_assignment_dimensions = tad_shape
-  proto.tile_assignment_devices = list(raw_mesh.transpose(tad_perm).reshape(tad_shape).flat)
+  proto.iota_reshape_dims = mesh_shape
+  proto.iota_transpose_perm = tad_perm
   proto.last_tile_dims = [xc.OpSharding.Type.REPLICATED, xc.OpSharding.Type.MANUAL]
   return proto
 

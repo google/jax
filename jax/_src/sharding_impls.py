@@ -507,8 +507,16 @@ def _from_op_sharding_to_pos_sharding(
           "Unhandled OpSharding type. Please open a bug report!")
 
   name = device_assignment[0].platform.upper()
-  ids = np.array([DeviceIdSet(name, i)
-                  for i in op_sharding.tile_assignment_devices])
+  if op_sharding.tile_assignment_devices:
+    tad = op_sharding.tile_assignment_devices
+  else:
+    tad = (
+        np.arange(math.prod(op_sharding.tile_assignment_dimensions))
+        .reshape(op_sharding.iota_reshape_dims)
+        .transpose(op_sharding.iota_transpose_perm)
+        .flat
+    )
+  ids = np.array([DeviceIdSet(name, i) for i in tad])
   p = PositionalSharding.remake(tuple(device_assignment), ids)
   p = p.reshape(op_sharding.tile_assignment_dimensions)
   if replicate_on_last_tile_dim:
@@ -1156,7 +1164,16 @@ def parse_flatten_op_sharding(op_sharding: xc.OpSharding,
         ParsedPartitionSpec(PartitionSpec(), ()))]
   elif op_sharding.type == xc.OpSharding.Type.OTHER:
     mesh_shape = mesh.shape
-    mesh_axis_order = unflatten_array(mesh.shape, op_sharding.tile_assignment_devices)
+    if op_sharding.tile_assignment_devices:
+      tad = op_sharding.tile_assignment_devices
+    else:
+      tad = (
+          np.arange(math.prod(op_sharding.tile_assignment_dimensions))
+          .reshape(op_sharding.iota_reshape_dims)
+          .transpose(op_sharding.iota_transpose_perm)
+          .flat
+      )
+    mesh_axis_order = unflatten_array(mesh.shape, tad)
     mesh_axis = iter(mesh_axis_order)
     shape = op_sharding.tile_assignment_dimensions
     partitions = []
