@@ -171,27 +171,37 @@ def register_pytree_node_class(cls: U) -> U:
   register_pytree_node(cls, op.methodcaller('tree_flatten'), cls.tree_unflatten)
   return cls
 
-def tree_map(f: Callable[..., Any], tree: Any, *rest: Any,
-             is_leaf: Optional[Callable[[Any], bool]] = None) -> Any:
+
+_TREE_MAP_SENTINEL = object()
+
+
+def tree_map(f: Callable[..., Any],
+             *trees: Any,
+             is_leaf: Optional[Callable[[Any], bool]] = None,
+             tree: Any = _TREE_MAP_SENTINEL) -> Any:
   """Maps a multi-input function over pytree args to produce a new pytree.
 
   Args:
-    f: function that takes ``1 + len(rest)`` arguments, to be applied at the
+    f: function that takes ``len(trees)`` arguments, to be applied at the
       corresponding leaves of the pytrees.
-    tree: a pytree to be mapped over, with each leaf providing the first
-      positional argument to ``f``.
-    rest: a tuple of pytrees, each of which has the same structure as ``tree``
-      or has ``tree`` as a prefix.
+    trees: a tuple of pytrees to be mapped over, each of which has the same
+      structure as ``trees[0]`` or has ``trees[0]`` as a prefix. If empty,
+      returns a function that is a tree-mapped version of the given ``f``.
     is_leaf: an optionally specified function that will be called at each
       flattening step. It should return a boolean, which indicates whether
       the flattening should traverse the current object, or if it should be
       stopped immediately, with the whole subtree being treated as a leaf.
+    tree: Do not use; only for backwards compatibility.
 
   Returns:
-    A new pytree with the same structure as ``tree`` but with the value at each
-    leaf given by ``f(x, *xs)`` where ``x`` is the value at the corresponding
-    leaf in ``tree`` and ``xs`` is the tuple of values at corresponding nodes in
-    ``rest``.
+
+    If at least one ``trees`` is given, returns a new pytree with the same
+    structure as ``trees[0]`` but with the value at each leaf given by
+    ``f(x, *xs)`` where ``x`` is the value at the corresponding leaf in
+    ``trees[0]`` and ``xs`` is the tuple of values at corresponding nodes in
+    ``trees[1:]``.
+
+    If ``trees`` is empty, returns a tree-mapped version of ``f``.
 
   Examples:
 
@@ -200,11 +210,33 @@ def tree_map(f: Callable[..., Any], tree: Any, *rest: Any,
     {'x': 8, 'y': 43}
 
     If multiple inputs are passed, the structure of the tree is taken from the
-    first input; subsequent inputs need only have ``tree`` as a prefix:
+    first input; subsequent inputs need only have ``trees[0]`` as a prefix:
 
     >>> jax.tree_util.tree_map(lambda x, y: [x] + y, [5, 6], [[7, 9], [1, 2]])
     [[5, 7, 9], [6, 1, 2]]
+
+    It can also be used as a function wrapper or decorator by passing no
+    ``trees``:
+
+    >>> tree_mapped_fn = jax.tree_util.tree_map(lambda x: x + 1)
+    >>> tree_mapped_fn({"x": 7, "y": 42})
+    {'x': 8, 'y': 43}
   """
+  if tree is not _TREE_MAP_SENTINEL:
+    # Backwards compatibility for case where this was called with a `tree` kwarg
+    # like `tree_map(f, tree=...)`. In this case `tree` is treated as the first
+    # tree because the function signature was previously:
+    #   def tree_map(f, tree, *rest, is_leaf=None): ...
+    trees = (tree,) + trees
+  del tree
+
+  if not trees:
+    @functools.wraps(f)
+    def wrapped_f(*trees: Any) -> Any:
+      return tree_map(f, *trees, is_leaf=is_leaf)
+    return wrapped_f
+
+  tree, *rest = trees
   leaves, treedef = tree_flatten(tree, is_leaf)
   all_leaves = [leaves] + [treedef.flatten_up_to(r) for r in rest]
   return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))

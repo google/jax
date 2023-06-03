@@ -283,18 +283,28 @@ class TreeTest(jtu.JaxTestCase):
     }, (3, 4)), None, ATuple(foo=(11, 9), bar=None)])
     self.assertEqual(out, [{"foo": 7}, (3, 4), (11, 9), None])
 
-  def testTreeMap(self):
+  @parameterized.parameters([False, True])
+  def testTreeMap(self, use_as_function_wrapper=False):
+    f = lambda *xs: tuple(xs)
     x = ((1, 2), (3, 4, 5))
     y = (([3], None), ({"foo": "bar"}, 7, [5, 6]))
-    out = tree_util.tree_map(lambda *xs: tuple(xs), x, y)
+    if use_as_function_wrapper:
+      out = tree_util.tree_map(f)(x, y)
+    else:
+      out = tree_util.tree_map(f, x, y)
     self.assertEqual(out, (((1, [3]), (2, None)),
                            ((3, {"foo": "bar"}), (4, 7), (5, [5, 6]))))
 
-  def testTreeMapWithIsLeafArgument(self):
+  @parameterized.parameters([False, True])
+  def testTreeMapWithIsLeafArgument(self, use_as_function_wrapper=False):
+    f = lambda *xs: tuple(xs)
+    is_leaf = lambda n: isinstance(n, list)
     x = ((1, 2), [3, 4, 5])
     y = (([3], None), ({"foo": "bar"}, 7, [5, 6]))
-    out = tree_util.tree_map(lambda *xs: tuple(xs), x, y,
-                             is_leaf=lambda n: isinstance(n, list))
+    if use_as_function_wrapper:
+      out = tree_util.tree_map(f, is_leaf=is_leaf)(x, y)
+    else:
+      out = tree_util.tree_map(f, x, y, is_leaf=is_leaf)
     self.assertEqual(out, (((1, [3]), (2, None)),
                            (([3, 4, 5], ({"foo": "bar"}, 7, [5, 6])))))
 
