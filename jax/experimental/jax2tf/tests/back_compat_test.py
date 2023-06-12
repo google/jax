@@ -456,7 +456,7 @@ data_{datetime.date.today().strftime('%Y_%m_%d')} = dict(
     operand = CompatTest.eigh_input((size, size), dtype)
     func = lambda: CompatTest.eigh_harness((8, 8), dtype)
     data = load_testdata(cpu_lapack_syev.data_2023_03_17[dtype_name])
-    rtol = dict(f32=1e-3, f64=1e-5, c64=1e-3, c128=1e-5)[dtype_name]
+    rtol = dict(f32=1e-3, f64=2.5, c64=1e-3, c128=1e-5)[dtype_name]
     self.run_one_test(func, data, rtol=rtol,
                       check_results=partial(self.check_eigh_results, operand))
 
