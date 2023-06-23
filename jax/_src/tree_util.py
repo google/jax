@@ -20,7 +20,7 @@ import functools
 from functools import partial
 import operator as op
 import textwrap
-from typing import (Any, Callable, Hashable, Iterable, List, NamedTuple,
+from typing import (Any, Callable, Generic, Hashable, Iterable, List, NamedTuple,
                     Optional, Tuple, Type, TypeVar, Union, overload)
 import warnings
 
@@ -924,3 +924,47 @@ def __getattr__(name):
     return _deprecate(globals()[name])
   else:
     raise AttributeError(f"module {__name__} has no attribute {name!r}")
+
+class Static(Generic[T]):
+  """Static is an empty pytree node with a fixed static value. It is useful to
+  pass non-JAX types across JAX transformations.
+
+  Example::
+
+    >>> import jax
+    ...
+    >>> @jax.jit
+    ... def add_exclamation(static):
+    ...   return jax.tree_util.Static(static.value + "!")
+    ...
+    >>> static = add_exclamation(jax.tree_util.Static("Hi"))
+    >>> static.value
+    'Hi!'
+
+  Note that Static follows the same rules as JIT's ``static_argnums`` and ``static_argnames``,
+  that is, jitted function will recompile if the value of Static changes.
+  """
+  __slots__ = ("_value",)
+
+  def __init__(self, value: T):
+    """Creates a Static pytree node with a fixed value.
+
+    Args:
+      value: The value of the Static pytree node.
+    """
+    self._value = value
+
+  @property
+  def value(self) -> T:
+    return self._value
+
+  def __hash__(self):
+    return hash(self._value)
+
+  def __eq__(self, other):
+    return type(other) is Static and self._value == other._value
+
+  def __repr__(self):
+    return f"Static(value={self._value!r})"
+
+register_pytree_node(Static, lambda s: ((), s.value), lambda aux, _: Static(aux))

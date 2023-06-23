@@ -589,6 +589,35 @@ class TreeTest(jtu.JaxTestCase):
     leaves, _ = tree_util.tree_flatten_with_path(ATuple2(1, 'hi'))
     self.assertLen(leaves, 1)
 
+  def test_static(self):
+    num_compilations = 0
+
+    @jax.jit
+    def add_exclamation(static):
+      nonlocal num_compilations
+      num_compilations += 1
+      return tree_util.Static(static.value + "!")
+
+    static = add_exclamation(tree_util.Static("hi"))
+    self.assertEqual(num_compilations, 1)
+    self.assertEqual(static.value, "hi!")
+
+    # check no recompilation for same value
+    static = add_exclamation(tree_util.Static("hi"))
+    self.assertEqual(num_compilations, 1)
+    self.assertEqual(static.value, "hi!")
+
+    # check recompilation for different value
+    static = add_exclamation(tree_util.Static("bye"))
+    self.assertEqual(num_compilations, 2)
+    self.assertEqual(static.value, "bye!")
+
+
+
+
+
+
+
 
 class RavelUtilTest(jtu.JaxTestCase):
 

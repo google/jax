@@ -12,6 +12,7 @@ List of Functions
    :toctree: _autosummary
 
    Partial
+   Static
    all_leaves
    build_tree
    register_pytree_node
