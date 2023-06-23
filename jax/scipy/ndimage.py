@@ -17,4 +17,6 @@
 
 from jax._src.scipy.ndimage import (
   map_coordinates as map_coordinates,
+  gaussian_filter1d as gaussian_filter1d,
+  gaussian_filter as gaussian_filter
 )
