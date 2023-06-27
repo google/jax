@@ -87,6 +87,8 @@ from jax._src.lib import xla_client as xc
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import func
 from jax._src.lib.mlir.dialects import hlo
+from jax._src.nn import functions
+from jax._src.numpy import lax_numpy
 from jax.interpreters import mlir
 
 
@@ -428,12 +430,26 @@ def _approx_top_k_jvp(primals, tangents, *, k, reduction_dimension,
     rank = len(arg_shape)
     if reduction_dimension < 0:
       reduction_dimension += rank
-    iotas = [
-        lax.broadcasted_iota(arg_out.dtype, arg_shape, i) for i in range(rank)
-    ]
-    idx = tuple(
-        arg_out if i == reduction_dimension else iotas[i] for i in range(rank))
-    tangent_out = tangent[idx]
+    arg_out_onehot = functions.one_hot(
+      arg_out,
+      num_classes=operand.shape[reduction_dimension],
+      dtype=tangent.dtype
+    )
+    tangent_contracting_dims = [reduction_dimension]
+    onehot_contracting_dims = [rank]
+    tangent_batch_dims = (
+      list(range(reduction_dimension))
+      + list(range(reduction_dimension + 1, rank)))
+    onehot_batch_dims = tangent_batch_dims
+    tangent_out_at_end = lax.dot_general(
+      tangent,
+      arg_out_onehot,
+      dimension_numbers=((tangent_contracting_dims, onehot_contracting_dims),
+                         (tangent_batch_dims, onehot_batch_dims))
+    )
+    tangent_out = lax_numpy.moveaxis(
+      tangent_out_at_end, -1, reduction_dimension)
+
   return (val_out, arg_out), (tangent_out, ad_util.Zero.from_value(arg_out))
 
 

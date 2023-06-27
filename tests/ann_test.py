@@ -100,16 +100,23 @@ class AnnTest(jtu.JaxTestCase):
   @jtu.sample_product(
     dtype=[np.float32],
     shape=[(4,), (5, 5), (2, 1, 4)],
+    reduction_dimension=[0, 1, 2],
     k=[1, 3],
     is_max_k=[True, False],
   )
-  def test_autodiff(self, shape, dtype, k, is_max_k):
+  def test_autodiff(self, shape, dtype, reduction_dimension, k, is_max_k):
+    if reduction_dimension >= len(shape):
+      self.skipTest(f'{reduction_dimension=} >= {len(shape)=}')
+    if k > shape[reduction_dimension]:
+      self.skipTest(f'{k=} > {shape[reduction_dimension]=}')
     vals = np.arange(math.prod(shape), dtype=dtype)
     vals = self.rng().permutation(vals).reshape(shape)
     if is_max_k:
-      fn = lambda vs: lax.approx_max_k(vs, k=k)[0]
+      fn = lambda vs: lax.approx_max_k(
+        vs, reduction_dimension=reduction_dimension, k=k)[0]
     else:
-      fn = lambda vs: lax.approx_min_k(vs, k=k)[0]
+      fn = lambda vs: lax.approx_min_k(
+        vs, reduction_dimension=reduction_dimension, k=k)[0]
     jtu.check_grads(fn, (vals,), 2, ["fwd", "rev"], eps=1e-2)
 
 

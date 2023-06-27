@@ -21,7 +21,6 @@ import weakref
 
 import numpy as np
 
-import jax.numpy as jnp
 from jax import lax
 
 from jax._src import core
@@ -38,6 +37,7 @@ from jax._src.interpreters import partial_eval as pe
 from jax._src.lib import xla_client as xc
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
+from jax._src.numpy import lax_numpy
 from jax._src.sharding import Sharding
 from jax._src.sharding_impls import (GSPMDSharding, NamedSharding,
                                      parse_flatten_op_sharding)
@@ -107,7 +107,7 @@ def debug_callback_batching_rule(args, dims, **params):
   for i in range(axis_size):
     args_idx = map(functools.partial(get_arg_at_dim, i), dims, args)
     outs.append(debug_callback_p.bind(*args_idx, **params))
-  outs = [jnp.stack(xs) for xs in zip(*outs)]
+  outs = [lax_numpy.stack(xs) for xs in zip(*outs)]
   return outs, (0,) * len(outs)
 batching.primitive_batchers[debug_callback_p] = debug_callback_batching_rule
 
