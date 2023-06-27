@@ -357,6 +357,7 @@ def _approx_top_k_fallback_translation(ctx, avals_in, avals_out, operand, *, k,
                                        reduction_dimension, recall_target,
                                        is_max_k, reduction_input_size_override,
                                        aggregate_to_topk):
+                                       # TODO
   c = ctx.builder
   op_shape = c.get_shape(operand)
   if not op_shape.is_array():
