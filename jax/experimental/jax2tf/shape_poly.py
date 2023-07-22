@@ -66,6 +66,11 @@ TfVal = Any
 DimVarEnv = dict[str, jax.Array]
 DType = Any
 
+# We have assumed so far that a dimension variable can range over strictly
+# positive integers. It would be cleaner if we could assume that they range
+# over non-negative integers.
+DIM_VAR_GEQ = 0
+
 class InconclusiveDimensionOperation(core.InconclusiveDimensionOperation):
   """Raised when we cannot conclusively compute with symbolic dimensions."""
 
@@ -190,7 +195,7 @@ class _DimAtom:
   def bounds(self) -> tuple[float, float]:
     """Returns the lower and upper bounds, or -+ inf."""
     if self.var is not None:
-      return (1, np.PINF)  # variables are assumed to be >= 1
+      return (DIM_VAR_GEQ, np.PINF)  # variables are assumed to be >= 1
     opnd_bounds = [opnd.bounds() for opnd in self.operands]
     if self.operation == _DimAtom.FLOORDIV:  #  a // b
       (a_l, a_u), (b_l, b_u) = opnd_bounds
@@ -264,6 +269,7 @@ class _DimMon(dict):
 
   @classmethod
   def from_atom(clscls, a: _DimAtom, aexp: int):
+    assert aexp >= 1
     return _DimMon({a: aexp})
 
   def to_var(self) -> Optional[str]:
@@ -422,8 +428,8 @@ class _DimExpr():
     return _DimExpr.normalize(coeffs)
 
   @classmethod
-  def from_monomial(cls, mon: _DimMon, exp: int):
-    return _DimExpr.normalize({mon: exp})
+  def from_monomial(cls, mon: _DimMon, coeff: int):
+    return _DimExpr.normalize({mon: coeff})
 
   @classmethod
   def from_var(cls, v: str) -> '_DimExpr':
@@ -1477,14 +1483,14 @@ def _solve_dim_equations(
         shape_constraints.add_constraint(
             ShapeConstraint.Comparator.EQ, var_remainder, 0,
             make_err_msg=lambda left, _: (
-                f"Dimension variable '{var}' must have integer value >= 1. "
+                f"Dimension variable '{var}' must have integer value >= {DIM_VAR_GEQ}. "
                 f"Non-zero remainder {left} for factor {factor_var} when solving "
                 f"{eqn}.{_shapeenv_to_str()}"))
 
       shape_constraints.add_constraint(
-          ShapeConstraint.Comparator.GEQ, var_value, 1,
+          ShapeConstraint.Comparator.GEQ, var_value, DIM_VAR_GEQ,
           make_err_msg=lambda left, _: (
-              f"Dimension variable '{var}' must have integer value >= 1. "
+              f"Dimension variable '{var}' must have integer value >= {DIM_VAR_GEQ}. "
               f"Found {left} when "
               f"solving {eqn}.{_shapeenv_to_str()}"))
 

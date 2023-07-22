@@ -3011,6 +3011,13 @@ class ShapePolyPrimitivesTest(tf_test_util.JaxToTfTestCase):
       if harness.group_name == "schur" and jtu.device_under_test() != "cpu":
         raise unittest.SkipTest("schur decomposition is only implemented on CPU.")
 
+      # # In OSS, TF does not have access to the symbols registered by jaxlib?
+      # todo_exclude = ["eig_", "eigh_", "qr_", "fft_", "svd_", "schur_",
+      #                 "cholesky_"]
+      # for exc in todo_exclude:
+      #   if exc in harness.fullname:
+      #     raise unittest.SkipTest("cannot resolve symbol")
+
       if "fft_fft_type" in harness.fullname:
         if "nr_fft_lengths=2" in harness.fullname:
           raise unittest.SkipTest("native serialization with shape polymorphism not implemented for fft with non-constant fft_lengths on GPU and TPU")
