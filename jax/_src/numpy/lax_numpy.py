@@ -2629,14 +2629,13 @@ def repeat(a: ArrayLike, repeats: ArrayLike, axis: Optional[int] = None, *,
 
     # Fast path for when repeats is a scalar.
     if np.ndim(repeats) == 0 and ndim(a) != 0:
-      input_shape = shape(a)
-      aux_axis = axis if axis < 0 else axis + 1
-      a = expand_dims(a, aux_axis)
-      reps: list[DimSize] = [1] * len(shape(a))
-      reps[aux_axis] = repeats
-      a = tile(a, reps)
-      result_shape: list[DimSize] = list(input_shape)
+      result_shape = list(shape(a))
       result_shape[axis] *= repeats
+      aux_axis = _canonicalize_axis(axis, ndim(a)) + 1
+      bcast_shape = list(shape(a))
+      bcast_shape.insert(aux_axis, repeats)
+      bcast_dims = [d for d in range(len(bcast_shape)) if d != aux_axis]
+      a = lax.broadcast_in_dim(a, bcast_shape, bcast_dims)
       return reshape(a, result_shape)
 
     repeats = np.ravel(repeats)
@@ -2667,7 +2666,7 @@ def repeat(a: ArrayLike, repeats: ArrayLike, axis: Optional[int] = None, *,
     return asarray(a)
 
   # This implementation of repeat avoid having to instantiate a large.
-  # intermediate tensor.
+  # intermediate tensor.
 
   # Modify repeats from e.g. [1,2,0,5] -> [0,1,2,0] for exclusive repeat.
   exclusive_repeats = roll(repeats, shift=1).at[0].set(0)
@@ -4947,7 +4946,6 @@ def _piecewise(x: Array, condlist: Array, consts: dict[int, ArrayLike],
     return lambda x: array(v, dtype=dtype)
   funclist = [_call(f) if callable(f) else _const(f) for f in funclist]
   return vectorize(lax.switch, excluded=(1,))(indices, funclist, x)
-
 
 
 @util._wraps(np.place, lax_description="""
