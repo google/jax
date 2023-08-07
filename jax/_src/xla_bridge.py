@@ -176,6 +176,8 @@ def get_compile_options(
     debug_options.xla_test_all_input_layouts = False
 
   compile_options.profile_version = _XLA_PROFILE_VERSION.value
+
+  logger.info("CO.serialized: %s", compile_options.SerializeAsStringInOrder())
   return compile_options
 
 
