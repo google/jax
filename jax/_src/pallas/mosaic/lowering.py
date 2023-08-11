@@ -39,6 +39,7 @@ from jax._src.lib.mlir.dialects import memref
 from jax._src.lib.mlir.dialects import scf
 from jax._src.lib.mlir.dialects import vector
 from jax._src.pallas import core
+from jax._src.pallas import indexing
 from jax._src.pallas import primitives
 from jax._src.pallas import utils as pallas_utils
 from jax._src.pallas.mosaic import core as tpu_core
@@ -56,6 +57,7 @@ import numpy as np
 # TODO(sharadmv): enable type checking
 # mypy: ignore-errors
 
+NDIndexer = indexing.NDIndexer
 TPUMemorySpace = tpu_core.TPUMemorySpace
 VMEM = tpu_core.TPUMemorySpace.VMEM
 SMEM = tpu_core.TPUMemorySpace.SMEM
@@ -219,7 +221,10 @@ def lower_jaxpr_to_transform_func(
   body_func = functools.partial(jaxpr_subcomp, lowering_context, jaxpr)
   body_func.__name__ = name
   body = func.FuncOp.from_py_func(*arg_types, name=name)(body_func)
-  body.func_op.verify()
+  try:
+    body.func_op.verify()
+  except Exception as e:
+    raise ValueError(f"Failed to verify: {body.func_op}") from e
   return body.func_op
 
 def lower_fun(fun: Callable, *, multiple_results: bool) -> Callable:
@@ -304,7 +309,10 @@ def lower_jaxpr_to_func(ctx: ir.Context,
     body_func = functools.partial(jaxpr_subcomp, lowering_context, jaxpr)
   body_func.__name__ = name
   body = func.FuncOp.from_py_func(*arg_types, name=name)(body_func)
-  body.func_op.verify()
+  try:
+    body.func_op.verify()
+  except Exception as e:
+    raise ValueError(f"Failed to verify: {body.func_op}") from e
   return body.func_op
 
 
@@ -366,52 +374,63 @@ def jaxpr_subcomp(
   return outvals
 
 
+def _convert_flat_indexing_to_indexer(ref_aval, non_slice_idx,
+                                      non_slice_idx_avals, indexed_dims):
+  non_slice_idx_iter = iter(zip(non_slice_idx, non_slice_idx_avals))
+  splatted_idx_idx_avals = tuple(
+      next(non_slice_idx_iter)
+      if indexed
+      else (primitives.Slice(0, s), primitives.Slice(0, s))
+      for s, indexed in zip(ref_aval.shape,indexed_dims)
+  )
+  splatted_idx, splatted_idx_avals = unzip2(splatted_idx_idx_avals)
+  if non_slice_idx:
+    (int_indexer_shape,) = set([idx_aval.shape for idx_aval
+                                in splatted_idx_avals
+                                if not isinstance(idx_aval, primitives.Slice)])
+  else:
+    int_indexer_shape = ()
+  nd_indexer = NDIndexer(splatted_idx, ref_aval.shape, int_indexer_shape)
+  nd_indexer_avals = NDIndexer(splatted_idx_avals, ref_aval.shape,
+                               int_indexer_shape)
+  return nd_indexer, nd_indexer_avals
+
+
 def _get_lowering_rule(
     ctx: LoweringRuleContext, ref, *non_slice_idx, indexed_dims: Sequence[bool]
 ):
-  ref_type = ir.MemRefType(ref.type)
-  ref_aval, *_ = ctx.avals_in
-  (aval_out,) = ctx.avals_out
-  is_smem_load = str(ref_type.memory_space) == "#tpu.memory_space<smem>"
-  ref_block_shape, *_ = ctx.block_shapes
-  non_slice_idx_iter = iter(non_slice_idx)
-  idx = [
-      next(non_slice_idx_iter)
-      if indexed
-      else ir_constant(0, ir.IndexType.get())
-      for indexed in indexed_dims
-  ]
-  # Need to now insert indexing the 0-th element for mapped dimensions
-  idx_iter = iter(idx)
-  idx = [
-      ir_constant(0, ir.IndexType.get()) if b is core.mapped else next(idx_iter)
-      for b in ref_block_shape
-  ]
-  assert len(idx) == len(ref_block_shape), (len(idx), len(ref_block_shape))
-  mlir_indices = [
-      s if isinstance(s, primitives.Slice) else _make_index(s) for s in idx
-  ]
-  load_shape = list(aval_out.shape)
-  for i, indexed in enumerate(indexed_dims):
-    if indexed:
-      load_shape.insert(i, 1)
-  assert len(load_shape) == len(ref_aval.shape)
-  load_shape_iter = iter(load_shape)
-  load_shape = [
-      1 if b is core.mapped else next(load_shape_iter) for b in ref_block_shape
-  ]
-  load_aval = aval_out.update(shape=tuple(load_shape))
-  if is_smem_load:
-    if ctx.avals_out[0].shape:
-      raise ValueError("Can only load scalars from SMEM:")
-    return memref.LoadOp(ref, mlir_indices).result
-  load_val = vector.LoadOp(aval_to_ir_type(load_aval), ref, mlir_indices).result
-  if load_aval == aval_out:
-    return load_val
-  return vector.ShapeCastOp(aval_to_ir_type(aval_out), load_val).result
+  # Call _load_lowering_rule (since it's more general)
+  ref_aval, *non_slice_idx_avals = ctx.avals_in
+  nd_indexer, nd_indexer_avals = _convert_flat_indexing_to_indexer(
+      ref_aval, non_slice_idx, non_slice_idx_avals, indexed_dims)
+  flat_args, tree = tree_util.tree_flatten((nd_indexer,))
+  flat_avals = tree_util.tree_leaves((nd_indexer_avals,))
+  ctx = ctx.replace(avals_in=(ref_aval, *flat_avals))
+  return _load_lowering_rule(ctx, ref, *flat_args, args_tree=tree,
+                             masked=False)
 
 
 lowering_rules[state_primitives.get_p] = _get_lowering_rule
+
+
+def _swap_lowering_rule(
+    ctx: LoweringRuleContext,
+    ref,
+    val,
+    *non_slice_idx,
+    indexed_dims: Sequence[bool],
+):
+  # Call _masked_swap_lowering_rule (since it's more general)
+  ref_aval, val_aval, *non_slice_idx_avals = ctx.avals_in
+  nd_indexer, nd_indexer_avals = _convert_flat_indexing_to_indexer(
+      ref_aval, non_slice_idx, non_slice_idx_avals, indexed_dims)
+  flat_args, tree = tree_util.tree_flatten((nd_indexer,))
+  flat_avals = tree_util.tree_leaves((nd_indexer_avals,))
+  ctx = ctx.replace(avals_in=(ref_aval, val_aval, *flat_avals))
+  return _masked_swap_lowering_rule(ctx, ref, val, *flat_args, args_tree=tree,
+                                    masked=False)
+
+lowering_rules[state_primitives.swap_p] = _swap_lowering_rule
 
 
 def _make_index(s):
@@ -421,6 +440,70 @@ def _make_index(s):
     return s
   return arith.IndexCastOp(ir.IndexType.get(), s).result
 
+
+def _maybe_handle_dynamic_slice(ref, ref_aval, ref_block_shape, indices):
+  # vector.Load/Store ops only support static indices (for now). To support
+  # a dynamic start index (i.e. a dynamic_slice), we can use a
+  # `tpu.MemRefSliceOp` on the `Ref` with the right dynamic indices, then
+  # return a `Ref` that can be sliced statically.
+  has_dynamic_indices = any(
+      isinstance(idx, ir.Value)
+      or isinstance(idx, primitives.Slice) and isinstance(idx.start, ir.Value)
+      for idx in indices
+  )
+  if not has_dynamic_indices:
+    return ref, indices, ref_block_shape
+  ref_slice_shape = []
+  slice_starts = []
+  idx_iter = iter(indices)
+  new_indices = []
+  new_block_shape = []
+  for s in ref_block_shape:
+    if s is core.mapped:
+      # This dimension is vmapped, so we don't do anything.
+      ref_slice_shape.append(1)
+      slice_starts.append(0)
+      new_block_shape.append(core.mapped)
+      continue
+    idx = next(idx_iter)
+    if isinstance(idx, ir.Value):
+      # If idx is a scalar, it we do a dynamic slice of size 1
+      # The caller is responsible for doing a ShapeCast.
+      ref_slice_shape.append(1)
+      slice_starts.append(idx)
+      new_indices.append(0)
+      new_block_shape.append(1)
+    elif isinstance(idx, primitives.Slice):
+      if isinstance(idx.start, ir.Value):
+        # We slice the Ref with start:start+size and return a 0:size static
+        # slice.
+        slice_starts.append(idx.start)
+        new_indices.append(primitives.Slice(0, idx.size))
+        ref_slice_shape.append(idx.size)
+        new_block_shape.append(idx.size)
+      else:
+        # We do a dummy slice
+        slice_starts.append(0)
+        new_indices.append(idx)
+        ref_slice_shape.append(s)
+        new_block_shape.append(s)
+    else:
+      # Is a constant integer so we just don't do anything at all because it
+      # will be handled downstream
+      ref_slice_shape.append(s)
+      slice_starts.append(0)
+      new_indices.append(idx)
+      new_block_shape.append(s)
+  ref_type = aval_to_ir_type(
+      state.AbstractRef(jax_core.ShapedArray(
+          ref_slice_shape, ref_aval.dtype)))
+  start_indices = [
+      s if isinstance(s, ir.Value) else ir_constant(s) for s in slice_starts
+  ]
+  ref = tpu.MemRefSliceOp(ref_type, ref, start_indices)
+  indices = tuple(new_indices)
+  ref_block_shape = tuple(new_block_shape)
+  return ref, indices, ref_block_shape
 
 def _load_lowering_rule(
     ctx: LoweringRuleContext, ref, *args, args_tree, masked, **params
@@ -436,11 +519,17 @@ def _load_lowering_rule(
   idx, *_ = tree_util.tree_unflatten(args_tree, args)
   idx_aval, *_ = tree_util.tree_unflatten(args_tree, ctx.avals_in[1:])
   indices = idx.indices
+  if not ref_block_shape:
+    raise NotImplementedError(
+        "Indexing into a ()-shaped Ref not yet supported on TPU.")
   if any(
-      not isinstance(a, primitives.Slice) and a.shape != ()
+      not isinstance(a, primitives.Slice) and a.shape
       for a in idx_aval.indices
   ):
     raise ValueError("Cannot do int indexing on TPU")
+  if not is_smem_load:
+    ref, indices, ref_block_shape = _maybe_handle_dynamic_slice(
+        ref, ref_aval, ref_block_shape, indices)
   starts = tuple(
       i.start if isinstance(i, primitives.Slice) else i for i in indices
   )
@@ -472,7 +561,9 @@ def _load_lowering_rule(
     load_val = vector.LoadOp(aval_to_ir_type(load_aval), ref, mlir_indices).result
   if load_aval == aval_out:
     return load_val
-  return vector.ShapeCastOp(aval_to_ir_type(aval_out), load_val).result
+  vec_type = ir.VectorType.get(aval_out.shape,
+                               mlir.dtype_to_ir_type(aval_out.dtype))
+  return vector.ShapeCastOp(vec_type, load_val).result
 
 
 lowering_rules[primitives.load_p] = _load_lowering_rule
@@ -484,9 +575,11 @@ def _masked_swap_lowering_rule(
   del params
   if masked:
     raise NotImplementedError
+  ref_type = ir.MemRefType(ref.type)
   ref_block_shape, *_ = ctx.block_shapes
   ref_aval, val_aval, *_ = ctx.avals_in
   (aval_out,) = ctx.avals_out
+  is_smem_store = str(ref_type.memory_space) == "#tpu.memory_space<smem>"
   if not isinstance(val, ir.Value):
     val = ir_constant(val, mlir_type=mlir.dtype_to_ir_type(val_aval.dtype))
   idx, *_ = tree_util.tree_unflatten(args_tree, args)
@@ -497,6 +590,12 @@ def _masked_swap_lowering_rule(
       for a in idx_aval.indices
   ):
     raise ValueError("Cannot do int indexing on TPU")
+  if not is_smem_store:
+    ref, indices, ref_block_shape = _maybe_handle_dynamic_slice(
+        ref, ref_aval, ref_block_shape, indices)
+  if not ref_block_shape:
+    raise NotImplementedError(
+        "Indexing into a ()-shaped Ref not yet supported on TPU.")
   starts = tuple(
       i.start if isinstance(i, primitives.Slice) else i for i in indices
   )
@@ -520,65 +619,22 @@ def _masked_swap_lowering_rule(
       for b in ref_block_shape
   ]
   mem_aval = aval_out.update(shape=tuple(mem_slice_shape))
-  result = vector.LoadOp(aval_to_ir_type(mem_aval), ref, mlir_indices).result
+  mem_aval_vec_type = ir.VectorType.get(mem_aval.shape,
+                                        mlir.dtype_to_ir_type(mem_aval.dtype))
+  result = vector.LoadOp(mem_aval_vec_type, ref, mlir_indices).result
   if mem_aval != aval_out:
-    result = vector.ShapeCastOp(aval_to_ir_type(aval_out), result).result
-    val = vector.ShapeCastOp(aval_to_ir_type(mem_aval), val).result
+    # We are slicing a scalar so provided dummy 1 indices
+    result_vec_type = ir.VectorType.get(aval_out.shape,
+                                        mlir.dtype_to_ir_type(aval_out.dtype))
+    result = vector.ShapeCastOp(result_vec_type, result).result
+    val_vec_type = ir.VectorType.get(mem_aval.shape,
+                                     mlir.dtype_to_ir_type(mem_aval.dtype))
+    val = vector.ShapeCastOp(val_vec_type, val).result
   vector.StoreOp(val, ref, mlir_indices)
   return result
 
 
 lowering_rules[primitives.swap_p] = _masked_swap_lowering_rule
-
-
-def _swap_lowering_rule(
-    ctx: LoweringRuleContext,
-    ref,
-    val,
-    *non_slice_idx,
-    indexed_dims: Sequence[bool],
-):
-  ref_aval, val_aval, *_ = ctx.avals_in
-  if not isinstance(val, ir.Value):
-    val = ir_constant(val, mlir_type=mlir.dtype_to_ir_type(val_aval.dtype))
-  (aval_out,) = ctx.avals_out
-  ref_block_shape, *_ = ctx.block_shapes
-  non_slice_idx_iter = iter(non_slice_idx)
-  idx = [
-      next(non_slice_idx_iter)
-      if indexed
-      else ir_constant(0, ir.IndexType.get())
-      for indexed in indexed_dims
-  ]
-  # Need to now insert indexing the 0-th element for mapped dimensions
-  idx_iter = iter(idx)
-  idx = [
-      ir_constant(0, ir.IndexType.get()) if b is core.mapped else next(idx_iter)
-      for b in ref_block_shape
-  ]
-  assert len(idx) == len(ref_block_shape), (len(idx), len(ref_block_shape))
-  mlir_indices = [
-      s if isinstance(s, primitives.Slice) else _make_index(s) for s in idx
-  ]
-  slice_shape = list(aval_out.shape)
-  for i, indexed in enumerate(indexed_dims):
-    if indexed:
-      slice_shape.insert(i, 1)
-  assert len(slice_shape) == len(ref_aval.shape)
-  slice_shape_iter = iter(slice_shape)
-  slice_shape = [
-      1 if b is core.mapped else next(slice_shape_iter) for b in ref_block_shape
-  ]
-  slice_aval = aval_out.update(shape=tuple(slice_shape))
-  result = vector.LoadOp(aval_to_ir_type(slice_aval), ref, mlir_indices).result
-  if slice_aval != aval_out:
-    result = vector.ShapeCastOp(aval_to_ir_type(aval_out), result).result
-    val = vector.ShapeCastOp(aval_to_ir_type(slice_aval), val).result
-  vector.StoreOp(val, ref, mlir_indices)
-  return result
-
-
-lowering_rules[state_primitives.swap_p] = _swap_lowering_rule
 
 
 def _multiple_of_lowering_rule(ctx: LoweringRuleContext, val, *, values):
@@ -601,6 +657,8 @@ def _reduce_max_lowering_rule(ctx: LoweringRuleContext, x, *, axes):
     raise NotImplementedError
   elif jnp.issubdtype(x_aval.dtype, jnp.unsignedinteger):
     kind = ir.Attribute.parse("#vector.kind<maxui>")
+    raise NotImplementedError
+  else:
     raise NotImplementedError
   acc = arith.ConstantOp(out_type, identity)
   op = vector.MultiDimReductionOp(
@@ -629,6 +687,8 @@ def _reduce_sum_lowering_rule(ctx: LoweringRuleContext, x, *, axes):
     raise NotImplementedError
   elif jnp.issubdtype(x_aval.dtype, jnp.unsignedinteger):
     kind = ir.Attribute.parse("#vector.kind<add>")
+    raise NotImplementedError
+  else:
     raise NotImplementedError
   acc = arith.ConstantOp(out_type, identity)
   op = vector.MultiDimReductionOp(

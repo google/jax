@@ -18,6 +18,7 @@ from jax._src import pallas
 from jax._src.pallas.core import BlockSpec
 from jax._src.pallas.indexing import ds
 from jax._src.pallas.indexing  import dslice
+from jax._src.pallas.indexing  import Slice
 from jax._src.pallas.indexing  import broadcast_to
 from jax._src.pallas.pallas_call import pallas_call
 from jax._src.pallas.pallas_call import pallas_call_p
