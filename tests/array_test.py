@@ -750,6 +750,11 @@ class JaxArrayTest(jtu.JaxTestCase):
     self.assertArraysEqual(fs, inp_data)
     self.assertArraysEqual(arr.addressable_data(0), inp_data)
 
+  def test_array_type(self):
+    x = jnp.arange(2)
+    self.assertIsInstance(x, jax.Array)
+    self.assertEqual(str(type(x)), "<class 'jax.Array'>")
+
 
 class ShardingTest(jtu.JaxTestCase):
 
