@@ -1473,5 +1473,18 @@ class JnpWithKeyArrayTest(jtu.JaxTestCase):
       jax.random.normal(jax.random.key(0), 1000)
     f()  # don't crash
 
+class SamplingDerivativeTest(jtu.JaxTestCase):
+  def test_gamma_hessian(self):
+    # Regression test for https://github.com/google/jax/issues/16076
+    def hessian_sample(key: jax.Array) -> jax.Array:
+      ((retval,),) = jax.hessian(random.gamma, argnums=(1,))(key, 0.8)
+      return retval
+
+    keys = random.split(random.key(0), 300)
+    x = jax.vmap(hessian_sample)(keys)
+    mean_x = jnp.mean(x, axis=-1)
+    self.assertArraysAllClose(mean_x, jnp.asarray(0.61), atol=0.1, rtol=0.4)
+
+
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())
