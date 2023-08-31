@@ -139,7 +139,8 @@ class CacheKeyTest(jtu.JaxTestCase):
     self.assertEqual(hash2, hash3)
     self.assertNotEqual(hash1, hash2)
 
-  def test_same_key(self):
+  @parameterized.parameters([False, True])
+  def test_same_key(self, produce_original_cache_key):
     computation = jax.jit(lambda x, y: x + y).lower(1, 1).compiler_ir()
     devices = np.array([[jax.local_devices()[0]]])
     compile_options = compiler.get_compile_options(
@@ -147,11 +148,14 @@ class CacheKeyTest(jtu.JaxTestCase):
     )
     backend = xla_bridge.get_backend()
     self.assertEqual(
-        cache_key.get(computation, devices, compile_options, backend),
-        cache_key.get(computation, devices, compile_options, backend),
+        cache_key.get(computation, devices, compile_options, backend,
+                      produce_original_cache_key=produce_original_cache_key),
+        cache_key.get(computation, devices, compile_options, backend,
+                      produce_original_cache_key=produce_original_cache_key),
     )
 
-  def test_different_key(self):
+  @parameterized.parameters([False, True])
+  def test_different_key(self, produce_original_cache_key):
     computation = jax.jit(lambda x, y: x + y).lower(1, 1).compiler_ir()
     devices = np.array([[jax.local_devices()[0]]])
     compile_options_not_filled = compiler.get_compile_options(
@@ -161,12 +165,15 @@ class CacheKeyTest(jtu.JaxTestCase):
     backend = xla_bridge.get_backend()
     self.assertNotEqual(
         cache_key.get(
-            computation, devices, compile_options_not_filled, backend
+            computation, devices, compile_options_not_filled, backend,
+            produce_original_cache_key=produce_original_cache_key
         ),
-        cache_key.get(computation, devices, compile_options_filled, backend),
+        cache_key.get(computation, devices, compile_options_filled, backend,
+                      produce_original_cache_key=produce_original_cache_key),
     )
 
-  def test_different_computations(self):
+  @parameterized.parameters([False, True])
+  def test_different_computations(self, produce_original_cache_key):
     computation1 = jax.jit(lambda x, y: x + y).lower(1, 1).compiler_ir()
     computation2 = jax.jit(lambda x, y: x * y).lower(2, 2).compiler_ir()
     devices = np.array([[jax.local_devices()[0]]])
@@ -175,12 +182,17 @@ class CacheKeyTest(jtu.JaxTestCase):
     )
     backend = xla_bridge.get_backend()
     self.assertNotEqual(
-        cache_key.get(computation1, devices, compile_options, backend),
-        cache_key.get(computation2, devices, compile_options, backend),
+        cache_key.get(computation1, devices, compile_options, backend,
+                      produce_original_cache_key=produce_original_cache_key),
+        cache_key.get(computation2, devices, compile_options, backend,
+                      produce_original_cache_key=produce_original_cache_key),
     )
 
-  @parameterized.parameters([False, True])
-  def test_identical_computations_different_metadata(self, include_metadata):
+  @parameterized.parameters([False, True],  # include_metadata
+                            [False, True])  # produce_original_cache_key
+  def test_identical_computations_different_metadata(
+      self, include_metadata, produce_original_cache_key
+  ):
     f = lambda x, y: lax.mul(lax.add(x, y), 2)
     g = lambda x, y: lax.mul(lax.add(x, y), 2)
     assert id(f) != id(g)
@@ -192,11 +204,16 @@ class CacheKeyTest(jtu.JaxTestCase):
     )
     backend = xla_bridge.get_backend()
     with compilation_cache_include_metadata_in_key(include_metadata):
-      key1 = cache_key.get(computation1, devices, compile_options, backend)
-      key2 = cache_key.get(computation2, devices, compile_options, backend)
+      key1 = cache_key.get(
+          computation1, devices, compile_options, backend,
+          produce_original_cache_key=produce_original_cache_key)
+      key2 = cache_key.get(
+          computation2, devices, compile_options, backend,
+          produce_original_cache_key=produce_original_cache_key)
     self.assertEqual(include_metadata, key1 != key2)
 
-  def test_xla_flags(self):
+  @parameterized.parameters([False, True])
+  def test_xla_flags(self, produce_original_cache_key):
     if jtu.is_device_tpu_v4():
       raise unittest.SkipTest("TODO(b/240151176)")
 
@@ -211,26 +228,36 @@ class CacheKeyTest(jtu.JaxTestCase):
     orig_argv = sys.argv
     try:
       os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
-      key1 = cache_key.get(computation, devices, compile_options, backend)
+      key1 = cache_key.get(
+          computation, devices, compile_options, backend,
+          produce_original_cache_key=produce_original_cache_key)
       os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=1"
-      key2 = cache_key.get(computation, devices, compile_options, backend)
+      key2 = cache_key.get(
+          computation, devices, compile_options, backend,
+          produce_original_cache_key=produce_original_cache_key)
       self.assertNotEqual(key1, key2)
 
       os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
-      key3 = cache_key.get(computation, devices, compile_options, backend)
+      key3 = cache_key.get(
+          computation, devices, compile_options, backend,
+          produce_original_cache_key=produce_original_cache_key)
       self.assertEqual(key1, key3)
 
       # Test flag in _xla_flags_to_exclude_from_cache_key
       os.environ["XLA_FLAGS"] = (
           "--xla_gpu_autotune_level=0 --xla_force_host_platform_device_count=8"
       )
-      key4 = cache_key.get(computation, devices, compile_options, backend)
+      key4 = cache_key.get(
+          computation, devices, compile_options, backend,
+          produce_original_cache_key=produce_original_cache_key)
       self.assertEqual(key1, key4)
 
       # Test flags given on command line
       del os.environ["XLA_FLAGS"]
       sys.argv.append("--xla_gpu_autotune_level=0")
-      key5 = cache_key.get(computation, devices, compile_options, backend)
+      key5 = cache_key.get(
+          computation, devices, compile_options, backend,
+          produce_original_cache_key=produce_original_cache_key)
       self.assertEqual(key1, key5)
       sys.argv.append("--xla_force_host_platform_device_count=8")
       self.assertEqual(key1, key5)

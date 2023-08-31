@@ -82,7 +82,6 @@ def get(module: ir.Module,
   Typical return value example:
    '14ac577cdb2ef6d986078b4054cc9893a9a14a16dbb0d8f37b89167c1f1aacdf'
   """
-  entries = []
   if produce_original_cache_key:
     entries = [
         ("computation", lambda hash_obj: _hash_computation(hash_obj, module)),
@@ -99,8 +98,20 @@ def get(module: ir.Module,
          lambda hash_obj: _hash_string(hash_obj, compression_algorithm)),
     ]
   else:
-    assert False, ("cache_key.get: new cache-key generation algorithm "
-                   "not supported as yet.")
+    entries = [
+        ("computation", lambda hash_obj: _hash_computation(hash_obj, module)),
+        ("devices", lambda hash_obj: _hash_devices(hash_obj, devices)),
+        ("compile_options",
+         lambda hash_obj: hash_obj.update(compile_options.SerializeAsString())),
+        ("jax_lib version",
+         lambda hash_obj: hash_obj.update(
+             bytes(jaxlib_version_str.encode("utf-8")))),
+        ("the backend", lambda hash_obj: _hash_platform(hash_obj, backend)),
+        ("XLA flags",
+         lambda hash_obj: _hash_xla_flags(hash_obj, get_flag_prefixes())),
+        ("compression",
+         lambda hash_obj: _hash_string(hash_obj, compression_algorithm)),
+    ]
 
   hash_obj = hashlib.sha256()
   for name, hashfn in entries:
