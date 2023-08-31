@@ -324,21 +324,24 @@ def create_hybrid_device_mesh(mesh_shape: Sequence[int],
   """Creates a device mesh for hybrid (e.g., ICI and DCN) parallelism.
 
   Args:
-    mesh_shape: shape of the logical mesh for the faster/inner network, ordered
-      by increasing network intensity, e.g. [replica, data, mdl] where mdl has
-      the most network communication requirements.
-    dcn_mesh_shape: shape of the logical mesh for the slower/outer network,
-      in the same order as mesh_shape.
+    mesh_shape: shape of the logical mesh for the faster network, ordered by
+      increasing network intensity, e.g. [replica, data, mdl] where mdl has the
+      most network communication requirements.
+    dcn_mesh_shape: shape of the logical mesh for the slower network, in the
+      same order as mesh_shape.
     devices: optionally, the devices to construct a mesh for. Defaults to
       jax.devices().
     process_is_granule: if True, this function will treat processes as the units
-      of the slower/outer network. Otherwise it will look for slice_index
-      attributes on devices and use slices as the units. Enabling this is meant
-      as a fallback for platforms (e.g., GPU) that don't set slice_index.
+      of the slower network. Otherwise it will look for slice_index attributes
+      on devices and use slices as the units. Enabling this is meant as a
+      fallback for platforms (e.g., GPU) that don't set slice_index.
 
   Returns:
     A np.ndarray of JAX devices with mesh_shape * dcn_mesh_shape as its shape
-    that can be fed into jax.sharding.Mesh for hybrid parallelism.
+    that can be fed into jax.sharding.Mesh for hybrid parallelism. Any axis that
+    is placed on both the faster and slower network will have the faster network
+    "major" and the slower one "minor" in order to maximize data contiguity for
+    hierarchical collective algorithms that do slow-network communication first. 
   """
   if devices is None:
     devices = xb.devices()
@@ -355,8 +358,13 @@ def create_hybrid_device_mesh(mesh_shape: Sequence[int],
   per_granule_meshes = [create_device_mesh(mesh_shape, granule)
                         for granule in granules]
   # TODO(jekbradbury): handle non-uniform DCN topologies
-  granule_mesh = np.arange(len(granules)).reshape(dcn_mesh_shape)
+  granule_indices = np.arange(len(granules)).reshape(dcn_mesh_shape)
+  indices_in_granule = np.fromiter(np.ndindex(mesh_shape), dtype=object,
+                                   count=len(granules[0])).reshape(mesh_shape)
   blocks = np.vectorize(
-    lambda i: per_granule_meshes[i], otypes=[object])(granule_mesh)
+      lambda index_in_granule: np.vectorize(
+          lambda granule_index: per_granule_meshes[granule_index][
+              index_in_granule], otypes=[object])(
+                  granule_indices), otypes=[object])(indices_in_granule)
   device_mesh = np.block(blocks.tolist())
   return device_mesh
