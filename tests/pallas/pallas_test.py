@@ -1567,7 +1567,7 @@ class FusedAttentionTest(PallasTest):
     dq, dk, dv = jax.grad(f, argnums=(0, 1, 2))(q, k, v)
     dq_ref, dk_ref, dv_ref = jax.grad(f_ref, argnums=(0, 1, 2))(q, k, v)
     np.testing.assert_allclose(dq, dq_ref, atol=0.1)
-    np.testing.assert_allclose(dk, dk_ref, atol=0.08)
+    np.testing.assert_allclose(dk, dk_ref, atol=0.1)
     np.testing.assert_allclose(dv, dv_ref, atol=0.05)
 
 

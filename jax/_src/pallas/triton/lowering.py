@@ -391,6 +391,13 @@ def _exp_lowering_rule(ctx: TritonLoweringRuleContext, a):
 triton_lowering_rules[lax.exp_p] = _exp_lowering_rule
 
 
+def _exp2_lowering_rule(ctx: TritonLoweringRuleContext, a):
+  return tl.math.exp2(a, _builder=ctx.builder)
+
+
+triton_lowering_rules[lax.exp2_p] = _exp2_lowering_rule
+
+
 def _log_lowering_rule(ctx: TritonLoweringRuleContext, a):
   return tl.log(a, _builder=ctx.builder)
 
