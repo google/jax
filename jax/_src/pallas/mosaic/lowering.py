@@ -1036,6 +1036,23 @@ lowering_rules[lax.pow_p] = _pow_lowering_rule
 skip_mlir_conversions.add(lax.pow_p)
 
 
+def _integer_pow_lowering_rule(ctx: LoweringRuleContext, x, y):
+  aval_out = ctx.avals_out[0]
+  out_type = aval_to_ir_type(aval_out)
+  y = ir_constant(y)
+  if aval_out.shape != ():
+    bcast_shape = ir.VectorType.get(
+        list(aval_out.shape), mlir.dtype_to_ir_type(jnp.dtype("int32"))
+    )
+    y = vector.BroadcastOp(bcast_shape, y)
+  if isinstance(x, (np.ndarray, float)):
+    x = ir_constant(x, mlir_type=out_type)
+  return math.FPowIOp(x, y).result
+
+
+lowering_rules[lax.integer_pow_p] = _integer_pow_lowering_rule
+
+
 def _exp2_lowering_rule(ctx: LoweringRuleContext, x):
   # exp2 in JAX lowers to exp(ln2 * x), not to pow2. We match that behavior
   # here.

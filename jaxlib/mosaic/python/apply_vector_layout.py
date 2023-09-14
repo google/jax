@@ -1678,6 +1678,9 @@ _register_rule("math.sin")(
     functools.partial(_elementwise_op_rule, math_dialect.SinOp))
 _register_rule("math.powf")(
     functools.partial(_elementwise_op_rule, math_dialect.PowFOp))
+_register_rule("math.fpowi")(
+    functools.partial(_elementwise_op_rule, math_dialect.FPowIOp)
+)
 _register_rule("math.rsqrt")(
     functools.partial(_elementwise_op_rule, math_dialect.RsqrtOp))
 _register_rule("math.tanh")(
