@@ -292,7 +292,7 @@ def _get_pjrt_plugin_names_and_library_paths(
 
 def _get_pjrt_plugin_config(
     json_path: str,
-) -> tuple[str, Optional[Mapping[str, Union[str, int, list[int], float]]]]:
+) -> tuple[str, Optional[Mapping[str, Union[str, int, list[int], float, bool]]]]:
   """Gets PJRT plugin configuration from a json file.
 
   The json file needs to have a "library_path" field for the plugin library
