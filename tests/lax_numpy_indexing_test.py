@@ -1055,10 +1055,6 @@ class IndexingTest(jtu.JaxTestCase):
 
     @jtu.ignore_warning(category=NumpyComplexWarning,
                         message="Casting complex values to real")
-    def _check_warns(x_type, y_type, msg):
-      with self.assertWarnsRegex(FutureWarning, msg):
-        _check(x_type, y_type)
-
     def _check_raises(x_type, y_type, msg):
       with self.assertRaisesRegex(ValueError, msg):
         _check(x_type, y_type)
@@ -1085,12 +1081,11 @@ class IndexingTest(jtu.JaxTestCase):
       _check(jnp.complex64, jnp.int32)
       _check(jnp.complex64, jnp.float32)
 
-      # TODO(jakevdp): make these _check_raises
-      _check_warns(jnp.int16, jnp.int32, msg)
-      _check_warns(jnp.int32, jnp.float32, msg)
-      _check_warns(jnp.int32, jnp.complex64, msg)
-      _check_warns(jnp.float16, jnp.float32, msg)
-      _check_warns(jnp.float32, jnp.complex64, msg)
+      _check_raises(jnp.int16, jnp.int32, msg)
+      _check_raises(jnp.int32, jnp.float32, msg)
+      _check_raises(jnp.int32, jnp.complex64, msg)
+      _check_raises(jnp.float16, jnp.float32, msg)
+      _check_raises(jnp.float32, jnp.complex64, msg)
 
     # in strict promotion mode, strong types do not promote.
     msg = "Input dtypes .* have no available implicit dtype promotion path"

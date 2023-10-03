@@ -17,7 +17,6 @@
 from collections.abc import Sequence
 import sys
 from typing import Any, Callable, Optional, Union
-import warnings
 
 import numpy as np
 
@@ -90,12 +89,10 @@ def _scatter_impl(x, y, scatter_op, treedef, static_idx, dynamic_idx,
   weak_type = dtypes.is_weakly_typed(x)
 
   if not dtypes.safe_to_cast(y, x):
-    # TODO(jakevdp): change this to an error after the deprecation period.
-    warnings.warn("scatter inputs have incompatible types: cannot safely cast "
-                  f"value from dtype={lax.dtype(y)} to dtype={lax.dtype(x)} "
-                  f"with jax_numpy_dtype_promotion={config.jax_numpy_dtype_promotion!r}. "
-                  "In future JAX releases this will result in an error.",
-                  FutureWarning)
+    raise ValueError(
+        "scatter inputs have incompatible types: cannot safely cast "
+        f"value from dtype={lax.dtype(y)} to dtype={lax.dtype(x)} "
+        f"with jax_numpy_dtype_promotion={config.jax_numpy_dtype_promotion!r}.")
 
   idx = jnp._merge_static_and_dynamic_indices(treedef, static_idx, dynamic_idx)
   indexer = jnp._index_to_gather(jnp.shape(x), idx,

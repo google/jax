@@ -1114,7 +1114,7 @@ def _lu_unblocked(a):
       magnitude = ufuncs.abs(ufuncs.real(t)) + ufuncs.abs(ufuncs.imag(t))
     else:
       magnitude = ufuncs.abs(a[:, k])
-    i = jnp.argmax(jnp.where(m_idx >= k, magnitude, -jnp.inf))
+    i = jnp.argmax(jnp.where(m_idx >= k, magnitude, -jnp.inf)).astype(pivot.dtype)
     pivot = pivot.at[k].set(i)
     a = a.at[[k, i],].set(a[[i, k],])
     perm = perm.at[[i, k],].set(perm[[k, i],])
