@@ -200,8 +200,26 @@ def arccosh(x: ArrayLike, /) -> Array:
 @_wraps(getattr(np, 'bitwise_count', None), module='numpy')
 @jit
 def bitwise_count(x: ArrayLike, /) -> Array:
-  # Following numpy we take the absolute value and return uint8.
-  return lax.population_count(lax.abs(x)).astype('uint8')
+  # Ref: https://graphics.stanford.edu/~seander/bithacks.html#CountBitsSetParallel
+  check_arraylike('bitwise_count', x)
+  a = lax.asarray(x)
+  if not dtypes.issubdtype(a.dtype, np.integer):
+    raise ValueError('bitwise_count is implemented only for integers inputs.')
+  nbits = np.iinfo(a.dtype).bits
+  if nbits not in [8, 16, 32, 64]:
+    raise ValueError("bitwise_count is implemented only for 8, 16, 32, and 64-bit")
+  if not dtypes.issubdtype(a.dtype, np.unsignedinteger):
+    # For signed integers, follow numpy's convention of taking the abs value.
+    a = abs(a).astype(f'uint{nbits}')
+  B0, B1, B2, B3 = np.array(
+    [0x5555555555555555, 0x3333333333333333, 0x0f0f0f0f0f0f0f0f, 0x0101010101010101],
+    dtype='uint64').astype(a.dtype)
+  a = a - ((a >> 1) & B0)
+  a = (a & B1) + ((a >> 2) & B1)
+  a = (a + (a >> 4)) & B2
+  count = a if nbits == 8 else (a * B3) >> (nbits - 8)
+  # Following numpy's convention, we always return uint8.
+  return count.astype('uint8')
 
 @_wraps(np.right_shift, module='numpy')
 @partial(jit, inline=True)
