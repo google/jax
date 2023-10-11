@@ -14,7 +14,7 @@
 """Provides JAX and TensorFlow interoperation APIs."""
 
 from collections.abc import Iterable, Sequence
-from functools import partial
+from functools import partial, wraps
 import contextlib
 import math
 import operator
@@ -433,8 +433,7 @@ def convert(fun_jax: Callable,
     outs_flat_tf = [tf.identity(x, "jax2tf_out") for x in outs_flat_tf]
     out_tf = tree_util.tree_unflatten(outs_tree, outs_flat_tf)
     return out_tf
-
-  return converted_fun_tf
+  return wraps(fun_jax)(converted_fun_tf)
 
 class SerializationImpl:
   """Implementation details for jax2tf serialization.

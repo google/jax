@@ -82,12 +82,12 @@ from jax.experimental.jax2tf.tests import primitive_harness
 DType = Any
 
 REDUCE = (
-    jnp.all,
-    jnp.any,
-    jnp.max,
-    jnp.min,
-    jnp.prod,
-    jnp.sum,
+    lambda x: jnp.all(x),
+    lambda x: jnp.any(x),
+    lambda x: jnp.max(x),
+    lambda x: jnp.min(x),
+    lambda x: jnp.prod(x),
+    lambda x: jnp.sum(x),
 )
 
 

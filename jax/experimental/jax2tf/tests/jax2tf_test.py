@@ -16,10 +16,10 @@
 Specific JAX primitive conversion tests are in primitives_test."""
 import collections
 import contextlib
+import inspect
 import math
 import os
 import re
-from typing import Callable, Optional
 import unittest
 
 from absl import logging
@@ -34,8 +34,6 @@ from jax import sharding
 from jax._src import core
 from jax._src import source_info_util
 from jax._src import test_util as jtu
-from jax._src.lib import xla_client
-from jax._src.lib.mlir.dialects import hlo
 import jax._src.xla_bridge
 from jax import config
 from jax.experimental import jax2tf
@@ -44,7 +42,6 @@ from jax.experimental.jax2tf.tests import tf_test_util
 from jax.experimental.maps import xmap
 from jax.experimental.shard_map import shard_map
 from jax.experimental import pjit
-from jax.interpreters import mlir
 from jax.sharding import PartitionSpec as P
 
 import numpy as np
@@ -1113,6 +1110,17 @@ class Jax2TfTest(tf_test_util.JaxToTfTestCase):
                          np.full_like(x[1], fill_value=2.)),
                         (grad_tf[0].numpy(), grad_tf[1].numpy()))
 
+  def test_with_default_args(self):
+    def f_jax(x, use_sin=True):
+      return jnp.sin(x) if use_sin else jnp.cos(x)
+    x = np.float32(.7)
+    res_jax = f_jax(x)
+    self.assertAllClose(res_jax, jax2tf.convert(f_jax)(x))
+    # TODO: The following fails because tf.function will try to pass the default
+    # argument `use_sin=True` also, which will make `use_sin` a tracer,
+    # leading to concretization error when doing "if use_sin"
+    # _ = tf.function(jax2tf.convert(f_jax))(x)
+
   @jtu.skip_on_flag("jax2tf_default_native_serialization", True)
   def test_enable_xla(self):
     # Tests that enable_xla flag is properly scoped to a conversion.
@@ -1625,6 +1633,15 @@ class Jax2TfTest(tf_test_util.JaxToTfTestCase):
     with self.assertRaisesRegex(NotImplementedError,
                                 "serialization of host_callbacks is not yet implemented"):
       jax2tf.convert(f_ordered_jax, native_serialization=True)(np.float32(42.))
+
+  def test_same_signature(self):
+    def f_jax(arg1, *, arg2=5.):
+      return arg1 + arg2
+
+    f_tf = jax2tf.convert(f_jax)
+    sig_jax = inspect.signature(f_jax)
+    sig_tf = inspect.signature(f_tf)
+    self.assertEqual(sig_jax, sig_tf)
 
   def test_tuple_args(self):
     # On TPU if we have more than 2000 arguments, we pass them as a tuple.

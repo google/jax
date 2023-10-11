@@ -268,8 +268,7 @@ def call_tf(
     return ct_args_jax_fixed
 
   make_call.defvjp(make_call_vjp_fwd, make_call_vjp_bwd)
-  return util.wraps(callable_tf)(make_call)
-
+  return functools.wraps(callable_tf)(lambda *args, **kwargs: make_call(*args, **kwargs))
 
 def check_tf_result(idx: int, r_tf: TfVal, r_aval: Optional[core.ShapedArray]) -> TfVal:
   # Check that the TF function returns values of expected types. This

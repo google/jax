@@ -869,7 +869,7 @@ class RoundTripToJaxTest(tf_test_util.JaxToTfTestCase):
 
   def test_without_gradient_saved_model(self):
     # Explicitly with_gradient=False
-    f_jax = jnp.sum
+    f_jax = lambda x: jnp.sum(x)
 
     x = np.array([0.7, 0.8], dtype=np.float32)
     f_tf, _ = tf_test_util.SaveAndLoadFunction(
@@ -884,7 +884,7 @@ class RoundTripToJaxTest(tf_test_util.JaxToTfTestCase):
 
   def test_saved_model_no_gradients(self):
     # Save without gradients
-    f_jax = jnp.sum
+    f_jax = lambda x: jnp.sum(x)
 
     x = np.array([0.7, 0.8], dtype=np.float32)
     f_tf, _ = tf_test_util.SaveAndLoadFunction(
