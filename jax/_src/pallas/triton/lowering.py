@@ -18,7 +18,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import operator
-from typing import Any, Dict, Sequence, Tuple
+from typing import Any, Dict, Sequence, Tuple, Callable
 import zlib
 
 import jax
@@ -1452,7 +1452,7 @@ def compile_jaxpr(
     name: str,
     num_warps: int,
     num_stages: int,
-    debug: bool,
+    debug: Callable[[str, str], None] | bool,
 ) -> TritonCompilationResult:
   lowering_result = lower_jaxpr_to_triton_module(
       jaxpr, in_shapes, grid_mapping, name, num_warps
