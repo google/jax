@@ -395,6 +395,7 @@ def _cache_write(cache_key: str,
           "Not writing persistent cache entry for '%s' because it took < %.2f "
           "seconds to compile (%.2fs)", module_name, min_compile_time,
           compile_time_secs)
+      monitoring.record_event('/jax/compilation_cache/cache_skipped')
       return
     else:
       logger.debug(
