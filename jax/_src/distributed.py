@@ -20,7 +20,6 @@ from typing import Any, Optional, Union
 
 from jax._src import clusters
 from jax._src import config
-from jax._src import xla_bridge
 from jax._src.lib import xla_extension
 from jax._src.lib import xla_extension_version
 

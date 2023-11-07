@@ -578,13 +578,6 @@ def expand_platform_alias(platform: str) -> list[str]:
 def is_gpu(platform):
   return platform in ("cuda", "rocm")
 
-
-def backends_are_initialized() -> bool:
-  "Returns true if backends have already been initialized."
-  with _backend_lock:
-    return _backends is not None
-
-
 def backends() -> dict[str, xla_client.Client]:
   global _backends
   global _backend_errors
