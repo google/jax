@@ -43,39 +43,40 @@ def mha_forward_kernel(
   seq_len = q_ref.shape[0]
   start_q = pl.program_id(0)
 
-  # acc is the buffer where we accumulate the output on sram.
+  # o is the buffer where we accumulate the output on sram.
   # m_i and l_i (see FlashAttention paper) are updated during the k,v loop.
   m_i = jnp.zeros(block_q, dtype=jnp.float32) - float('inf')
   l_i = jnp.zeros(block_q, dtype=jnp.float32)
   # acc is the buffer where we accumulate the output on sram.
-  acc = jnp.zeros((block_q, block_d), dtype=jnp.float32)
+  o = jnp.zeros((block_q, block_d), dtype=jnp.float32)
 
   # Load q: it will stay in L1 throughout. Indices form a matrix because we
   # read, compute, and write all in 2d chunks. 1 element ~= 1 CUDA thread index.
   # q tile has shape [block_q, block_d], block_d == head_dim.
-  q = pl.load(q_ref, (pl.dslice(start_q * block_q, block_q), pl.dslice(None)))
+  curr_q_slice = pl.dslice(start_q * block_q, block_q)
+  q = pl.load(q_ref, (curr_q_slice, pl.dslice(None)))
   q_segment_ids = (
       None
       if segment_ids_ref is None
-      else pl.load(segment_ids_ref, (pl.dslice(start_q * block_q, block_q),))
+      else pl.load(segment_ids_ref, (curr_q_slice,))
   )
   # In FlashAttention algorithm 1 there are 2 loops: slow over tiles of kv (size
   # (Bc == block_k here), and fast over blocks of q (size Br == block_q here).
   # Here we only loop over blocks of kv to process entire seq_len, the loop over
   # blocks of q is carried out by the grid.
   def body(start_k, carry):
-    acc, m_prev, l_prev = carry
+    o_prev, m_prev, l_prev = carry
+    curr_k_slice = pl.dslice(start_k * block_k, block_k)
 
-    k = pl.load(k_ref, (pl.dslice(start_k * block_k, block_k), slice(None)))
+    k = pl.load(k_ref, (curr_k_slice, slice(None)))
     kv_segment_ids = (
         None
         if segment_ids_ref is None
-        else pl.load(segment_ids_ref, (pl.dslice(start_k * block_k, block_k),))
+        else pl.load(segment_ids_ref, (curr_k_slice,))
     )
-    qk = jnp.zeros([block_q, block_k], dtype=jnp.float32)
-    qk += pl.dot(q, k.T)   # [block_q, block_k]
+    qk = pl.dot(q, k.T)   # [block_q, block_k]
     if sm_scale != 1.:
-      qk *= sm_scale # [block_q, block_k]
+      qk *= sm_scale  # [block_q, block_k]
 
     # Bring closer to XLA:GPU numerics.
     qk = qk.astype(q_ref.dtype)
@@ -94,34 +95,35 @@ def mha_forward_kernel(
         )
       # Apply mask to qk.
       qk = jnp.where(mask, qk, DEFAULT_MASK_VALUE)
-    m_curr = jnp.maximum(jnp.max(qk, axis=1), m_prev)
-    l_prev *= jnp.exp(m_prev - m_curr)
-    p = jnp.exp(qk - m_curr[:, None])
-    l_curr = jnp.sum(p, axis=1) + l_prev
 
-    l_rcp = 1. / l_curr
-    p = p * l_rcp[:, None]
-    acc *= (l_prev * l_rcp)[:, None]
-    p = p.astype(jnp.float16)
+    m_curr = qk.max(axis=-1)
+    m_curr = jax.lax.broadcast_in_dim(m_curr, m_prev.shape, (0,))
+    m_next = jnp.maximum(m_prev, m_curr)
+    s_curr = jnp.exp(
+        qk - m_next[:, None]
+    )  # Use m_next instead of m_curr to avoid a correction on l_curr
+    l_curr = jax.lax.broadcast_in_dim(s_curr.sum(axis=-1), l_prev.shape, (0,))
+    v = pl.load(v_ref, (curr_k_slice, pl.dslice(block_d)))
+    o_curr = jnp.dot(s_curr, v) / l_curr
 
-    v = pl.load(v_ref, (pl.dslice(start_k * block_k, block_k), pl.dslice(block_d)))
-    acc = acc + pl.dot(p.astype(v.dtype), v)
-    return acc, m_curr, l_curr
+    correction = jnp.exp(m_prev - m_next)
+    l_next = correction * l_prev + l_curr
+    o_next = (l_prev * correction * o_prev + l_curr * o_curr) / l_next
+    return o_next, m_next, l_next
   if causal:
     # Ceildiv (`pl.cdiv` and `//` do not work due to type of start_q)
     upper_bound = lax.div(block_q * (start_q + 1) + block_k - 1, block_k)
   else:
     upper_bound = pl.cdiv(seq_len, block_k)  # type: ignore
-  acc, m_i, l_i = lax.fori_loop(0, upper_bound, body,
-                                (acc, m_i, l_i))
+  o, m_i, l_i = lax.fori_loop(0, upper_bound, body, (o, m_i, l_i))
 
   if residual_refs:
     l_ref, m_ref = residual_refs
-    pl.store(l_ref, (pl.ds(start_q * block_q, block_q),), l_i)
-    pl.store(m_ref, (pl.ds(start_q * block_q, block_q),), m_i)
+    pl.store(l_ref, (curr_q_slice,), l_i)
+    pl.store(m_ref, (curr_q_slice,), m_i)
   # Write output to dram.
-  acc = acc.astype(o_ref.dtype)
-  pl.store(o_ref, (pl.dslice(start_q * block_q, block_q), pl.dslice(None)), acc)
+  o = o.astype(o_ref.dtype)
+  pl.store(o_ref, (curr_q_slice, pl.dslice(None)), o)
 
 
 def segment_mask(
@@ -168,7 +170,7 @@ def mha(
     backward_pass_impl: str = "triton",
     num_warps: Optional[int] = None,
     num_stages: int = 2,
-    grid=None,
+    grid: tuple[int, ...] | None = None,
     interpret: bool = False,
     debug: bool = False,
 ):
