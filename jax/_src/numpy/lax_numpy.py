@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# pytype: skip-file
 """
 Implements the NumPy API, using the primitives in :mod:`jax.lax`.
 
@@ -1063,22 +1062,23 @@ def interp(x: ArrayLike, xp: ArrayLike, fp: ArrayLike,
 
 
 @overload
-def where(condition: ArrayLike, x: Literal[None] = None, y: Literal[None] = None, *,
-          size: int | None = None,
-          fill_value: None | ArrayLike | tuple[ArrayLike, ...] = None
+def where(condition: ArrayLike,
+          /, *,
+          size: int | None = ...,
+          fill_value: None | ArrayLike | tuple[ArrayLike, ...] = ...
           ) -> tuple[Array, ...]: ...
 
 @overload
-def where(condition: ArrayLike, x: ArrayLike, y: ArrayLike, *,
-          size: int | None = None,
-          fill_value: None | ArrayLike | tuple[ArrayLike, ...] = None
+def where(condition: ArrayLike, x: ArrayLike, y: ArrayLike, /, *,
+          size: int | None = ...,
+          fill_value: None | ArrayLike | tuple[ArrayLike, ...] = ...
           ) -> Array: ...
 
-@overload
-def where(condition: ArrayLike, x: ArrayLike | None = None,
-          y: ArrayLike | None = None, *, size: int | None = None,
-          fill_value: None | ArrayLike | tuple[ArrayLike, ...] = None
-          ) -> Array | tuple[Array, ...]: ...
+# @overload
+# def where(condition: ArrayLike, x: ArrayLike | None = None,
+#           y: ArrayLike | None = None, *, size: int | None = None,
+#           fill_value: None | ArrayLike | tuple[ArrayLike, ...] = None
+#           ) -> Array | tuple[Array, ...]: ...
 
 @util._wraps(np.where,
   lax_description=_dedent("""
@@ -1104,10 +1104,7 @@ def where(condition: ArrayLike, x: ArrayLike | None = None,
     fill_value : array_like, optional
         When ``size`` is specified and there are fewer than the indicated number of elements, the
         remaining elements will be filled with ``fill_value``, which defaults to zero."""))
-def where(condition: ArrayLike, x: ArrayLike | None = None,
-          y: ArrayLike | None = None, *, size: int | None = None,
-          fill_value: None | ArrayLike | tuple[ArrayLike, ...] = None
-    ) -> Array | tuple[Array, ...]:
+def where(condition, x = None, y = None, /, *, size = None, fill_value = None):
   if x is None and y is None:
     util.check_arraylike("where", condition)
     return nonzero(condition, size=size, fill_value=fill_value)
@@ -1989,9 +1986,9 @@ def atleast_1d(*arys: ArrayLike) -> Array | list[Array]:
   util.check_arraylike("atleast_1d", *arys, emit_warning=True)
   if len(arys) == 1:
     arr = asarray(arys[0])
-    return arr if ndim(arr) >= 1 else reshape(arr, -1)
+    return arr if ndim(arr) >= 1 else reshape(arr, -1)  # pytype: disable=bad-return-type
   else:
-    return [atleast_1d(arr) for arr in arys]
+    return [atleast_1d(arr) for arr in arys]  # pytype: disable=bad-return-type
 
 
 @overload
@@ -2011,13 +2008,13 @@ def atleast_2d(*arys: ArrayLike) -> Array | list[Array]:
   if len(arys) == 1:
     arr = asarray(arys[0])
     if ndim(arr) >= 2:
-      return arr
+      return arr  # pytype: disable=bad-return-type
     elif ndim(arr) == 1:
-      return expand_dims(arr, axis=0)
+      return expand_dims(arr, axis=0)  # pytype: disable=bad-return-type
     else:
-      return expand_dims(arr, axis=(0, 1))
+      return expand_dims(arr, axis=(0, 1))  # pytype: disable=bad-return-type
   else:
-    return [atleast_2d(arr) for arr in arys]
+    return [atleast_2d(arr) for arr in arys]  # pytype: disable=bad-return-type
 
 
 @overload
@@ -2042,9 +2039,9 @@ def atleast_3d(*arys: ArrayLike) -> Array | list[Array]:
       arr = expand_dims(arr, axis=(0, 2))
     elif ndim(arr) == 2:
       arr = expand_dims(arr, axis=2)
-    return arr
+    return arr  # pytype: disable=bad-return-type
   else:
-    return [atleast_3d(arr) for arr in arys]
+    return [atleast_3d(arr) for arr in arys]  # pytype: disable=bad-return-type
 
 
 _ARRAY_DOC = """
@@ -4364,8 +4361,8 @@ def _attempt_rewriting_take_via_slice(arr: Array, idx: Any, mode: str | None) ->
     return arr
 
   idx += (arr.ndim - len(idx)) * (slice(None),)
-  start_indices: Sequence[ArrayLike] = []
-  slice_sizes: Sequence[int] = []
+  start_indices: list[ArrayLike] = []
+  slice_sizes: list[int] = []
 
   for ind, size in safe_zip(idx, arr.shape):
     if isinstance(ind, slice):
@@ -4466,7 +4463,7 @@ class _Indexer(NamedTuple):
   # The slice shape to pass to lax.gather().
   gather_slice_shape: Sequence[int]
   # The gather indices to use.
-  gather_indices: ArrayLike
+  gather_indices: Array
   # A GatherDimensionNumbers object describing the gather to perform.
   dnums: lax.GatherDimensionNumbers
 
@@ -4527,7 +4524,7 @@ def _merge_static_and_dynamic_indices(treedef, static_idx, dynamic_idx):
 def _int(aval):
   return not aval.shape and issubdtype(aval.dtype, integer)
 
-def _index_to_gather(x_shape: Sequence[int], idx: Sequence[Any],
+def _index_to_gather(x_shape: Sequence[int], idx: tuple[Any, ...],
                      normalize_indices: bool = True) -> _Indexer:
   # Remove ellipses and add trailing slice(None)s.
   idx = _canonicalize_tuple_index(len(x_shape), idx)
@@ -4564,9 +4561,9 @@ def _index_to_gather(x_shape: Sequence[int], idx: Sequence[Any],
   collapsed_y_axis = 0  # Current axis in y, after collapsing.
 
   # Scatter dimension numbers.
-  offset_dims: Sequence[int] = []
-  collapsed_slice_dims: Sequence[int] = []
-  start_index_map: Sequence[int] = []
+  offset_dims: list[int] = []
+  collapsed_slice_dims: list[int] = []
+  start_index_map: list[int] = []
 
   use_64bit_index = any(not core.is_constant_dim(d) or d >= (1 << 31) for d in x_shape)
   index_dtype = int64 if use_64bit_index else int32
@@ -4581,16 +4578,16 @@ def _index_to_gather(x_shape: Sequence[int], idx: Sequence[Any],
   # We perform three transformations to y before the scatter op, in order:
   # First, y is broadcast to slice_shape. In general `y` only need broadcast to
   # the right shape.
-  slice_shape: Sequence[int] = []
+  slice_shape: list[int] = []
 
   # Next, y is squeezed to remove newaxis_dims. This removes np.newaxis/`None`
   # indices, which the scatter cannot remove itself.
-  newaxis_dims: Sequence[int] = []
+  newaxis_dims: list[int] = []
 
   # Finally, we reverse reversed_y_dims to handle slices with negative strides.
-  reversed_y_dims: Sequence[int] = []
+  reversed_y_dims: list[int] = []
 
-  gather_slice_shape: Sequence[int] = []
+  gather_slice_shape: list[int] = []
 
   for idx_pos, i in enumerate(idx):
     # Handle the advanced indices here if:
@@ -4862,7 +4859,8 @@ def _is_scalar(x):
   return  np.isscalar(x) or (isinstance(x, (np.ndarray, Array))
                              and np.ndim(x) == 0)
 
-def _canonicalize_tuple_index(arr_ndim, idx, array_name='array'):
+def _canonicalize_tuple_index(
+    arr_ndim, idx: tuple[Any, ...], array_name='array'):
   """Helper to remove Ellipsis and add in the implicit trailing slice(None)."""
   len_without_none = sum(1 for e in idx if e is not None and e is not Ellipsis)
   if len_without_none > arr_ndim:
