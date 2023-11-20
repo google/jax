@@ -211,6 +211,7 @@ build:rbe_cpu_linux_py312 --python_path="/usr/local/bin/python3.12"
 # TODO(ybaturina): remove "_clang" suffix when Kokoro release workflows are changed.
 build:rbe_cpu_linux_base_clang --config=rbe_linux
 build:rbe_cpu_linux_base_clang --config=cuda_clang
+build:rbe_cpu_linux_base_clang --action_env=TF_CLANG_NVCC="1"
 build:rbe_cpu_linux_base_clang --host_crosstool_top="@ubuntu20.04-clang_manylinux2014-cuda12.2-cudnn8.9_config_cuda//crosstool:toolchain"
 build:rbe_cpu_linux_base_clang --crosstool_top="@ubuntu20.04-clang_manylinux2014-cuda12.2-cudnn8.9_config_cuda//crosstool:toolchain"
 build:rbe_cpu_linux_base_clang --extra_toolchains="@ubuntu20.04-clang_manylinux2014-cuda12.2-cudnn8.9_config_cuda//crosstool:toolchain-linux-x86_64"
@@ -251,6 +252,7 @@ build:rbe_linux_cuda11.8_nvcc_py3.12 --python_path="/usr/local/bin/python3.12"
 # TODO(ybaturina): remove "_clang" suffix when Kokoro release workflows are changed.
 build:rbe_linux_cuda11.8_nvcc_base_clang --config=rbe_linux_cuda_base
 build:rbe_linux_cuda11.8_nvcc_base_clang --config=cuda_clang
+build:rbe_linux_cuda11.8_nvcc_base_clang --action_env=TF_CLANG_NVCC="1"
 build:rbe_linux_cuda11.8_nvcc_base_clang --action_env=TF_CUDA_VERSION=11
 build:rbe_linux_cuda11.8_nvcc_base_clang --action_env=TF_CUDNN_VERSION=8
 build:rbe_linux_cuda11.8_nvcc_base_clang --action_env=CUDA_TOOLKIT_PATH="/usr/local/cuda-11.8"
@@ -293,6 +295,7 @@ build:rbe_linux_cuda12.2_nvcc_py3.12 --python_path="/usr/local/bin/python3.12"
 # TODO(ybaturina): remove "_clang" suffix when Kokoro release workflows are changed.
 build:rbe_linux_cuda12.2_nvcc_base_clang --config=rbe_linux_cuda_base
 build:rbe_linux_cuda12.2_nvcc_base_clang --config=cuda_clang
+build:rbe_linux_cuda12.2_nvcc_base_clang --action_env=TF_CLANG_NVCC="1"
 build:rbe_linux_cuda12.2_nvcc_base_clang --action_env=TF_CUDA_VERSION=12
 build:rbe_linux_cuda12.2_nvcc_base_clang --action_env=TF_CUDNN_VERSION=8
 build:rbe_linux_cuda12.2_nvcc_base_clang --action_env=CUDA_TOOLKIT_PATH="/usr/local/cuda-12"
