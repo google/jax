@@ -286,6 +286,7 @@ with Mesh(jax.local_devices(), ("x",)):
             PartitionSpec(None, None),
         ),
     )
+    print(pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string())
     out = pjitted(x, weight)
 
 for r, o in zip(ref, out):
