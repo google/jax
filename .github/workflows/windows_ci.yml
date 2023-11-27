@@ -8,6 +8,10 @@ env:
   DISTUTILS_USE_SDK: 1
   MSSdk: 1
 
+permissions:
+  # Needed for writing statuses to Commit list
+  statuses: write
+
 jobs:
   win-wheels:
     strategy:
@@ -66,3 +70,14 @@ jobs:
           python -m pip install --no-index --find-links ${{ github.workspace }}\jax\dist jaxlib
           echo "JAX_ENABLE_CHECKS=$JAX_ENABLE_CHECKS"
           pytest -n auto --tb=short tests examples
+
+      - name: Add result status to commit list on GitHub
+        uses: myrotvorets/set-commit-status-action@v1.1.7
+        # Always run this even if previous steps fail
+        if: always()
+        with:
+          # Note: defaults to Workflow name. You can set "context" with a
+          # matrix value if you want to split statuses by their matrix.
+          status: ${{ job.status }}
+          # set-commit-status-action doesn't know how to fetch SHA by itself
+          sha: ${{ github.sha }}

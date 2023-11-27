@@ -95,6 +95,8 @@ jobs:
     permissions:
       contents: read
       issues: write
+      # Needed for writing statuses to Commit list
+      statuses: write
     if: |
       failure()
       && github.event_name == 'schedule'
@@ -169,3 +171,13 @@ jobs:
                     body: issue_body
                 })
             }
+      - name: Add result status to commit list on GitHub
+        uses: myrotvorets/set-commit-status-action@v1.1.7
+        # Always run this even if previous steps fail
+        if: always()
+        with:
+          # Note: defaults to Workflow name. You can set "context" with a
+          # matrix value if you want to split statuses by their matrix.
+          status: ${{ job.status }}
+          # set-commit-status-action doesn't know how to fetch SHA by itself
+          sha: ${{ github.sha }}

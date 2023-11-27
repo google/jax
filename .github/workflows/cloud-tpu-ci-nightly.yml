@@ -19,6 +19,8 @@ on:
 # document and enforce the permissions here.
 permissions:
   contents: read
+  # Needed for writing statuses to Commit list
+  statuses: write
 jobs:
   cloud-tpu-test:
     strategy:
@@ -97,3 +99,13 @@ jobs:
             --data-raw "{
             'text': '\"$GITHUB_WORKFLOW\", jaxlib/libtpu version \"${{ matrix.jaxlib-version }}\", TPU type ${{ matrix.tpu-type }} job failed, timed out, or was cancelled: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID'
             }"
+      - name: Add result status to commit list on GitHub
+        uses: myrotvorets/set-commit-status-action@v1.1.7
+        # Always run this even if previous steps fail
+        if: always()
+        with:
+          # Note: defaults to Workflow name. You can set "context" with a
+          # matrix value if you want to split statuses by their matrix.
+          status: ${{ job.status }}
+          # set-commit-status-action doesn't know how to fetch SHA by itself
+          sha: ${{ github.sha }}
