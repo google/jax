@@ -359,21 +359,15 @@ class RmsNormFwdClass:
         # We only support sharding on the batch dimensions.
         # Force sharding on all others dimensions with None.
         arg_shardings = (NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
-                         NamedSharding(mesh, PartitionSpec(None, None)))
+                         NamedSharding(mesh, PartitionSpec(None, None))) # TODO: TE don't force anything.
         invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
         output_shardings = (arg_shardings[0], invvar_sharding)
         # Sharded_impl only accepts ponsitional arugments
         # And they should be Jax traceable variables
         impl = partial(RmsNormFwdClass.impl, eps=eps)
-        def impl2(x, weight):
-            import pdb;pdb.set_trace()
-            local_output = _rms_norm_bwd_p.bind(
-                x=x, weight=weight, eps=eps
-            )
-            return local_output
 
         return mesh, impl, output_shardings, arg_shardings
-        g_sharding = NamedSharding(mesh, PartitionSpec(*g_spec))# TODO: Is that a bug in TE? No unsharding on the second input?
+        g_sharding = NamedSharding(mesh, PartitionSpec(*g_spec))
 
 register_primitive(RmsNormFwdClass)
 class RmsNormBwdClass:
@@ -436,7 +430,7 @@ class RmsNormBwdClass:
         x_spec = get_padded_spec(x_info)
         # We only support sharding on the batch dimensions.
         # Force sharding on all others dimensions with None.
-        # (bf16[4,512,512]{2,1,0}, bf16[512,512]{1,0}, f32[16,262144]{1,0}) custom-call(bf16[4,512,512]{2,1,0} %fusion.1, f32[4]{0} %get-tuple-element.1, bf16[4,512,512]{2,1,0} %param, bf16[512,512]{1,0} %param.1)
+        # Also force gx, x and invvar to have the same batch sharding/replication.
         x_spec = get_padded_spec(x_info)
         arg_shardings = (NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
                          NamedSharding(mesh, PartitionSpec(x_spec[0],)),
@@ -450,12 +444,15 @@ class RmsNormBwdClass:
 
         # Sharded_impl only accepts ponsitional arugments
         # And they should be Jax traceable variables
-        impl = partial(RmsNormBwdClass.impl, eps=eps)
-        def impl2(x, weight):
-            local_output = _rms_norm_bwd_p.bind(
-                x=x, weight=weight, eps=eps
+        def impl(g, invvar, x, weight):
+            grad_input, grad_weight, part_grad = _rms_norm_bwd_p.bind(
+                g, invvar, x, weight, eps=eps
             )
-            return local_output
+            # We need to sum the weight gradient from all partition.
+            global_weight = grad_weight
+            if x_spec[0]:
+                global_weight = jax.lax.psum(grad_weight, x_spec[0])
+            return grad_input, global_weight, part_grad
         return mesh, impl, output_shardings, arg_shardings
 
 register_primitive(RmsNormBwdClass)
@@ -518,43 +515,33 @@ def custom_p_loss(x, weight, *, device_count):
 
 
 with Mesh(jax.local_devices(), ("x",)):
-    if True:
-      xmap_pjitted = pjit(
-        jax.grad(partial(xmap_loss, device_count=jax.local_device_count()), argnums=(0, 1)),
-        # Shard x by batch dimension and replicate weight on all devices.
-        in_shardings=(
-            PartitionSpec("x", None, None),
-            PartitionSpec(None, None),
-        ),
-        # Shard the output by batch dimension and replicate weight grad on all devices.
-        out_shardings=(
-            PartitionSpec("x", None, None),
-            PartitionSpec(None, None),
-        ),
-      )
-      print("XMAP graph")
-      print(xmap_pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string())
-      xmap_out = xmap_pjitted(x, weight)
-    else:
-        xmap_out = []
-    custom_p_pjitted = pjit(
-        jax.grad(partial(custom_p_loss, device_count=jax.local_device_count()), argnums=(0, 1)),
-        # Shard x by batch dimension and replicate weight on all devices.
-        in_shardings=(
-            PartitionSpec("x", None, None),
-            PartitionSpec(None, None),
-        ),
-        # Shard the output by batch dimension and replicate weight grad on all devices.
-        out_shardings=(
-            PartitionSpec("x", None, None),
-            PartitionSpec(None, None),
-        ),
-    )
-    print("Custom_partitioning graph")
-    print(custom_p_pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string())
-    custom_p_out = custom_p_pjitted(x, weight)
+    def run_and_verify(loss):
+        pjitted = pjit(
+            jax.grad(partial(loss, device_count=jax.local_device_count()), argnums=(0, 1)),
+            # Shard x by batch dimension and replicate weight on all devices.
+            in_shardings=(
+                PartitionSpec("x", None, None),
+                PartitionSpec(None, None),
+            ),
+            # Shard the output by batch dimension and replicate weight grad on all devices.
+            out_shardings=(
+                PartitionSpec("x", None, None),
+                PartitionSpec(None, None),
+            ),
+        )
+        hlo = pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string()
+        out = pjitted(x, weight)
+        print(hlo)
+        assert "all-reduce-done" in hlo
+        if "all-gather-start" in hlo:
+            print("NOT OPTIMIZED, ALL_GATHER in the graph!")
+        return out
+    print("xmap graph")
+    xmap_out = run_and_verify(xmap_loss)
+    print("custom_partitioning graph")
+    custom_p_out = run_and_verify(custom_p_loss)
 
 for r, o in zip(ref, xmap_out):
-    print(jnp.allclose(r, o, atol=1e-2, rtol=1e-2))
+    print(jnp.allclose(r, o, atol=1e-6, rtol=1e-6))
 for r, o in zip(ref, custom_p_out):
-    print(jnp.allclose(r, o, atol=1e-2, rtol=1e-2))
+    print(jnp.allclose(r, o, atol=1e-6, rtol=1e-6))
