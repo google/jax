@@ -1,5 +1,6 @@
 python -m pip install pybind11==2.10.1
 mkdir -p build
+touch build/__init__.py
 pybind_include_path=$(python -c "import pybind11; print(pybind11.get_include())")
 python_executable=$(python -c 'import sys; print(sys.executable)')
 #python_include_path=$(python -c 'from distutils.sysconfig import get_python_inc;print(get_python_inc())')

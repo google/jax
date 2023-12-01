@@ -6,12 +6,13 @@ import jax.numpy as jnp
 from build import gpu_ops
 from jax import core, dtypes
 from jax.core import ShapedArray
+from jax.experimental.custom_partitioning import custom_partitioning
 from jax.experimental.maps import xmap
 from jax.experimental.pjit import pjit
 from jax.interpreters import mlir, xla
 from jax.interpreters.mlir import ir
 from jax.lib import xla_client
-from jax.sharding import Mesh, PartitionSpec
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from jaxlib.hlo_helpers import custom_call
 
 
@@ -237,6 +238,247 @@ def xmap_rms_norm(x, weight, *, device_count):
     reshaped_out = xmapped(reshaped, weight)
     return reshaped_out.reshape(x.shape)
 
+#####################################
+# RMS norm with custom_partitioning #
+#####################################
+
+def register_primitive(cls):
+    """
+    register jax primitive
+
+    The order of calls.
+
+    Inner, only the basic to wrap the TE XLA(not JAX) custom_call itself.
+    - Impl to TE XLA custom_call in C.
+    - abstract to know the static shapes
+    - lower to StableHLO TE XLA custom_call.
+    Outer, mostly all the rest:
+    - impl: Bind to the inner primitive? Why??? Not used for real computation, but only for tracing. So we only need to bind.
+    - abstract: same
+    - lower to StableHLO custom_p. (XLA will call the python callback from it)
+    - batcher for vmap
+    - custom_p
+    VJP is based on Outer, but in the primitive itself. So not in this file.
+    """
+
+    def name_of_wrapper_p():
+        return cls.name + "_wrapper"
+
+    inner_p = core.Primitive(cls.name)
+    inner_p.multiple_results = cls.multiple_results
+    inner_p.def_impl(partial(xla.apply_primitive, inner_p))
+    inner_p.def_abstract_eval(cls.abstract)
+    mlir.register_lowering(inner_p, cls.lowering, platform='cuda')
+    cls.inner_primitive = inner_p
+
+    outer_p = core.Primitive(name_of_wrapper_p())
+    outer_p.multiple_results = cls.multiple_results
+    outer_p.def_impl(cls.impl)
+    outer_p.def_abstract_eval(cls.abstract)
+    #TODO:    batching.primitive_batchers[outer_p] = cls.batcher
+    outer_p_lower = custom_partitioning(cls.impl, static_argnums=cls.impl_static_args)
+    outer_p_lower.def_partition(infer_sharding_from_operands=cls.infer_sharding_from_operands,
+                                partition=cls.partition)
+    mlir.register_lowering(outer_p,
+                           mlir.lower_fun(outer_p_lower, multiple_results=cls.multiple_results))
+    cls.outer_primitive = outer_p
+
+def te_get_padded_spec(spec, ndim):
+    """
+    Get padded spec for partitioning from arguments' information
+    """
+    if spec is None:
+        return (None,) * ndim
+    assert len(spec) <= ndim
+    return spec + (None,) * (ndim - len(spec))
+
+
+def get_padded_spec(arg_info):
+    """
+    Get padded spec for partitioning from arguments' information
+    """
+    if arg_info.sharding is None:
+        return te_get_padded_spec(None, arg_info.ndim)
+    ndim, spec = arg_info.ndim, arg_info.sharding.spec
+    return te_get_padded_spec(spec, ndim)
+
+
+class RmsNormFwdClass:
+    name = "rms_forward_affine_mixed_dtype"
+    multiple_results = True
+    impl_static_args = (2,)    # eps
+    inner_primitive = None
+    outer_primitive = None
+
+    @staticmethod
+    def abstract(x_aval, gamma_aval, **kwargs):    # pylint: disable=unused-argument
+        return _rms_norm_fwd_abstract(x_aval, gamma_aval, **kwargs)
+
+    @staticmethod
+    def lowering(ctx, x, gamma, *, eps):
+        return _rms_norm_fwd_cuda_lowering(ctx, x, gamma, eps)
+
+    @staticmethod
+    def impl(x, gamma, eps):
+        assert RmsNormFwdClass.inner_primitive is not None
+        out, rsigma = RmsNormFwdClass.inner_primitive.bind(x, gamma, eps=eps)
+        return out, rsigma
+
+    @staticmethod
+    def batcher(batched_args, batch_dims, *, eps):
+        # TODO: Add to the tutorial!
+        _check_valid_batch_dims(batch_dims)
+        assert RmsNormFwdPrimitive.outer_primitive is not None
+        x, gamma = batched_args
+        x_bdim, _ = batch_dims
+
+        out_bdims = x_bdim, x_bdim
+        return RmsNormFwdPrimitive.outer_primitive.bind(x, gamma, eps=eps), out_bdims
+
+    @staticmethod
+    def infer_sharding_from_operands(eps, mesh, arg_infos, result_infos):
+        del eps, result_infos
+        x_info, weight_info = arg_infos
+        assert len(x_info.shape) == 3
+        assert len(weight_info.shape) == 2
+        # partition() will force all dims to be replicated except the
+        # first dim of x that will be kept as is.
+        x_spec = get_padded_spec(arg_infos[0])
+        output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[1], None, None))
+        #TODO: Validate the sharding of invvar. compare to xmap.
+        invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
+        return (output_sharding, invvar_sharding)
+
+    @staticmethod
+    def partition(eps, mesh, arg_infos, result_infos):
+        del result_infos
+        x_info, weight_info = arg_infos
+        assert len(x_info.shape) == 3
+        assert len(weight_info.shape) == 2
+        x_spec = get_padded_spec(arg_infos[0])
+        # We only support sharding on the batch dimensions.
+        # Force sharding on all others dimensions with None.
+        arg_shardings = (NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
+                         NamedSharding(mesh, PartitionSpec(None, None)))
+        invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
+        output_shardings = (arg_shardings[0], invvar_sharding)
+        # Sharded_impl only accepts ponsitional arugments
+        # And they should be Jax traceable variables
+        impl = partial(RmsNormFwdClass.impl, eps=eps)
+        def impl2(x, weight):
+            import pdb;pdb.set_trace()
+            local_output = _rms_norm_bwd_p.bind(
+                x=x, weight=weight, eps=eps
+            )
+            return local_output
+
+        return mesh, impl, output_shardings, arg_shardings
+        g_sharding = NamedSharding(mesh, PartitionSpec(*g_spec))# TODO: Is that a bug in TE? No unsharding on the second input?
+
+register_primitive(RmsNormFwdClass)
+class RmsNormBwdClass:
+    name = "rms_norm_bwd"
+    multiple_results = True
+    impl_static_args = (4,)    # eps
+    inner_primitive = None
+    outer_primitive = None
+
+    @staticmethod
+    def abstract(grad_output, invvar, x, weight, eps):    # pylint: disable=unused-argument
+        return _rms_norm_bwd_abstract(grad_output, invvar, x, weight, eps)
+
+    @staticmethod
+    def lowering(ctx, grad_output, invvar, x, weight, eps):
+        return _rms_norm_bwd_cuda_lowering(ctx, grad_output, invvar, x, weight, eps)
+
+    @staticmethod
+    def impl(grad_output, invvar, x, weight, eps):
+        assert RmsNormBwdClass.inner_primitive is not None
+        gx, gw, part_grad = RmsNormBwdClass.inner_primitive.bind(grad_output, invvar, x, weight, eps=eps)
+        return gx, gw, part_grad
+
+    @staticmethod
+    def batcher(batched_args, batch_dims, *, eps):
+        # TODO: Add to the tutorial!
+        _check_valid_batch_dims(batch_dims)
+        assert RmsNormBwdPrimitive.outer_primitive is not None
+        x, gamma = batched_args
+        x_bdim, _ = batch_dims
+
+        out_bdims = x_bdim, x_bdim
+        return RmsNormBwdPrimitive.outer_primitive.bind(x, gamma, eps=eps), out_bdims
+
+    @staticmethod
+    def infer_sharding_from_operands(eps, mesh, arg_infos, result_infos):
+        del eps, result_infos
+        g_info, invvar_info, x_info, weight_info = arg_infos
+        assert len(g_info.shape) == 3
+        assert len(invvar_info.shape) == 1
+        assert len(x_info.shape) == 3
+        assert len(weight_info.shape) == 2
+#        (bf16[4,512,512]{2,1,0}, bf16[512,512]{1,0}, f32[16,262144]{1,0}) custom-call(bf16[4,512,512]{2,1,0} %fusion.1, f32[4]{0} %get-tuple-element.1, bf16[4,512,512]{2,1,0} %param, bf16[512,512]{1,0} %param.1)
+
+        # partition() will force all dims to be replicated except the
+        # first dim of x that will be kept as is.
+        x_spec = get_padded_spec(x_info)
+        output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
+        invvar_sharding = NamedSharding(mesh, PartitionSpec(None, None))
+        return (output_sharding, invvar_sharding, output_sharding, )
+
+    @staticmethod
+    def partition(eps, mesh, arg_infos, result_infos):
+        del result_infos
+        g_info, invvar_info, x_info, weight_info = arg_infos
+        assert len(g_info.shape) == 3
+        assert len(invvar_info.shape) == 1
+        assert len(x_info.shape) == 3
+        assert len(weight_info.shape) == 2
+        x_spec = get_padded_spec(x_info)
+        # We only support sharding on the batch dimensions.
+        # Force sharding on all others dimensions with None.
+        # (bf16[4,512,512]{2,1,0}, bf16[512,512]{1,0}, f32[16,262144]{1,0}) custom-call(bf16[4,512,512]{2,1,0} %fusion.1, f32[4]{0} %get-tuple-element.1, bf16[4,512,512]{2,1,0} %param, bf16[512,512]{1,0} %param.1)
+        x_spec = get_padded_spec(x_info)
+        arg_shardings = (NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
+                         NamedSharding(mesh, PartitionSpec(x_spec[0],)),
+                         NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
+                         NamedSharding(mesh, PartitionSpec(None, None)))
+
+        output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
+        invvar_sharding = NamedSharding(mesh, PartitionSpec(None, None))
+        output_shardings = (output_sharding, invvar_sharding, invvar_sharding)
+
+
+        # Sharded_impl only accepts ponsitional arugments
+        # And they should be Jax traceable variables
+        impl = partial(RmsNormBwdClass.impl, eps=eps)
+        def impl2(x, weight):
+            local_output = _rms_norm_bwd_p.bind(
+                x=x, weight=weight, eps=eps
+            )
+            return local_output
+        return mesh, impl, output_shardings, arg_shardings
+
+register_primitive(RmsNormBwdClass)
+
+def custom_p_rms_norm_fwd(x, weight, eps=1e-05):
+    output, invvar = RmsNormFwdClass.outer_primitive.bind(x, weight, eps=eps)
+    return output, (invvar, x, weight)
+
+@partial(jax.custom_vjp, nondiff_argnums=(2,))
+def custom_p_rms_norm(x, weight, eps=1e-05):
+    # TODO: Why not called?
+    import pdb;pdb.set_trace()
+    output, _ = custom_p_rms_norm_fwd(x, weight, eps=eps)
+
+    return output
+
+def custom_p_rms_norm_bwd(eps, res, g):
+    invvar, x, weight = res
+    grad_input, grad_weight, part_grad = RmsNormBwdClass.outer_primitive.bind(
+        g, invvar, x, weight, eps=eps)
+    return grad_input, grad_weight
+
+custom_p_rms_norm.defvjp(custom_p_rms_norm_fwd, custom_p_rms_norm_bwd)
 
 ########
 # Test #
@@ -266,15 +508,37 @@ def loss_ref(x, weight):
 ref = jax.grad(loss_ref, argnums=(0, 1))(x, weight)
 
 
-def loss(x, weight, *, device_count):
+def xmap_loss(x, weight, *, device_count):
     predictions = xmap_rms_norm(x, weight, device_count=device_count)
+    return -jnp.mean(predictions**2)
+
+def custom_p_loss(x, weight, *, device_count):
+    predictions = custom_p_rms_norm(x, weight)
     return -jnp.mean(predictions**2)
 
 
 with Mesh(jax.local_devices(), ("x",)):
-
-    pjitted = pjit(
-        jax.grad(partial(loss, device_count=jax.local_device_count()), argnums=(0, 1)),
+    if True:
+      xmap_pjitted = pjit(
+        jax.grad(partial(xmap_loss, device_count=jax.local_device_count()), argnums=(0, 1)),
+        # Shard x by batch dimension and replicate weight on all devices.
+        in_shardings=(
+            PartitionSpec("x", None, None),
+            PartitionSpec(None, None),
+        ),
+        # Shard the output by batch dimension and replicate weight grad on all devices.
+        out_shardings=(
+            PartitionSpec("x", None, None),
+            PartitionSpec(None, None),
+        ),
+      )
+      print("XMAP graph")
+      print(xmap_pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string())
+      xmap_out = xmap_pjitted(x, weight)
+    else:
+        xmap_out = []
+    custom_p_pjitted = pjit(
+        jax.grad(partial(custom_p_loss, device_count=jax.local_device_count()), argnums=(0, 1)),
         # Shard x by batch dimension and replicate weight on all devices.
         in_shardings=(
             PartitionSpec("x", None, None),
@@ -286,8 +550,11 @@ with Mesh(jax.local_devices(), ("x",)):
             PartitionSpec(None, None),
         ),
     )
-    print(pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string())
-    out = pjitted(x, weight)
+    print("Custom_partitioning graph")
+    print(custom_p_pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string())
+    custom_p_out = custom_p_pjitted(x, weight)
 
-for r, o in zip(ref, out):
+for r, o in zip(ref, xmap_out):
+    print(jnp.allclose(r, o, atol=1e-2, rtol=1e-2))
+for r, o in zip(ref, custom_p_out):
     print(jnp.allclose(r, o, atol=1e-2, rtol=1e-2))

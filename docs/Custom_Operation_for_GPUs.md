@@ -558,7 +558,11 @@ The values have been computed correctly for forward operation, however, the gene
 
 As XLA does not have enough knowledge about the custom functions to shard input tensors, it decides to replicate them to produce correct values before making the custom call.
 
-To avoid this overhead, we need to use the xmap manual sharding with the following configuration updates
+To avoid this overhead, we can:
+- custom_partitioning: to make it behave like all native JAX operations (but more complicated)
+- Use manual sharding
+  - xmap: deprecated and bugged in some cases when combined with grad
+  - shard_map: experimental but should work
 
 ```python
 jax.config.update("experimental_xmap_spmd_lowering", True)
