@@ -344,7 +344,7 @@ class RmsNormFwdClass:
         # partition() will force all dims to be replicated except the
         # first dim of x that will be kept as is.
         x_spec = get_padded_spec(arg_infos[0])
-        output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[1], None, None))
+        output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
         #TODO: Validate the sharding of invvar. compare to xmap.
         invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
         return (output_sharding, invvar_sharding)
