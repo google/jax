@@ -488,13 +488,14 @@ import jax
 per_core_batch_size=4
 seq_len=512
 emb_dim=512
+assert jax.local_device_count() > 1, "Only 1 GPU, the example work, but it is this really what you want?"
 x = jax.random.normal(
     jax.random.PRNGKey(0),
     shape=(jax.local_device_count() * per_core_batch_size, seq_len, emb_dim),
-    dtype=jnp.bfloat16,
+    dtype=jnp.float16,
 )
 norm_shape = x.shape[-2:]
-weight = jnp.ones(norm_shape, dtype=jnp.bfloat16)
+weight = jnp.ones(norm_shape, dtype=jnp.float16)
 
 
 def loss_ref(x, weight):
@@ -532,7 +533,7 @@ with Mesh(jax.local_devices(), ("x",)):
         hlo = pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string()
         out = pjitted(x, weight)
         print(hlo)
-        assert "all-reduce-done" in hlo
+        assert "all-reduce-done" in hlo, "The gradient will produce wrong value!"
         if "all-gather-start" in hlo:
             print("NOT OPTIMIZED, ALL_GATHER in the graph!")
         return out
