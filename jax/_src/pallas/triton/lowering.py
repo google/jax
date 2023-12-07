@@ -87,7 +87,6 @@ class TritonModuleContext:
 @dataclasses.dataclass
 class BlockInfo:
   full_shape_dtype: jax.ShapeDtypeStruct
-  start_indices: Sequence[Any]
   block_shape: Tuple[int, ...]
 
 
@@ -128,11 +127,7 @@ class TritonLoweringException(Exception):
   pass
 
 
-def _eval_index_map(
-    ctx: TritonModuleContext, idx, block_mapping: BlockMapping | None
-):
-  if block_mapping is None:
-    return None
+def _eval_index_map(ctx: TritonModuleContext, idx, block_mapping: BlockMapping):
   block_indices = tuple(
       lower_jaxpr_to_triton_ir(
           ctx, block_mapping.index_map_jaxpr.jaxpr, None, *idx
@@ -230,6 +225,11 @@ def lower_jaxpr_to_triton_module(
     jaxpr: jax_core.Jaxpr, in_shapes, grid_mapping: GridMapping, name: str,
     num_warps: int
 ) -> tl_ir.module:
+  if grid_mapping.num_index_operands:
+    raise NotImplementedError(
+        "Scalar prefetch not supported in Triton lowering."
+    )
+
   jaxpr, _ = pe.dce_jaxpr(jaxpr, [True] * len(jaxpr.outvars), instantiate=True)
   ir_context = tl_ir.context()
   ir_context.load_triton()
@@ -248,16 +248,10 @@ def lower_jaxpr_to_triton_module(
   triton_types = [get_triton_type(x) for x in in_avals]
   arg_types = [code_gen.str_to_ty(arg) for arg in triton_types]
   assert len(jaxpr.outvars) == 0
-  prototype = tl.function_type([], arg_types)
-  out = prototype.to_ir(builder)
-  fn = builder.get_or_insert_function(module, name, out, "public", False)
+  fn_type = tl.function_type([], arg_types).to_ir(builder)
+  fn = builder.get_or_insert_function(module, name, fn_type, "public", False)
   module.push_back(fn)
   entry = fn.add_entry_block()
-  args = []
-  for i in range(len(in_avals)):
-    fn.set_arg_attr(i, "tt.divisibility", 16)
-    ptr = tl.tensor(fn.args(i), prototype.param_types[i])
-    args.append(ptr)
   builder.set_insertion_point_to_start(entry)
   new_grid, program_ids = _process_grid_to_3d_grid(builder, grid_mapping)
   local_program_ids = [
@@ -266,24 +260,28 @@ def lower_jaxpr_to_triton_module(
   ctx = TritonModuleContext(
       name, ir_context, builder, module, grid_mapping, local_program_ids
   )
-  if grid_mapping.num_index_operands:
-    raise NotImplementedError(
-        "Scalar prefetch not supported in Triton lowering.")
-  start_indices = map(
-      partial(_eval_index_map, ctx, program_ids), grid_mapping.block_mappings
-  )
-  block_infos = [
-      BlockInfo(
-          jax.ShapeDtypeStruct(shape_dtype.shape, shape_dtype.dtype),
-          start_idx,
-          block_mapping.block_shape,
-      )
-      if block_mapping is not None
-      else None
-      for shape_dtype, block_mapping, start_idx in zip(
-          in_shapes, grid_mapping.block_mappings, start_indices
-      )
-  ]
+
+  args = []
+  block_infos = []
+  for i, (arg_type, in_shape, block_mapping) in enumerate(
+      zip(arg_types, in_shapes, grid_mapping.block_mappings)
+  ):
+    fn.set_arg_attr(i, "tt.divisibility", 16)
+    ptr = tl.tensor(fn.args(i), arg_type)
+
+    if block_mapping is None:
+      block_infos.append(None)
+    else:
+      block_infos.append(BlockInfo(in_shape, block_mapping.block_shape))
+      # Add start index offset to pointer.
+      start_indices = _eval_index_map(ctx, program_ids, block_mapping)
+      strides = pallas_utils.strides_from_shape(in_shape.shape)
+      for idx, stride in zip(start_indices, strides):
+        offset = idx.__mul__(stride, _builder=builder)
+        ptr = ptr.__add__(offset, _builder=builder)
+
+    args.append(ptr)
+
   () = lower_jaxpr_to_triton_ir(ctx, jaxpr, block_infos, *args)
   module.context = ir_context
   ctx.builder.ret([])
@@ -630,16 +628,9 @@ def _compute_pointers_from_indices(
   other_shape = indexer_shape[len(int_indexer_shape) :]
   bcast_indices = []
   other_shape_idx = 0
-  if block_info is None:
-    start_index_offsets = [None] * len(indices)
-  else:
-    start_index_offsets = block_info.start_indices
   assert len(indices) + num_mapped_dims == len(full_shape)
-  assert len(start_index_offsets) == len(full_shape)
   indexer_iter = iter(indices)
-  for dim_stride, dim_block_size, start_offset in zip(
-      strides, block_shape, start_index_offsets
-  ):
+  for dim_stride, dim_block_size in zip(strides, block_shape):
     if dim_block_size is pallas_core.mapped:
       index = tl.core._to_tensor(0, builder)
     else:
@@ -687,8 +678,7 @@ def _compute_pointers_from_indices(
       for _ in range(num_right_expand_dims):
         ndim = len(ptr_dim_offset.shape)
         ptr_dim_offset = tl.semantic.expand_dims(ptr_dim_offset, ndim, builder)
-    if start_offset is not None:
-      ptr_dim_offset = ptr_dim_offset.__add__(start_offset, _builder=builder)
+
     stride_size = tl.core._to_tensor(int(dim_stride), builder)
     bcast_indices.append(ptr_dim_offset.__mul__(stride_size, _builder=builder))
   block_shapes = [
