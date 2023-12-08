@@ -314,8 +314,9 @@ def compile_or_get_cached(
         config.use_original_compilation_cache_key_generation.value,
     )
   except xc._xla.XlaRuntimeError as ex:
-    logger.error("compile_or_get_cached: unable to generate cache key, "
-                 "skipping the cache: %s", ex)
+    logger.warning("compile_or_get_cached: unable to generate cache key, "
+                   "skipping the cache. Please report this to the JAX team. "
+                   "Error: %s", ex)
     return backend_compile(backend, computation, compile_options,
                            host_callbacks)
 
@@ -326,7 +327,7 @@ def compile_or_get_cached(
 
   if retrieved_executable is not None:
     assert retrieved_compile_time is not None
-    logger.debug("Persistent compilation cache hit for '%s'", module_name)
+    logger.info("Persistent compilation cache hit for '%s'", module_name)
 
     if config.use_original_compilation_cache_key_generation.value:
       # TODO(b/293308239) Remove metrics for the original cache after the new

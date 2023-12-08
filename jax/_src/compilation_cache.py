@@ -80,7 +80,7 @@ def _initialize_cache() -> None:
       return
 
     _cache = get_file_cache(path)
-    logger.debug("Initialized persistent compilation cache at %s", path)
+    logger.info("Initialized persistent compilation cache at %s", path)
 
 
 def _get_cache() -> Optional[CacheInterface]:
@@ -131,7 +131,7 @@ def put_executable_and_time(
   if cache is None:
     logger.debug("put_executable_and_time: cache is disabled/not initialized")
     return
-  logger.debug(
+  logger.info(
       "Writing %s to persistent compilation cache with key %s.",
       module_name,
       cache_key,
@@ -167,7 +167,7 @@ def reset_cache() -> None:
   """Get back to pristine, uninitialized state."""
   global _cache
   global _cache_initialized
-  logger.debug("Resetting cache at %s.",
+  logger.info("Resetting cache at %s.",
                _cache._path if _cache is not None else "<empty>")
   _cache = None
   _cache_initialized = False
