@@ -203,6 +203,13 @@ class MeshUtilsTest(test_util.JaxTestCase):
     total_mesh_shape = tuple(
         m1 * m2 for m1, m2 in zip(mesh_shape, dcn_mesh_shape))
     assert mesh.shape == total_mesh_shape
+    axis_with_dcn = dcn_mesh_shape.index(2)
+    i1, i2 = [0, 0, 0], [0, 0, 0]
+    i2[axis_with_dcn] = 1
+    d1, d2 = mesh[tuple(i1)], mesh[tuple(i2)]
+    # mesh should have DCN minor to slice
+    assert d1.coords == d2.coords
+    assert d1.slice_index != d2.slice_index
 
   @parameterized.named_parameters(
       # Physical ring order over tray
