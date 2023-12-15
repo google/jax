@@ -257,9 +257,9 @@ def register_primitive(cls):
     - impl: Bind to the inner primitive? Why??? Not used for real computation, but only for tracing. So we only need to bind.
     - abstract: same
     - lower to StableHLO custom_p. (XLA will call the python callback from it)
-    - batcher for vmap
     - custom_p
-    VJP is based on Outer, but in the primitive itself. So not in this file.
+    - vmap: could be added here.
+    VJP is based on Outer, but not handled in this function.
     """
 
     def name_of_wrapper_p():
@@ -278,7 +278,7 @@ def register_primitive(cls):
     outer_p.multiple_results = cls.multiple_results
     outer_p.def_impl(cls.impl)
     outer_p.def_abstract_eval(cls.abstract)
-    #TODO:    batching.primitive_batchers[outer_p] = cls.batcher
+    #batching.primitive_batchers[outer_p] = cls.batcher
     outer_p_lower = custom_partitioning(cls.impl, static_argnums=cls.impl_static_args)
     outer_p_lower.def_partition(infer_sharding_from_operands=cls.infer_sharding_from_operands,
                                 partition=cls.partition)
@@ -348,7 +348,6 @@ class RmsNormFwdClass:
         # first dim of x that will be kept as is.
         x_spec = get_padded_spec(arg_infos[0])
         output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
-        #TODO: Validate the sharding of invvar. compare to xmap.
         invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
         return (output_sharding, invvar_sharding)
 
@@ -365,12 +364,11 @@ class RmsNormFwdClass:
                          NamedSharding(mesh, PartitionSpec(None, None))) # TODO: TE don't force anything.
         invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
         output_shardings = (arg_shardings[0], invvar_sharding)
-        # Sharded_impl only accepts ponsitional arugments
+        # Sharded_impl only accepts positional arugments
         # And they should be Jax traceable variables
         impl = partial(RmsNormFwdClass.impl, eps=eps)
 
         return mesh, impl, output_shardings, arg_shardings
-        g_sharding = NamedSharding(mesh, PartitionSpec(*g_spec))
 
 register_primitive(RmsNormFwdClass)
 class RmsNormBwdClass:
@@ -413,8 +411,6 @@ class RmsNormBwdClass:
         assert len(invvar_info.shape) == 1
         assert len(x_info.shape) == 3
         assert len(weight_info.shape) == 2
-#        (bf16[4,512,512]{2,1,0}, bf16[512,512]{1,0}, f32[16,262144]{1,0}) custom-call(bf16[4,512,512]{2,1,0} %fusion.1, f32[4]{0} %get-tuple-element.1, bf16[4,512,512]{2,1,0} %param, bf16[512,512]{1,0} %param.1)
-
         # partition() will force all dims to be replicated except the
         # first dim of x that will be kept as is.
         x_spec = get_padded_spec(x_info)
@@ -445,7 +441,7 @@ class RmsNormBwdClass:
         output_shardings = (output_sharding, invvar_sharding, invvar_sharding)
 
 
-        # Sharded_impl only accepts ponsitional arugments
+        # Sharded_impl only accepts positional arugments
         # And they should be Jax traceable variables
         def impl(g, invvar, x, weight):
             grad_input, grad_weight, part_grad = _rms_norm_bwd_p.bind(
