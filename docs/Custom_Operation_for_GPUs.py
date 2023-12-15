@@ -14,6 +14,7 @@ from jax.interpreters.mlir import ir
 from jax.lib import xla_client
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from jaxlib.hlo_helpers import custom_call
+from jax._src import dispatch
 
 
 # Create _rms_norm_fwd_p for forward operation.
@@ -265,6 +266,7 @@ def register_primitive(cls):
         return cls.name + "_wrapper"
 
     inner_p = core.Primitive(cls.name)
+    dispatch.prim_requires_devices_during_lowering.add(inner_p)
     inner_p.multiple_results = cls.multiple_results
     inner_p.def_impl(partial(xla.apply_primitive, inner_p))
     inner_p.def_abstract_eval(cls.abstract)
@@ -272,6 +274,7 @@ def register_primitive(cls):
     cls.inner_primitive = inner_p
 
     outer_p = core.Primitive(name_of_wrapper_p())
+    dispatch.prim_requires_devices_during_lowering.add(outer_p)
     outer_p.multiple_results = cls.multiple_results
     outer_p.def_impl(cls.impl)
     outer_p.def_abstract_eval(cls.abstract)
