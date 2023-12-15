@@ -633,7 +633,73 @@ With this modification, the `all-gather` operation is eliminated and the custom 
 
 ### Shard the forward function with custom_partitioning
 
+When using custom_partitioning, it isn't needed to define the JAX config
+experimental_xmap_spmd_lowering and
+experimental_xmap_spmd_lowering_manual.
 
+We create an helper function to help with all the JAX registration needed.
+
+```python
+def register_primitive(cls):
+...
+```
+
+We define 2 JAX primitives, one inner primitive that map to the
+real kernel we want to warp in JAX. And an outer primitive that will
+be used with the custom_partitioning registration and for the
+gradient. (And if you implement the interface to support vmat, it will
+also be on the outer primitive).
+
+JAX custom_partitioning implementation are callbacks from XLA to Python during XLA sharding logic.
+XLA sharding goes in two phases: a sharding propagation phase and a partition phase.
+The propagation phase is when XLA plan the sharding to be created. It is the partition phase that create the sharded graph.
+For XLA to be able to shard our custom operations, it needs us to define 2 extra functions:
+infer_sharding_from_operands() and partition(). They are used in the first and second phase respectively.
+
+The infer_sharding_from_operands() function must do what its name say: infer the output sharding from the input sharding.
+
+The partition() function will do a few things:
+- tell which input sharding will be expected. XLA will reshad if needed.
+- tell the final version of the output sharding.
+- give a function that will create the new instruction from the sharded inputs.
+
+See the code comments for more explanation:
+
+```python
+    def infer_sharding_from_operands(eps, mesh, arg_infos, result_infos):
+        del eps, result_infos
+        x_info, weight_info = arg_infos
+        assert len(x_info.shape) == 3
+        assert len(weight_info.shape) == 2
+        # partition() will force all dims of all inputs to be replicated except the
+        # first dim of x that will be kept as is.
+	# This is because the implementaion we can only shard on the batch dimensions.
+        x_spec = get_padded_spec(arg_infos[0])
+	# None mean that we replicate on that dimension.
+        output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
+        invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
+        return (output_sharding, invvar_sharding)
+
+    def partition(eps, mesh, arg_infos, result_infos):
+        del result_infos
+        x_info, weight_info = arg_infosz
+        assert len(x_info.shape) == 3
+        assert len(weight_info.shape) == 2
+        x_spec = get_padded_spec(arg_infos[0])
+        # We only support sharding on the batch dimensions.
+        # Force sharding on all others dimensions with None.
+        arg_shardings = (NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
+                         NamedSharding(mesh, PartitionSpec(None, None)))
+        invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
+        output_shardings = (arg_shardings[0], invvar_sharding)
+        # Sharded_impl only accepts positional arugments
+        # And they should be Jax traceable variables
+        impl = partial(RmsNormFwdClass.impl, eps=eps)
+
+        return mesh, impl, output_shardings, arg_shardings
+register_primitive(RmsNormFwdClass)
+
+```
 
 
 ### Shard the backward function with xmap
@@ -806,10 +872,6 @@ return (
 ```
 
 ### Shard the backward function with custom_partitioning
-
-## Let's put it together
-
-Here is the complete code.
 
 ```python
 from functools import partial, reduce
