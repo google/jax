@@ -34,7 +34,7 @@ You need to follow these steps in Python:
 * Define its abstract evaluation.
 * Define its lowering to MLIR.
 * [Optional] Define the gradient.
-* [Optional] Use [xmap](https://jax.readthedocs.io/en/latest/notebooks/xmap_tutorial.html) (or one of the experimental [custom_partitioning](https://jax.readthedocs.io/en/latest/jax.experimental.custom_partitioning.html) or [shard_map](https://jax.readthedocs.io/en/latest/jep/14273-shard-map.html) functions) for fast multi-GPU.
+* [Optional] Use [xmap](https://jax.readthedocs.io/en/latest/notebooks/xmap_tutorial.html), [custom_partitioning](https://jax.readthedocs.io/en/latest/jax.experimental.custom_partitioning.html) or [shard_map](https://jax.readthedocs.io/en/latest/jep/14273-shard-map.html) functions for fast multi-GPU.
 
 
 ## C code
@@ -525,7 +525,7 @@ with mesh:
     print(pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string())
     out = pjitted(x, weight)
 
-jnp.allclose(ref, out, atol=1e-2, rtol=1e-2)
+jnp.allclose(ref, out, atol=1e-5, rtol=1e-5)
 ```
 ```python
 HloModule pjit_rms_norm, entry_computation_layout={(bf16[4,512,512]{2,1,0},bf16[512,512]{1,0})->bf16[4,512,512]{2,1,0}}
@@ -558,11 +558,15 @@ The values have been computed correctly for forward operation, however, the gene
 
 As XLA does not have enough knowledge about the custom functions to shard input tensors, it decides to replicate them to produce correct values before making the custom call.
 
-To avoid this overhead, we can:
-- custom_partitioning: to make it behave like all native JAX operations (but more complicated)
+To avoid this duplication, we can:
+- [custom_partitioning](https://jax.readthedocs.io/en/latest/jax.experimental.custom_partitioning.html): to make it behave like all native JAX operations (but more complicated)
 - Use manual sharding
-  - xmap: deprecated and bugged in some cases when combined with grad
-  - shard_map: experimental but should work
+  - [xmap](https://jax.readthedocs.io/en/latest/notebooks/xmap_tutorial.html): deprecated and bugged in some cases when combined with grad
+  - [shard_map](https://jax.readthedocs.io/en/latest/jep/14273-shard-map.html): experimental but should work
+
+We show examples for xmap and custom_partitioning below.
+
+### Shard the forward function with xmap
 
 ```python
 jax.config.update("experimental_xmap_spmd_lowering", True)
@@ -609,7 +613,7 @@ with mesh:
     print(pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string())
     out = pjitted(x, weight)
 
-jnp.allclose(ref, out, atol=1e-2, rtol=1e-2)
+jnp.allclose(ref, out, atol=1e-5, rtol=1e-5)
 ```
 ```python
 HloModule pjit__unnamed_wrapped_function_, entry_computation_layout={(bf16[4,512,512]{2,1,0},bf16[512,512]{1,0})->bf16[4,512,512]{2,1,0}}
@@ -627,7 +631,12 @@ True
 
 With this modification, the `all-gather` operation is eliminated and the custom call is made on each shard of `x`.
 
-### Test the backward function
+### Shard the forward function with custom_partitioning
+
+
+
+
+### Shard the backward function with xmap
 
 We are moving onto the backward operation using `jax.grad` on multiple devices.
 
@@ -636,16 +645,16 @@ Similarly to the forward operation test, we are creating a simple 1D mesh and sh
 We also define the `loss` function with `xmap_rms_norm` instead of `rms_norm`
 
 ```python
-def loss_ref(x, weight):
+def ref_loss(x, weight):
     predictions = rms_norm(x, weight)
     return -jnp.mean(predictions**2)
 
 
-ref = jax.grad(loss_ref, argnums=(0, 1))(x, weight)
+ref = jax.grad(ref_loss, argnums=(0, 1))(x, weight)
 
 
 # Re-define loss to use xmap_rms_norm instead of rms_norm
-def loss(x, weight, *, device_count):
+def xmap_loss(x, weight, *, device_count):
     predictions = xmap_rms_norm(x, weight, device_count=device_count)
     return -jnp.mean(predictions**2)
 
@@ -653,7 +662,7 @@ def loss(x, weight, *, device_count):
 with mesh:
 
     pjitted = pjit(
-        jax.grad(partial(loss, device_count=jax.local_device_count()), argnums=(0, 1)),
+        jax.grad(partial(xmap_loss, device_count=jax.local_device_count()), argnums=(0, 1)),
         # Shard x by batch dimension and replicate weight on all devices.
         in_shardings=(
             PartitionSpec("x", None, None),
@@ -668,7 +677,7 @@ with mesh:
     out = pjitted(x, weight)
 
 for r, o in zip(ref, out):
-    print(jnp.allclose(r, o, atol=1e-2, rtol=1e-2))
+    print(jnp.allclose(r, o, atol=1e-5, rtol=1e-5))
 ```
 ```python
 True
@@ -795,6 +804,8 @@ return (
     ....
 )
 ```
+
+### Shard the backward function with custom_partitioning
 
 ## Let's put it together
 
@@ -1092,7 +1103,7 @@ with Mesh(jax.local_devices(), ("x",)):
     out = pjitted(x, weight)
 
 for r, o in zip(ref, out):
-    print(jnp.allclose(r, o, atol=1e-2, rtol=1e-2))
+    print(jnp.allclose(r, o, atol=1e-5, rtol=1e-5))
 ```
 ```python
 True

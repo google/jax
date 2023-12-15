@@ -501,12 +501,12 @@ norm_shape = x.shape[-2:]
 weight = jnp.ones(norm_shape, dtype=jnp.float16)
 
 
-def loss_ref(x, weight):
+def ref_loss(x, weight):
     predictions = rms_norm(x, weight)
     return -jnp.mean(predictions**2)
 
 
-ref = jax.grad(loss_ref, argnums=(0, 1))(x, weight)
+ref = jax.grad(ref_loss, argnums=(0, 1))(x, weight)
 
 
 def xmap_loss(x, weight, *, device_count):
