@@ -889,7 +889,11 @@ def module_to_string(module: ir.Module) -> str:
 
 def module_to_bytecode(module: ir.Module) -> bytes:
   output = io.BytesIO()
-  module.operation.write_bytecode(file=output)
+  # TODO: Remove the desired_version pin. The version was incremented
+  # when https://reviews.llvm.org/D149515 was integrated.
+  # The proper fix is to thread versions and VHLO serialization
+  # through the PJRT plugin boundary.
+  module.operation.write_bytecode(file=output, desired_version=0)
   return output.getvalue()
 
 
