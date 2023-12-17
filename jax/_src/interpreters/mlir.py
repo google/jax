@@ -889,7 +889,8 @@ def module_to_string(module: ir.Module) -> str:
 
 def module_to_bytecode(module: ir.Module) -> bytes:
   output = io.BytesIO()
-  module.operation.write_bytecode(file=output)
+  # TODO: Document version pinning mechanism.
+  module.operation.write_bytecode(file=output, desired_version=0)
   return output.getvalue()
 
 
