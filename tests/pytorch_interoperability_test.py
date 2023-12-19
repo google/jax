@@ -117,6 +117,8 @@ class DLPackTest(jtu.JaxTestCase):
 
   @jtu.sample_product(shape=all_shapes, dtype=torch_dtypes)
   def testTorchToJax(self, shape, dtype):
+    if xla_bridge.using_pjrt_c_api():
+      self.skipTest("x64 types are disabled by jax_enable_x64")
     if not config.enable_x64.value and dtype in [
         jnp.int64,
         jnp.float64,

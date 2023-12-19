@@ -114,6 +114,8 @@ class DLPackTest(jtu.JaxTestCase):
   )
   @unittest.skipIf(not tf, "Test requires TensorFlow")
   def testTensorFlowToJax(self, shape, dtype):
+    if xb.using_pjrt_c_api():
+      self.skipTest("DLPack support is incomplete in the PJRT C API")
     if (not config.enable_x64.value and
         dtype in [jnp.int64, jnp.uint64, jnp.float64]):
       raise self.skipTest("x64 types are disabled by jax_enable_x64")
