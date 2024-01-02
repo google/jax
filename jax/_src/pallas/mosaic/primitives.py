@@ -256,6 +256,28 @@ class AsyncCopyDescriptor:
     )
 
 
+@dataclasses.dataclass
+class AsyncCopy(AsyncCopyDescriptor):
+  waited_for_send: bool = False
+  waited_for_recv: bool = False
+
+  def start(self):
+    raise RuntimeError("The async copy is already running.")
+
+  def wait_recv(self):
+    if self.waited_for_recv:
+      suffix = " for recv" if self.is_remote else ""
+      raise RuntimeError(f"Already waited{suffix}.")
+    self.waited_for_recv = True
+    super().wait_recv()
+
+  def wait_send(self):
+    if self.waited_for_send:
+      raise RuntimeError("Already waited for send.")
+    self.waited_for_send = True
+    super().wait_send()
+
+
 dma_start_p = jax_core.Primitive('dma_start')
 dma_start_p.multiple_results = True
 
@@ -319,34 +341,6 @@ def _dma_start_pp_eqn(eqn: jax_core.JaxprEqn,
 jax_core.pp_eqn_rules[dma_start_p] = _dma_start_pp_eqn
 
 
-def _make_copy_descriptor(
-    src_ref,
-    src_indices,
-    dst_ref,
-    dst_indices,
-    dst_sem,
-    src_sem,
-    device_id,
-    device_id_type,
-) -> AsyncCopyDescriptor:
-  src_indexer = indexing.NDIndexer.from_indices_shape(
-      src_indices, src_ref.shape
-  )
-  dst_indexer = indexing.NDIndexer.from_indices_shape(
-      dst_indices, dst_ref.shape
-  )
-  return AsyncCopyDescriptor(
-      src_ref,
-      src_indexer,
-      dst_ref,
-      dst_indexer,
-      dst_sem,
-      src_sem,
-      device_id,
-      device_id_type=device_id_type,
-  )
-
-
 dma_wait_p = jax_core.Primitive('dma_wait')
 dma_wait_p.multiple_results = True
 
@@ -376,33 +370,51 @@ def _get_ref_and_indexer(ref):
     return ref.ref, ref.indexer
   return ref, (slice(None),) * len(ref.shape)
 
-def make_async_copy(src_ref, dst_ref, sem):
+def _make_async_copy(src_ref, dst_ref, sem, desc_cls):
   """Issues a DMA copying from src_ref to dst_ref."""
   src_ref, src_indices = _get_ref_and_indexer(src_ref)
   dst_ref, dst_indices = _get_ref_and_indexer(dst_ref)
-  return _make_copy_descriptor(src_ref, src_indices, dst_ref, dst_indices, sem,
-                               None, None, DeviceIdType.MESH)
+  src_idx = indexing.NDIndexer.from_indices_shape(src_indices, src_ref.shape)
+  dst_idx = indexing.NDIndexer.from_indices_shape(dst_indices, dst_ref.shape)
+  return desc_cls(
+      src_ref, src_idx, dst_ref, dst_idx, sem,
+      src_sem=None, device_id=None, device_id_type=DeviceIdType.MESH,
+  )
+
+def make_async_copy(src_ref, dst_ref, sem):
+  return _make_async_copy(src_ref, dst_ref, sem, AsyncCopyDescriptor)
 
 def async_copy(src_ref, dst_ref, sem):
   """Issues a DMA copying from src_ref to dst_ref."""
-  copy_descriptor = make_async_copy(src_ref, dst_ref, sem)
-  copy_descriptor.start()
-  return copy_descriptor
+  copy = _make_async_copy(src_ref, dst_ref, sem, AsyncCopy)
+  AsyncCopyDescriptor.start(copy)  # Override the .start() error
+  return copy
+
+def _make_async_remote_copy(src_ref, dst_ref, send_sem, recv_sem, device_id,
+                            device_id_type, desc_cls):
+  src_ref, src_indices = _get_ref_and_indexer(src_ref)
+  dst_ref, dst_indices = _get_ref_and_indexer(dst_ref)
+  src_idx = indexing.NDIndexer.from_indices_shape(src_indices, src_ref.shape)
+  dst_idx = indexing.NDIndexer.from_indices_shape(dst_indices, dst_ref.shape)
+  return desc_cls(
+      src_ref, src_idx, dst_ref, dst_idx, recv_sem,
+      send_sem, device_id, device_id_type,
+  )
 
 def make_async_remote_copy(src_ref, dst_ref, send_sem, recv_sem, device_id,
                            device_id_type: DeviceIdType = DeviceIdType.MESH):
-  src_ref, src_indices = _get_ref_and_indexer(src_ref)
-  dst_ref, dst_indices = _get_ref_and_indexer(dst_ref)
-  return _make_copy_descriptor(
-      src_ref, src_indices, dst_ref, dst_indices, recv_sem,
-      send_sem, device_id, device_id_type=device_id_type)
+  return _make_async_remote_copy(
+      src_ref, dst_ref, send_sem, recv_sem,
+      device_id, device_id_type, AsyncCopyDescriptor
+  )
 
 def async_remote_copy(src_ref, dst_ref, send_sem, recv_sem, device_id,
                       device_id_type: DeviceIdType = DeviceIdType.MESH):
-  copy_descriptor = make_async_remote_copy(src_ref, dst_ref, send_sem, recv_sem,
-                                           device_id, device_id_type)
-  copy_descriptor.start()
-  return copy_descriptor
+  copy = _make_async_remote_copy(
+      src_ref, dst_ref, send_sem, recv_sem,
+      device_id, device_id_type, AsyncCopy)
+  AsyncCopyDescriptor.start(copy)
+  return copy
 
 device_id_p = jax_core.Primitive('device_id')
 
