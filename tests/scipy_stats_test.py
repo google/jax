@@ -30,6 +30,10 @@ from jax.scipy.special import expit
 from jax import config
 config.parse_flags_with_absl()
 
+import os
+
+os.environ["XLA_FLAGS"] = "--xla_gpu_hlo_emitter_autotune_level=0"
+
 scipy_version = tuple(map(int, scipy.version.version.split('.')[:3]))
 
 all_shapes = [(), (4,), (3, 4), (3, 1), (1, 4), (2, 1, 4)]
