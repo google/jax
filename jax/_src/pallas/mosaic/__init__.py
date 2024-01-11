@@ -19,6 +19,8 @@ from jax._src.pallas.mosaic import pallas_call_registration
 from jax._src.pallas.mosaic.core import PrefetchScalarGridSpec
 from jax._src.pallas.mosaic.core import SemaphoreType
 from jax._src.pallas.mosaic.core import TPUMemorySpace
+from jax._src.pallas.mosaic.core import semaphore
+from jax._src.pallas.mosaic.core import dma_semaphore
 from jax._src.pallas.mosaic.kernel_regeneration_util import encode_kernel_regeneration_metadata
 from jax._src.pallas.mosaic.kernel_regeneration_util import extract_kernel_regeneration_metadata
 from jax._src.pallas.mosaic.lowering import LoweringException

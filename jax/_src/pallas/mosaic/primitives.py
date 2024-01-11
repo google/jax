@@ -131,73 +131,132 @@ semaphore_signal_p.multiple_results = True
 
 
 def semaphore_signal(
-    sem,
+    sem_or_view,
     inc: int | jax.Array = 1,
     *,
     device_id: int | jax.Array | None | tuple[int | jax.Array, ...] = None,
     device_id_type: DeviceIdType = DeviceIdType.MESH,
 ):
+  ref, indexers = _get_ref_and_indexers(sem_or_view)
   inc = jnp.asarray(inc, dtype=jnp.int32)
-  args = [sem, inc]
-  has_device_id = device_id is not None
-  device_id_tree = None
-  if has_device_id:
-    flat_device_id, device_id_tree = tree_util.tree_flatten(device_id)
-    args = [*args, *flat_device_id]
+  args = [ref, indexers, inc, device_id]
+  flat_args, args_tree = tree_util.tree_flatten(args)
   semaphore_signal_p.bind(
-      *args,
-      has_device_id=has_device_id,
+      *flat_args,
+      args_tree=args_tree,
       device_id_type=device_id_type,
-      device_id_tree=device_id_tree,
   )
 
 
 @semaphore_signal_p.def_abstract_eval
 def _semaphore_signal_abstract_eval(
-    sem_aval: tpu_core.AbstractSemaphore,
-    value,
-    *args,
-    has_device_id: bool,
+    *avals,
+    args_tree,
     device_id_type: DeviceIdType,
-    device_id_tree,
 ):
   del device_id_type
-  del device_id_tree
-  if not isinstance(sem_aval, tpu_core.AbstractSemaphore):
-    raise ValueError(f"Cannot signal on a non-semaphore value: {sem_aval}")
-  if sem_aval.sem_type not in {
-      tpu_core.SemaphoreType.REGULAR,
-      tpu_core.SemaphoreType.BARRIER,
-  }:
-    raise ValueError("Must signal a REGULAR or BARRIER semaphore.")
-  if value.dtype != jnp.dtype("int32"):
+  sem_aval, sem_indexers_avals, value_aval, device_id_avals = (
+      tree_util.tree_unflatten(args_tree, avals)
+  )
+  if not isinstance(sem_aval, state.AbstractRef):
+    raise ValueError(f"Cannot signal on a non-Ref: {sem_aval}")
+  sem_shape = sem_aval.shape
+  if sem_indexers_avals:
+    sem_shape = sem_indexers_avals[-1].get_indexer_shape()
+  if sem_shape:
+    raise ValueError(f"Cannot signal on a non-()-shaped semaphore: {sem_shape}")
+  sem_dtype = sem_aval.dtype
+  if not (jnp.issubdtype(sem_dtype, tpu_core.semaphore) or jnp.issubdtype(
+      sem_dtype, tpu_core.barrier_semaphore)):
+    raise ValueError(f"Must signal a REGULAR or BARRIER semaphore: {sem_dtype}")
+  if value_aval.dtype != jnp.dtype("int32"):
     raise ValueError("Must signal an int32 value.")
-  if has_device_id:
-    device_id = args[0]
-    if device_id.dtype != jnp.dtype("int32"):
-      raise ValueError("`device_id` must be an int32 value.")
+  if device_id_avals is not None:
+    device_id_flat_avals = tree_util.tree_leaves(device_id_avals)
+    for aval in device_id_flat_avals:
+      if aval.dtype != jnp.dtype("int32"):
+        raise ValueError("`device_id`s must be an int32 value.")
   return []
 
+
+def _semaphore_signal_pp_eqn(eqn: jax_core.JaxprEqn,
+                             context: jax_core.JaxprPpContext,
+                             settings: jax_core.JaxprPpSettings):
+  del settings
+  invars = eqn.invars
+  tree = eqn.params["args_tree"]
+  (
+      sem,
+      sem_indexers,
+      value,
+      device_ids,
+  ) = tree_util.tree_unflatten(tree, invars)
+  out = pp.concat([
+      pp.text('semaphore_signal'),
+      pp.text(' '),
+      sp.pp_ref_indexers(context, sem, sem_indexers),
+      pp.text(' '),
+      pp.text(jax_core.pp_var(value, context)),
+  ])
+  if device_ids is not None:
+    flat_device_ids = tree_util.tree_leaves(device_ids)
+    if not flat_device_ids:
+      return out
+    device_ids_pp = [flat_device_ids[0]]
+    for device_id in flat_device_ids[1:]:
+      device_ids_pp.append(pp.text(" "))
+      device_ids_pp.append(pp.text(jax_core.pp_var(device_id, context)))
+    out = pp.concat([out, pp.concat(device_ids_pp)])
+  return out
+jax_core.pp_eqn_rules[semaphore_signal_p] = _semaphore_signal_pp_eqn
 
 semaphore_wait_p = jax_core.Primitive('semaphore_wait')
 semaphore_wait_p.multiple_results = True
 
-def semaphore_wait(sem, dec: int | jax.Array = 1):
+def semaphore_wait(sem_or_view, dec: int | jax.Array = 1):
+  ref, indexers = _get_ref_and_indexers(sem_or_view)
   dec = jnp.asarray(dec, dtype=jnp.int32)
-  semaphore_wait_p.bind(sem, dec)
+  args = [ref, indexers, dec]
+  flat_args, args_tree = tree_util.tree_flatten(args)
+  semaphore_wait_p.bind(*flat_args, args_tree=args_tree)
 
 @semaphore_wait_p.def_abstract_eval
-def _semaphore_wait_abstract_eval(sem_aval: tpu_core.AbstractSemaphore, value):
-  if not isinstance(sem_aval, tpu_core.AbstractSemaphore):
-    raise ValueError(f"Cannot wait on a non-semaphore value: {sem_aval}")
-  if sem_aval.sem_type not in {
-      tpu_core.SemaphoreType.REGULAR,
-      tpu_core.SemaphoreType.BARRIER,
-  }:
-    raise ValueError("Must wait on a REGULAR or BARRIER semaphore.")
-  if value.dtype != jnp.dtype("int32"):
+def _semaphore_wait_abstract_eval(*avals, args_tree):
+  sem_aval, sem_indexers_avals, value_aval = tree_util.tree_unflatten(args_tree, avals)
+  if not isinstance(sem_aval, state.AbstractRef):
+    raise ValueError(f"Cannot signal on a non-semaphore Ref: {sem_aval}")
+  sem_shape = sem_aval.shape
+  if sem_indexers_avals:
+    sem_shape = sem_indexers_avals[-1].get_indexer_shape()
+  if sem_shape:
+    raise ValueError(f"Cannot signal on a non-()-shaped semaphore: {sem_shape}")
+  sem_dtype = sem_aval.dtype
+  if not (jnp.issubdtype(sem_dtype, tpu_core.semaphore) or jnp.issubdtype(
+      sem_dtype, tpu_core.barrier_semaphore)):
+    raise ValueError(f"Must signal a REGULAR or BARRIER semaphore: {sem_dtype}")
+  if value_aval.dtype != jnp.dtype("int32"):
     raise ValueError("Must signal an int32 value.")
   return []
+
+def _semaphore_wait_pp_eqn(eqn: jax_core.JaxprEqn,
+                             context: jax_core.JaxprPpContext,
+                             settings: jax_core.JaxprPpSettings):
+  del settings
+  invars = eqn.invars
+  tree = eqn.params["args_tree"]
+  (
+      sem,
+      sem_indexers,
+      value,
+  ) = tree_util.tree_unflatten(tree, invars)
+  return pp.concat([
+      pp.text('semaphore_wait'),
+      pp.text(' '),
+      sp.pp_ref_indexers(context, sem, sem_indexers),
+      pp.text(' '),
+      pp.text(jax_core.pp_var(value, context)),
+  ])
+jax_core.pp_eqn_rules[semaphore_wait_p] = _semaphore_wait_pp_eqn
 
 
 @dataclasses.dataclass
@@ -207,7 +266,9 @@ class AsyncCopyDescriptor:
   dst_ref: Any
   dst_indexers: tuple[indexing.NDIndexer, ...]
   dst_sem: int | jax.Array
+  dst_sem_indexers: tuple[indexing.NDIndexer, ...]
   src_sem: int | jax.Array | None
+  src_sem_indexers: tuple[indexing.NDIndexer, ...] | None
   device_id: int | jax.Array | None
   device_id_type: DeviceIdType = DeviceIdType.MESH
 
@@ -227,7 +288,9 @@ class AsyncCopyDescriptor:
         self.dst_ref,
         self.dst_indexers,
         self.dst_sem,
+        self.dst_sem_indexers,
         self.src_sem,
+        self.src_sem_indexers,
         self.device_id,
     ))
     dma_start_p.bind(*flat_args, tree=tree, device_id_type=self.device_id_type)
@@ -239,7 +302,7 @@ class AsyncCopyDescriptor:
 
   def wait_recv(self):
     wait_args, tree = tree_util.tree_flatten(
-        (self.dst_sem, self.dst_ref, self.dst_indexers)
+        (self.dst_sem, self.dst_sem_indexers, self.dst_ref, self.dst_indexers)
     )
     dma_wait_p.bind(
         *wait_args, tree=tree, device_id_type=self.device_id_type
@@ -249,7 +312,7 @@ class AsyncCopyDescriptor:
     if not self.is_remote:
       raise ValueError("Cannot `wait_send` on a local copy.")
     wait_args, tree = tree_util.tree_flatten(
-        (self.src_sem, self.src_ref, self.src_indexers)
+        (self.src_sem, self.src_sem_indexers, self.src_ref, self.src_indexers)
     )
     dma_wait_p.bind(
         *wait_args, tree=tree, device_id_type=self.device_id_type
@@ -261,7 +324,32 @@ dma_start_p.multiple_results = True
 
 @dma_start_p.def_abstract_eval
 def _dma_start_abstract_eval(*args, tree, device_id_type):
-  del args, tree, device_id_type
+  (
+      src_ref_aval,
+      src_indexers_avals,
+      dst_ref_aval,
+      dst_indexers_avals,
+      dst_sem_aval,
+      dst_sem_indexers_avals,
+      src_sem_aval,
+      src_sem_indexers_avals,
+      device_id_aval,
+  ) = tree_util.tree_unflatten(tree, args)
+  dst_sem_shape = dst_sem_aval.shape
+  if dst_sem_indexers_avals:
+    dst_sem_shape = dst_sem_indexers_avals[-1].get_indexer_shape()
+  if dst_sem_shape:
+    raise ValueError(
+        f"Cannot signal on a non-()-shaped semaphore: {dst_sem_shape}"
+    )
+  if src_sem_aval is not None:
+    src_sem_shape = src_sem_aval.shape
+    if src_sem_indexers_avals:
+      src_sem_shape = src_sem_indexers_avals[-1].get_indexer_shape()
+    if src_sem_shape:
+      raise ValueError(
+          f"Cannot signal on a non-()-shaped semaphore: {src_sem_shape}"
+      )
   return []
 
 def _dma_start_pp_eqn(eqn: jax_core.JaxprEqn,
@@ -269,9 +357,19 @@ def _dma_start_pp_eqn(eqn: jax_core.JaxprEqn,
                       settings: jax_core.JaxprPpSettings):
   invars = eqn.invars
   tree = eqn.params["tree"]
-  src_ref, src_indexers, dst_ref, dst_indexers, dst_sem, src_sem, device_id = (
-      tree_util.tree_unflatten(tree, invars)
-  )
+  (
+      src_ref,
+      src_indexers,
+      dst_ref,
+      dst_indexers,
+      dst_sem,
+      dst_sem_indexers,
+      src_sem,
+      src_sem_indexers,
+      device_id,
+  ) = tree_util.tree_unflatten(tree, invars)
+  del src_sem_indexers
+  # TODO(sharadmv): pretty print source semaphores and device id
   if src_sem or device_id:
     return jax_core._pp_eqn(eqn, context, settings)
   return pp.concat([
@@ -281,7 +379,7 @@ def _dma_start_pp_eqn(eqn: jax_core.JaxprEqn,
       pp.text(' -> '),
       sp.pp_ref_indexers(context, dst_ref, dst_indexers),
       pp.text(' '),
-      pp.text(jax_core.pp_var(dst_sem, context)),
+      sp.pp_ref_indexers(context, dst_sem, dst_sem_indexers),
   ])
 
 jax_core.pp_eqn_rules[dma_start_p] = _dma_start_pp_eqn
@@ -300,13 +398,13 @@ def _dma_wait_pp_eqn(eqn: jax_core.JaxprEqn,
   del settings
   invars = eqn.invars
   tree = eqn.params["tree"]
-  sem, ref, indexers = tree_util.tree_unflatten(tree, invars)
+  sem, sem_indexers, ref, indexers = tree_util.tree_unflatten(tree, invars)
   return pp.concat([
       pp.text('dma_wait'),
       pp.text(' '),
       sp.pp_ref_indexers(context, ref, indexers),
       pp.text(' '),
-      pp.text(jax_core.pp_var(sem, context)),
+      sp.pp_ref_indexers(context, sem, sem_indexers),
   ])
 
 jax_core.pp_eqn_rules[dma_wait_p] = _dma_wait_pp_eqn
@@ -320,8 +418,10 @@ def make_async_copy(src_ref, dst_ref, sem):
   """Issues a DMA copying from src_ref to dst_ref."""
   src_ref, src_indexers = _get_ref_and_indexers(src_ref)
   dst_ref, dst_indexers = _get_ref_and_indexers(dst_ref)
+  sem, sem_indexers = _get_ref_and_indexers(sem)
   return AsyncCopyDescriptor(src_ref, src_indexers, dst_ref, dst_indexers,
-                             sem, None, None, DeviceIdType.MESH)
+                             sem, sem_indexers, None, None, None,
+                             DeviceIdType.MESH)
 
 def async_copy(src_ref, dst_ref, sem):
   """Issues a DMA copying from src_ref to dst_ref."""
@@ -332,10 +432,12 @@ def async_copy(src_ref, dst_ref, sem):
 def make_async_remote_copy(src_ref, dst_ref, send_sem, recv_sem, device_id,
                            device_id_type: DeviceIdType = DeviceIdType.MESH):
   src_ref, src_indexers = _get_ref_and_indexers(src_ref)
+  send_sem, send_sem_indexers = _get_ref_and_indexers(send_sem)
   dst_ref, dst_indexers = _get_ref_and_indexers(dst_ref)
+  recv_sem, recv_sem_indexers = _get_ref_and_indexers(recv_sem)
   return AsyncCopyDescriptor(
-      src_ref, src_indexers, dst_ref, dst_indexers, recv_sem,
-      send_sem, device_id, device_id_type=device_id_type)
+      src_ref, src_indexers, dst_ref, dst_indexers, recv_sem, recv_sem_indexers,
+      send_sem, send_sem_indexers, device_id, device_id_type=device_id_type)
 
 def async_remote_copy(src_ref, dst_ref, send_sem, recv_sem, device_id,
                       device_id_type: DeviceIdType = DeviceIdType.MESH):
@@ -356,7 +458,10 @@ get_barrier_semaphore_p = jax_core.Primitive('get_barrier_semaphore')
 
 @get_barrier_semaphore_p.def_abstract_eval
 def _get_barrier_semaphore_abstract_eval():
-  return tpu_core.AbstractSemaphore(tpu_core.SemaphoreType.BARRIER)
+  return tpu_core.AbstractMemoryRef(
+      jax_core.ShapedArray((), tpu_core.BarrierSemaphoreTy()),
+      tpu_core.TPUMemorySpace.SEMAPHORE,
+  )
 
 def get_barrier_semaphore():
   return get_barrier_semaphore_p.bind()

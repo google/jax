@@ -22,6 +22,7 @@ import functools
 from typing import Any
 
 from jax._src import core as jax_core
+from jax._src import dtypes
 from jax._src import state
 from jax._src import tree_util
 from jax._src import util
@@ -50,6 +51,7 @@ class TPUMemorySpace(enum.Enum):
   VMEM = "vmem"
   SMEM = "smem"
   CMEM = "cmem"
+  SEMAPHORE = "semaphore_mem"
 
   def __str__(self) -> str:
     return self.value
@@ -58,14 +60,53 @@ class TPUMemorySpace(enum.Enum):
     # A convenience function for constructing MemoryRef types.
     return MemoryRef(shape, dtype, self)
 
+class semaphore_dtype(dtypes.extended): pass
+class semaphore(semaphore_dtype): pass
+class dma_semaphore(semaphore_dtype): pass
+class barrier_semaphore(semaphore_dtype): pass
+
+class AbstractSemaphoreTy(dtypes.ExtendedDType):
+  name: str
+
+  def __repr__(self) -> str:
+    return self.name
+
+  def __eq__(self, other):
+    return self.__class__ == other.__class__
+
+  def __hash__(self) -> int:
+    return hash((self.__class__))
+
+# TODO(sharadmv): implement dtype rules for AbstractSemaphoreTy
+
+class SemaphoreTy(AbstractSemaphoreTy):
+  type = semaphore
+  name = "sem"
+
+class DmaSemaphoreTy(AbstractSemaphoreTy):
+  type = dma_semaphore
+  name = "dma_sem"
+
+class BarrierSemaphoreTy(AbstractSemaphoreTy):
+  type = barrier_semaphore
+  name = "barrier_sem"
 
 class SemaphoreType(enum.Enum):
   REGULAR = "regular"
   DMA = "dma"
   BARRIER = "barrier"
 
-  def get_aval(self) -> AbstractSemaphore:
-    return AbstractSemaphore(self)
+  def __call__(self, shape: tuple[int, ...]):
+    if self == SemaphoreType.DMA:
+      dtype = DmaSemaphoreTy()
+    elif self == SemaphoreType.BARRIER:
+      dtype = BarrierSemaphoreTy()
+    else:
+      dtype = SemaphoreTy()
+    return MemoryRef(shape, dtype, TPUMemorySpace.SEMAPHORE)
+
+  def get_aval(self) -> "AbstractMemoryRef":
+    return self(()).get_aval()
 
 class AbstractMemoryRef(state.AbstractRef):
   __slots__ = ["inner_aval", "memory_space"]

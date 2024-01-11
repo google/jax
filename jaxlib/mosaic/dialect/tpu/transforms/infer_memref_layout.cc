@@ -151,11 +151,19 @@ LogicalResult checkTiles(MLIRContext *mlir_ctx,
 FailureOr<MemRefType> inferMemref(MemRefType memref,
                                   const int hardware_generation) {
   if (isa<SemaphoreType, DMASemaphoreType>(memref.getElementType())) {
-    const Attribute kSemaphoreMem = tpu::MemorySpaceAttr::get(
+    const Attribute semaphore_mem = tpu::MemorySpaceAttr::get(
         memref.getContext(), MemorySpace::kSemaphoreMem);
-    auto layout = TiledLayoutAttr::get(memref.getContext(), {}, {});
+    SmallVector<int64_t> tile_strides;
+    tile_strides.reserve(memref.getRank());
+    int64_t stride = 1;
+    for (int i = memref.getRank() - 1; i >= 0; --i) {
+      tile_strides.push_back(stride);
+      stride *= memref.getDimSize(i);
+    }
+    std::reverse(tile_strides.begin(), tile_strides.end());
+    auto layout = TiledLayoutAttr::get(memref.getContext(), {}, tile_strides);
     return MemRefType::get(memref.getShape(), memref.getElementType(), layout,
-                           kSemaphoreMem);
+                           semaphore_mem);
   }
   const Attribute vmem =
       tpu::MemorySpaceAttr::get(memref.getContext(), MemorySpace::vmem);
@@ -185,6 +193,22 @@ FailureOr<MemRefType> inferMemref(MemRefType memref,
 
 LogicalResult inferOp(Operation &op, const int hardware_generation) {
   if (auto alloca_op = dyn_cast<memref::AllocaOp>(op)) {
+    TypedValue<MemRefType> arg = alloca_op.getResult();
+    const MemRefType memref_ty = alloca_op.getResult().getType();
+    FAILUREOR_ASSIGN_OR_RETURN(const MemRefType new_memref_ty,
+                               inferMemref(memref_ty, hardware_generation));
+    alloca_op.getResult().setType(new_memref_ty);
+    if (memref_ty != new_memref_ty) {
+      OpBuilder builder(alloca_op->getContext());
+      builder.setInsertionPointAfter(alloca_op);
+      auto erase_op = builder.create<tpu::EraseLayoutOp>(
+          arg.getLoc(),
+          MemRefType::get(new_memref_ty.getShape(), memref_ty.getElementType(),
+                          /*layout=*/nullptr, new_memref_ty.getMemorySpace()),
+          arg);
+      arg.replaceAllUsesExcept(erase_op.getResult(), erase_op);
+    }
+  } else if (auto alloca_op = dyn_cast<tpu::AllocaSemaphoreOp>(op)) {
     TypedValue<MemRefType> arg = alloca_op.getResult();
     const MemRefType memref_ty = alloca_op.getResult().getType();
     FAILUREOR_ASSIGN_OR_RETURN(const MemRefType new_memref_ty,

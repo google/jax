@@ -419,6 +419,7 @@ def TPU_GetBarrierSemaphoreOp : TPU_Op<"sem_barrier"> {
   let arguments = (ins);
   let results = (outs MemRefOf<[TPU_SemaphoreType]>:$semaphore);
   let assemblyFormat = [{ attr-dict `:` type($semaphore) }];
+  let hasVerifier = 1;
 }
 
 def TPU_SemaphoreSignalOp : TPU_Op<"sem_signal"> {
