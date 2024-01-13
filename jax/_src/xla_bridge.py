@@ -105,6 +105,11 @@ _CPU_ENABLE_GLOO_COLLECTIVES = config.DEFINE_bool(
     help="If True, enable cross-process collectives on CPU using Gloo.",
 )
 
+_CPU_ENABLE_MPI_COLLECTIVES = config.DEFINE_bool(
+    name="jax_cpu_enable_mpi_collectives",
+    default=False,
+    help="If True, enable cross-process collectives on CPU using MPI.",
+)
 
 # Warn the user if they call fork(), because it's not going to go well for them.
 def _at_fork():
@@ -225,7 +230,27 @@ def register_backend_factory(name: str, factory: BackendFactory, *,
 
 
 def make_cpu_client() -> xla_client.Client:
-  if xla_extension_version >= 223:
+  if xla_extension_version >= 223:  # TODO set correct version after mpi is merged
+    collectives: xla_client._xla.CpuCollectives | None = None
+    if _CPU_ENABLE_GLOO_COLLECTIVES.value and _CPU_ENABLE_MPI_COLLECTIVES.value:
+      raise ValueError(
+          "The flags jax_cpu_enable_gloo_collectives and "
+          "jax_cpu_enable_mpi_collectives are mutually exclusive. Please set "
+          "at least one to False."
+      )
+    if _CPU_ENABLE_GLOO_COLLECTIVES.value:
+      collectives = xla_client._xla.make_gloo_tcp_collectives(  # type: ignore
+        distributed_client=distributed.global_state.client,
+      )
+    if _CPU_ENABLE_MPI_COLLECTIVES.value:
+      collectives = xla_client._xla.make_mpi_collectives()  # type: ignore
+    return xla_client.make_cpu_client(  # type: ignore
+      distributed_client=distributed.global_state.client,
+      node_id=distributed.global_state.process_id,
+      num_nodes=distributed.global_state.num_processes,
+      collectives=collectives,
+    )
+  elif xla_extension_version >= 223:
     collectives: xla_client._xla.CpuCollectives | None = None
     if _CPU_ENABLE_GLOO_COLLECTIVES.value:
       collectives = xla_client._xla.make_gloo_tcp_collectives(  # type: ignore
