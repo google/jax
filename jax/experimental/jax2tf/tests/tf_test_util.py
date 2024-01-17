@@ -401,9 +401,9 @@ class JaxToTfTestCase(jtu.JaxTestCase):
     # Converts a tf.function to HLO text which we can inspect for occurrence of
     # substrings. This works whether we use native serialization or not.
     tf_function = tf.function(tf_fun, autograph=False, jit_compile=True)
-    device_name = f"/device:{jtu.device_under_test().upper()}:0"
-    return tf_function.experimental_get_compiler_ir(*args)(stage="hlo",
-                                                           device_name=device_name)
+    return tf_function.experimental_get_compiler_ir(*args)(
+        stage="hlo", platform_name=jtu.device_under_test().upper()
+    )
 
   def FindLargeTfConstants(self, tf_fun: Callable, *args,
                            at_least=256):

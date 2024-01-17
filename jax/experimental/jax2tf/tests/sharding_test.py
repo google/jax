@@ -142,20 +142,20 @@ class ShardingTest(tf_test_util.JaxToTfTestCase):
     logging.info("[%s] Got TF graph %s",
                  self._testMethodName,
                  f_tf_fun.get_concrete_function(*args_tf).graph.as_graph_def())
-    device_name = f"/device:{jtu.device_under_test().upper()}:0"
     tf_hlo_generator = f_tf_fun.experimental_get_compiler_ir(*args_tf)
-    tf_hlo = tf_hlo_generator(stage="hlo", device_name=device_name)
+    tf_hlo = tf_hlo_generator(
+        stage="hlo", platform_name=jtu.device_under_test().upper()
+    )
     logging.info("[%s] got TF HLO %s", self._testMethodName, tf_hlo)
     # TODO(necula): TensorFlow doesn't support getting the optimized_hlo on TFRT
     # TPU devices. But it doesn't seem like we're using it anyway.
     #
     # tf_optimized_hlo = tf_hlo_generator(stage="optimized_hlo",
-    #                                     device_name=device_name)
+    #                                     platform_name=platform_name)
     # logging.info("[%s] got TF optimized HLO for %s: %s", self._testMethodName,
-    #             device_name, tf_optimized_hlo)
+    #             platform_name, tf_optimized_hlo)
     # Before we check, we drop the metadata= at the end of tf_hlo
     return re.sub(r'metadata=.*', '', tf_hlo)
-
 
   def GEQ(self, value):
     # Construct an expected >= value. See `check_sharding`.
@@ -638,7 +638,6 @@ class ShardingTest(tf_test_util.JaxToTfTestCase):
         tape.watch(a)
         res_tf = jax2tf.convert(f_jax, native_serialization=True)(a)
         return tape.gradient(res_tf, a, output_gradients=res_ct)
-
 
     with Mesh(devices, ('x', 'y')):
       self.check_sharding(f_grad_tf, [a, np.concatenate([a, a], axis=2)],
