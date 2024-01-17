@@ -2150,12 +2150,10 @@ class APITest(jtu.JaxTestCase):
   def test_vjp_mismatched_arguments(self):
     _, pullback = api.vjp(lambda x, y: x * y, np.float32(3), np.float32(4))
     self.assertRaisesRegex(
-      TypeError,
-      "Tree structure of cotangent input.*does not match",
+      ValueError, "unexpected tree structure",
       lambda: pullback((np.float32(7), np.float32(100))))
     self.assertRaisesRegex(
-      TypeError,
-      "Type of cotangent input to vjp pullback.*is not the expected tangent type",
+      ValueError, "unexpected JAX type",
       lambda: pullback(np.float16(42)))
 
   def test_vjp_bad_cotangent_shape(self):
@@ -2164,9 +2162,7 @@ class APITest(jtu.JaxTestCase):
     def f_jax(x, y):
       return jnp.matmul(x, y)
     res, pullback = jax.vjp(f_jax, x, y)
-    with self.assertRaisesRegex(
-        ValueError,
-        "Shape of cotangent input to vjp pullback function .* must be the same as the shape of corresponding primal input .*"):
+    with self.assertRaisesRegex(ValueError, "unexpected JAX type"):
       pullback(np.ones((2, 4), dtype=np.float32))
 
   def test_jvp_jit_cached(self):
@@ -2612,14 +2608,14 @@ class APITest(jtu.JaxTestCase):
     self.assertEqual(tangent_i, np.zeros(shape=(), dtype=float0))
 
   def test_vjp_of_int_shapes(self):
-    out, fn_vjp = api.vjp(lambda x: lax.reshape(x, (2, 2)), np.ones((4, 1),
-                                                                    dtype=int))
-    tangent, = fn_vjp(out)
+    out, fn_vjp = api.vjp(
+        lambda x: lax.reshape(x, (2, 2)), np.ones((4, 1), dtype=int))
+    tangent, = fn_vjp(np.zeros((2, 2), dtypes.float0))
     self.assertArraysEqual(tangent, np.zeros(shape=(4, 1), dtype=float0))
 
   def test_jit_vjp_of_int(self):
     primal, fn_vjp = api.vjp(lambda x, y: x+y, 2, 1)
-    tangent_x, tangent_i = jax.jit(fn_vjp)(1)
+    tangent_x, tangent_i = jax.jit(fn_vjp)(np.zeros((), dtypes.float0))
     self.assertEqual(primal, 3)
     self.assertEqual(tangent_x, np.zeros(shape=(), dtype=float0))
     self.assertEqual(tangent_i, np.zeros(shape=(), dtype=float0))

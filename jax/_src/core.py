@@ -1708,6 +1708,7 @@ class ShapedArray(UnshapedArray):
 
   def str_short(self, short_dtypes=False):
     dt_str =  _short_dtype_name(self.dtype) if short_dtypes else self.dtype.name
+    dt_str = dt_str.replace('void', 'float0')
     shapestr = ','.join(map(str, self.shape))
     if self.named_shape:
       named_shapestr = ','.join(f'{k}:{v}' for k, v in self.named_shape.items())
