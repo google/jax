@@ -106,6 +106,20 @@ def _transpose(a: Array, *args: Any) -> Array:
   return lax_numpy.transpose(a, axis)
 
 
+def _hermitian(a: Array, *args: Any) -> Array:
+  """Returns a view of the array with axes transposed and values conjugated.
+
+  Refer to :func:`jax.numpy.hermitian` for full documentation.
+  """
+  if not args:
+    axis = None
+  elif len(args) == 1:
+    axis = args[0] if args[0] is None else _ensure_index_tuple(args[0])
+  else:
+    axis = _ensure_index_tuple(args)
+  return lax_numpy.hermitian(a, axis)
+
+
 def _compute_newshape(a: ArrayLike, newshape: DimSize | Shape) -> Shape:
   """Fixes a -1 value in newshape, if present."""
   orig_newshape = newshape  # for error messages
@@ -673,6 +687,7 @@ _array_methods = {
   "diagonal": lax_numpy.diagonal,
   "dot": lax_numpy.dot,
   "flatten": lax_numpy.ravel,
+  "hermitian": _hermitian,
   "item": _item,
   "max": reductions.max,
   "mean": reductions.mean,
@@ -710,6 +725,8 @@ _array_properties = {
   "flat": _notimplemented_flat,
   "T": lax_numpy.transpose,
   "mT": lax_numpy.matrix_transpose,
+  "H": lax_numpy.hermitian,
+  "mH": lax_numpy.matrix_hermitian,
   "real": ufuncs.real,
   "imag": ufuncs.imag,
   "nbytes": _nbytes,

@@ -572,6 +572,51 @@ def matrix_transpose(x: ArrayLike, /) -> Array:
   return lax.transpose(x, axes)
 
 
+def hermitian(a: ArrayLike, axes: Sequence[int] | None = None) -> Array:
+  """Returns the hermitian conjugate transpose of an array.
+
+  Parameters
+  ----------
+  a : array_like
+      Input array.
+  axes : tuple or list of ints, optional
+      If specified, it must be a tuple or list which contains a permutation of [0,1,…,
+      N-1] where N is the number of axes of a. The i’th axis of the returned array will
+      correspond to the axis numbered `axes[i]` of the input. If not specified,
+      defaults to `range(a.ndim)[::-1]`, which reverses the order of the axes.
+
+  Returns
+  -------
+  out : array_like
+      The hermitian conjugate transpose of `a`.
+  """
+  util.check_arraylike("hermitian", a)
+  axes_ = list(range(ndim(a))[::-1]) if axes is None else axes
+  axes_ = [_canonicalize_axis(i, ndim(a)) for i in axes_]
+  return lax.conj(lax.transpose(a, axes_))
+
+
+def matrix_hermitian(x: ArrayLike, /) -> Array:
+  """Hermitian conjugate the last two dimensions of x.
+
+  Parameters
+  ----------
+  x : array_like
+      Input array. Must have ``x.ndim >= 2``.
+
+  Returns
+  -------
+  xH : Array
+      Hermitian conjugated array.
+  """
+  util.check_arraylike("matrix_hermitian", x)
+  ndim = np.ndim(x)
+  if ndim < 2:
+    raise ValueError(f"x must be at least two-dimensional for matrix_transpose; got {ndim=}")
+  axes = (*range(ndim - 2), ndim - 1, ndim - 2)
+  return lax.conj(lax.transpose(x, axes))
+
+
 @util._wraps(np.rot90, lax_description=_ARRAY_VIEW_DOC)
 @partial(jit, static_argnames=('k', 'axes'))
 def rot90(m: ArrayLike, k: int = 1, axes: tuple[int, int] = (0, 1)) -> Array:
