@@ -1,6 +1,7 @@
 #include "jaxlib/gpu/triton_kernels.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cmath>
 #include <memory>
@@ -8,17 +9,20 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include "absl/base/optimization.h"
 #include "absl/cleanup/cleanup.h"
+#include "absl/container/fixed_array.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "jaxlib/gpu/gpu_kernel_helpers.h"
 #include "jaxlib/gpu/triton.pb.h"
@@ -132,8 +136,10 @@ absl::StatusOr<KernelCall*> GetKernelCall(absl::string_view opaque,
       *new absl::flat_hash_map<std::string, std::unique_ptr<KernelCall>>
           ABSL_GUARDED_BY(mutex);
 
+  size_t hash = kernel_calls.hash_function()(opaque);
+  // TODO(cjfj): Use `ReaderMutexLock`?
   absl::MutexLock lock(&mutex);
-  auto it = kernel_calls.find(opaque);
+  auto it = kernel_calls.find(opaque, hash);
   if (ABSL_PREDICT_TRUE(it != kernel_calls.end())) return it->second.get();
 
   // The opaque data is a zlib compressed protobuf.
@@ -222,10 +228,10 @@ class ModuleImage {
     }
 
     if (shared_optin > kMaxStaticSharedMemBytes) {
-      #ifdef JAX_GPU_CUDA  
-        GPU_RETURN_IF_ERROR(
+#ifdef JAX_GPU_CUDA
+      GPU_RETURN_IF_ERROR(
           gpuFuncSetCacheConfig(function, CU_FUNC_CACHE_PREFER_SHARED));
-      #endif
+#endif
       int shared_total;
       GPU_RETURN_IF_ERROR(gpuDeviceGetAttribute(
           &shared_total,
@@ -408,8 +414,7 @@ KernelCall::KernelCall(Kernel kernel, uint32_t grid_0, uint32_t grid_1,
       parameters_(std::move(parameters)) {}
 
 absl::Status KernelCall::Launch(gpuStream_t stream, void** buffers) {
-  std::vector<void*> params;
-  params.reserve(parameters_.size());
+  absl::FixedArray<void*> params(parameters_.size());
   for (size_t i = 0; i < parameters_.size(); ++i) {
     const Parameter& param = parameters_[i];
     if (std::holds_alternative<Parameter::Array>(param.value)) {
@@ -428,11 +433,11 @@ absl::Status KernelCall::Launch(gpuStream_t stream, void** buffers) {
         GPU_RETURN_IF_ERROR(
             gpuMemsetD8Async(cu_ptr, 0, array.bytes_to_zero, stream));
       }
-      params.push_back(&ptr);
+      params[i] = &ptr;
     } else {
-      params.push_back(const_cast<void*>(std::visit(
+      params[i] = const_cast<void*>(std::visit(
           [](auto&& arg) { return reinterpret_cast<const void*>(&arg); },
-          param.value)));
+          param.value));
     }
   }
 
@@ -516,12 +521,6 @@ jax_triton::TritonAutotunedKernelCall AutotunedKernelCall::ToProto() const {
 
 /*static*/ absl::StatusOr<KernelCall> AutotunedKernelCall::Autotune(
     AutotunedKernelCall kernel_call, gpuStream_t stream, void** buffers) {
-  // Ensure a valid context for driver calls that don't take the stream.
-  //gpuContext_t context;
-  //GPU_RETURN_IF_ERROR(gpuStreamGetCtx(stream, &context));
-  //GPU_RETURN_IF_ERROR(gpuCtxPushCurrent(context));
-  //absl::Cleanup ctx_restorer = [] { gpuCtxPopCurrent(nullptr); };
-
   // If an input aliases with an output, it will get overwritten during the
   // kernel execution. If the kernel is called repeatedly, as we do during
   // auto-tuning, the final result will be junk, so we take a copy of the
@@ -607,7 +606,7 @@ void TritonKernelCall(gpuStream_t stream, void** buffers, const char* opaque,
         GetKernelCall(absl::string_view(opaque, opaque_len), stream, buffers));
     return kernel_call->Launch(stream, buffers);
   }();
-  if (!result.ok()) {
+  if (ABSL_PREDICT_FALSE(!result.ok())) {
     absl::string_view msg = result.message();
     XlaCustomCallStatusSetFailure(status, msg.data(), msg.length());
   }

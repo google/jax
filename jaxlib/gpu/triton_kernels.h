@@ -1,8 +1,8 @@
 #ifndef JAXLIB_GPU_TRITON_H_
 #define JAXLIB_GPU_TRITON_H_
 
+#include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <tuple>
 #include <variant>

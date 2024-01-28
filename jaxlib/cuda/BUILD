@@ -14,13 +14,13 @@
 
 # NVIDIA CUDA kernels
 
-load("@rules_python//python:defs.bzl", "py_library")
 load(
     "//jaxlib:jax.bzl",
     "cuda_library",
     "if_cuda_is_configured",
     "pybind_extension",
 )
+load("@rules_python//python:defs.bzl", "py_library")
 
 licenses(["notice"])
 
@@ -404,12 +404,14 @@ cc_library(
         "@tsl//tsl/platform:env",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/container:fixed_array",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
     ],
 )
