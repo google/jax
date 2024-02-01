@@ -17,7 +17,7 @@ from jax._src.lax.control_flow.loops import (associative_scan, cummax, cummax_p,
                                              cumlogsumexp_p, cumprod,
                                              cumprod_p, cumsum, cumsum_p,
                                              cumred_reduce_window_impl,
-                                             fori_loop, map,
+                                             fori_loop, map, batched_vmap,
                                              scan, scan_bind, scan_p,
                                              _scan_impl, while_loop, while_p)
 from jax._src.lax.control_flow.conditionals import (cond, cond_p, switch,

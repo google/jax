@@ -323,6 +323,7 @@ from jax._src.lax.control_flow import (
   fori_loop as fori_loop,
   linear_solve_p as linear_solve_p,
   map as map,
+  batched_vmap as batched_vmap,
   scan as scan,
   scan_bind as scan_bind,
   scan_p as scan_p,

@@ -176,6 +176,7 @@ Control flow operators
     cond
     fori_loop
     map
+    batched_vmap
     scan
     select
     select_n
