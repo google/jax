@@ -941,8 +941,30 @@ def reshape(x: tensor, dst_shape: Sequence[int]) -> tensor:
       block_type(x.dtype, dst_shape),
   )
 
+def dot(
+    lhs: object,
+    rhs: object,
+    acc=None,
+    allow_tf32=True,
+    out_dtype=float32,
+    max_num_imprecise_acc=None) -> tensor:
+  lhs = _to_tensor(lhs)
+  rhs = _to_tensor(rhs)
+  M = lhs.type.shape[0]
+  N = rhs.type.shape[1]
 
-dot = wrap_with_builder(tl.core.dot)
+  if acc is None:
+    if out_dtype.is_fp16():
+      acc = builder.current.create_splat(builder.current.get_fp16(0.0), [M, N])
+    elif out_dtype.is_fp32():
+      acc = builder.current.create_splat(builder.current.get_fp32(0.0), [M, N])
+    else:
+      raise ValueError(f"unsupported out_dtype: {out_dtype}")
+  else:
+    acc = _to_tensor(acc).handle
+  if max_num_imprecise_acc is None:
+    max_num_imprecise_acc = 4
+  return tensor(builder.current.create_dot(lhs.handle, rhs.handle, acc, allow_tf32, max_num_imprecise_acc), block_type(out_dtype, [M, N]))
 
 
 def atomic_cas(
