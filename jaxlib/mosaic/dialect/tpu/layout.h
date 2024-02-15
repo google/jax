@@ -237,7 +237,7 @@ class VectorLayout {
   const LayoutOffsets &offsets() const { return offsets_; }
   const std::array<int64_t, 2> &tiling() const { return tiling_; }
   ImplicitDim implicit_dim() const { return implicit_dim_; }
-  int packing() const { return 32 / bitwidth_; }
+  int packing() const { return bitwidth_ == 1 ? 1 : 32 / bitwidth_; }
   // The number of minormost dimensions tiled by this layout.
   int layout_rank() const { return 1 + (implicit_dim_ == ImplicitDim::kNone); }
 
@@ -357,7 +357,8 @@ class VectorLayout {
   //     shape, but that implication does not hold the other way around for some
   //     shapes.
   bool generalizes(const VectorLayout &other, ArrayRef<int64_t> shape,
-                   std::array<int64_t, 2> target_shape) const;
+                   std::array<int64_t, 2> target_shape,
+                   bool check_bitwidth = true) const;
 
   // Returns True if the two layouts are equivalent.
   //
@@ -379,9 +380,13 @@ class VectorLayout {
   template <typename Stream>
   void print(Stream &os) const;
 
+  // Return a compatible layout which can be generalized from both layouts. If
+  // check_bitwidth is set to false, we will skip checking if both layouts'
+  // bitwidth are equal but the first layout's bitwidth will be used in output.
   static std::optional<VectorLayout> join(const VectorLayout &l,
                                           const VectorLayout &r,
-                                          ArrayRef<int64_t> shape);
+                                          ArrayRef<int64_t> shape,
+                                          bool check_bitwidth = true);
 
   static std::optional<VectorLayout> parse(llvm::StringRef *data);
 

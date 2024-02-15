@@ -1432,14 +1432,17 @@ class VectorLayoutInferer {
     std::optional<VectorLayout> out_layout_candidate;
     std::optional<VectorLayout> out_layout;
     SmallVector<std::optional<Layout>, 4> in_layouts;
-    int64_t bit_width = -1;
+
+    int64_t out_bitwidth;
+    if (auto out_vty = dyn_cast<VectorType>(op->getResult(0).getType())) {
+      out_bitwidth = out_vty.getElementTypeBitWidth();
+    } else {
+      out_bitwidth = op->getResult(0).getType().getIntOrFloatBitWidth();
+    }
     for (int64_t i = 0; i < op->getNumOperands(); ++i) {
       if (auto vty = dyn_cast<VectorType>(op->getOperand(i).getType())) {
-        if (bit_width == -1) {
-          bit_width = vty.getElementTypeBitWidth();
-        }
         TPU_CHECK_OP(
-            !check_bitwidth || bit_width == vty.getElementTypeBitWidth(),
+            !check_bitwidth || out_bitwidth == vty.getElementTypeBitWidth(),
             "Generic elementwise rule only supports operands of same width");
         auto some_layout = getLayout(op->getOperand(i));
         TPU_CHECK_OP(some_layout.has_value(), "missing vector layout");
@@ -1448,16 +1451,19 @@ class VectorLayoutInferer {
         // layout. Replicated values are easy to relayout.
         if (is_fully_replicated(some_layout)) {
           in_layouts.push_back(std::nullopt);
-          out_layout_candidate = layout;
+          out_layout_candidate =
+              VectorLayout(out_bitwidth, layout.offsets(), layout.tiling(),
+                           layout.implicit_dim());
           continue;
         }
         if (!out_layout) {
           // TODO(apaszke): There are probably smarter ways to choose layout.
-          out_layout = layout;
+          out_layout = VectorLayout(out_bitwidth, layout.offsets(),
+                                    layout.tiling(), layout.implicit_dim());
           in_layouts.push_back(some_layout);
         } else {
-          if (auto new_out =
-                  VectorLayout::join(layout, *out_layout, vty.getShape())) {
+          if (auto new_out = VectorLayout::join(
+                  *out_layout, layout, vty.getShape(), check_bitwidth)) {
             out_layout = *new_out;
             in_layouts.push_back(some_layout);
           } else {
@@ -1466,7 +1472,7 @@ class VectorLayoutInferer {
             // since there is no guarantee that the conflicting inputs could
             // even become replicated.
             out_layout =
-                VectorLayout(out_layout->bitwidth(),
+                VectorLayout(out_bitwidth,
                              {out_layout->offsets()[0].value_or(0),
                               out_layout->offsets()[1].value_or(0)},
                              out_layout->tiling(), out_layout->implicit_dim());
@@ -1481,9 +1487,6 @@ class VectorLayoutInferer {
     }
     Layout final_out_layout = std::nullopt;
     if (auto out_vty = dyn_cast<VectorType>(op->getResult(0).getType())) {
-      TPU_CHECK_OP(
-          !check_bitwidth || bit_width == out_vty.getElementTypeBitWidth(),
-          "Generic elementwise rule can't change element type width");
       if (out_layout) {
         final_out_layout = *out_layout;
       } else if (out_layout_candidate) {
@@ -1499,8 +1502,12 @@ class VectorLayoutInferer {
     for (int i = 0; i < in_layouts.size(); ++i) {
       if (in_layouts[i]) {
         final_in_layouts.push_back(*in_layouts[i]);
-      } else {
-        final_in_layouts.push_back(final_out_layout);
+      } else if (auto vty = dyn_cast<VectorType>(op->getOperand(i).getType())) {
+        CHECK(final_out_layout.has_value());
+        final_in_layouts.push_back(VectorLayout(
+            vty.getElementTypeBitWidth(), final_out_layout.value().offsets(),
+            final_out_layout.value().tiling(),
+            final_out_layout.value().implicit_dim()));
       }
     }
     setLayout(op, final_in_layouts, final_out_layout);

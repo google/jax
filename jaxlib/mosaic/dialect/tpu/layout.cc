@@ -599,10 +599,11 @@ std::unique_ptr<VRegDataBounds> VectorLayout::tileDataBounds(
       std::array<int64_t, 2>{sb, lb}, std::array<int64_t, 2>{se, le});
 }
 
-bool VectorLayout::generalizes(
-    const VectorLayout& other, ArrayRef<int64_t> shape,
-    const std::array<int64_t, 2> target_shape) const {
-  if (bitwidth_ != other.bitwidth_) {
+bool VectorLayout::generalizes(const VectorLayout& other,
+                               ArrayRef<int64_t> shape,
+                               const std::array<int64_t, 2> target_shape,
+                               bool check_bitwidth) const {
+  if (check_bitwidth && bitwidth_ != other.bitwidth_) {
     return false;
   }
   for (auto [s, o] : llvm::zip(offsets_, other.offsets_)) {
@@ -681,8 +682,10 @@ void VectorLayout::print(Stream& os) const {
 
 std::optional<VectorLayout> VectorLayout::join(const VectorLayout& l,
                                                const VectorLayout& r,
-                                               ArrayRef<int64_t> shape) {
-  if (l.bitwidth_ != r.bitwidth_ || l.tiling_ != r.tiling_) {
+                                               ArrayRef<int64_t> shape,
+                                               bool check_bitwidth) {
+  if (check_bitwidth &&
+      (l.bitwidth_ != r.bitwidth_ || l.tiling_ != r.tiling_)) {
     return std::nullopt;
   }
   if (l.implicit_dim_ != r.implicit_dim_) {

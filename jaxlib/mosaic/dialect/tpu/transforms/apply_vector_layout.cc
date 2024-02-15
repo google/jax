@@ -496,9 +496,12 @@ FailureOr<SmallVector<Layout>> getInLayout(Operation &op) {
   return in_layout;
 }
 
+// If check_bitwidth is set to false, we expect the expected bitwidth for
+// each layout in inputs and outputs have already been checked.
 LogicalResult elementwise_op_rule(RewriteContext &ctx, Operation &op,
                                   const ArrayRef<Layout> layouts_in,
-                                  const ArrayRef<Layout> layouts_out) {
+                                  const ArrayRef<Layout> layouts_out,
+                                  bool check_bitwidth = true) {
   CHECK(OpTrait::hasElementwiseMappableTraits(&op));
   if (op.getNumResults() != 1) {
     return op.emitError("Not implemented: Only ops with one result supported");
@@ -517,7 +520,8 @@ LogicalResult elementwise_op_rule(RewriteContext &ctx, Operation &op,
   const auto out_ty = cast<VectorType>(op.getResult(0).getType());
   const VectorLayout &layout_out = *layouts_out.front();
   if (!llvm::all_of(layouts_in, [&](const Layout &l) {
-        return l->generalizes(layout_out, out_ty.getShape(), ctx.target_shape);
+        return l->generalizes(layout_out, out_ty.getShape(), ctx.target_shape,
+                              check_bitwidth);
       })) {
     return op.emitOpError(
         "Not implemented: Incompatible layouts in elementwise operation");
@@ -662,6 +666,51 @@ LogicalResult ext_op_rule_impl(RewriteContext &ctx, OpTy op,
   return success();
 }
 
+LogicalResult arith_cmp_rule(RewriteContext &ctx, Operation &op,
+                             const ArrayRef<Layout> layouts_in,
+                             const ArrayRef<Layout> layouts_out) {
+  CHECK_EQ(layouts_in.size(), 2);
+  CHECK(layouts_in[0].has_value());
+  CHECK(layouts_in[1].has_value());
+  CHECK(layouts_out[0].has_value());
+  auto lhs_layout = layouts_in[0].value();
+  auto rhs_layout = layouts_in[1].value();
+  auto res_layout = layouts_out[0].value();
+  if (lhs_layout.bitwidth() != 32 || rhs_layout.bitwidth() != 32) {
+    return op.emitOpError("Not implemented: Only 32-bit comparison supported");
+  }
+  if (res_layout.bitwidth() != 1) {
+    return op.emitOpError("Expected 1-bit output layout");
+  }
+  return elementwise_op_rule(ctx, op, layouts_in, layouts_out,
+                             /*check_bitwidth=*/false);
+}
+
+LogicalResult arith_select_rule(RewriteContext &ctx, Operation &op,
+                                const ArrayRef<Layout> layouts_in,
+                                const ArrayRef<Layout> layouts_out) {
+  CHECK_EQ(layouts_in.size(), 3);
+  CHECK(layouts_in[0].has_value());
+  CHECK(layouts_in[1].has_value());
+  CHECK(layouts_in[2].has_value());
+  CHECK_EQ(layouts_out.size(), 1);
+  CHECK(layouts_out[0].has_value());
+  auto cond_layout = layouts_in[0].value();
+  auto true_layout = layouts_in[1].value();
+  auto false_layout = layouts_in[2].value();
+  auto result_layout = layouts_out[0].value();
+
+  if (cond_layout.bitwidth() != 1) {
+    return op.emitOpError("Expected 1-bit condition layout");
+  }
+  if (true_layout.bitwidth() != 32 || false_layout.bitwidth() != 32 ||
+      result_layout.bitwidth() != 32) {
+    return op.emitOpError("Not implemented: Only 32-bit select supported");
+  }
+  return elementwise_op_rule(ctx, op, layouts_in, layouts_out,
+                             /*check_bitwidth=*/false);
+}
+
 LogicalResult arith_extf_rule(RewriteContext &ctx, Operation &op,
                               const ArrayRef<Layout> layouts_in,
                               const ArrayRef<Layout> layouts_out) {
@@ -688,6 +737,22 @@ LogicalResult arith_extsi_rule(RewriteContext &ctx, Operation &op,
   auto extsi_op = cast<arith::ExtSIOp>(op);
   return ext_op_rule_impl(ctx, extsi_op, *layouts_in.front(),
                           *layouts_out.front());
+}
+
+LogicalResult arith_extui_rule(RewriteContext &ctx, Operation &op,
+                               const ArrayRef<Layout> layouts_in,
+                               const ArrayRef<Layout> layouts_out) {
+  CHECK_EQ(layouts_in.size(), 1);
+  CHECK(layouts_in.front().has_value());
+  CHECK_EQ(layouts_out.size(), 1);
+  CHECK(layouts_out.front().has_value());
+  if (layouts_in.front()->bitwidth() != 1 ||
+      layouts_out.front()->bitwidth() != 32) {
+    return op.emitOpError(
+        "Not implemented: Only 1-bit to 32-bit conversion supported");
+  }
+  return elementwise_op_rule(ctx, op, layouts_in, layouts_out,
+                             /*check_bitwidth=*/false);
 }
 
 template <typename OpTy>
@@ -3338,8 +3403,12 @@ LogicalResult vector_transpose_rule(RewriteContext &ctx, Operation &op,
 const llvm::StringMap<rule_type> &rules() {
   static auto rules = new llvm::StringMap<rule_type>{
       {arith::ConstantOp::getOperationName(), arith_constant_rule},
+      {arith::CmpFOp::getOperationName(), arith_cmp_rule},
+      {arith::CmpIOp::getOperationName(), arith_cmp_rule},
       {arith::ExtFOp::getOperationName(), arith_extf_rule},
       {arith::ExtSIOp::getOperationName(), arith_extsi_rule},
+      {arith::ExtUIOp::getOperationName(), arith_extui_rule},
+      {arith::SelectOp::getOperationName(), arith_select_rule},
       {arith::TruncFOp::getOperationName(), arith_truncf_rule},
       {arith::TruncIOp::getOperationName(), arith_trunci_rule},
       {func::ReturnOp::getOperationName(), func_return_rule},
