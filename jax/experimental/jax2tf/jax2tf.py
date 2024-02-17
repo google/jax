@@ -1464,12 +1464,10 @@ class TensorFlowTrace(core.Trace):
 def _unexpected_primitive(p: core.Primitive, *args, **kwargs):
   assert False, f"Encountered unexpected primitive {p}"
 
+
+# Call primitives are inlined
 for unexpected in [core.call_p, maps.xmap_p]:
   tf_impl[unexpected] = partial(_unexpected_primitive, unexpected)
-
-tf_impl[lax_control_flow.loops.eval_jaxpr_p] = \
-    lambda *args, jaxpr: _interpret_jaxpr(
-        jaxpr, *args, fresh_constant_cache=False, extra_name_stack=None)
 
 # Primitives that are not yet implemented must be explicitly declared here.
 tf_not_yet_impl = [

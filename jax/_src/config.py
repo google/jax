@@ -23,7 +23,6 @@ import os
 import sys
 import threading
 from typing import Any, Callable, Generic, NamedTuple, NoReturn, TypeVar, cast
-import warnings
 
 from jax._src import lib
 from jax._src.lib import jax_jit
@@ -70,23 +69,6 @@ UPGRADE_BOOL_HELP = (
 UPGRADE_BOOL_EXTRA_DESC = " (transient)"
 
 
-_CONFIG_DEPRECATIONS = {
-    # Added October 26, 2023:
-    "check_exists",
-    "DEFINE_bool",
-    "DEFINE_integer",
-    "DEFINE_float",
-    "DEFINE_string",
-    "DEFINE_enum",
-    "define_bool_state",
-    "define_enum_state",
-    "define_int_state",
-    "define_float_state",
-    "define_string_state",
-    "define_string_or_object_state",
-}
-
-
 class Config:
   _HAS_DYNAMIC_ATTRIBUTES = True
 
@@ -99,20 +81,6 @@ class Config:
     self.meta = {}
     self.use_absl = False
     self._contextmanager_flags = set()
-
-  def __getattr__(self, name):
-    fn = None
-    if name in _CONFIG_DEPRECATIONS:
-      fn = globals().get(name, None)
-    if fn is None:
-      raise AttributeError(
-          f"'{type(self).__name__!r} object has no attribute {name!r}")
-    message = (
-        f"jax.config.{name} is deprecated. Please use other libraries "
-        "for configuration instead."
-    )
-    warnings.warn(message, DeprecationWarning, stacklevel=2)
-    return fn
 
   def update(self, name, val):
     if name not in self._value_holders:

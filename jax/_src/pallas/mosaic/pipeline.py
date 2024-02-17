@@ -206,6 +206,9 @@ def _block_copy(
     is_wait: bool,
     force_copy: Optional[Union[jax.Array, bool]] = None,
     force_skip: Optional[Union[jax.Array, bool]] = None,
+    use_accum: Optional[Union[jax.Array, bool]] = None,
+    accum_if_skipping: Optional[Union[jax.Array, bool]] = None,
+    zero_accum_if_skipping: Optional[Union[jax.Array, bool]] = None,
 ):
   """General purpose input/output block copys.
 
@@ -231,6 +234,11 @@ def _block_copy(
     is_wait: True if we want to wait on instead of start a copy.
     force_copy: Force copy if this condition is True. force_skip overrides this.
     force_skip: Force skipping the operation if this condition is True.
+    use_accum: Whether to add the accum to the VMEM ref before copying.
+    accum_if_skipping: Whether to accumulate into the current accum buffer if
+      skipping copy.
+    zero_accum_if_skipping: Whether to zero out the existing accum before
+      accumulating into it if skipping copy.
 
   Returns:
     Current and next buffer indices, swapped if a copy was started.
@@ -297,22 +305,51 @@ def _block_copy(
 
   def do_and_advance_buffers():
     if accum_allocation is not None:
-      with tpu_primitives.trace("ep_accum_copy"):
-        accum_dtype = jnp.float32
-        if vmem_ref.dtype == jnp.int32:
-          accum_dtype = jnp.int32
-        accum_vmem_ref = accum_allocation.vmem_ref
-        vmem_ref[used_buffer] = (
-            vmem_ref[used_buffer].astype(accum_dtype)
-            + accum_vmem_ref[accum_buffers.current].astype(accum_dtype)
-        ).astype(vmem_ref.dtype)
+
+      def accum():
+        with tpu_primitives.trace("ep_accum_copy"):
+          accum_dtype = jnp.float32
+          if vmem_ref.dtype == jnp.int32:
+            accum_dtype = jnp.int32
+          accum_vmem_ref = accum_allocation.vmem_ref
+          vmem_ref[used_buffer] = (
+              vmem_ref[used_buffer].astype(accum_dtype)
+              + accum_vmem_ref[accum_buffers.current].astype(accum_dtype)
+          ).astype(vmem_ref.dtype)
+
+      lax.cond(use_accum, accum, lambda: None)
 
     do_fn()
     if advance_buffers:
       return PipelineBuffer(next_buffer, buffer)
     return buffers
 
-  return lax.cond(cond, do_and_advance_buffers, lambda: buffers)
+  def dont_advance_buffers():
+    if accum_allocation is not None:
+
+      def accum():
+        with tpu_primitives.trace("ep_accum_store"):
+
+          def zero_accum():
+            accum_vmem_ref = accum_allocation.vmem_ref
+            accum_vmem_ref[...] = jnp.zeros_like(accum_vmem_ref[...])
+
+          lax.cond(zero_accum_if_skipping, zero_accum, lambda: None)
+
+          accum_dtype = jnp.float32
+          if vmem_ref.dtype == jnp.int32:
+            accum_dtype = jnp.int32
+          accum_vmem_ref = accum_allocation.vmem_ref
+          accum_vmem_ref[accum_buffers.current] = (
+              accum_vmem_ref[accum_buffers.current].astype(accum_dtype)
+              + vmem_ref[used_buffer].astype(accum_dtype)
+          ).astype(accum_vmem_ref.dtype)
+
+      lax.cond(accum_if_skipping, accum, lambda: None)
+
+    return buffers
+
+  return lax.cond(cond, do_and_advance_buffers, dont_advance_buffers)
 
 
 # Start copying an input's next block to its next buffer.
@@ -342,7 +379,9 @@ class MakePipelineRefs(Protocol):
 class MakePipelineAllocations(Protocol):
   """Makes pipeline allocations from flat user friendly function args."""
 
-  def __call__(self, *ref_args: PipelineRefs) -> Any:
+  def __call__(
+      self, *ref_args: PipelineRefs, return_treedef: bool = False
+  ) -> Any:
     ...
 
 
@@ -520,6 +559,7 @@ def emit_pipeline_with_allocations(
 
   def make_pipeline_allocations(
       *ref_args: PipelineRefs,
+      return_treedef: bool = False,
   ) -> tuple[tuple[Any, tree_util.PyTreeDef], Any]:
     pipeline_buffers = tree_util.tree_map(
         lambda _: PipelineBuffer(*((SMEM((1,), jnp.int32),) * 2)),
@@ -561,12 +601,15 @@ def emit_pipeline_with_allocations(
         pipeline_refs.in_out,
     )
 
+    flat_allocations, allocations_treedef = tree_util.tree_flatten((
+        pipeline_buffers,
+        pipeline_allocations,
+        in_out_existing_allocations,
+    ))
+    if return_treedef:
+      flat_allocations = cast(Any, (tuple(flat_allocations), allocations_treedef))
     return (
-        tree_util.tree_flatten((
-            pipeline_buffers,
-            pipeline_allocations,
-            in_out_existing_allocations,
-        )),
+        (flat_allocations, allocations_treedef),
         pipeline_existing_allocations,
     )
 
@@ -596,7 +639,8 @@ def emit_pipeline_with_allocations(
         pipeline_allocations: PipelineArg[PipelineAllocations],
         in_out_existing_allocations: PipelineRefs,
     ):
-      def init_buffer_refs():
+
+      def init_pipeline_allocations():
         def init_buffer_ref(_, buffer_ref):
           buffer_ref.current[0] = 0
           buffer_ref.next[0] = 1
@@ -607,9 +651,12 @@ def emit_pipeline_with_allocations(
             pipeline_buffer_refs,
         )
 
+      do_init_pipeline_allocations = jnp.logical_or(
+          allocations is None, init_allocations
+      )
       lax.cond(
-          jnp.logical_or(allocations is None, init_allocations),
-          init_buffer_refs,
+          do_init_pipeline_allocations,
+          init_pipeline_allocations,
           lambda: None,
       )
 
@@ -953,32 +1000,51 @@ def emit_pipeline_with_allocations(
               run_out_prologue,
               wait_prev_iteration_out_block_copies,
           )
-          next_out_buffers = lax.cond(
-              use_in_out,
-              lambda: tree_util.tree_map(
-                  partial(
-                      _start_block_copy_out,
-                      indices=copy_indices,
-                      force_copy=i == total_iterations - 1,
-                  ),
-                  pipeline_specs.out,
-                  pipeline_refs.out,
-                  pipeline_allocations.out,
-                  pipeline_buffers.out,
-                  pipeline_allocations.in_out,
-                  pipeline_buffers.in_out,
+          if out_epilogue is not None:
+            skip_out_epilogue_wait = out_epilogue(
+                PipelineCallbackArgs(
+                    pipeline_specs=pipeline_specs,
+                    pipeline_refs=pipeline_refs,
+                    pipeline_buffer_refs=pipeline_buffer_refs,
+                    pipeline_allocations=pipeline_allocations,
+                    pipeline_buffers=pipeline_buffers,
+                    make_pipeline_refs=make_pipeline_refs,
+                    start_pipeline_prefetch=cast(Any, lambda *args, **kwargs: None),
+                )
+            )
+          else:
+            skip_out_epilogue_wait = cast(Any, False)
+          skip_out_epilogue_wait = _broadcast_pytree_to(
+              "skip_out_epilogue_wait",
+              skip_out_epilogue_wait,
+              pipeline_specs.out,
+          )
+          force_start_block_copy_out = jax.tree_util.tree_map(
+              lambda skip_out_wait: jnp.logical_and(
+                  jnp.logical_not(skip_out_wait), i == total_iterations - 1
               ),
-              lambda: tree_util.tree_map(
-                  partial(
-                      _start_block_copy_out,
-                      indices=copy_indices,
-                      force_copy=i == total_iterations - 1,
-                  ),
-                  pipeline_specs.out,
-                  pipeline_refs.out,
-                  pipeline_allocations.out,
-                  pipeline_buffers.out,
+              skip_out_epilogue_wait,
+          )
+          next_out_buffers = _tree_map_with_kwargs(
+              partial(
+                  _start_block_copy_out,
+                  indices=copy_indices,
+                  use_accum=use_in_out,
+                  # If an output tile doesn't change from last to first, we need
+                  # to add its accum since the body overwrites outputs each
+                  # pipeline.
+                  accum_if_skipping=i == total_iterations - 1,
+                  # Initialize the accum if this is the first time this is
+                  # happening.
+                  zero_accum_if_skipping=do_init_pipeline_allocations,
               ),
+              pipeline_specs.out,
+              pipeline_refs.out,
+              pipeline_allocations.out,
+              pipeline_buffers.out,
+              pipeline_allocations.in_out,
+              pipeline_buffers.in_out,
+              force_copy=force_start_block_copy_out,
           )
 
         prev_indices = indices
@@ -1062,7 +1128,9 @@ def emit_pipeline_with_allocations(
           *tree_util.tree_unflatten(allocations_treedef, list(allocations)),
       )
 
-  return pipeline, lambda *args: tuple(make_pipeline_allocations(*args)[0][0])
+  return pipeline, lambda *args, **kwargs: tuple(
+      make_pipeline_allocations(*args, **kwargs)[0][0]
+  )
 
 
 def emit_pipeline(

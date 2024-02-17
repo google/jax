@@ -25,6 +25,14 @@ Remember to align the itemized text with the first line of an item within a list
   * Conversion of a non-scalar array to a Python scalar now raises an error, regardless
     of the size of the array. Previously a deprecation warning was raised in the case of
     non-scalar arrays of size 1. This follows a similar deprecation in NumPy.
+  * The previously deprecated configuration APIs have been removed
+    following a standard 3 months deprecation cycle (see {ref}`api-compatibility`).
+    These include
+    * the `jax.config.config` object and
+    * the `define_*_state` and `DEFINE_*` methods of {data}`jax.config`.
+  * Importing the `jax.config` submodule via `import jax.config` is deprecated.
+    To configure JAX use `import jax` and then reference the config object
+    via `jax.config`.
 
 ## jaxlib 0.4.25
 

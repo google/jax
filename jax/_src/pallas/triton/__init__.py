@@ -17,6 +17,9 @@
 from jax._src.pallas.triton import lowering
 from jax._src.lib import gpu_triton as triton_kernel_call_lib
 
+if triton_kernel_call_lib is None:
+  raise ImportError("Jaxlib with Triton not available.")
+
 get_compute_capability = triton_kernel_call_lib.get_compute_capability
 
 del lowering

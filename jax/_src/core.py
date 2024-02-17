@@ -2355,8 +2355,6 @@ class ClosedCallPrimitive(CallPrimitive):
 
 closed_call_p: ClosedCallPrimitive = ClosedCallPrimitive('closed_call')
 closed_call_p.def_impl(call_impl)
-closed_call_p.def_effectful_abstract_eval(
-    lambda *_, call_jaxpr: (call_jaxpr.out_avals, call_jaxpr.effects))
 
 
 outfeed_primitives: set[Primitive] = set()
@@ -2764,7 +2762,7 @@ custom_typechecks: dict[Primitive, Callable] = {}
 
 def _check_closed_call(_, *in_atoms, call_jaxpr):
   in_avals = [x.aval for x in in_atoms]
-  if not all(map(typecompat, call_jaxpr.in_avals, in_avals)):
+  if list(in_avals) != list(call_jaxpr.in_avals):
     raise JaxprTypeError("Closed call in_avals mismatch")
   return call_jaxpr.out_avals, call_jaxpr.effects
 custom_typechecks[closed_call_p] = _check_closed_call

@@ -1766,7 +1766,10 @@ class PallasCallPipelineTest(parameterized.TestCase):
       @pltpu.trace('send_next_dma')
       def _send_next_dma():
         pltpu.make_async_remote_copy(**bwd_kwargs).start()
-        pltpu.make_async_remote_copy(**fwd_kwargs).start()
+
+        @pl.when(jnp.logical_not(is_start))
+        def _send_next_fwd_dma():
+          pltpu.make_async_remote_copy(**fwd_kwargs).start()
 
       def get_rhs_slice(step, is_start_of_step=is_start_of_step):
         bwd_rhs_offset = lax.rem(my_id + step, num_devices)
@@ -1788,6 +1791,7 @@ class PallasCallPipelineTest(parameterized.TestCase):
           @pltpu.trace('fwd_prologue')
           def _fwd_prologue():
             prologue_fwd_copy.wait()
+            pltpu.make_async_remote_copy(**fwd_kwargs).start()
 
           @pl.when(jnp.logical_and(is_not_last_step, is_end_of_step))
           @pltpu.trace('wait_on_prev_dma')
@@ -1817,7 +1821,8 @@ class PallasCallPipelineTest(parameterized.TestCase):
                     epilogue_args.pipeline_buffers,
                 ),
                 # Force copy lhs because we just permuted it.
-                force_copy=([True, False], False),
+                # Force copy rhs because we need a different slice.
+                force_copy=([True, True], False),
             )
 
           return lax.cond(
@@ -1843,7 +1848,7 @@ class PallasCallPipelineTest(parameterized.TestCase):
                     jnp.logical_not(is_start),
                 ),
                 # Force input and accum input copy wait.
-                ([True, False], False),
+                ([True, True], False),
             ),
             epilogue=epilogue,
             # Only skip prologue output copy wait if starting and there is no

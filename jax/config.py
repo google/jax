@@ -12,23 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from jax._src.config import config as _deprecated_config  # noqa: F401
+import warnings
 
-# Deprecations
-
-_deprecations = {
-    # Added October 27, 2023
-    "config": (
-        "Accessing jax.config via the jax.config submodule is deprecated.",
-        _deprecated_config),
-}
-
-import typing
-if typing.TYPE_CHECKING:
-  config = _deprecated_config
-else:
-  from jax._src.deprecations import deprecation_getattr as _deprecation_getattr
-  __getattr__ = _deprecation_getattr(__name__, _deprecations)
-  del _deprecation_getattr
-del typing
-del _deprecated_config
+# Added February 16, 2024.
+warnings.warn(
+    "Importing the jax.config submodule via `import jax.config` is deprecated."
+    " To configure JAX use `import jax` and then reference the config object"
+    " via `jax.config`.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+del warnings

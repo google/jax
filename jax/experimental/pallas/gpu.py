@@ -18,5 +18,7 @@ try:
   get_compute_capability = triton.get_compute_capability
   del triton
 except ImportError as e:
-  raise ImportError("Cannot import Pallas Triton backend. "
-                    "Make sure you've installed jax-triton.") from e
+  raise ImportError(
+      "Cannot import Pallas Triton backend. "
+      "Make sure you've installed jax-triton and Jaxlib GPU."
+  ) from e

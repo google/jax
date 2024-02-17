@@ -78,7 +78,7 @@ from jax._src import source_info_util as _deprecated_source_info_util
 _deprecations = {
     # Added Oct 13, 2023:
     "config": (
-        "jax.interpreters.ad.config is deprecated. Import jax.config directly.",
+        "jax.interpreters.ad.config is deprecated. Use jax.config directly.",
         _deprecated_config,
     ),
     "source_info_util": (

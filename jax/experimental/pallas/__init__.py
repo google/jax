@@ -44,13 +44,3 @@ from jax._src.state.primitives import broadcast_to
 from jax._src.state.indexing import ds
 from jax._src.state.indexing  import dslice
 from jax._src.state.indexing import Slice
-
-try:
-  from jax.experimental.pallas import gpu # pytype: disable=import-error
-except (ImportError, ModuleNotFoundError):
-  pass
-
-try:
-  from jax.experimental.pallas import tpu # pytype: disable=import-error
-except (ImportError, ModuleNotFoundError):
-  pass
