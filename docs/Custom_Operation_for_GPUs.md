@@ -666,8 +666,10 @@ The partition() function will do a few things:
 See the code comments for more explanation:
 
 ```python
-    def infer_sharding_from_operands(eps, mesh, arg_infos, result_infos):
-        del eps, result_infos
+    def infer_sharding_from_operands(eps : float, mesh : jax.sharding.Mesh,
+                                     arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
+                                     result_infos : tuple[jax._src.core.ShapedArray]):
+        del eps, result_infos  # Not needed for this example.
         x_info, weight_info = arg_infos
         assert len(x_info.shape) == 3
         assert len(weight_info.shape) == 2
@@ -680,9 +682,11 @@ See the code comments for more explanation:
         invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
         return (output_sharding, invvar_sharding)
 
-    def partition(eps, mesh, arg_infos, result_infos):
-        del result_infos
-        x_info, weight_info = arg_infosz
+    def partition(eps : float, mesh : jax.sharding.Mesh,
+                  arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
+                  result_infos : tuple[jax._src.api.ShapeDtypeStruct]):
+        del result_infos  # Not needed for this example.
+        x_info, weight_info = arg_infos
         assert len(x_info.shape) == 3
         assert len(weight_info.shape) == 2
         x_spec = get_padded_spec(arg_infos[0])
