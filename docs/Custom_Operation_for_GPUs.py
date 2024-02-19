@@ -417,8 +417,7 @@ class RmsNormBwdClass:
         assert len(invvar_info.shape) == 1
         assert len(x_info.shape) == 3
         assert len(weight_info.shape) == 2
-        # partition() will force all dims to be replicated except the
-        # first dim of x that will be kept as is.
+        # partition() will force all dims to be replicated except the batch dimension.
         x_spec = get_padded_spec(x_info)
         output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
         invvar_sharding = NamedSharding(mesh, PartitionSpec(None, None))
