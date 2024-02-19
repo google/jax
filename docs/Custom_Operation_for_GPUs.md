@@ -675,7 +675,10 @@ See the code comments for more explanation:
         assert len(weight_info.shape) == 2
         # partition() will force all dims of all inputs to be replicated except the
         # first dim of x that will be kept as is.
-        # This is because the implementaion we can only shard on the batch dimensions.
+        # This is because the implementaion can only be sharded on the batch dimensions.
+
+        # get_padded_spec() make sure the lenght of the PartitionSpec
+        # is the same as the tensor rank. See it's docstring for details.
         x_spec = get_padded_spec(arg_infos[0])
         # None mean that we replicate on that dimension.
         output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))

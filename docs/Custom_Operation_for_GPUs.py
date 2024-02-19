@@ -286,24 +286,23 @@ def register_primitive(cls):
                            mlir.lower_fun(outer_p_lower, multiple_results=cls.multiple_results))
     cls.outer_primitive = outer_p
 
-def te_get_padded_spec(spec, ndim):
+def get_padded_spec(arg_info):
+    """Get padded spec for partitioning from arguments' information.
+
+    This is useful when a tensor rank don't match the PartitionSpec
+    lenght. This function pad the partition spec, if needed, to an
+    equivalent one of the same lenght. The padding is always done on
+    the left with None.
+
+    i.e. For a 4d tensor with this PartitionSpec: ("foo", "bar"), this function returns (None, None, "foo", "bar").
+
     """
-    Get padded spec for partitioning from arguments' information
-    """
-    if spec is None:
-        return (None,) * ndim
+    spec = []
+    if arg_info.sharding is not None:
+        spec = arg_info.sharding.spec
+    ndim = arg_info.ndim
     assert len(spec) <= ndim
     return spec + (None,) * (ndim - len(spec))
-
-
-def get_padded_spec(arg_info):
-    """
-    Get padded spec for partitioning from arguments' information
-    """
-    if arg_info.sharding is None:
-        return te_get_padded_spec(None, arg_info.ndim)
-    ndim, spec = arg_info.ndim, arg_info.sharding.spec
-    return te_get_padded_spec(spec, ndim)
 
 
 class RmsNormFwdClass:
