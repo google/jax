@@ -443,26 +443,11 @@ bool VectorLayout::hasNativeTiling(
 
 llvm::SmallVector<int64_t> VectorLayout::implicitShape(
     ArrayRef<int64_t> shape) const {
-  CHECK(!shape.empty());
-  switch (implicit_dim_) {
-    case ImplicitDim::kNone:
-      return llvm::SmallVector<int64_t>(shape);
-    case ImplicitDim::kMinor: {
-      llvm::SmallVector<int64_t> implicit_shape;
-      implicit_shape.reserve(shape.size() + 1);
-      implicit_shape.append(shape.begin(), shape.end());
-      implicit_shape.push_back(1);
-      return implicit_shape;
-    }
-    case ImplicitDim::kSecondMinor: {
-      llvm::SmallVector<int64_t> implicit_shape;
-      implicit_shape.reserve(shape.size() + 1);
-      implicit_shape.append(shape.begin(), std::prev(shape.end()));
-      implicit_shape.push_back(1);
-      implicit_shape.push_back(shape.back());
-      return implicit_shape;
-    }
-  }
+  llvm::SmallVector<int64_t> implicit_shape(shape);
+  const int64_t num_implicit_dims = 2 - layout_rank();
+  implicit_shape.reserve(shape.size() + num_implicit_dims);
+  addImplicit(implicit_shape, 1);
+  return implicit_shape;
 }
 
 llvm::SmallVector<int64_t> VectorLayout::tileArrayImplicitShape(
@@ -485,16 +470,7 @@ llvm::SmallVector<int64_t> VectorLayout::tileArrayShape(
   llvm::SmallVector<int64_t> tiles_shape =
       tileArrayImplicitShape(shape, target_shape);
   // Remove the implicit dimension --- it's always of size 1.
-  switch (implicit_dim_) {
-    case ImplicitDim::kNone:
-      break;
-    case ImplicitDim::kMinor:
-      tiles_shape.pop_back();
-      break;
-    case ImplicitDim::kSecondMinor:
-      tiles_shape.erase(tiles_shape.end() - 2);
-      break;
-  }
+  dropImplicit(tiles_shape);
   return tiles_shape;
 }
 

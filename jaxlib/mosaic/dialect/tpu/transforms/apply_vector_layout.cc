@@ -2420,6 +2420,128 @@ LogicalResult vector_broadcast_rule(RewriteContext &ctx, Operation &op,
   }
 }
 
+LogicalResult vector_extract_slice_impl(RewriteContext &ctx, Operation &op,
+                                        const ArrayRef<int64_t> sizes,
+                                        const ArrayRef<int64_t> offsets,
+                                        const VectorLayout &layout_in,
+                                        const VectorLayout &layout_out) {
+  if (layout_in.tiling() != layout_out.tiling() ||
+      layout_in.packing() != layout_out.packing()) {
+    return op.emitOpError(
+        "Expected layout_in and layout_out tiling and packing to match");
+  }
+
+  OpBuilder builder(&op);
+  // Both extract_strided_slice and extract have their input vector at index 0
+  // and a single result.
+  auto src_vector = cast<TypedValue<VectorType>>(op.getOperand(0));
+  auto result = cast<TypedValue<VectorType>>(op.getResult(0));
+
+  const VectorType dst_ty = result.getType();
+  if (!(layout_in.implicit_dim() == layout_out.implicit_dim()) &&
+      !(layout_in.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
+        layout_out.implicit_dim() == VectorLayout::ImplicitDim::kSecondMinor &&
+        dst_ty.getRank() == 1)) {
+    return op.emitOpError(
+        "Unexpected change in implicit dimension that may not be a no-op");
+  }
+
+  const ArrayRef<int64_t> src_vector_shape = src_vector.getType().getShape();
+  const int64_t src_vector_rank = src_vector.getType().getRank();
+  const int64_t num_indices = offsets.size();
+
+  SmallVector<int64_t> full_sizes;
+  const int64_t num_implicit_dims = 2 - layout_in.layout_rank();
+  full_sizes.reserve(src_vector_rank + num_implicit_dims);
+  if (sizes.data() == nullptr) {
+    full_sizes.append(num_indices, 1);
+  } else {
+    TPU_ASSERT_EQ_OP(sizes.size(), num_indices);
+    full_sizes.append(sizes.begin(), sizes.end());
+  }
+  full_sizes.append(src_vector_shape.begin() + num_indices,
+                    src_vector_shape.end());
+  TPU_ASSERT_EQ_OP(full_sizes.size(), src_vector_rank);
+  layout_in.addImplicit(full_sizes, 1);
+
+  SmallVector<int64_t> full_offsets;
+  full_offsets.reserve(src_vector_rank + num_implicit_dims);
+  full_offsets.append(offsets.begin(), offsets.end());
+  full_offsets.append(src_vector_rank - num_indices, 0);
+  layout_in.addImplicit(full_offsets, 0);
+
+  // We currently only support only no-op cases - that is, those where we
+  // effectively just extract a slice of vregs without doing any operations
+  // (e.g. shifts) on them.
+  // TODO(tlongeri): VectorLayout enforces that the offsets must fall in the
+  // first tile of each vreg. That means a no-op would not result in a valid
+  // layout if the index offset falls within a different tile in the vreg. Do we
+  // want to loosen this restriction or add shifts? This is the only non-no-op
+  // that might make sense to support - otherwise we should expect
+  // infer-vector-layout to assign no-op layouts and have the burden of any
+  // shifts that might be needed later fall on relayout.
+  const std::array<int64_t, 2> vreg_slice =
+      layout_in.vregSlice(ctx.target_shape);
+  for (auto [index_offset, in_offset, vreg_slice, out_offset] : llvm::zip_equal(
+           ArrayRef<int64_t>(full_offsets).take_back(2), layout_in.offsets(),
+           layout_in.tiling(), layout_out.offsets())) {
+    if (in_offset.has_value() != out_offset.has_value()) {
+      return op.emitOpError(
+          "Unexpected mismatch in replication between input and output "
+          "layouts");
+    }
+    if (in_offset.has_value() &&
+        (index_offset + *in_offset) % vreg_slice != *out_offset) {
+      return op.emitOpError("Not implemented: Only no-op tiles");
+    }
+  }
+
+  SmallVector<int64_t> slice_tiled_starts(full_offsets);
+  *(slice_tiled_starts.end() - 2) =
+      (layout_in.offsets()[0].value_or(0) + *(full_offsets.end() - 2)) /
+      vreg_slice[0];
+  *(slice_tiled_starts.end() - 1) =
+      (layout_in.offsets()[1].value_or(0) + *(full_offsets.end() - 1)) /
+      vreg_slice[1];
+  layout_in.dropImplicit(slice_tiled_starts);
+  SmallVector<int64_t> slice_tiled_limits(full_offsets);
+  for (int64_t i = 0; i < full_offsets.size() - layout_in.layout_rank(); ++i) {
+    slice_tiled_limits[i] += full_sizes[i];
+  }
+  *(slice_tiled_limits.end() - 2) =
+      llvm::divideCeil(layout_in.offsets()[0].value_or(0) +
+                           *(full_offsets.end() - 2) + *(full_sizes.end() - 2),
+                       vreg_slice[0]);
+  *(slice_tiled_limits.end() - 1) =
+      llvm::divideCeil(layout_in.offsets()[1].value_or(0) +
+                           *(full_offsets.end() - 1) + *(full_sizes.end() - 1),
+                       vreg_slice[1]);
+  layout_in.dropImplicit(slice_tiled_limits);
+  FAILUREOR_ASSIGN_OR_RETURN(
+      const xla::Array<Value> input_tiles,
+      disassemble(builder, layout_in, src_vector, ctx.target_shape));
+  xla::Array<Value> dst_vregs =
+      input_tiles.Slice(slice_tiled_starts, slice_tiled_limits);
+  if (sizes.data() == nullptr) {  // vector.extract
+    // Squeeze leading singleton dimensions.
+    TPU_ASSERT_EQ_OP(dst_ty.getRank(), src_vector_rank - num_indices);
+    TPU_ASSERT_OP(
+        llvm::all_of(toArrayRef(dst_vregs.dimensions()).take_front(num_indices),
+                     [](const int64_t d) { return d == 1; }));
+    // Copy dims to temporary before passing to xla::Array::Reshape - it cannot
+    // take a pointer to its own data.
+    dst_vregs.Reshape(SmallVector<int64_t>(
+        toArrayRef(dst_vregs.dimensions()).drop_front(num_indices)));
+  } else {
+    TPU_ASSERT_OP(layout_in.implicit_dim() == layout_out.implicit_dim());
+  }
+  op.replaceAllUsesWith(
+      assemble(builder, dst_ty, layout_out, dst_vregs, ctx.target_shape)
+          .getOperation());
+  op.erase();
+  return success();
+}
+
 LogicalResult vector_extract_rule(RewriteContext &ctx, Operation &op,
                                   const ArrayRef<Layout> layouts_in,
                                   const ArrayRef<Layout> layouts_out) {
@@ -2431,32 +2553,38 @@ LogicalResult vector_extract_rule(RewriteContext &ctx, Operation &op,
   TPU_ASSERT_EQ_OP(layouts_out.size(), 1);
   TPU_ASSERT_OP(layouts_in.front().has_value());
   const VectorLayout &layout_in = *layouts_in.front();
-  if (layouts_out.front().has_value()) {
-    return op.emitOpError("Not implemented: Only scalar results supported");
-  }
   if (layout_in.bitwidth() != 32) {
     return op.emitOpError(
         "Not implemented: Only 32-bit vector.extract supported");
   }
-  if (layout_in.offsets() != LayoutOffsets{0, 0}) {
-    return op.emitOpError("Not implemented: Unsupported layout");
-  }
+  const VectorType res_vty =
+      dyn_cast<VectorType>(extract_op.getResult().getType());
   ImplicitLocOpBuilder builder(op.getLoc(), &op);
-  for (int64_t i : extract_op.getStaticPosition()) {
-    if (i != 0) {
-      return op.emitOpError("Not implemented: Only 0 indices supported");
+  if (res_vty != nullptr) {
+    return vector_extract_slice_impl(ctx, *extract_op, std::nullopt,
+                                     extract_op.getStaticPosition(), layout_in,
+                                     *layouts_out.front());
+  } else {
+    for (int64_t i : extract_op.getStaticPosition()) {
+      if (i != 0) {
+        return op.emitOpError(
+            "Not implemented: Only 0 indices supported for scalar results");
+      }
     }
+    if (layout_in.offsets() != LayoutOffsets{0, 0}) {
+      return op.emitOpError("Not implemented: Unsupported layout");
+    }
+    FAILUREOR_ASSIGN_OR_RETURN(
+        const xla::Array<Value> vregs,
+        disassemble(builder, layout_in, extract_op.getVector(),
+                    ctx.target_shape));
+    TPU_ASSERT_GT_OP(vregs.num_elements(), 0);
+    extract_op.replaceAllUsesWith(
+        builder
+            .create<vector::ExtractOp>(op.getLoc(), *vregs.data(),
+                                       ArrayRef<int64_t>{0, 0})
+            .getResult());
   }
-  FAILUREOR_ASSIGN_OR_RETURN(
-      const xla::Array<Value> vregs,
-      disassemble(builder, layout_in, extract_op.getVector(),
-                  ctx.target_shape));
-  TPU_ASSERT_GT_OP(vregs.num_elements(), 0);
-  extract_op.replaceAllUsesWith(
-      builder
-          .create<vector::ExtractOp>(op.getLoc(), *vregs.data(),
-                                     ArrayRef<int64_t>{0, 0})
-          .getResult());
   extract_op.erase();
   return success();
 }
@@ -2518,23 +2646,7 @@ LogicalResult vector_extract_strided_slice_rule(
   TPU_ASSERT_OP(layouts_out.front().has_value());
   const VectorLayout &layout_in = *layouts_in.front();
   const VectorLayout &layout_out = *layouts_out.front();
-  if (!layout_in.hasNaturalTopology(ctx.target_shape)) {
-    return op.emitOpError("Not implemented: Unsupported input layout");
-  }
-  if (layout_out != layout_in) {
-    return op.emitOpError("Not implemented: Unsupported output layout");
-  }
-  OpBuilder builder(&op);
-  vector::ExtractStridedSliceOp extract_strided_slice_op =
-      cast<vector::ExtractStridedSliceOp>(op);
-  const ArrayRef<int64_t> tiled_dims =
-      extract_strided_slice_op.getVector().getType().getShape().take_back(2);
-  if (tiled_dims[0] % layout_in.tiling()[0] != 0 ||
-      tiled_dims[1] % layout_in.tiling()[1] != 0) {
-    return op.emitOpError(
-        "Not implemented: Extract strides slices only works with operands with "
-        "sizes that are multiples of the native tiling");
-  }
+  auto extract_strided_slice_op = cast<vector::ExtractStridedSliceOp>(op);
 
   auto I64ArrayToSmallVector = [&](const ArrayAttr array_attr) {
     return llvm::map_to_vector(array_attr, [](Attribute attr) {
@@ -2542,38 +2654,11 @@ LogicalResult vector_extract_strided_slice_rule(
     });
   };
 
-  // We currently only support zero-offset, tile-aligned slices. This implies
-  // the output layout is merely a slice of the input layout, without needing to
-  // modify physical any of the vregs' layouts.
-  const SmallVector<int64_t> offsets =
-      I64ArrayToSmallVector(extract_strided_slice_op.getOffsets());
-  for (const int64_t offset : ArrayRef<int64_t>(offsets).take_back(2)) {
-    if (offset != 0) {
-      return extract_strided_slice_op.emitOpError(
-          "Not implemented: Only tile-aligned slices supported");
-    }
-  }
-
-  const SmallVector<int64_t> slice_sizes =
-      I64ArrayToSmallVector(extract_strided_slice_op.getSizes());
-  SmallVector<int64_t> slice_tiled_limits =
-      layout_in.tileArrayShape(slice_sizes, ctx.target_shape);
-  TPU_ASSERT_EQ_OP(slice_tiled_limits.size(), offsets.size());
-  for (size_t i = 0; i < slice_tiled_limits.size(); ++i) {
-    slice_tiled_limits[i] += offsets[i];
-  }
-  FAILUREOR_ASSIGN_OR_RETURN(
-      const xla::Array<Value> input_tiles,
-      disassemble(builder, layout_in, extract_strided_slice_op.getVector(),
-                  ctx.target_shape));
-  const xla::Array<Value> dst_tiles =
-      input_tiles.Slice(offsets, slice_tiled_limits);
-  const VectorType dst_ty = extract_strided_slice_op.getResult().getType();
-  extract_strided_slice_op.replaceAllUsesWith(
-      assemble(builder, dst_ty, layout_out, dst_tiles, ctx.target_shape)
-          .getOperation());
-  extract_strided_slice_op.erase();
-  return success();
+  return vector_extract_slice_impl(
+      ctx, *extract_strided_slice_op,
+      I64ArrayToSmallVector(extract_strided_slice_op.getSizes()),
+      I64ArrayToSmallVector(extract_strided_slice_op.getOffsets()), layout_in,
+      layout_out);
 }
 
 LogicalResult vector_multi_reduction_rule(RewriteContext &ctx, Operation &op,

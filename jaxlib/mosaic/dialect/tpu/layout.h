@@ -270,6 +270,31 @@ class VectorLayout {
     return {tiling_[0], tilesPerVreg(target_shape) * tiling_[1]};
   }
 
+  void addImplicit(llvm::SmallVector<int64_t> &vec, int64_t value) const {
+    CHECK_GE(vec.size(), layout_rank());
+    switch (implicit_dim_) {
+      case ImplicitDim::kNone:
+        break;
+      case ImplicitDim::kMinor:
+      case ImplicitDim::kSecondMinor:
+        vec.insert(vec.end() - (static_cast<int64_t>(implicit_dim_) - 1),
+                   value);
+        break;
+    }
+  }
+
+  void dropImplicit(llvm::SmallVector<int64_t> &vec) const {
+    CHECK_GE(vec.size(), 2);
+    switch (implicit_dim_) {
+      case ImplicitDim::kNone:
+        break;
+      case ImplicitDim::kMinor:
+      case ImplicitDim::kSecondMinor:
+        vec.erase(vec.end() - static_cast<int64_t>(implicit_dim_));
+        break;
+    }
+  }
+
   llvm::SmallVector<int64_t> implicitShape(ArrayRef<int64_t> shape) const;
 
  private:
