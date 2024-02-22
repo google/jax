@@ -168,6 +168,7 @@ def tpu_client_timer_callback(timer_secs: float) -> xla_client.Client | None:
 # device.
 
 BackendFactory = Callable[[], Union[xla_client.Client, None]]
+TopologyFactory = Callable[..., Union[xla_client.DeviceTopology, None]]
 
 @dataclasses.dataclass
 class BackendRegistration:
@@ -195,6 +196,7 @@ _backend_errors : dict[str, str] = {}
 _backend_lock = threading.Lock()
 _plugins_registered: bool = False
 _plugin_lock = threading.Lock()
+_topology_factories: dict[str, TopologyFactory] = {}
 
 # The set of known non-experimental plugins.
 #
@@ -209,12 +211,15 @@ _nonexperimental_plugins: set[str] = {'cuda'}
 def register_backend_factory(name: str, factory: BackendFactory, *,
                              priority: int = 0,
                              fail_quietly: bool = True,
-                             experimental: bool = False) -> None:
+                             experimental: bool = False,
+                             make_topology: TopologyFactory | None = None) -> None:
   with _backend_lock:
     if name in _backends:
       raise RuntimeError(f"Backend {name} already initialized")
   _backend_factories[name] = BackendRegistration(
     factory, priority, fail_quietly, experimental)
+  if make_topology is not None:
+    _topology_factories[name] = make_topology
 
 
 def make_cpu_client() -> xla_client.Client:
@@ -535,9 +540,6 @@ def register_plugin(
   logger.debug(
       'registering PJRT plugin %s from %s', plugin_name, library_path
   )
-  experimental = plugin_name not in _nonexperimental_plugins
-  register_backend_factory(plugin_name, factory, priority=priority,
-                           fail_quietly=False, experimental=experimental)
   if library_path is not None:
     c_api = xla_client.load_pjrt_plugin_dynamically(plugin_name, library_path)  # type: ignore
     xla_client.profiler.register_plugin_profiler(c_api)
@@ -545,6 +547,14 @@ def register_plugin(
     if xla_extension_version >= 236:
       assert c_api is not None
       xla_client.load_pjrt_plugin_with_c_api(plugin_name, c_api)
+  if xla_extension_version >= 238:
+    make_topology = partial(xla_client.make_c_api_device_topology, c_api)
+  else:
+    make_topology = None
+  experimental = plugin_name not in _nonexperimental_plugins
+  register_backend_factory(plugin_name, factory, priority=priority,
+                           fail_quietly=False, experimental=experimental,
+                           make_topology=make_topology)
   return c_api
 
 
@@ -575,6 +585,23 @@ def register_pjrt_plugin_factories_from_env() -> None:
         'registering PJRT plugin %s from %s', plugin_name, library_path
     )
     register_plugin(plugin_name, library_path=library_path, options=options)
+
+
+def discover_and_register_pjrt_plugins():
+  global _plugins_registered
+
+  # Needs a separate lock because register_backend_factory (called from
+  # register_plugin) requires to hold _backend_lock.
+  with _plugin_lock:
+    if not _plugins_registered:
+      # Plugins in the namespace package `jax_plugins` or have an entry-point
+      # under the `jax_plugins` group will be imported.
+      discover_pjrt_plugins()
+      # Registers plugins names and paths set in env var
+      # PJRT_NAMES_AND_LIBRARY_PATHS, in the format of 'name1:path1,name2:path2'
+      # ('name1;path1,name2;path2' for windows).
+      register_pjrt_plugin_factories_from_env()
+      _plugins_registered = True
 
 
 _platform_aliases = {
@@ -638,20 +665,8 @@ def backends() -> dict[str, xla_client.Client]:
   global _backends
   global _backend_errors
   global _default_backend
-  global _plugins_registered
 
-  # Needs a separate lock because register_backend_factory (called from
-  # register_plugin) requries to hold _backend_lock.
-  with _plugin_lock:
-    if not _plugins_registered:
-      # Plugins in the namespace package `jax_plugins` or have an entry-point
-      # under the `jax_plugins` group will be imported.
-      discover_pjrt_plugins()
-      # Registers plugins names and paths set in env var
-      # PJRT_NAMES_AND_LIBRARY_PATHS, in the format of 'name1:path1,name2:path2'
-      # ('name1;path1,name2;path2' for windows).
-      register_pjrt_plugin_factories_from_env()
-      _plugins_registered = True
+  discover_and_register_pjrt_plugins()
 
   with _backend_lock:
     if _backends:
@@ -977,6 +992,14 @@ def host_ids(
 
 def using_pjrt_c_api(backend=None):
   return "PJRT C API" in get_backend(backend).platform_version
+
+def make_pjrt_topology(platform: str, topology_name='', **kwargs):
+  discover_and_register_pjrt_plugins()
+  actual_platform = canonicalize_platform(platform)
+  with _backend_lock:
+    if actual_platform in _topology_factories:
+      return _topology_factories[actual_platform](topology_name, **kwargs)
+  raise NotImplementedError("topology not implemented for %s" % platform)
 
 
 # TODO(parkers): Get rid of this in favor of a generic way to get topologies.

@@ -21,6 +21,7 @@ from typing import Optional
 import jax
 from jax.experimental import mesh_utils
 from jax._src.lib import xla_client as xc
+from jax._src.lib import xla_extension
 from jax._src import xla_bridge as xb
 
 Device = xc.Device
@@ -44,9 +45,15 @@ def get_topology_desc(
             topology_name, **kwargs
         )._make_compile_only_devices()
     )
-  raise NotImplementedError(
-      "get_topology_desc(platform=%s) is not implemented" % repr(platform)
-  )
+  try:
+    topology = xb.make_pjrt_topology(platform, topology_name, **kwargs)
+    return TopologyDescription(topology._make_compile_only_devices())
+  except xla_extension.XlaRuntimeError as e:
+    msg, *_ = e.args
+    if type(msg) is str and msg.startswith("UNIMPLEMENTED"):
+      raise NotImplementedError(msg) from e
+    else:
+      raise
 
 
 # -- future mesh_utils --

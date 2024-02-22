@@ -42,7 +42,7 @@ with contextlib.suppress(ImportError):
 
 class JaxAotTest(jtu.JaxTestCase):
 
-  @jtu.run_on_devices('tpu')
+  @jtu.run_on_devices('tpu', 'gpu')
   def test_pickle_pjit_lower(self):
     def fun(x):
       return x * x
