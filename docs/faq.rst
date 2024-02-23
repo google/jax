@@ -814,6 +814,34 @@ computation at runtime. For example:
 For more information on runtime callbacks and examples of their use,
 see `External callbacks in JAX`_.
 
+Why do some CUDA libraries fail to load/initialize?
+---------------------------------------------------
+
+When resolving dynamic libraries, :code:`ld.so` prefers in order:
+:code:`RPATH, LD_LIBRARY_PATH, RUNPATH`. JAX sets :code:`RPATH` to point to the
+JAX-relative location of the pip-installed NVIDIA CUDA packages, preferring them
+if installed. Otherwise JAX searches :code:`/lib, /usr/lib`, library paths included
+in :code:`/etc/ld.so.conf.d/` and any path included in :code:`LD_LIBRARY_PATH`. If
+:code:`ld.so` cannot find your CUDA runtime libraries along its usual search path,
+then you must include the paths to those libraries explicitly in
+:code:`LD_LIBRARY_PATH`. The easiest way to ensure your CUDA files are discoverable
+is to simply install the :code:`nvidia-*-cu{11, 12}` pip packages, which are included in
+the standard :code:`jax[cuda_{11, 12}]` install option.
+
+Occasionally, even when you have ensured that your runtime libraries are discoverable,
+there may still be some issues with loading or initializing them. A common cause of
+such issues is simply having insufficient memory for CUDA library initialization at
+runtime. This sometimes occurs because JAX will pre-allocate too large of a chunk of
+currently available device memory for faster execution, occasionally resulting in
+insufficient memory being left available for runtime CUDA library initialization. 
+
+This is especially likely when running multiple JAX instances, running JAX in
+tandem with TensorFlow which performs its own pre-allocation, or when running
+JAX on a system where the GPU is being heavily utilized by other processes. When
+in doubt, try running the program again with reduced pre-allocation, either by
+reducing :code:`XLA_PYTHON_CLIENT_MEM_FRACTION` from the default of :code:`.75`,
+or setting :code:`XLA_PYTHON_CLIENT_PREALLOCATE=false`. For more details, please
+see the page on `JAX GPU memory allocation`_.
 
 .. _JIT mechanics: https://jax.readthedocs.io/en/latest/notebooks/thinking_in_jax.html#jit-mechanics-tracing-and-static-variables
 .. _External callbacks in JAX: https://jax.readthedocs.io/en/latest/notebooks/external_callbacks.html
@@ -822,3 +850,4 @@ see `External callbacks in JAX`_.
 .. _Heaviside Step Function: https://en.wikipedia.org/wiki/Heaviside_step_function
 .. _Sigmoid Function: https://en.wikipedia.org/wiki/Sigmoid_function
 .. _algebraic_simplifier.cc: https://github.com/tensorflow/tensorflow/blob/v2.10.0/tensorflow/compiler/xla/service/algebraic_simplifier.cc#L3266
+.. _JAX GPU memory allocation: https://jax.readthedocs.io/en/latest/gpu_memory_allocation.html
