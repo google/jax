@@ -24,6 +24,8 @@ from jax._src import dtypes
 from jax._src.util import safe_zip
 from jax._src.lib import xla_client
 
+zip, unsafe_zip = safe_zip, zip
+
 import numpy as np
 
 xops = xla_client.ops
@@ -35,20 +37,19 @@ def _argnum_weak_type(*argnums):
   return lambda *args, **_: all(args[i].weak_type for i in argnums)
 
 def standard_primitive(shape_rule, dtype_rule, name,
-                       weak_type_rule=None, named_shape_rule=None):
+                       weak_type_rule=None):
   weak_type_rule = weak_type_rule or _standard_weak_type_rule
-  named_shape_rule = named_shape_rule or standard_named_shape_rule
   prim = core.Primitive(name)
   prim.def_impl(partial(dispatch.apply_primitive, prim))
   prim.def_abstract_eval(
       partial(standard_abstract_eval, prim, shape_rule, dtype_rule,
-              weak_type_rule, named_shape_rule))
+              weak_type_rule))
   return prim
 
 def _get_array_abstraction_level(a): return a.array_abstraction_level
 
 def standard_abstract_eval(prim, shape_rule, dtype_rule, weak_type_rule,
-                           named_shape_rule, *avals, **kwargs):
+                           *avals, **kwargs):
   assert all(isinstance(aval, core.UnshapedArray) for aval in avals), avals
   assert not prim.multiple_results
   weak_type = weak_type_rule(*avals, **kwargs)
@@ -58,8 +59,7 @@ def standard_abstract_eval(prim, shape_rule, dtype_rule, weak_type_rule,
     return core.ConcreteArray(out.dtype, out, weak_type=weak_type)
   elif least_specialized is core.ShapedArray:
     return core.ShapedArray(shape_rule(*avals, **kwargs),
-                            dtype_rule(*avals, **kwargs), weak_type=weak_type,
-                            named_shape=named_shape_rule(*avals, **kwargs))
+                            dtype_rule(*avals, **kwargs), weak_type=weak_type)
   elif least_specialized is core.DShapedArray:
     shape = shape_rule(*avals, **kwargs)
     ty = (core.ShapedArray if all(type(d) is int for d in shape)
@@ -71,8 +71,7 @@ def standard_abstract_eval(prim, shape_rule, dtype_rule, weak_type_rule,
     raise TypeError(avals, least_specialized)
 
 def standard_multi_result_abstract_eval(
-    prim, shape_rule, dtype_rule, weak_type_rule,
-    named_shape_rule, *avals, **kwargs):
+    prim, shape_rule, dtype_rule, weak_type_rule, *avals, **kwargs):
   assert prim.multiple_results
   assert all(isinstance(aval, core.UnshapedArray) for aval in avals), avals
   least_specialized = max(map(type, avals), key=_get_array_abstraction_level)
@@ -80,18 +79,16 @@ def standard_multi_result_abstract_eval(
   if least_specialized is core.ConcreteArray:
     out_vals = prim.impl(*[x.val for x in avals], **kwargs)
     return [core.ConcreteArray(val.dtype, val, weak_type=weak_type)
-            for val, weak_type in safe_zip(out_vals, weak_types)]
+            for val, weak_type in zip(out_vals, weak_types)]
   elif least_specialized is core.ShapedArray:
     out_shapes = shape_rule(*avals, **kwargs)
     out_dtypes = dtype_rule(*avals, **kwargs)
-    out_named_shapes = named_shape_rule(*avals, **kwargs)
-    return [core.ShapedArray(s, d, weak_type=weak_type, named_shape=named_shape)
-            for s, d, weak_type, named_shape
-            in safe_zip(out_shapes, out_dtypes, weak_types, out_named_shapes)]
+    return [core.ShapedArray(s, d, weak_type=weak_type)
+            for s, d, weak_type in zip(out_shapes, out_dtypes, weak_types)]
   elif least_specialized is core.UnshapedArray:
     out_dtypes = dtype_rule(*avals, **kwargs)
     return [core.UnshapedArray(dtype, weak_type=weak_type)
-            for dtype, weak_type in safe_zip(out_dtypes, weak_types)]
+            for dtype, weak_type in zip(out_dtypes, weak_types)]
   else:
     raise TypeError(avals, least_specialized)
 
@@ -102,9 +99,6 @@ def standard_translate(prim):
     del ctx, avals_in, avals_out
     return [op(*args, **kwargs)]
   return translation_rule
-
-def standard_named_shape_rule(*avals, **kwargs):
-  return core.join_named_shapes(*(a.named_shape for a in avals))
 
 def _standard_weak_type_rule(*avals, **kwargs):
   return all(aval.weak_type for aval in avals)

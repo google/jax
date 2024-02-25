@@ -800,12 +800,10 @@ def lower_parallel_callable(
 def _pmap_unmap_shaped_array(
     size: int, axis_name: core.AxisName, axis: int | None, aval: ShapedArray
   ) -> ShapedArray:
-  named_shape = dict(aval.named_shape)
-  named_shape.pop(axis_name, None)  # TODO: make this mandatory
-  if axis is None: return aval.update(named_shape=named_shape)
+  if axis is None: return aval
   elif type(axis) is int:
     return ShapedArray(tuple_update(aval.shape, axis, size), aval.dtype,
-                       named_shape=named_shape, weak_type=aval.weak_type)
+                       weak_type=aval.weak_type)
   else: raise TypeError(axis)
 
 
@@ -1441,22 +1439,17 @@ mlir.register_lowering(xla_pmap_p, _pmap_lowering)
 def tile_aval_nd(axis_sizes, in_axes: ArrayMapping, aval):
   assert isinstance(aval, ShapedArray)
   shape = list(aval.shape)
-  named_shape = dict(aval.named_shape)
   for name, axis in in_axes.items():
     assert shape[axis] % axis_sizes[name] == 0
-    assert name not in named_shape
-    named_shape[name] = axis_sizes[name]
     shape[axis] //= axis_sizes[name]
-  return aval.update(shape=tuple(shape), named_shape=named_shape)
+  return aval.update(shape=tuple(shape))
 
 def untile_aval_nd(axis_sizes, out_axes: ArrayMapping, aval):
   assert isinstance(aval, ShapedArray)
   shape = list(aval.shape)
-  named_shape = dict(aval.named_shape)
   for name, axis in out_axes.items():
     shape[axis] *= axis_sizes[name]
-    named_shape.pop(name, None)  # The name might be missing --- it's a broadcast.
-  return aval.update(shape=tuple(shape), named_shape=named_shape)
+  return aval.update(shape=tuple(shape))
 
 
 def mesh_local_to_global(mesh, axes: ArrayMapping, aval):
@@ -3269,27 +3262,8 @@ custom_resource_typing_rules: dict[core.Primitive, Callable] = {}
 def resource_typecheck(jaxpr, resource_env, axis_resources, what_jaxpr_thunk):
   if isinstance(jaxpr, core.ClosedJaxpr):
     jaxpr = jaxpr.jaxpr
-  def _check_aval(aval, what_thunk):
-    if not hasattr(aval, 'named_shape'):
-      return
-    resource_to_axis = {}
-    for axis in aval.named_shape:
-      if axis_resources:
-        for resource in axis_resources[axis]:
-          if resource in resource_to_axis:
-            other_axis = resource_to_axis[resource]
-            axis, other_axis = sorted([str(axis), str(other_axis)])
-            raise JAXTypeError(
-                f"Axes `{axis}` and `{other_axis}` are both mapped to the "
-                f"resource `{resource}`, but they coincide in the named_shape "
-                f"of {what_thunk()}")
-          resource_to_axis[resource] = axis
 
   what_thunk = lambda: (f"an input to {what_jaxpr_thunk()}")
-  for v in jaxpr.constvars:
-    _check_aval(v.aval, what_thunk)
-  for v in jaxpr.invars:
-    _check_aval(v.aval, what_thunk)
   what_thunk = lambda: (f"a value returned from a primitive {eqn.primitive} created "
                         f"at {source_info_util.summarize(eqn.source_info)}")
   rec_what_jaxpr_thunk = lambda: (f"a primitive {eqn.primitive} created at"
@@ -3305,8 +3279,6 @@ def resource_typecheck(jaxpr, resource_env, axis_resources, what_jaxpr_thunk):
                                          axis_resources=axis_resources,
                                          what_jaxpr_thunk=rec_what_jaxpr_thunk),
                                  eqn.params)
-    for v in eqn.outvars:
-      _check_aval(v.aval, what_thunk)
 
 
 @contextmanager

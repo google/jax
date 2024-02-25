@@ -974,25 +974,6 @@ def _resource_typing_xmap(avals,
                (f"(xmap called at {source_info_util.summarize(source_info)})"
                 if source_info else "")))
 
-  for v, axes in zip(call_jaxpr.outvars, params['out_axes']):
-    broadcast_axes = set(axes) - set(v.aval.named_shape)
-    used_resources = set(it.chain.from_iterable(
-        inner_axis_resources[a] for a in v.aval.named_shape))
-    for baxis in broadcast_axes:
-      baxis_resources = set(inner_axis_resources[baxis])
-      overlap = baxis_resources & used_resources
-      if overlap:
-        resource_to_axis = {}
-        for axis in v.aval.named_shape:
-          for raxis in inner_axis_resources[axis]:
-            resource_to_axis[raxis] = axis
-        partitioning_axes = {resource_to_axis[raxis] for raxis in overlap}
-        raise JAXTypeError(
-            f"One of xmapped function ({params['name']}) outputs is broadcast "
-            f"along axis `{baxis}` which is assigned to resources "
-            f"{mesh_lib.show_axes(baxis_resources)}, but the output is already "
-            f"partitioned along {mesh_lib.show_axes(overlap)}, because its "
-            f"named shape contains {mesh_lib.show_axes(partitioning_axes)}")
 pxla.custom_resource_typing_rules[xmap_p] = _resource_typing_xmap
 
 
@@ -1553,20 +1534,16 @@ def _untile(x, out_axes, axis_sizes):
 def _delete_aval_axes(aval, axes: AxisNamePos, global_axis_sizes):
   assert isinstance(aval, core.ShapedArray)
   shape = list(aval.shape)
-  named_shape = dict(aval.named_shape)
-  for name, dim in sorted(axes.items(), key=lambda x: x[1], reverse=True):
-    named_shape[name] = global_axis_sizes[name]
+  for _, dim in sorted(axes.items(), key=lambda x: x[1], reverse=True):
     del shape[dim]
-  return aval.update(shape=tuple(shape), named_shape=named_shape)
+  return aval.update(shape=tuple(shape))
 
 def _insert_aval_axes(aval, axes: AxisNamePos, local_axis_sizes):
   assert isinstance(aval, core.ShapedArray)
   shape = list(aval.shape)
-  named_shape = dict(aval.named_shape)
-  for name, dim in sorted(axes.items(), key=lambda x: x[1]):
+  for _, dim in sorted(axes.items(), key=lambda x: x[1]):
     shape.insert(dim, local_axis_sizes[name])
-    named_shape.pop(name, None)  # The name might be missing --- it's a broadcast.
-  return aval.update(shape=tuple(shape), named_shape=named_shape)
+  return aval.update(shape=tuple(shape))
 
 
 class ResourceCount(NamedTuple):
@@ -1732,12 +1709,6 @@ def _check_out_avals_vs_out_axes(out_avals: Sequence[core.AbstractValue],
         raise AssertionError(f"Only array abstract values can have non-empty "
                              f"out_axes, but {aval} has {axes}")
       continue
-    undeclared_axes = (set(aval.named_shape) - set(axes)) & defined_axes
-    if undeclared_axes:
-      undeclared_axes_str = sorted(str(axis) for axis in undeclared_axes)
-      raise TypeError(f"One of xmap results has an out_axes specification of "
-                      f"{axes.user_repr}, but is actually mapped along more axes "
-                      f"defined by this xmap call: {', '.join(undeclared_axes_str)}")
 
 
 def _check_gda_or_array_xmap_partitioning(axis_resources, resource_env,
