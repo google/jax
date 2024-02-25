@@ -35,7 +35,6 @@ from jax._src import dtypes
 from jax._src import prng
 from jax._src import xla_bridge
 from jax._src.api import jit, vmap
-from jax._src.core import NamedShape
 from jax._src.interpreters import ad
 from jax._src.interpreters import batching
 from jax._src.interpreters import mlir
@@ -327,12 +326,10 @@ def wrap_key_data(key_bits_array: Array, *,
 ### random samplers
 
 
-def _check_shape(name: str, shape: Shape | NamedShape, *param_shapes) -> None:
-  shape = core.as_named_shape(shape)
-
+def _check_shape(name: str, shape: Shape, *param_shapes) -> None:
   if param_shapes:
-    shape_ = lax.broadcast_shapes(shape.positional, *param_shapes)
-    if shape.positional != shape_:
+    shape_ = lax.broadcast_shapes(shape, *param_shapes)  # type: ignore
+    if shape != shape_:
       msg = ("{} parameter shapes must be broadcast-compatible with shape "
              "argument, and the result of broadcasting the shapes must equal "
              "the shape argument, but got result {} for shape argument {}.")
@@ -369,7 +366,7 @@ def bits(key: KeyArrayLike,
 
 
 def uniform(key: KeyArrayLike,
-            shape: Shape | NamedShape = (),
+            shape: Shape = (),
             dtype: DTypeLikeFloat = float,
             minval: RealArray = 0.,
             maxval: RealArray = 1.) -> Array:
@@ -394,7 +391,6 @@ def uniform(key: KeyArrayLike,
     raise ValueError(f"dtype argument to `uniform` must be a float dtype, "
                      f"got {dtype}")
   dtype = dtypes.canonicalize_dtype(dtype)
-  shape = core.as_named_shape(shape)
   return _uniform(key, shape, dtype, minval, maxval)  # type: ignore
 
 @partial(jit, static_argnums=(1, 2))
@@ -405,8 +401,8 @@ def _uniform(key, shape, dtype, minval, maxval) -> Array:
 
   minval = lax.convert_element_type(minval, dtype)
   maxval = lax.convert_element_type(maxval, dtype)
-  minval = lax.broadcast_to_rank(minval, shape.positional_rank)
-  maxval = lax.broadcast_to_rank(maxval, shape.positional_rank)
+  minval = lax.broadcast_to_rank(minval, len(shape))
+  maxval = lax.broadcast_to_rank(maxval, len(shape))
 
   finfo = jnp.finfo(dtype)
   nbits, nmant = finfo.bits, finfo.nmant
@@ -433,7 +429,7 @@ def _uniform(key, shape, dtype, minval, maxval) -> Array:
   floats = lax.bitcast_convert_type(float_bits, dtype) - np.array(1., dtype)
   return lax.max(
       minval,
-      lax.reshape(floats * (maxval - minval) + minval, shape.positional))
+      lax.reshape(floats * (maxval - minval) + minval, shape))
 
 
 def randint(key: KeyArrayLike,
@@ -680,7 +676,7 @@ def choice(key: KeyArrayLike,
 
 
 def normal(key: KeyArrayLike,
-           shape: Shape | NamedShape = (),
+           shape: Shape = (),
            dtype: DTypeLikeFloat = float) -> Array:
   r"""Sample standard normal random values with given shape and float dtype.
 
@@ -707,7 +703,6 @@ def normal(key: KeyArrayLike,
     raise ValueError(f"dtype argument to `normal` must be a float or complex dtype, "
                      f"got {dtype}")
   dtype = dtypes.canonicalize_dtype(dtype)
-  shape = core.as_named_shape(shape)
   return _normal(key, shape, dtype)  # type: ignore
 
 @partial(jit, static_argnums=(1, 2))
@@ -818,7 +813,7 @@ def _multivariate_normal(key, mean, cov, shape, dtype, method) -> Array:
 def truncated_normal(key: KeyArrayLike,
                      lower: RealArray,
                      upper: RealArray,
-                     shape: Shape | NamedShape | None = None,
+                     shape: Shape | None = None,
                      dtype: DTypeLikeFloat = float) -> Array:
   r"""Sample truncated standard normal random values with given shape and dtype.
 
@@ -853,8 +848,6 @@ def truncated_normal(key: KeyArrayLike,
     raise ValueError(f"dtype argument to `truncated_normal` must be a float "
                      f"dtype, got {dtype}")
   dtype = dtypes.canonicalize_dtype(dtype)
-  if shape is not None:
-    shape = core.as_named_shape(shape)
   return _truncated_normal(key, lower, upper, shape, dtype)  # type: ignore
 
 @partial(jit, static_argnums=(3, 4))
@@ -883,7 +876,7 @@ def _truncated_normal(key, lower, upper, shape, dtype) -> Array:
 
 def bernoulli(key: KeyArrayLike,
               p: RealArray = np.float32(0.5),
-              shape: Shape | NamedShape | None = None) -> Array:
+              shape: Shape | None = None) -> Array:
   r"""Sample Bernoulli random values with given shape and mean.
 
   The values are distributed according to the probability mass function:
@@ -907,8 +900,6 @@ def bernoulli(key: KeyArrayLike,
   """
   key, _ = _check_prng_key("bernoulli", key)
   dtype = dtypes.canonicalize_dtype(lax.dtype(p))
-  if shape is not None:
-    shape = core.as_named_shape(shape)
   if not jnp.issubdtype(dtype, np.floating):
     msg = "bernoulli probability `p` must have a floating dtype, got {}."
     raise TypeError(msg.format(dtype))

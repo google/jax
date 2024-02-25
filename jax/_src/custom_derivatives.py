@@ -327,13 +327,11 @@ def _flatten_jvp(primal_name, jvp_name, in_tree, maybe_out_type, *args):
            f"""    {str(ty_tree_).replace("'", "")}""")
       raise TypeError(m)
   # TODO(mattjj): compare primals' tangent types to tangent objects' types
-  primal_avals_out = [
-      raise_to_shaped(core.get_aval(x), weak_type=False).strip_named_shape()
-      for x in primals_out]
-  tangent_avals_out = [
-      raise_to_shaped(core.get_aval(t), weak_type=False).strip_named_shape()
-      if type(t) is not SymbolicZero else t.aval.strip_weak_type()
-      for t in tangents_out]
+  primal_avals_out = [raise_to_shaped(core.get_aval(x), weak_type=False)
+                      for x in primals_out]
+  tangent_avals_out = [raise_to_shaped(core.get_aval(t), weak_type=False)
+                       if type(t) is not SymbolicZero else t.aval.strip_weak_type()
+                       for t in tangents_out]
   if primal_avals_out != tangent_avals_out:
     if len(primal_avals_out) == 1:
       (av1,), (av2,) = primal_avals_out, tangent_avals_out

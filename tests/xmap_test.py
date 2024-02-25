@@ -45,7 +45,6 @@ from jax._src import core
 from jax._src import maps
 from jax._src.maps import xmap, serial_loop, SerialLoop
 from jax._src import xla_bridge
-from jax._src.core import NamedShape
 from jax._src.lax import parallel as lax_parallel
 from jax._src.lax.parallel import pgather
 from jax._src.lib import xla_client
@@ -640,6 +639,7 @@ class XMapTest(XMapTestCase):
 
   @jtu.with_and_without_mesh
   def testNamedShape(self, mesh, axis_resources):
+    raise SkipTest("NamedShape is deprecated")
     x = np.arange(4,)
     y = 2
     f = xmap(lambda x, y: (x + y, y * lax.axis_index('i')),
@@ -1019,16 +1019,17 @@ class NamedRandomTest(XMapTestCase):
 
   @parameterized.parameters(*SAMPLERS)
   def testSamplerSharding(self, distr_name, distr_sample):
+    raise SkipTest("NamedShape is deprecated")
     def sample(shape, map_size):
       return xmap(lambda: distr_sample(jax.random.PRNGKey(0), shape=shape),
                   in_axes=(), out_axes=[None, 'i', ...], axis_sizes={'i': map_size})()
     replicated = sample((3,), 4)
     self.assertTrue((replicated[:,[0]] == replicated).all())
-    sharded = sample(NamedShape(3, i=4), 4)
+    sharded = sample(NamedShape(3, i=4), 4)  # noqa: F821
     self.assertFalse((sharded[:,[0]] == sharded[:,1:]).all(1).any())
     error = "The shape of axis i was specified as 4, but it really is 5"
     with self.assertRaisesRegex(ValueError, error):
-      sample(NamedShape(3, i=4), 5)
+      sample(NamedShape(3, i=4), 5)  # noqa: F821
 
   @jtu.sample_product(
     [dict(distr_name=name, distr_sample=sample)
@@ -1039,8 +1040,9 @@ class NamedRandomTest(XMapTestCase):
   @jtu.with_mesh_from_kwargs
   def testSamplerResourceIndependence(self, distr_name, distr_sample,
                                       axis_resources, mesh):
+    raise SkipTest("NamedShape is deprecated")
     def sample(axis_resources):
-      return xmap(lambda: distr_sample(jax.random.PRNGKey(0), shape=NamedShape(3, i=4, j=6)),
+      return xmap(lambda: distr_sample(jax.random.PRNGKey(0), shape=NamedShape(3, i=4, j=6)),  # noqa: F821
                   in_axes=(), out_axes=['i', 'j', ...], axis_sizes={'i': 4, 'j': 6},
                   axis_resources=axis_resources)()
     self.assertAllClose(sample({}), sample(dict(axis_resources)))
@@ -1075,22 +1077,23 @@ class NamedNNTest(XMapTestCase):
     distr=['uniform', 'normal', 'truncated_normal'],
   )
   def testVarianceScaling(self, map_in, map_out, fan, distr):
+    raise SkipTest("NamedShape is deprecated")
     shape = (80, 50, 7)
-    fan_in, fan_out = nn_initializers._compute_fans(NamedShape(*shape), 0, 1)
+    fan_in, fan_out = nn_initializers._compute_fans(NamedShape(*shape), 0, 1)  # noqa: F821
     key = jax.random.PRNGKey(1)
     base_scaling = partial(jax.nn.initializers.variance_scaling, 100, fan, distr)
     ref_sampler = lambda: base_scaling(in_axis=0, out_axis=1)(key, shape)
     if map_in and map_out:
       out_axes = ['i', 'o', ...]
-      named_shape = NamedShape(shape[2], i=shape[0], o=shape[1])
+      named_shape = NamedShape(shape[2], i=shape[0], o=shape[1])  # noqa: F821
       xmap_sampler = lambda: base_scaling(in_axis='i', out_axis='o')(key, named_shape)
     elif map_in:
       out_axes = ['i', ...]
-      named_shape = NamedShape(shape[1], shape[2], i=shape[0])
+      named_shape = NamedShape(shape[1], shape[2], i=shape[0])  # noqa: F821
       xmap_sampler = lambda: base_scaling(in_axis='i', out_axis=0)(key, named_shape)
     elif map_out:
       out_axes = [None, 'o', ...]
-      named_shape = NamedShape(shape[0], shape[2], o=shape[1])
+      named_shape = NamedShape(shape[0], shape[2], o=shape[1])  # noqa: F821
       xmap_sampler = lambda: base_scaling(in_axis=0, out_axis='o')(key, named_shape)
     mapped_sampler = xmap(xmap_sampler,
                           in_axes=(), out_axes=out_axes,

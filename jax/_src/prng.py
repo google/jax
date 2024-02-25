@@ -46,7 +46,6 @@ from jax._src.interpreters import mlir
 from jax._src.interpreters import pxla
 from jax._src.interpreters import xla
 from jax._src.lax import lax as lax_internal
-from jax._src.lax import utils as lax_utils
 from jax._src.lib.mlir import ir
 from jax._src.lib import xla_client as xc
 from jax._src.lib.mlir.dialects import hlo
@@ -710,8 +709,7 @@ batching.defbroadcasting(random_fold_in_p)
 def random_fold_in_abstract_eval(keys_aval, msgs_aval):
   shape = lax_internal.broadcasting_shape_rule(
       'random_fold_in', keys_aval, msgs_aval)
-  named_shape = lax_utils.standard_named_shape_rule(keys_aval, msgs_aval)
-  return core.ShapedArray(shape, keys_aval.dtype, named_shape=named_shape)
+  return core.ShapedArray(shape, keys_aval.dtype)
 
 @random_fold_in_p.def_impl
 def random_fold_in_impl(keys, msgs):
@@ -739,19 +737,7 @@ mlir.register_lowering(random_fold_in_p, random_fold_in_lowering)
 
 
 def random_bits(keys, bit_width, shape):
-  shape = core.as_named_shape(shape)
-  for name, size in shape.named_items:
-    # TODO(frostig,mattjj,apaszke): Is this real_size check necessary,
-    # and is it meant to raise a user-facing ValueError? Should it be
-    # an `assert` (or RuntimeError) instead? Why do we check it in
-    # calls to `random_bits` instead of a more common paralleism path?
-    real_size = lax.psum(1, name)
-    if real_size != size:
-      raise ValueError(f"The shape of axis {name} was specified as {size}, "
-                       f"but it really is {real_size}")
-    axis_index = lax.axis_index(name)
-    keys = random_fold_in(keys, axis_index)
-  return random_bits_p.bind(keys, bit_width=bit_width, shape=shape.positional)
+  return random_bits_p.bind(keys, bit_width=bit_width, shape=shape)
 
 random_bits_p = core.Primitive('random_bits')
 ad.defjvp_zero(random_bits_p)
@@ -921,8 +907,7 @@ def _threefry2x32_abstract_eval(*args):
                     .format(args))
   if all(isinstance(arg, core.ShapedArray) for arg in args):
     shape = lax_internal.broadcasting_shape_rule(*args)
-    named_shape = core.join_named_shapes(*(a.named_shape for a in args))
-    aval = core.ShapedArray(shape, jnp.dtype(jnp.uint32), named_shape=named_shape)
+    aval = core.ShapedArray(shape, jnp.dtype(jnp.uint32))
   else:
     aval = core.UnshapedArray(jnp.dtype(jnp.uint32))
   return (aval,) * 2

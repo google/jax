@@ -497,9 +497,7 @@ def _unshard_aval(mesh: Mesh, names: AxisNames, aval: core.AbstractValue
                  ) -> core.AbstractValue:
   if isinstance(aval, core.ShapedArray):
     return aval.update(tuple(sz * prod(mesh.shape[n] for n in names.get(i, ()))
-                             for i, sz in enumerate(aval.shape)),
-                       named_shape={k: v for k, v in aval.named_shape.items()
-                                    if k not in mesh.shape})
+                             for i, sz in enumerate(aval.shape)))
   else:
     raise NotImplementedError  # TODO(mattjj): add table with handlers
 

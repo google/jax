@@ -200,8 +200,8 @@ def backward_pass(jaxpr: core.Jaxpr, transform_stack,
     # TODO(mattjj): add back these checks for dynamic shapes
     # if config.enable_checks.value:
     #   ct_aval = core.get_aval(ct_env[v])
-    #   joined_aval = core.lattice_join(v.aval, ct_aval).strip_weak_type().strip_named_shape()
-    #   assert v.aval.strip_weak_type().strip_named_shape() == joined_aval, (prim, v.aval, ct_aval)
+    #   joined_aval = core.lattice_join(v.aval, ct_aval).strip_weak_type()
+    #   assert v.aval.strip_weak_type() == joined_aval, (prim, v.aval, ct_aval)
 
   def read_cotangent(v):
     return ct_env.pop(v, Zero(v.aval.at_least_vspace()))
