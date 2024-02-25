@@ -286,24 +286,6 @@ def register_primitive(cls):
                            mlir.lower_fun(outer_p_lower, multiple_results=cls.multiple_results))
     cls.outer_primitive = outer_p
 
-def get_padded_spec(arg_info):
-    """Get padded spec for partitioning from arguments' information.
-
-    This is useful when a tensor rank don't match the PartitionSpec
-    lenght. This function pad the partition spec, if needed, to an
-    equivalent one of the same lenght. The padding is always done on
-    the left with None.
-
-    i.e. For a 4d tensor with this PartitionSpec: ("foo", "bar"), this function returns (None, None, "foo", "bar").
-
-    """
-    spec = []
-    if arg_info.sharding is not None:
-        spec = arg_info.sharding.spec
-    ndim = arg_info.ndim
-    assert len(spec) <= ndim
-    return spec + (None,) * (ndim - len(spec))
-
 
 class RmsNormFwdClass:
     name = "rms_forward_affine_mixed_dtype"
@@ -347,7 +329,7 @@ class RmsNormFwdClass:
         assert len(weight_info.shape) == 2
         # partition() will force all dims to be replicated except the
         # first dim of x that will be kept as is.
-        x_spec = get_padded_spec(arg_infos[0])
+        x_spec = arg_infos[0].sharding.spec
         output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
         invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
         return (output_sharding, invvar_sharding)
@@ -360,7 +342,7 @@ class RmsNormFwdClass:
         x_info, weight_info = arg_infos
         assert len(x_info.shape) == 3
         assert len(weight_info.shape) == 2
-        x_spec = get_padded_spec(arg_infos[0])
+        x_spec = arg_infos[0].sharding.spec
         # We only support sharding on the batch dimensions.
         # Force sharding on all others dimensions with None.
         arg_shardings = (NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
@@ -417,7 +399,7 @@ class RmsNormBwdClass:
         assert len(x_info.shape) == 3
         assert len(weight_info.shape) == 2
         # partition() will force all dims to be replicated except the batch dimension.
-        x_spec = get_padded_spec(x_info)
+        x_spec = x_info.sharding.spec
         output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
         invvar_sharding = NamedSharding(mesh, PartitionSpec(None, None))
         return (output_sharding, invvar_sharding, output_sharding, )
@@ -432,11 +414,11 @@ class RmsNormBwdClass:
         assert len(invvar_info.shape) == 1
         assert len(x_info.shape) == 3
         assert len(weight_info.shape) == 2
-        x_spec = get_padded_spec(x_info)
+
         # We only support sharding on the batch dimensions.
         # Force sharding on all others dimensions with None.
         # Also force gx, x and invvar to have the same batch sharding/replication.
-        x_spec = get_padded_spec(x_info)
+        x_spec = x_info.sharding.spec
         arg_shardings = (NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
                          NamedSharding(mesh, PartitionSpec(x_spec[0],)),
                          NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),

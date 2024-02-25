@@ -677,9 +677,7 @@ See the code comments for more explanation:
         # first dim of x that will be kept as is.
         # This is because the implementaion can only be sharded on the batch dimensions.
 
-        # get_padded_spec() make sure the lenght of the PartitionSpec
-        # is the same as the tensor rank. See it's docstring for details.
-        x_spec = get_padded_spec(arg_infos[0])
+        x_spec = arg_infos[0].sharding.spec
         # None mean that we replicate on that dimension.
         output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
         invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
@@ -692,7 +690,7 @@ See the code comments for more explanation:
         x_info, weight_info = arg_infos
         assert len(x_info.shape) == 3
         assert len(weight_info.shape) == 2
-        x_spec = get_padded_spec(arg_infos[0])
+        x_spec = arg_infos[0].sharding.spec
         # We only support sharding on the batch dimensions.
         # Force sharding on all others dimensions with None.
         arg_shardings = (NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
