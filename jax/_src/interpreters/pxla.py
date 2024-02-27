@@ -2525,11 +2525,22 @@ def get_logical_mesh_ids(mesh_shape):
 
 
 @weakref_lru_cache
-def _cached_compilation(computation, name, mesh, spmd_lowering,
-                        tuple_args, auto_spmd_lowering,
-                        _allow_propagation_to_outputs, host_callbacks, backend,
-                        da, pmap_nreps, compiler_options_keys,
-                        compiler_options_values):
+def _cached_compilation(
+    computation,
+    name,
+    mesh,
+    spmd_lowering,
+    tuple_args,
+    auto_spmd_lowering,
+    _allow_propagation_to_outputs,
+    _allow_propagation_to_parameters,
+    host_callbacks,
+    backend,
+    da,
+    pmap_nreps,
+    compiler_options_keys,
+    compiler_options_values,
+):
   # TODO(phawkins): One would normally just write:
   # dev = np.array(device_assignment)
   # The formulation below is substantially faster if there are many devices.
@@ -2581,6 +2592,9 @@ def _cached_compilation(computation, name, mesh, spmd_lowering,
         .reshape(-1))
   compile_options.parameter_is_tupled_arguments = tuple_args
   opts.allow_spmd_sharding_propagation_to_output = list(_allow_propagation_to_outputs)
+  opts.allow_spmd_sharding_propagation_to_parameters = list(
+      _allow_propagation_to_parameters
+  )
 
   if hasattr(backend, "compile_replicated"):
     return None, compile_options
@@ -2685,31 +2699,35 @@ class UnloadedMeshExecutable:
 
   # May return a MeshExecutable in the compile_replicated case.
   @staticmethod
-  def from_hlo(name: str,
-               hlo: ir.Module,
-               global_in_avals: Sequence[ShapedArray],
-               global_out_avals: Sequence[ShapedArray],
-               in_shardings: Sequence[sharding_impls.XLACompatibleSharding | AUTO],
-               out_shardings: Sequence[(sharding_impls.XLACompatibleSharding | AUTO |
-                                             UnspecifiedValue)],
-               spmd_lowering: bool,
-               tuple_args: bool,
-               auto_spmd_lowering: bool,
-               unordered_effects: list[core.Effect],
-               ordered_effects: list[core.Effect],
-               host_callbacks: list[Any],
-               keepalive: Any,
-               kept_var_idx: set[int],
-               backend: xb.XlaBackend,
-               device_assignment: xc.DeviceList | Sequence[xc.Device],  # type: ignore
-               committed: bool,
-               in_layouts: MaybeLayout,
-               out_layouts: MaybeLayout,
-               pmap_nreps: int = 1,
-               shape_poly_state: mlir.ShapePolyLoweringState | None = None,
-               all_default_mem_kind: bool = True,
-               all_args_info: AllArgsInfo | None = None,
-               compiler_options=None,
+  def from_hlo(
+      name: str,
+      hlo: ir.Module,
+      global_in_avals: Sequence[ShapedArray],
+      global_out_avals: Sequence[ShapedArray],
+      in_shardings: Sequence[
+          (sharding_impls.XLACompatibleSharding | AUTO | UnspecifiedValue)
+      ],
+      out_shardings: Sequence[
+          (sharding_impls.XLACompatibleSharding | AUTO | UnspecifiedValue)
+      ],
+      spmd_lowering: bool,
+      tuple_args: bool,
+      auto_spmd_lowering: bool,
+      unordered_effects: list[core.Effect],
+      ordered_effects: list[core.Effect],
+      host_callbacks: list[Any],
+      keepalive: Any,
+      kept_var_idx: set[int],
+      backend: xb.XlaBackend,
+      device_assignment: xc.DeviceList | Sequence[xc.Device],  # type: ignore
+      committed: bool,
+      in_layouts: MaybeLayout,
+      out_layouts: MaybeLayout,
+      pmap_nreps: int = 1,
+      shape_poly_state: mlir.ShapePolyLoweringState | None = None,
+      all_default_mem_kind: bool = True,
+      all_args_info: AllArgsInfo | None = None,
+      compiler_options=None,
   ) -> MeshExecutable:
     if shape_poly_state is not None and shape_poly_state.uses_dim_vars:
       hlo = mlir.refine_polymorphic_shapes(hlo)
@@ -2722,6 +2740,7 @@ class UnloadedMeshExecutable:
     else:
       da = _create_da_object(tuple(device_assignment))
     del device_assignment
+    allow_prop_to_parameters = tuple(is_unspecified(i) for i in in_shardings)
     allow_prop_to_outputs = tuple(is_unspecified(o) for o in out_shardings)
 
     mesh = None
@@ -2732,10 +2751,21 @@ class UnloadedMeshExecutable:
           break
 
     xla_executable, compile_options = _cached_compilation(
-        hlo, name, mesh, spmd_lowering,
-        tuple_args, auto_spmd_lowering, allow_prop_to_outputs,
-        tuple(host_callbacks), backend, da, pmap_nreps,
-        compiler_options_keys, compiler_options_values)
+        hlo,
+        name,
+        mesh,
+        spmd_lowering,
+        tuple_args,
+        auto_spmd_lowering,
+        allow_prop_to_outputs,
+        allow_prop_to_parameters,
+        tuple(host_callbacks),
+        backend,
+        da,
+        pmap_nreps,
+        compiler_options_keys,
+        compiler_options_values,
+    )
 
     if hasattr(backend, "compile_replicated"):
       semantics_in_shardings = SemanticallyEqualShardings(in_shardings)  # type: ignore
