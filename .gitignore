@@ -13,6 +13,7 @@
 .mypy_cache/
 .pytype/
 /docs/build
+/docs/_build
 *_pb2.py
 /docs/notebooks/.ipynb_checkpoints/
 /docs/_autosummary

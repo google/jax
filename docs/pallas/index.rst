@@ -7,8 +7,13 @@ This section contains tutorials, guides and examples for using Pallas.
 
 .. toctree::
    :caption: Guides
-   :maxdepth: 1
+   :maxdepth: 2
 
    design
    quickstart
-   tpu
+
+.. toctree::
+   :caption: Platform Features
+   :maxdepth: 2
+
+   tpu/index
