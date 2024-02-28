@@ -347,6 +347,24 @@ class CheckpointTest(jtu.JaxTestCase):
                                 "Checkpoint path should be absolute"):
       serialization.get_tensorstore_spec(path, ocdbt=True)
 
+  def test_maybe_cloud_storage(self):
+    gs_path = 'gs://some-buck/path'
+    gs_spec = serialization.get_tensorstore_spec(gs_path, ocdbt=True)
+    self.assertTrue(serialization.maybe_cloud_storage(gs_spec))
+
+    local_path = '/tmp/checkpoint'
+    local_spec = serialization.get_tensorstore_spec(local_path, ocdbt=True)
+    self.assertFalse(serialization.maybe_cloud_storage(local_spec))
+
+    nested_tspec = {
+        'driver': 'cast',
+        'dtype': 'int32',
+        'base': {
+            'driver': 'zarr',
+            'kvstore': {'driver': 'ocdbt', 'base': 's3://some-bucket/path'},
+        },
+    }
+    self.assertTrue(serialization.maybe_cloud_storage(nested_tspec))
 
 if __name__ == '__main__':
   absltest.main(testLoader=jtu.JaxTestLoader())

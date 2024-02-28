@@ -18,18 +18,19 @@ from __future__ import annotations
 import abc
 import asyncio
 from collections.abc import Awaitable, Sequence
+from functools import partial
 import itertools
 import logging
-from functools import partial
 import os
 import re
-import time
+import sys
 import threading
+import time
 from typing import Any, Callable, Optional, Union
 
 import jax
-from jax._src import distributed
 from jax._src import array
+from jax._src import distributed
 from jax._src import sharding
 from jax._src import sharding_impls
 from jax._src import typing
@@ -48,6 +49,11 @@ _DEFAULT_DRIVER = 'file'
 _DISTRIBUTED_SYSTEM_MSG = (
     'Please initialize the distributed system via '
     '`jax.distributed.initialize()` at the start of your program.')
+_CLOUD_URL_PREFIXES = ['gs://', 's3://']
+_CLOUD_DRIVER_VALIDATIONS = [
+    {'driver': 'gcs', 'path_regex': None},
+    {'driver': 's3', 'path_regex': None},
+]
 
 class BarrierTimeoutException(Exception):
   pass
@@ -134,6 +140,36 @@ def get_tensorstore_spec(ckpt_path: str, ocdbt: bool = False):
   return spec
 
 
+def maybe_cloud_storage(tspec: Union[dict[str, Any], str]) -> bool:
+  """Detect if user is using cloud storages.
+
+  This can detect common defines and unable to detect some corner cases such as
+  using gcsfuse.
+  """
+  if isinstance(tspec, str):
+    # KvStoreUrl
+    if re.match(rf'^({"|".join(_CLOUD_URL_PREFIXES)})', tspec):
+      return True
+    else:
+      return False
+
+  for key in ('base', 'kvstore'):
+    if key in tspec:
+      return maybe_cloud_storage(tspec[key])
+
+  if 'driver' in tspec:
+    for rule in _CLOUD_DRIVER_VALIDATIONS:
+      if tspec['driver'] == rule['driver']:
+        if rule['path_regex']:
+          # check if path matches the regex.
+          if re.match(rule['path_regex'], tspec['path']):
+            return True
+        else:
+          return True
+
+  return False
+
+
 # Lifted from T5X.
 class _LimitInFlightBytes:
   """Limits in-flight bytes when reading/writing checkpoints per process."""
@@ -160,7 +196,12 @@ class _LimitInFlightBytes:
 
 
 async def async_serialize(
-    arr_inp, tensorstore_spec, commit_future=None, context=TS_CONTEXT
+    arr_inp,
+    tensorstore_spec,
+    commit_future=None,
+    context=TS_CONTEXT,
+    primary_host: Optional[int] = 0,
+    replica_id: int = 0,
 ):
   if (isinstance(arr_inp, array.ArrayImpl) and jax.process_count() > 1 and
       arr_inp.is_fully_addressable):
@@ -169,12 +210,21 @@ async def async_serialize(
         f'serialization is not allowed, as this may lead to a race condition '
         f'between processes. Serialization have failed for the array with '
         f'the path "{tensorstore_spec["kvstore"]["path"]}".')
+
+  if primary_host is None and maybe_cloud_storage(tensorstore_spec):
+    raise ValueError(
+        'When primary_host is set to None and cloud storage is used,'
+        ' serialization is not allowed, as this may lead to a race condition'
+        ' between processes.'
+    )
   # 'metadata' may not be present at the top level (for example, if we are using
   # a 'cast' driver).
   if not _spec_has_metadata(tensorstore_spec):
     tensorstore_spec['metadata'] = _get_metadata(arr_inp)
 
-  if jax.process_index() == 0:
+  # If primary_host is None, all hosts will checkpoint. This is used
+  # for checkpointing to local filesystem.
+  if primary_host is None or jax.process_index() == primary_host:
     open_future = ts.open(
         ts.Spec(tensorstore_spec),
         create=True,
@@ -201,7 +251,7 @@ async def async_serialize(
   )
 
   async def _write_array(shard):
-    if shard.replica_id == 0:
+    if shard.replica_id == replica_id:
       write_future = t[shard.index].write(shard.data)
       if commit_future is not None:
         assert isinstance(commit_future, list)
