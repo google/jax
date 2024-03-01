@@ -241,6 +241,8 @@ def backend_compile(
   return backend.compile(built_c, compile_options=options)
 
 def _total_graph_constant_size(operation: func.FuncOp) -> float:
+  # Return the cumulative size of constants in the graph defined by
+  # operation in megabytes
   const_op_list = []
   def get_constant_ops(op: func.FuncOp, const_op_list: list):
     for i in range(len(op.regions)):
@@ -255,10 +257,10 @@ def _total_graph_constant_size(operation: func.FuncOp) -> float:
             get_constant_ops(child_op, const_op_list)
   
   get_constant_ops(operation, const_op_list)
-  constant_size_bytes = sum([reduce(operator.mul, const_op.value.type.shape, 1) * const_op.value.type.element_type.width 
+  constant_size_mbytes = sum([reduce(operator.mul, const_op.value.type.shape, 1) * const_op.value.type.element_type.width 
                for const_op in const_op_list]) / (8 * (1024 ** 2))
   
-  return constant_size_bytes
+  return constant_size_mbytes
 
 def compile_or_get_cached(
     backend: xc.Client,
