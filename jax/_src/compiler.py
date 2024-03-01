@@ -258,7 +258,7 @@ def _total_graph_constant_size(operation: func.FuncOp) -> float:
   
   get_constant_ops(operation, const_op_list)
   constant_size_mbytes = sum([reduce(operator.mul, const_op.value.type.shape, 1) * const_op.value.type.element_type.width 
-               for const_op in const_op_list]) / (8 * (1024 ** 2))
+                              for const_op in const_op_list]) / (8 * (1024 ** 2))
   
   return constant_size_mbytes
 
