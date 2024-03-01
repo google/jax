@@ -1198,6 +1198,17 @@ share_binary_between_hosts_timeout_ms = define_int_state(
     help='Timeout for the compiled module share.',
 )
 
+share_binary_between_hosts_size_threshold = define_float_state(
+  name='jax_share_binary_between_hosts_size_threshold',
+  default=10.0,
+  help=(
+    'If the size of all constants in a pre-compiled graph is less than this '
+    'threshold, allow sharing of compiled binary with other processes. '
+    'Even if share_binary_between hosts is True, the total size of all '
+    'constants in the graph must be less than this threshold. The unit is MB'
+  ),
+)
+
 enable_compilation_cache = define_bool_state(
     name='jax_enable_compilation_cache',
     default=True,
