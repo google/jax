@@ -1187,8 +1187,9 @@ share_binary_between_hosts = define_bool_state(
     name='jax_share_binary_between_hosts',
     default=False,
     help=(
-        'If set to True, the compiled module will be shared between hosts '
-        'directly.'
+        'If set to True and the cumulative size of constants in the pre-compiled graph is '
+        'less than share_binary_between_hosts_size_threshold, the compiled module will be '
+        'shared between hosts directly. '
     ),
 )
 
@@ -1205,7 +1206,8 @@ share_binary_between_hosts_size_threshold = define_float_state(
     'If the size of all constants in a pre-compiled graph is less than this '
     'threshold, allow sharing of compiled binary with other processes. '
     'Even if share_binary_between hosts is True, the total size of all '
-    'constants in the graph must be less than this threshold. The unit is MB'
+    'constants in the graph must be less than this threshold. '
+    'The unit is MB.'
   ),
 )
 
