@@ -15,21 +15,24 @@
 """Module for lowering JAX to Mosaic-compatible MLIR dialects."""
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 import dataclasses
 import functools
-from typing import Any, Callable
-from collections.abc import Sequence
+import string
+from typing import Any
 
 import jax
 from jax import core as jax_core
 from jax import lax
 from jax import tree_util
+from jax._src import ad_util
 from jax._src import custom_derivatives
 from jax._src import debugging
+from jax._src import dtypes
 from jax._src import linear_util as lu
-from jax._src import ad_util
 from jax._src import mesh as mesh_lib
 from jax._src import pjit
+from jax._src import prng
 from jax._src import source_info_util
 from jax._src import state
 from jax._src.interpreters import mlir
@@ -55,9 +58,9 @@ from jax._src.util import safe_map
 from jax._src.util import safe_zip
 from jax._src.util import split_list
 from jax._src.util import unzip2
-from jax._src.util import unzip3
 from jax.experimental.mosaic.dialects import tpu
 import jax.numpy as jnp
+from jaxlib.mlir.ir import Module
 import numpy as np
 
 # TODO(sharadmv): enable type checking
@@ -68,17 +71,23 @@ TPUMemorySpace = tpu_core.TPUMemorySpace
 VMEM = tpu_core.TPUMemorySpace.VMEM
 SMEM = tpu_core.TPUMemorySpace.SMEM
 
-# The value interpreter as a dynamic dimension by MLIR.
+# The value interpreted as a dynamic dimension by MLIR.
 MLIR_DYNAMIC = -9223372036854775808
 
 partial = functools.partial
 map, unsafe_map = safe_map, map  # pylint: disable=redefined-builtin
 zip, unsafe_zip = safe_zip, zip  # pylint: disable=redefined-builtin
 
+UNSIGNED_TO_SIGNED = {
+    np.dtype('uint8'): np.dtype('int8'),
+    np.dtype('uint16'): np.dtype('int16'),
+    np.dtype('uint32'): np.dtype('int32'),
+    np.dtype('uint64'): np.dtype('int64'),
+}
 
 @dataclasses.dataclass
 class MeshContext:
-  logical_to_mesh: ir.Value
+  mesh_shape: tuple[int, ...]
   axis_names: tuple[str, ...]
   mesh_strides: tuple[int, ...]
 
@@ -86,7 +95,9 @@ class MeshContext:
 @dataclasses.dataclass
 class LoweringContext:
   ir_context: ir.Context
-  grid_indices: Sequence[ir.Value] | None
+  grid_rank: int  # Includes both user and vmap axes.
+  mapped_dims: tuple[int, ...]  # Indices of vmapped grid dimensions.
+  user_grid_indices: Sequence[ir.Value] | None
   block_shapes: list[tuple[int | pl_core.Mapped, ...]]
   name_stack: source_info_util.NameStack
   mesh_context: MeshContext | None
@@ -120,7 +131,13 @@ def _dtype_to_ir_type(dtype: jnp.dtype) -> ir.Type:
       return ir.Type.parse("!tpu.semaphore")
     else:
       raise NotImplementedError
-  return mlir.dtype_to_ir_type(dtype)
+  # TODO(justinfu): Remove after mosaic supports unsigned types.
+  # This conversion makes mosaic interpret all unsigned types as signed types.
+  type =  mlir.dtype_to_ir_type(dtype)
+  if isinstance(type, ir.IntegerType):
+    return ir.IntegerType.get_signless(type.width)
+  else:
+    return type
 
 def aval_to_ir_type(aval, shape=None, memory_space: TPUMemorySpace | None = None):
   if isinstance(aval, tpu_core.AbstractSemaphore):
@@ -134,6 +151,15 @@ def aval_to_ir_type(aval, shape=None, memory_space: TPUMemorySpace | None = None
       raise ValueError(f"Cannot allocate {aval.sem_type}.")
     memspace = _memory_space_to_tpu_memspace(TPUMemorySpace.SEMAPHORE)
     return ir.MemRefType.get((), sem_type, memory_space=memspace)
+  if dtypes.issubdtype(aval.dtype, dtypes.prng_key):
+    shape = aval.dtype._impl.key_shape
+    if memory_space is None:
+      memory_space = TPUMemorySpace.SMEM
+    if memory_space != TPUMemorySpace.SMEM:
+      raise ValueError(f"PRNG keys must be stored in SMEM. Got {memory_space}")
+    memspace = _memory_space_to_tpu_memspace(memory_space)
+    return ir.MemRefType.get(shape, _dtype_to_ir_type(np.dtype(np.uint32)),
+                             memory_space=memspace)
   if isinstance(aval, state.AbstractRef):
     if shape is None:
       shape = aval.shape
@@ -297,20 +323,7 @@ class MosaicGridMapping:
     mesh_strides = pallas_utils.strides_from_shape(tuple(
         mesh.shape[a] for a in axis_names
     ))
-    logical_to_mesh = np.empty((mesh.size, len(axis_names)), dtype=np.int32)
-    for i, idx in enumerate(np.ndindex(*mesh.device_ids.shape)):
-      logical_to_mesh[i] = np.array(idx)
-    self.mesh_info = MeshInfo(logical_to_mesh, axis_names, mesh_strides)
-    l_to_m_aval = pl_core.AbstractMemoryRef(
-        jax_core.raise_to_shaped(jax_core.get_aval(logical_to_mesh)),
-        TPUMemorySpace.SMEM,
-    )
-    # We are now passing in the logical -> mesh index mapping
-    # TODO(sharadmv,apaszke): avoid stalling pipeline by marking the index
-    # mapping as scalar prefetch and instead just mark it as an SMEM operand.
-    self.scalar_prefetch_types = (
-        _get_arg_type(l_to_m_aval, None)[0],
-        *self.scalar_prefetch_types)
+    self.mesh_info = MeshInfo(mesh.device_ids.shape, axis_names, mesh_strides)
 
   def maybe_compress_grid(self):
     # If we have many leading parallel dimensions, we should "compress" them
@@ -323,9 +336,7 @@ class MosaicGridMapping:
     return bool(jax_core.used_axis_names_jaxpr(self.jaxpr))
 
   def get_extra_args(self) -> tuple[Any, ...]:
-    if self.mesh_info is None:
-      return ()
-    return (self.mesh_info.logical_to_mesh,)
+    return ()
 
   def get_dimension_semantics(self) -> ir.ArrayAttr:
 
@@ -343,7 +354,7 @@ class MosaicGridMapping:
 
 @dataclasses.dataclass
 class MeshInfo:
-  logical_to_mesh: np.ndarray
+  mesh_shape: tuple[int, ...]
   axis_names: list[str]
   mesh_strides: tuple[int, ...]
 
@@ -355,7 +366,7 @@ def lower_jaxpr_to_module(
     jaxpr: jax_core.Jaxpr,
     dimension_semantics: tuple[str | None, ...] | None,
     mesh: mesh_lib.Mesh | None = None
-) -> ir.Module:
+) -> tuple[Module, tuple[Any, ...]]:
   mosaic_grid_mapping = MosaicGridMapping(
       jaxpr, grid_mapping, dimension_semantics, mesh)
   mosaic_grid_mapping.maybe_compress_grid()
@@ -392,13 +403,20 @@ def lower_jaxpr_to_module(
         raise NotImplementedError("Index map jaxpr with consts not supported.")
       # ANY operands don't support windowing and require empty window_params.
       if aval.memory_space == tpu_core.TPUMemorySpace.ANY:
-        requires_windowing = bm.block_shape != full_ty.shape
-        for atom in bm.index_map_jaxpr.jaxpr.outvars:
-          if requires_windowing:
-            break
-          requires_windowing = not (
-              isinstance(atom, jax_core.Literal) and atom.val == 0
-          )
+        # We may not require windowing if our block_shape matches the original
+        # shape or the dimensions are mapped.
+        requires_windowing = any(
+            b != s
+            for b, s in zip(bm.block_shape, full_ty.shape)
+            if not (b is pl_core.mapped and s == 1)
+        )
+        if np.prod(grid) != 1:
+          for atom in bm.index_map_jaxpr.jaxpr.outvars:
+            if requires_windowing:
+              break
+            requires_windowing = not (
+                isinstance(atom, jax_core.Literal) and atom.val == 0
+            )
         if requires_windowing:
           raise NotImplementedError(
               "Operands in placed in the TPUMemorySpace.ANY memory space don't"
@@ -433,7 +451,9 @@ def lower_jaxpr_to_module(
       m.body.append(mlir_func)
       sym_tab.insert(mlir_func)
     func_op.attributes["window_params"] = ir.ArrayAttr.get(window_params)
-    static_grid = [MLIR_DYNAMIC if b is None else b for b in grid]
+    static_grid = [
+        MLIR_DYNAMIC if b is pl_core.dynamic_grid_dim else b for b in grid
+    ]
     func_op.attributes["iteration_bounds"] = ir.DenseI64ArrayAttr.get(static_grid)
 
   func_op.attributes["scalar_prefetch"] = ir.IntegerAttr.get(
@@ -468,13 +488,15 @@ def lower_jaxpr_to_transform_func(
 
     mesh_info = mosaic_grid_mapping.mesh_info
     if mesh_info is not None:
-      (l_to_m,), scalar_prefetch = split_list(scalar_prefetch, [1])
-      mesh_context = MeshContext(l_to_m, mesh_info.axis_names,
-                                 mesh_info.mesh_strides)
+      mesh_context = MeshContext(
+          mesh_info.mesh_shape, mesh_info.axis_names, mesh_info.mesh_strides
+      )
     else:
       mesh_context = None
     lowering_context = LoweringContext(
         ctx,
+        len(mosaic_grid_mapping.grid),
+        mosaic_grid_mapping.mapped_dims,
         None,
         arg_block_shapes,
         source_info_util.NameStack(),
@@ -524,13 +546,15 @@ def lower_jaxpr_to_func(
                           if i not in mosaic_grid_mapping.mapped_dims)
     mesh_info = mosaic_grid_mapping.mesh_info
     if mesh_info is not None:
-      (l_to_m,), scalar_prefetch = split_list(scalar_prefetch, [1])
-      mesh_context = MeshContext(l_to_m, mesh_info.axis_names,
-                                 mesh_info.mesh_strides)
+      mesh_context = MeshContext(
+          mesh_info.mesh_shape, mesh_info.axis_names, mesh_info.mesh_strides
+      )
     else:
       mesh_context = None
     lowering_context = LoweringContext(
         ctx,
+        len(mosaic_grid_mapping.grid),
+        mosaic_grid_mapping.mapped_dims,
         jaxpr_indices,
         arg_block_shapes,
         source_info_util.NameStack(),
@@ -575,6 +599,29 @@ class LoweringException(Exception):
   pass
 
 
+def _compute_name_stack_updates(
+    old_name_stack: list[str],
+    new_name_stack: list[str]
+) -> tuple[list[str], list[str]]:
+  """Computes the popped/pushed items to the name stack after an update.
+
+  Args:
+    old_name_stack: The name stack prior to the update.
+    new_name_stack: The name stack after the update.
+
+  Returns:
+    popped: A list of names popped from the name stack as part of the update.
+    pushed: A list of names pushed to the name stack as part of the update.
+  """
+  common_prefix_idx = 0
+  for i, (old, new) in enumerate(unsafe_zip(old_name_stack, new_name_stack)):
+    if old == new:
+      common_prefix_idx = i+1
+    else:
+      break
+  return old_name_stack[common_prefix_idx:], new_name_stack[common_prefix_idx:]
+
+
 def jaxpr_subcomp(
     ctx: LoweringContext, jaxpr: jax_core.Jaxpr, *args: ir.Value
 ) -> Sequence[ir.Value]:
@@ -591,13 +638,18 @@ def jaxpr_subcomp(
     return atom.val if isinstance(atom, jax_core.Literal) else env[atom]
 
   def write_env(var: jax_core.Var, val):
-    assert isinstance(val, ir.Value), type(val)
+    is_valid_type = isinstance(val, (ir.Value, KeyScalarBundle))
+    assert is_valid_type, type(val)
     env[var] = val
 
   for invar, bs in zip(jaxpr.invars, ctx.block_shapes):
     block_shape_env[invar] = bs
   map(write_env, jaxpr.invars, args)
 
+  initial_name_stack = [scope.name for scope in ctx.name_stack.stack]
+  current_name_stack: list[str] = []
+  # TODO(justinfu): Handle transform scopes.
+  current_name_stack.extend(initial_name_stack)
   for eqn in jaxpr.eqns:
     invals = map(read_env, eqn.invars)
     source_info = eqn.source_info.replace(
@@ -618,6 +670,17 @@ def jaxpr_subcomp(
             [v.aval for v in eqn.outvars],
             block_shapes,
         )
+
+        # Insert trace_start and trace_stop ops on named_scope boundaries.
+        name_stack = [scope.name for scope in source_info.name_stack.stack]
+        popped, pushed = _compute_name_stack_updates(
+            current_name_stack, name_stack)
+        current_name_stack = name_stack
+        for _ in popped:
+          tpu.TraceStopOp()
+        for name in pushed:
+          tpu.TraceStartOp(message=name, level=10)
+
         try:
           ans = lowering_rules[eqn.primitive](
               rule_context, *invals, **eqn.params
@@ -632,6 +695,7 @@ def jaxpr_subcomp(
               " inval"
               f" types={map(lambda t: getattr(t, 'type', None), invals)}\nIn"
               f" jaxpr:\n{jaxpr}"
+              f"\nException: {e}"
           ) from e
       else:
         raise NotImplementedError(
@@ -642,6 +706,14 @@ def jaxpr_subcomp(
         map(write_env, eqn.outvars, ans)
       else:
         write_env(eqn.outvars[0], ans)
+
+  # Drain the name stack at the end of a jaxpr and insert trace_stop ops.
+  popped, pushed = _compute_name_stack_updates(
+      current_name_stack, initial_name_stack)
+  for _ in popped:
+    tpu.TraceStopOp()
+  assert len(pushed) == 0
+
   outvals = map(read_env, jaxpr.outvars)
   outvals = [
       ir_constant(x) if isinstance(var, jax_core.Literal) else x
@@ -652,6 +724,8 @@ def jaxpr_subcomp(
 
 def _ensure_mlir_value(val, aval):
   if isinstance(val, ir.Value):
+    return val
+  if isinstance(val, KeyScalarBundle):
     return val
   elif isinstance(val, (np.generic, np.ndarray, int, float)):
     return ir_constant(val, _dtype_to_ir_type(aval.dtype))
@@ -740,80 +814,129 @@ def _maybe_cast_to_index(cast_to_index, x):
     return _make_index(x)
   return _ensure_mlir_value(x, aval=jax_core.ShapedArray((), jnp.int32))
 
-def _index_to_start_size(idx: tuple[indexing.Slice | int | ir.Value, ...],
-                         cast_to_index: bool) -> tuple[ir.Value, int, bool]:
+
+def _index_to_start_size_stride(
+    idx: tuple[indexing.Slice | int | ir.Value, ...], cast_to_index: bool
+) -> tuple[ir.Value, int | ir.Value, int, bool]:
   assert not isinstance(idx, slice)
   if isinstance(idx, indexing.Slice):
     start = _maybe_cast_to_index(cast_to_index, idx.start)
     size = idx.size
+    stride = idx.stride
     squeeze = False
   elif isinstance(idx, int):
     start = _maybe_cast_to_index(cast_to_index, idx)
     size = 1
+    stride = 1
     squeeze = True
   else:
     if np.shape(idx):
       raise ValueError(f"Can only use ()-shaped and slice indexing: {idx}")
     start = _maybe_cast_to_index(cast_to_index, idx)
     size = 1
+    stride = 1
     squeeze = True
-  return start, size, squeeze
+  return start, size, stride, squeeze
 
 
-def _indexer_to_start_size(
-    indexer: NDIndexer, ref_block_shape: tuple[int | pl_core.Mapped, ...], *,
+def _indexer_to_start_size_stride(
+    indexer: NDIndexer,
+    ref_block_shape: tuple[int | pl_core.Mapped, ...],
+    *,
     cast_to_index: bool,
-) -> tuple[tuple[ir.Value, ...], tuple[int, ...], tuple[bool, ...],
-           tuple[int | pl_core.Mapped, ...]]:
+) -> tuple[
+    tuple[ir.Value, ...],
+    tuple[int | ir.Value, ...],
+    tuple[int, ...],
+    tuple[bool, ...],
+    tuple[int | pl_core.Mapped, ...],
+]:
   indices_iter = iter(indexer.indices)
-  starts, sizes, squeeze_dims = unzip3(
-      (
-          _maybe_cast_to_index(cast_to_index, 0),
-          1,
-          True,
-      )
-      if s is pl_core.mapped
-      else _index_to_start_size(next(indices_iter), cast_to_index)
-      for s in ref_block_shape
-  )
+  starts, sizes, strides, squeeze_dims = [], [], [], []
+  for s in ref_block_shape:
+    start, size, stride, squeeze_dim = (
+        (
+            _maybe_cast_to_index(cast_to_index, 0),
+            1,
+            1,
+            True,
+        )
+        if s is pl_core.mapped
+        else _index_to_start_size_stride(next(indices_iter), cast_to_index)
+    )
+    starts.append(start)
+    sizes.append(size)
+    strides.append(stride)
+    squeeze_dims.append(squeeze_dim)
   next_index = next(indices_iter, None)
   assert next_index is None, (indexer.indices, ref_block_shape)
   new_ref_block_shape = tuple(s for s, squeeze in zip(sizes, squeeze_dims)
                               if not squeeze)
-  return tuple(starts), tuple(sizes), tuple(squeeze_dims), new_ref_block_shape
+  return (
+      tuple(starts),
+      tuple(sizes),
+      tuple(strides),
+      tuple(squeeze_dims),
+      new_ref_block_shape,
+  )
 
 
 def _slice_memref(ref: ir.Value, ref_aval: state.AbstractRef,
                   indexer: NDIndexer,
                   ref_block_shape: tuple[int | pl_core.Mapped, ...]
-                  ) -> tuple[ir.Value, state.AbstractRef, tuple[int | pl_core.Mapped, ...],
+                  ) -> tuple[ir.Value, tuple[int | pl_core.Mapped, ...],
                              tuple[int | pl_core.Mapped, ...]]:
   assert ref_block_shape is not None
   target_shape = indexer.get_indexer_shape()
-  starts, sizes, squeeze_dims, ref_block_shape = _indexer_to_start_size(
-      indexer, ref_block_shape, cast_to_index=False,
+  starts, sizes, strides, squeeze_dims, ref_block_shape = (
+      _indexer_to_start_size_stride(
+          indexer,
+          ref_block_shape,
+          cast_to_index=False,
+      )
   )
+  if not all((s is None or s == 1) for s in strides):
+    raise NotImplementedError("Strided slices of references are unsupported.")
+  dynamic_sizes = tuple(s for s in sizes if isinstance(s, ir.Value))
+  ir_dynamic_size = ir.ShapedType.get_dynamic_size()
+  static_sizes = tuple(s if not isinstance(s, ir.Value)
+                       else ir_dynamic_size for s in sizes)
   target_ref_ty = ir.MemRefType.get(
-      tuple(sizes), _dtype_to_ir_type(ref_aval.dtype),
+      static_sizes, _dtype_to_ir_type(ref_aval.dtype),
       memory_space=ref.type.memory_space)
-  inner_aval = ref_aval.inner_aval
-  out_aval = ref_aval.update(inner_aval=inner_aval.update(shape=target_shape))
-  out = tpu.MemRefSliceOp(target_ref_ty, ref, starts).result
+  out = tpu.MemRefSliceOp(target_ref_ty, ref, starts, dynamic_sizes).result
   if any(squeeze_dims):
     # We need to squeeze out some dimensions
+    static_sizes = tuple(s if not isinstance(s, ir.Value)
+                         else ir_dynamic_size for s in target_shape)
     squeezed_ref_ty = ir.MemRefType.get(
-        tuple(target_shape), _dtype_to_ir_type(ref_aval.dtype),
+        static_sizes, _dtype_to_ir_type(ref_aval.dtype),
         memory_space=ref.type.memory_space)
     out = tpu.MemRefSqueezeOp(squeezed_ref_ty, out).result
-  return out, out_aval, ref_block_shape
+  return out, ref_block_shape
 
 
 def _index_ref(ref, ref_aval, ref_block_shape, indexers):
   for indexer in indexers:
-    ref, ref_aval, ref_block_shape = _slice_memref(ref, ref_aval, indexer,
-                                                   ref_block_shape)
-  return ref, ref_aval, ref_block_shape
+    ref, ref_block_shape = _slice_memref(ref, ref_aval, indexer,
+                                         ref_block_shape)
+  return ref, ref_block_shape
 
+@dataclasses.dataclass(frozen=True)
+class KeyScalarBundle:
+  """A container class for PRNG key data.
+
+  We pass around keys as a KeyScalarBundle in the lowering pass rather than
+  as a vector, since we want the key data to live in scalar registers rather
+  than vector registers. This special dataclass exists so we can return
+  multiple scalar values from load_op, because the load_op primitive does
+  not allow multiple results.
+
+  Attributes:
+    scalars: A list of OpResults representing scalar key data during the
+      lowering pass.
+  """
+  scalars: list[ir.OpResult]
 
 def _load_lowering_rule(ctx: LoweringRuleContext, *args_flat, args_tree, **_):
   ref, indexers, mask, _ = args_tree.unflatten(args_flat)
@@ -826,12 +949,18 @@ def _load_lowering_rule(ctx: LoweringRuleContext, *args_flat, args_tree, **_):
     raise NotImplementedError
 
   ref_block_shape, *_ = ctx.block_shapes
-  ref, _, ref_block_shape = _index_ref(
+  ref, ref_block_shape = _index_ref(
       ref, ref_aval, ref_block_shape, slice_indexers)
   ref_type = ir.MemRefType(ref.type)
   is_smem_load = str(ref_type.memory_space) == "#tpu.memory_space<smem>"
   ref_aval, *_ = ctx.avals_in
   (aval_out,) = ctx.avals_out
+  if isinstance(aval_out.dtype, prng.KeyTy):
+    if not is_smem_load:
+      raise ValueError("PRNG keys must be loaded from SMEM. Did you set "
+                       "the memory space to TPUMemorySpace.SMEM in the "
+                       "BlockSpec for the PRNG key input?")
+    return _prng_key_load_lowering_rule(ctx, *args_flat, args_tree=args_tree)
   if not is_smem_load and not ref_block_shape:
     raise NotImplementedError(
         "Indexing into a ()-shaped Ref not yet supported on TPU.")
@@ -840,14 +969,21 @@ def _load_lowering_rule(ctx: LoweringRuleContext, *args_flat, args_tree, **_):
       for a in idx_aval.indices
   ):
     raise ValueError("Cannot do int indexing on TPU")
-  starts, sizes, _, _ = _indexer_to_start_size(
-      idx, ref_block_shape, cast_to_index=True,
+  starts, sizes, strides, _, _ = _indexer_to_start_size_stride(
+      idx,
+      ref_block_shape,
+      cast_to_index=True,
   )
+  need_stride = not all((s is None or s == 1) for s in strides)
   load_aval = jax_core.ShapedArray(sizes, dtype=ref_aval.dtype)
   if is_smem_load:
     if ctx.avals_out[0].shape:
       raise ValueError("Can only load scalars from SMEM")
     return memref.LoadOp(ref, starts).result
+  if need_stride:
+    load_val = tpu.StridedLoadOp(
+        aval_to_ir_type(load_aval), ref, starts, strides
+    ).result
   else:
     load_val = vector.LoadOp(aval_to_ir_type(load_aval), ref, starts).result
   if load_aval == aval_out:
@@ -855,6 +991,37 @@ def _load_lowering_rule(ctx: LoweringRuleContext, *args_flat, args_tree, **_):
   vec_type = ir.VectorType.get(aval_out.shape,
                                _dtype_to_ir_type(aval_out.dtype))
   return vector.ShapeCastOp(vec_type, load_val).result
+
+def _prng_key_load_lowering_rule(ctx: LoweringRuleContext, *args_flat, args_tree) -> KeyScalarBundle:
+  """Lowering rule for loading PRNG keys from SMEM.
+
+  PRNG key loads are currently lowered as a list of scalar loads from SMEM,
+  rather than a single vector load.
+  We store these scalars in a bundle type called KeyScalarBundle, which has
+  special case handling for functions that consume the key such as set_seed.
+  """
+  ref, _, _, _ = args_tree.unflatten(args_flat)
+  (aval_out,) = ctx.avals_out
+  assert isinstance(aval_out.dtype, prng.KeyTy)
+  ref_block_shape = aval_out.dtype._impl.key_shape
+
+  if len(ref_block_shape) != 2:
+    raise NotImplementedError("Seed key_data must be 2D.")
+  if tuple(ref_block_shape) != (1, 1):
+    raise NotImplementedError(
+      f"Seed key_data of shape != (1, 1) not supported. Got: {ref_block_shape}")
+
+  load_ops = []
+  for i in range(ref_block_shape[0]):
+    idx = NDIndexer(indices=(0, i), shape=ref_block_shape,
+                    int_indexer_shape=tuple())
+    starts, _, _, _, _ = _indexer_to_start_size_stride(
+        idx,
+        ref_block_shape,
+        cast_to_index=True,
+    )
+    load_ops.append(memref.LoadOp(ref, starts).result)
+  return KeyScalarBundle(scalars=load_ops)
 
 
 lowering_rules[primitives.load_p] = _load_lowering_rule
@@ -873,7 +1040,7 @@ def _masked_swap_lowering_rule(
     raise NotImplementedError
 
   ref_block_shape, *_ = ctx.block_shapes
-  ref, _, ref_block_shape = _index_ref(
+  ref, ref_block_shape = _index_ref(
       ref, ref_aval, ref_block_shape, slice_indexers)
 
   ref_type = ir.MemRefType(ref.type)
@@ -890,10 +1057,12 @@ def _masked_swap_lowering_rule(
     raise NotImplementedError(
         "Indexing into a ()-shaped Ref not yet supported on TPU.")
 
-  starts, _, _, _ = _indexer_to_start_size(
-      idx, ref_block_shape, cast_to_index=True,
+  starts, _, strides, _, _ = _indexer_to_start_size_stride(
+      idx,
+      ref_block_shape,
+      cast_to_index=True,
   )
-
+  need_stride = not all((s is None or s == 1) for s in strides)
   if is_smem_store:
     if val_aval.shape:
       raise ValueError("Can only store scalars to SMEM")
@@ -912,7 +1081,10 @@ def _masked_swap_lowering_rule(
   mem_aval = aval_out.update(shape=tuple(mem_slice_shape))
   mem_aval_vec_type = ir.VectorType.get(mem_aval.shape,
                                         _dtype_to_ir_type(mem_aval.dtype))
-  result = vector.LoadOp(mem_aval_vec_type, ref, starts).result
+  if need_stride:
+    result = tpu.StridedLoadOp(mem_aval_vec_type, ref, starts, strides).result
+  else:
+    result = vector.LoadOp(mem_aval_vec_type, ref, starts).result
   if mem_aval != aval_out:
     # We are slicing a scalar so provided dummy 1 indices
     result_vec_type = ir.VectorType.get(aval_out.shape,
@@ -921,7 +1093,10 @@ def _masked_swap_lowering_rule(
     val_vec_type = ir.VectorType.get(mem_aval.shape,
                                      _dtype_to_ir_type(mem_aval.dtype))
     val = vector.ShapeCastOp(val_vec_type, val).result
-  vector.StoreOp(val, ref, starts)
+  if need_stride:
+    tpu.StridedStoreOp(val, ref, starts, strides)
+  else:
+    vector.StoreOp(val, ref, starts)
   return result
 
 
@@ -941,13 +1116,15 @@ lowering_rules[primitives.multiple_of_p] = _multiple_of_lowering_rule
 
 def _reduce_max_lowering_rule(ctx: LoweringRuleContext, x, *, axes):
   (x_aval,) = ctx.avals_in
+  if not ctx.avals_out[0].shape:
+    raise NotImplementedError(
+        "Cannot lower reductions to scalar. Reduce to one element vector"
+        " instead, using keepdims=True."
+    )
+
   out_type = aval_to_ir_type(ctx.avals_out[0])
   if jnp.issubdtype(x_aval.dtype, jnp.floating):
-    # TODO(apaszke): Remove in 03/2024.
-    if hasattr(vector.CombiningKind, "MAXIMUMF"):
-      kind = vector.CombiningKind.MAXIMUMF
-    else:
-      kind = vector.CombiningKind.MAXF
+    kind = vector.CombiningKind.MAXIMUMF
     val = ir.FloatAttr.get(ir.F32Type.get(), float("-inf"))
     identity = ir.DenseElementsAttr.get_splat(out_type, val)
   elif jnp.issubdtype(x_aval.dtype, jnp.signedinteger):
@@ -973,6 +1150,12 @@ lowering_rules[lax.reduce_max_p] = _reduce_max_lowering_rule
 
 def _reduce_sum_lowering_rule(ctx: LoweringRuleContext, x, *, axes):
   (x_aval,) = ctx.avals_in
+  if not ctx.avals_out[0].shape:
+    raise NotImplementedError(
+        "Cannot lower reductions to scalar. Reduce to one element vector"
+        " instead, using keepdims=True."
+    )
+
   out_type = aval_to_ir_type(ctx.avals_out[0])
   if jnp.issubdtype(x_aval.dtype, jnp.floating):
     kind = ir.Attribute.parse("#vector.kind<add>")
@@ -1031,14 +1214,24 @@ def _dot_general_lowering_rule(
   (aval_out,) = ctx.avals_out
   out_type = aval_to_ir_type(aval_out)
   val_type = out_type.element_type
-  if any(cls.isinstance(val_type) for cls in [ir.BF16Type, ir.F32Type]):
+  if any(
+      cls.isinstance(val_type)
+      for cls in [
+          ir.BF16Type,
+          ir.F32Type,
+          ir.Float8E5M2Type,
+          ir.Float8E4M3FNType,
+      ]
+  ):
     val = ir.FloatAttr.get(val_type, 0.0)
   elif ir.IntegerType.isinstance(val_type):
     val = ir.IntegerAttr.get(val_type, 0)
   else:
     raise NotImplementedError(ctx.avals_out[0].dtype)
   if any(len(a.shape) != 2 for a in ctx.avals_in):
-    raise NotImplementedError(ctx.avals_in)
+    raise NotImplementedError(
+        f"Only 2D tensors supported in dot; received: {ctx.avals_in}"
+    )
   lhs_aval, _ = ctx.avals_in
   # This is really a matrix-vector product. It only looks like matrix-matrix.
   if lhs_dims == (1,) and rhs_dims == (1,) and ctx.avals_in[1].shape[0] == 1:
@@ -1110,14 +1303,14 @@ def _convert_helper(x, *, to_dtype):
   if jnp.issubdtype(from_dtype, jnp.dtype("bool")):
     x = x.astype(jnp.int32)
     return _convert_helper(x, to_dtype=to_dtype)
-  if jnp.issubdtype(from_dtype, jnp.integer):
+  if jnp.issubdtype(from_dtype, jnp.signedinteger):
     if from_dtype.itemsize < 4:
       x = x.astype(jnp.int32)
     if jnp.issubdtype(to_dtype, jnp.floating) and to_dtype.itemsize < 4:
       x = x.astype(jnp.float32)
     return x.astype(to_dtype)
   if jnp.issubdtype(from_dtype, jnp.floating):
-    if jnp.issubdtype(to_dtype, jnp.integer):
+    if jnp.issubdtype(to_dtype, jnp.signedinteger):
       if from_dtype.itemsize < 4:
         x = x.astype(jnp.float32)
       if to_dtype.itemsize < 4:
@@ -1138,6 +1331,11 @@ def _convert_element_type_lowering_rule(
   out_aval = ctx.avals_out[0]
   old_dtype = ctx.avals_in[0].dtype
   out_type = aval_to_ir_type(out_aval)
+
+  # TODO(justinfu): Remove after mosaic supports unsigned types.
+  # This conversion makes mosaic interpret all unsigned types as signed types.
+  if np.issubdtype(new_dtype, jnp.unsignedinteger):
+    new_dtype = UNSIGNED_TO_SIGNED[new_dtype]
   if old_dtype == new_dtype:
     return x
   if jnp.issubdtype(old_dtype, jnp.floating) and jnp.issubdtype(
@@ -1234,24 +1432,30 @@ lowering_rules[lax.transpose_p] = _transpose_lowering_rule
 
 
 def _bcast(x, y, x_aval, y_aval, out_aval):
+  x_dtype = x_aval.dtype
+  y_dtype = y_aval.dtype
+  if y_aval.weak_type:
+    y_dtype = x_aval.dtype
+  elif x_aval.weak_type:
+    x_dtype = y_aval.dtype
   if isinstance(x, (np.ndarray, np.number, int, float)):
-    if hasattr(y, "type") and y.type == ir.IndexType.get():
+    if getattr(y, "type", None) == ir.IndexType.get():
       mlir_type = y.type
     else:
-      mlir_type = _dtype_to_ir_type(x_aval.dtype)
+      mlir_type = _dtype_to_ir_type(x_dtype)
     x = ir_constant(x, mlir_type)
   if isinstance(y, (np.ndarray, np.number, int, float)):
-    if hasattr(x, "type") and x.type == ir.IndexType.get():
+    if getattr(x, "type", None) == ir.IndexType.get():
       mlir_type = x.type
     else:
-      mlir_type = _dtype_to_ir_type(y_aval.dtype)
+      mlir_type = _dtype_to_ir_type(y_dtype)
     y = ir_constant(y, mlir_type)
   out_shape = list(out_aval.shape)
   if x_aval.shape != out_aval.shape:
-    x_ty = ir.VectorType.get(out_shape, _dtype_to_ir_type(x_aval.dtype))
+    x_ty = ir.VectorType.get(out_shape, _dtype_to_ir_type(x_dtype))
     x = vector.BroadcastOp(x_ty, x)
   if y_aval.shape != out_aval.shape:
-    y_ty = ir.VectorType.get(out_shape, _dtype_to_ir_type(y_aval.dtype))
+    y_ty = ir.VectorType.get(out_shape, _dtype_to_ir_type(y_dtype))
     y = vector.BroadcastOp(y_ty, y)
   return x, y
 
@@ -1484,6 +1688,20 @@ def _log1p_lowering_rule(ctx: LoweringRuleContext, x):
 lowering_rules[lax.log1p_p] = _log1p_lowering_rule
 
 
+def _round_lowering_rule(ctx: LoweringRuleContext, x, *, rounding_method):
+  if rounding_method == 0:
+    return math.RoundOp(x).result
+  elif rounding_method == 1:
+    return math.RoundEvenOp(x).result
+  else:
+    raise NotImplementedError(f"Unsupported rounding method: {rounding_method}")
+
+
+lowering_rules[lax.round_p] = _round_lowering_rule
+
+
+# See https://mlir.llvm.org/docs/Dialects/ArithOps/#arithcmpi-arithcmpiop for
+# the mapping from comparison type to integer predicates for int comparisons.
 _cmpi_lowering_types = {
     lax.eq_p: 0,
     lax.ne_p: 1,
@@ -1493,10 +1711,15 @@ _cmpi_lowering_types = {
     lax.ge_p: 5,
 }
 
+# See https://mlir.llvm.org/docs/Dialects/ArithOps/#arithcmpf-arithcmpfop for
+# the mapping from comparison type to integer predicate for float comparisons.
 _cmpf_lowering_types = {
     lax.eq_p: 1,
-    lax.gt_p: 2,
     lax.ne_p: 6,
+    lax.lt_p: 4,
+    lax.le_p: 5,
+    lax.gt_p: 2,
+    lax.ge_p: 3,
 }
 
 
@@ -1523,18 +1746,22 @@ lowering_rules[lax.gt_p] = functools.partial(_cmp_lowering_rule, lax.gt_p)
 lowering_rules[lax.ge_p] = functools.partial(_cmp_lowering_rule, lax.ge_p)
 
 
-def _and_lowering_rule(ctx: LoweringRuleContext, lhs, rhs):
-  return arith.AndIOp(lhs, rhs).result
+def _and_lowering_rule(ctx: LoweringRuleContext, x, y):
+  x, y = _bcast(x, y, *ctx.avals_in, *ctx.avals_out)
+  return arith.AndIOp(x, y).result
 
 
 lowering_rules[lax.and_p] = _and_lowering_rule
+skip_mlir_conversions.add(lax.and_p)
 
 
-def _or_lowering_rule(ctx: LoweringRuleContext, lhs, rhs):
-  return arith.OrIOp(lhs, rhs).result
+def _or_lowering_rule(ctx: LoweringRuleContext, x, y):
+  x, y = _bcast(x, y, *ctx.avals_in, *ctx.avals_out)
+  return arith.OrIOp(x, y).result
 
 
 lowering_rules[lax.or_p] = _or_lowering_rule
+skip_mlir_conversions.add(lax.or_p)
 
 
 def _not_lowering_rule(ctx: LoweringRuleContext, x):
@@ -1631,8 +1858,8 @@ lowering_rules[for_loop.for_p] = _for_lowering_rule
 
 
 def _lower_jaxpr_to_for_loop(ctx: LoweringRuleContext,
-                             jaxpr: jax_core.Jaxpr, start: int,
-                             num_steps: int, consts, *args,
+                             jaxpr: jax_core.Jaxpr, start: int | ir.Value,
+                             num_steps: int | ir.Value, consts, *args,
                              has_loop_index: bool,
                              unroll: int):
   def _run_body(i, args):
@@ -1649,7 +1876,11 @@ def _lower_jaxpr_to_for_loop(ctx: LoweringRuleContext,
       args = jaxpr_subcomp(lowering_context, jaxpr, *consts, *args)
     return args
 
-  if num_steps == unroll:
+  if (
+      not isinstance(start, ir.Value)
+      and not isinstance(num_steps, ir.Value)
+      and num_steps == unroll
+  ):
     # No need for an scf.For. We can just unroll completely
     for i in range(start, start + num_steps):
       args = _run_body(
@@ -1660,13 +1891,9 @@ def _lower_jaxpr_to_for_loop(ctx: LoweringRuleContext,
   if unroll != 1:
     raise NotImplementedError(
         f"Only unroll={num_steps=} and unroll=1 supported. Got {unroll=}.")
-  lbd = ir_constant(0, mlir_type=mlir.dtype_to_ir_type(jnp.dtype("int32")))
-  if isinstance(num_steps, int):
-    ubd = ir_constant(
-        num_steps, mlir_type=_dtype_to_ir_type(jnp.dtype("int32"))
-    )
-  else:
-    ubd = num_steps
+  i32 = jax_core.ShapedArray((), jnp.int32)
+  lbd = _ensure_mlir_value(start, i32)
+  ubd = arith.addi(lbd, _ensure_mlir_value(num_steps, i32))
   step = ir_constant(1, mlir_type=_dtype_to_ir_type(jnp.dtype("int32")))
   for_op = scf.ForOp(lbd, ubd, step, args)
   with ir.InsertionPoint(for_op.body):
@@ -1705,10 +1932,12 @@ def _scan_lowering_rule(
     linear: tuple[bool, ...],
     length: int,
     reverse: bool,
-    unroll: bool,
+    unroll: bool | int,
     num_consts: int,
     num_carry: int,
+    _split_transpose: bool,
 ):
+  del _split_transpose
   # Can only handle fori_loop-like scans
   num_extensive = len(args) - num_consts - num_carry
   if num_extensive: raise NotImplementedError
@@ -1719,9 +1948,9 @@ def _scan_lowering_rule(
   if jaxpr_consts: raise NotImplementedError
   del jaxpr_consts
 
-  jaxpr, has_loop_index = (
-      pallas_utils.pattern_match_scan_to_fori_loop(jaxpr, num_consts, num_carry)
-      )
+  jaxpr, has_loop_index = pallas_utils.pattern_match_scan_to_fori_loop(
+      jaxpr, num_consts, num_carry
+  )
   consts, args = split_list(args, [num_consts])
   consts_avals, args_avals = split_list(ctx.avals_in, [num_consts])
   if has_loop_index:
@@ -1744,17 +1973,15 @@ lowering_rules[lax.scan_p] = _scan_lowering_rule
 skip_mlir_conversions.add(lax.scan_p)
 
 
-def _while_lowering_rule(
+def _lower_while_via_fori(
     ctx: LoweringRuleContext,
     *args,
+    fori_jaxpr,
     cond_nconsts,
     cond_jaxpr,
     body_nconsts,
     body_jaxpr,
 ):
-  jaxpr = pallas_utils.pattern_match_while_to_fori_loop(
-      cond_jaxpr, cond_nconsts, body_jaxpr, body_nconsts
-  )
   _, body_consts, carry = split_list(args, [cond_nconsts, body_nconsts])
   (lb, ub), args = carry[:2], carry[2:]
   for_out = _lower_jaxpr_to_for_loop(
@@ -1762,9 +1989,9 @@ def _while_lowering_rule(
           block_shapes=ctx.block_shapes[: body_nconsts + 1]
           + ctx.block_shapes[body_nconsts + 2 :],
       ),
-      jaxpr,
+      fori_jaxpr,
       lb,
-      ub,
+      arith.subi(ub, lb),
       body_consts,
       *args,
       has_loop_index=True,
@@ -1773,9 +2000,87 @@ def _while_lowering_rule(
   return [ub, ub, *for_out]
 
 
+def _while_lowering_rule(
+    ctx: LoweringRuleContext,
+    *args,
+    cond_nconsts,
+    cond_jaxpr,
+    body_nconsts,
+    body_jaxpr,
+):
+  # First try to lower via a simpler fori loop, which may optimize better.
+  fori_jaxpr, err = pallas_utils.pattern_match_while_to_fori_loop(
+      cond_jaxpr, cond_nconsts, body_jaxpr, body_nconsts
+  )
+  if fori_jaxpr is not None:
+    return _lower_while_via_fori(
+        ctx,
+        *args,
+        fori_jaxpr=fori_jaxpr,
+        cond_nconsts=cond_nconsts,
+        cond_jaxpr=cond_jaxpr,
+        body_nconsts=body_nconsts,
+        body_jaxpr=body_jaxpr,
+    )
+
+  # If we fail conversion to fori, fallback to an ordinary while loop.
+  cond_consts, body_consts, carry = split_list(
+      args, [cond_nconsts, body_nconsts]
+  )
+  cond_const_block_shapes, body_const_block_shapes, carry_block_shapes = (
+      split_list(ctx.block_shapes, [cond_nconsts, body_nconsts])
+  )
+  cond_const_types = [a.type for a in cond_consts]
+  body_const_types = [a.type for a in body_consts]
+  carry_types = [a.type for a in carry]
+  all_types = [*cond_const_types, *body_const_types, *carry_types]
+  while_op = scf.WhileOp(all_types, args)
+
+  before_block = while_op.before.blocks.append(*all_types)
+  cond_consts_, _, carry_ = split_list(
+      before_block.arguments,
+      [cond_nconsts, body_nconsts],
+  )
+  cond_args = [*cond_consts_, *carry_]
+  with ir.InsertionPoint.at_block_begin(before_block):
+    [cond] = jaxpr_subcomp(
+        ctx.lowering_context.replace(
+            block_shapes=[*cond_const_block_shapes, *carry_block_shapes]
+        ),
+        cond_jaxpr.jaxpr,
+        *cond_args,
+    )
+    scf.condition(cond, before_block.arguments)
+
+  after_block = while_op.after.blocks.append(*all_types)
+  cond_consts_, body_consts_, carry_ = split_list(
+      after_block.arguments,
+      [cond_nconsts, body_nconsts],
+  )
+  all_args = [*cond_consts_, *body_consts_, *carry_]
+  cond_const_args, body_const_args, carry_args = split_list(
+      all_args, [cond_nconsts, body_nconsts]
+  )
+  with ir.InsertionPoint.at_block_begin(after_block):
+    loop_out = jaxpr_subcomp(
+        ctx.lowering_context.replace(
+            block_shapes=[*body_const_block_shapes, *carry_block_shapes],
+        ),
+        body_jaxpr.jaxpr,
+        *body_const_args,
+        *carry_args,
+    )
+    all_handles = [*cond_const_args, *body_const_args, *loop_out]
+    if all_handles:
+      scf.yield_(all_handles)
+
+  all_out = list(while_op.results_)
+  return all_out[cond_nconsts + body_nconsts :]
+
+
 lowering_rules[lax.while_p] = _while_lowering_rule
 
-def _cond_lowering_rule(ctx: LoweringRuleContext, *args, branches, linear):
+def _cond_lowering_rule(ctx: LoweringRuleContext, *args, branches):
   index, *args = args
   out_types = map(aval_to_ir_type, ctx.avals_out)
   pred = arith.CmpIOp(
@@ -1794,7 +2099,6 @@ def _cond_lowering_rule(ctx: LoweringRuleContext, *args, branches, linear):
           arith.SubIOp(index, ir_constant(1, index.type)).result,
           *args,
           branches=branches[1:],
-          linear=linear,
       )
     else:
       out = jaxpr_subcomp(lowering_context, branches[1].jaxpr, *args)
@@ -1846,22 +2150,32 @@ lowering_rules[debugging.debug_callback_p] = _debug_callback_lowering_rule
 
 
 def _program_id_lowering_rule(ctx: LoweringRuleContext, *, axis: int):
-  if ctx.lowering_context.grid_indices is None:
+  if ctx.lowering_context.user_grid_indices is None:
     raise ValueError(
         f"program id: {axis} was passed, but user did not provide a grid."
     )
-  length = len(ctx.lowering_context.grid_indices)
+  length = len(ctx.lowering_context.user_grid_indices)
   if not (0 <= axis < length):
     raise ValueError(
         f"user passed in program id with axis: {axis}, but grid only has"
         f" length: {length}"
     )
-  return ctx.lowering_context.grid_indices[axis]
+  return ctx.lowering_context.user_grid_indices[axis]
 lowering_rules[primitives.program_id_p] = _program_id_lowering_rule
 
 def _num_programs_lowering_rule(ctx: LoweringRuleContext, *, axis: int):
-  del ctx
-  return tpu.iteration_bound(axis)
+  mapped_axes = set(ctx.lowering_context.mapped_dims)
+  seen_user_axes = 0
+  for i in range(ctx.lowering_context.grid_rank):
+    seen_user_axes += int(i not in mapped_axes)
+    if seen_user_axes == axis + 1:
+      break
+  else:
+    raise ValueError(
+        f"user passed in program id with axis: {axis}, but grid only has"
+        f" length: {len(ctx.lowering_context.grid_rank)}"
+    )
+  return tpu.iteration_bound(i)
 lowering_rules[primitives.num_programs_p] = _num_programs_lowering_rule
 
 
@@ -1874,9 +2188,11 @@ lowering_rules[tpu_primitives.repeat_p] = _repeat_lowering_rule
 
 
 def _roll_lowering_rule(
-    ctx: LoweringRuleContext, x, *, shift, axis, stride, stride_axis
+    ctx: LoweringRuleContext, x, shift, *, axis, stride, stride_axis
 ):
-  return tpu.RotateOp(
+  (out_aval,) = ctx.avals_out
+  return tpu.DynamicRotateOp(
+      aval_to_ir_type(out_aval),
       x,
       shift,
       axis,
@@ -1906,24 +2222,30 @@ lowering_rules[lax.slice_p] = _slice_lowering_rule
 
 
 def _xor_lowering_rule(ctx: LoweringRuleContext, x, y):
+  x, y = _bcast(x, y, *ctx.avals_in, *ctx.avals_out)
   return arith.XOrIOp(x, y).result
 
 
 lowering_rules[lax.xor_p] = _xor_lowering_rule
+skip_mlir_conversions.add(lax.xor_p)
 
 
 def _shift_left_lowering_rule(ctx: LoweringRuleContext, x, d):
+  x, d = _bcast(x, d, *ctx.avals_in, *ctx.avals_out)
   return arith.ShLIOp(x, d).result
 
 
 lowering_rules[lax.shift_left_p] = _shift_left_lowering_rule
+skip_mlir_conversions.add(lax.shift_left_p)
 
 
 def _shift_right_logical_lowering_rules(ctx: LoweringRuleContext, x, d):
+  x, d = _bcast(x, d, *ctx.avals_in, *ctx.avals_out)
   return arith.ShRUIOp(x, d).result
 
 
 lowering_rules[lax.shift_right_logical_p] = _shift_right_logical_lowering_rules
+skip_mlir_conversions.add(lax.shift_right_logical_p)
 
 
 def _bitcast_lowering_rule(ctx: LoweringRuleContext, x, *, ty):
@@ -1931,24 +2253,16 @@ def _bitcast_lowering_rule(ctx: LoweringRuleContext, x, *, ty):
   (out_aval,) = ctx.avals_out
   return tpu.BitcastOp(aval_to_ir_type(out_aval), x).result
 
-
 lowering_rules[tpu_primitives.bitcast_p] = _bitcast_lowering_rule
 
-def _trace_start_lowering_rule(
-    ctx: LoweringRuleContext, *, message: str, level: int
-):
-  return tpu.TraceStartOp(message=message, level=level).results
-
-
-lowering_rules[tpu_primitives.trace_start_p] = _trace_start_lowering_rule
-
-
-def _trace_stop_lowering_rule(ctx: LoweringRuleContext):
-  return tpu.TraceStopOp().results
-
-
-lowering_rules[tpu_primitives.trace_stop_p] = _trace_stop_lowering_rule
-
+def _bitcast_convert_type_lowering_rule(
+    ctx: LoweringRuleContext, x, *, new_dtype):
+  (in_aval, ) = ctx.avals_in
+  (out_aval,) = ctx.avals_out
+  if in_aval.dtype.itemsize != new_dtype.itemsize:
+    raise NotImplementedError("Changing bitwidths not supported.")
+  return tpu.BitcastOp(aval_to_ir_type(out_aval), x).result
+lowering_rules[lax.bitcast_convert_type_p] = _bitcast_convert_type_lowering_rule
 
 def _alloc_value(aval: jax_core.AbstractValue) -> ir.Value:
   if isinstance(aval, pl_core.AbstractMemoryRef):
@@ -1993,7 +2307,7 @@ def _device_id_to_logical(
     device_ids = tree_util.tree_leaves(device_id)
     mesh_strides = ctx.lowering_context.mesh_context.mesh_strides
     def _linearize_mesh_indices(*indices):
-      return sum([a * b for a, b in zip(indices, mesh_strides)])
+      return sum(a * b for a, b in zip(indices, mesh_strides))
     lower_ctx = LoweringRuleContext(
         lowering_context=ctx.lowering_context,
         avals_in=[jax_core.ShapedArray((), jnp.int32)] * len(device_ids),
@@ -2006,18 +2320,34 @@ def _device_id_to_logical(
     return device_id
   raise NotImplementedError(f"Unsupported device id type: {device_id_type}")
 
+
+def _semaphore_read_lowering_rule(
+    ctx: LoweringRuleContext,
+    *args,
+    args_tree,
+):
+  sem_aval, _ = tree_util.tree_unflatten(args_tree, ctx.avals_in)
+  sem, indexers = tree_util.tree_unflatten(args_tree, args)
+  sem, _ = _index_ref(sem, sem_aval, sem_aval.shape, indexers)
+  return tpu.SemaphoreReadOp(sem).result
+
+
+lowering_rules[tpu_primitives.semaphore_read_p] = _semaphore_read_lowering_rule
+
 def _semaphore_signal_lowering_rule(
     ctx: LoweringRuleContext,
     *args,
     args_tree,
     device_id_type: tpu_primitives.DeviceIdType,
 ):
-  sem_aval, _, _, _ = tree_util.tree_unflatten(args_tree, ctx.avals_in)
-  sem, indexers, value, device_id = tree_util.tree_unflatten(args_tree, args)
-  sem, _, _ = _index_ref(sem, sem_aval, sem_aval.shape, indexers)
+  sem_aval, _, _, _, _ = tree_util.tree_unflatten(args_tree, ctx.avals_in)
+  sem, indexers, value, device_id, core_index = tree_util.tree_unflatten(args_tree, args)
+  sem, _ = _index_ref(sem, sem_aval, sem_aval.shape, indexers)
   if device_id is not None:
     device_id = _device_id_to_logical(ctx, device_id, device_id_type)
-  return tpu.SemaphoreSignalOp(sem, value, device_id=device_id).results
+  return tpu.SemaphoreSignalOp(
+      sem, value, device_id=device_id, core_id=core_index
+  ).results
 
 
 lowering_rules[tpu_primitives.semaphore_signal_p] = (
@@ -2027,7 +2357,7 @@ lowering_rules[tpu_primitives.semaphore_signal_p] = (
 def _semaphore_wait_lowering_rule(ctx: LoweringRuleContext, *args, args_tree):
   sem_aval, _, _ = tree_util.tree_unflatten(args_tree, ctx.avals_in)
   sem, indexers, value = tree_util.tree_unflatten(args_tree, args)
-  sem, _, _ = _index_ref(sem, sem_aval, sem_aval.shape, indexers)
+  sem, _ = _index_ref(sem, sem_aval, sem_aval.shape, indexers)
   return tpu.SemaphoreWaitOp(sem, value).results
 lowering_rules[tpu_primitives.semaphore_wait_p] = _semaphore_wait_lowering_rule
 
@@ -2049,16 +2379,16 @@ def _dma_start_lowering_rule(ctx: LoweringRuleContext, *args, tree,
   )
   block_shapes = tree_util.tree_unflatten(tree, ctx.block_shapes)
   src_ref_block_shape, dst_ref_block_shape = block_shapes[0], block_shapes[2]
-  src_ref, _, _ = _index_ref(
+  src_ref, _ = _index_ref(
       src_ref, src_ref_aval, src_ref_block_shape, src_indexers
   )
   if src_sem is not None:
-    src_sem, _, _ = _index_ref(
+    src_sem, _ = _index_ref(
         src_sem, src_sem_aval, src_sem_aval.shape, src_sem_indexers)
-  dst_ref, _, _ = _index_ref(
+  dst_ref, _ = _index_ref(
       dst_ref, dst_ref_aval, dst_ref_block_shape, dst_indexers
   )
-  sem, _, _ = _index_ref(sem, sem_aval, sem_aval.shape, sem_indexers)
+  sem, _ = _index_ref(sem, sem_aval, sem_aval.shape, sem_indexers)
   if device_id is not None:
     device_id = _device_id_to_logical(ctx, device_id, device_id_type)
   return tpu.EnqueueDMAOp(src_ref, dst_ref, sem, source_semaphore=src_sem,
@@ -2073,10 +2403,10 @@ def _dma_wait_lowering_rule(ctx: LoweringRuleContext, *args, tree,
   sem_aval, _, ref_aval, _ = tree_util.tree_unflatten(tree, ctx.avals_in)
   block_shapes = tree_util.tree_unflatten(tree, ctx.block_shapes)
   ref_block_shape = block_shapes[2]
-  ref, _, _ = _index_ref(
+  ref, _ = _index_ref(
       ref, ref_aval, ref_block_shape, indexers
   )
-  sem, _, _ = _index_ref(sem, sem_aval, sem_aval.shape, sem_indexers)
+  sem, _ = _index_ref(sem, sem_aval, sem_aval.shape, sem_indexers)
   return tpu.WaitDMAOp(sem, ref).results
 lowering_rules[tpu_primitives.dma_wait_p] = _dma_wait_lowering_rule
 
@@ -2085,14 +2415,135 @@ def _device_id_lowering_rule(ctx: LoweringRuleContext):
 lowering_rules[tpu_primitives.device_id_p] = _device_id_lowering_rule
 
 def _axis_index_rule(ctx: LoweringRuleContext, *, axis_name: str):
-  device_id = _make_index(tpu.DeviceIdOp().result)
-  l_to_m = ctx.lowering_context.mesh_context.logical_to_mesh
+  device_id = tpu.DeviceIdOp().result
+  mesh_shape = ctx.lowering_context.mesh_context.mesh_shape
   axis_names = ctx.lowering_context.mesh_context.axis_names
-  col = _make_index(axis_names.index(axis_name))
-  return memref.LoadOp(l_to_m, [device_id, col]).result
+  axis_index = axis_names.index(axis_name)
+  axis_size = ir_constant(mesh_shape[axis_index])
+  minor_divisor = ir_constant(
+      np.prod(mesh_shape[axis_index + 1 :], dtype=np.int32)
+  )
+  return arith.remsi(arith.divsi(device_id, minor_divisor), axis_size)
 lowering_rules[lax.axis_index_p] = _axis_index_rule
 
 def _get_barrier_semaphore_rule(ctx: LoweringRuleContext):
   memref_type = aval_to_ir_type(ctx.avals_out[0])
   return tpu.GetBarrierSemaphoreOp(memref_type).result
 lowering_rules[tpu_primitives.get_barrier_semaphore_p] = _get_barrier_semaphore_rule
+
+
+def _delay_rule(ctx: LoweringRuleContext, nanos: int):
+  return tpu.DelayOp(nanos).results
+
+
+lowering_rules[tpu_primitives.delay_p] = _delay_rule
+
+
+def _debug_print_rule(
+    ctx: LoweringRuleContext, *args, fmt: str, has_placeholders: bool
+):
+  primitives.check_debug_print_format(fmt, *args)
+  if has_placeholders:
+    if not all(
+        isinstance(arg.type, ir.IntegerType) and arg.type.width == 32
+        for arg in args
+    ):
+      raise TypeError(
+          "All arguments must be 32-bit integers when using"
+          " placeholders (`{...}`). If you need to print values of other types,"
+          " remove placeholders from the format string."
+      )
+
+    # TPU expects $0, $1 etc as placeholders.
+    tpu_fmt = "".join(
+        f"{text}${idx}"
+        for idx, (text, _, _, _) in enumerate(string.Formatter().parse(fmt))
+    )
+  else:
+    tpu_fmt = fmt
+  tpu.log(args, tpu_fmt, formatted=has_placeholders)
+  return ()
+
+
+lowering_rules[primitives.debug_print_p] = _debug_print_rule
+
+
+def _prng_seed_lowering_rule(ctx: LoweringRuleContext, *seeds):
+  del ctx
+  # In the KeyScalarBundle case we unpack the bundle and set the seed with
+  # the list of scalars.
+  if len(seeds) == 1 and isinstance(seeds[0], KeyScalarBundle):
+    return tpu.PRNGSeed32Op(seeds[0].scalars).results
+  # For integer seeds, we can set the seed directly as PRNGSeed32Op natively
+  # takes in a list of integers as input.
+  all_integers = all(isinstance(seed.type, ir.IntegerType) for seed in seeds)
+  if not all_integers:
+    seed_types = [seed.type for seed in seeds]
+    raise ValueError(f"All seed data must be scalar integers. Got {seed_types}")
+  return tpu.PRNGSeed32Op(seeds).results
+lowering_rules[tpu_primitives.prng_seed_p] = _prng_seed_lowering_rule
+
+
+def _prng_random_bits_lowering_rule(ctx: LoweringRuleContext, *, shape):
+  if len(shape) <= 1:
+    # TODO(b/342054464): Support implicit dims for PRNGRandomBitsOp.
+    raise NotImplementedError("random_bits only supports rank>=2 outputs.")
+  out_aval = ctx.avals_out[0]
+  out_type = aval_to_ir_type(out_aval)
+  return tpu.PRNGRandomBitsOp(out_type).result
+lowering_rules[tpu_primitives.prng_random_bits_p] = _prng_random_bits_lowering_rule
+
+
+def random_seed_lowering(ctx, seeds, *, impl):
+  seed_lowering = lower_fun(
+      impl.seed, multiple_results=False)
+  return seed_lowering(ctx, seeds)
+lowering_rules[prng.random_seed_p] = random_seed_lowering
+
+
+def random_bits_lowering(ctx, keys, *, bit_width, shape):
+  assert bit_width == 32, "Only 32-bit PRNG supported."
+  aval, = ctx.avals_in
+  impl = aval.dtype._impl
+  bits_lowering = lower_fun(
+      impl.random_bits, multiple_results=False)
+  return bits_lowering(ctx, keys, bit_width=bit_width, shape=shape)
+lowering_rules[prng.random_bits_p] = random_bits_lowering
+
+
+def random_fold_in_lowering(ctx, keys, msgs):
+  keys_aval, _ = ctx.avals_in
+  impl = keys_aval.dtype._impl
+  fold_in_lowering = lower_fun(
+      impl.fold_in, multiple_results=False)
+  return fold_in_lowering(ctx, keys, msgs)
+lowering_rules[prng.random_fold_in_p] = random_fold_in_lowering
+
+
+def random_unwrap_lowering(ctx, key):
+  del ctx, key
+  raise NotImplementedError("key_data not implemented.")
+lowering_rules[prng.random_unwrap_p] = random_unwrap_lowering
+
+
+def random_wrap_lowering(ctx, key_data, *, impl):
+  del ctx, impl
+  if isinstance(key_data.type, ir.VectorType):
+    # If the key data lives in vregs, need to unpack it to sregs.
+    key_data_list = []
+    key_data_shape = key_data.type.shape
+    if len(key_data_shape) != 2:
+      raise NotImplementedError("Seed key_data must be 2D.")
+    if tuple(key_data_shape) != (1, 1):
+      raise NotImplementedError(
+        "Seed key_data of shape != (1, 1) not supported. "
+        f"Got: {key_data_shape}")
+    for i in range(key_data_shape[1]):
+      key_data_list.append(vector.ExtractOp(key_data, [], [0, i]))
+    return KeyScalarBundle(scalars=key_data_list)
+  if isinstance(key_data, KeyScalarBundle):
+    return key_data
+  else:
+    raise NotImplementedError(f"key_data wrap {type(key_data)}")
+
+lowering_rules[prng.random_wrap_p] = random_wrap_lowering

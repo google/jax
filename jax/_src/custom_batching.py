@@ -14,9 +14,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import functools
 import operator
-from typing import Callable
 
 from jax import lax
 from jax._src import api
@@ -53,7 +53,7 @@ class custom_vmap:
 
   def __init__(self, fun: Callable):
     functools.update_wrapper(self, fun)
-    self.fun = fun  # type: ignore[assignment]
+    self.fun = fun
     self.vmap_rule = None
 
   __getattr__ = custom_api_util.forward_attr

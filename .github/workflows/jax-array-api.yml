@@ -25,11 +25,11 @@ jobs:
       with:
         repository: data-apis/array-api-tests
         # TODO(jakevdp) update this to a stable release/tag when available.
-        ref: '4f83bb3ee9146c30cf997f1527588b7a8b8ee6db'  # Latest commit as of 2024-02-16
+        ref: '33f2d2ea2f3dd2b3ceeeb4519d55e08096184149'  # Latest commit as of 2024-05-28
         submodules: 'true'
         path: 'array-api-tests'
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # ratchet:actions/setup-python@v5
+      uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # ratchet:actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
@@ -42,4 +42,4 @@ jobs:
         JAX_ENABLE_X64: 'true'
       run: |
         cd ${GITHUB_WORKSPACE}/array-api-tests
-        pytest --ci array_api_tests --max-examples=5 --derandomize --disable-deadline --skips-file ${GITHUB_WORKSPACE}/jax/experimental/array_api/skips.txt
+        pytest array_api_tests --max-examples=5 --derandomize --disable-deadline --skips-file ${GITHUB_WORKSPACE}/jax/experimental/array_api/skips.txt

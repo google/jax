@@ -73,31 +73,17 @@ from jax._src.interpreters.ad import (
   zeros_like_p as zeros_like_p,
 )
 
-from jax import config as _deprecated_config
-from jax._src import source_info_util as _deprecated_source_info_util
 _deprecations = {
-    # Added Oct 13, 2023:
+    # Finalized Mar 18, 2024; remove after June 18, 2024
     "config": (
         "jax.interpreters.ad.config is deprecated. Use jax.config directly.",
-        _deprecated_config,
+        None,
     ),
     "source_info_util": (
         "jax.interpreters.ad.source_info_util is deprecated. Use jax.extend.source_info_util.",
-        _deprecated_source_info_util,
+        None,
     ),
 }
-
-import typing
-if typing.TYPE_CHECKING:
-  config = _deprecated_config
-  source_info_util = _deprecated_source_info_util
-else:
-  from jax._src.deprecations import deprecation_getattr as _deprecation_getattr
-  __getattr__ = _deprecation_getattr(__name__, _deprecations)
-  del _deprecation_getattr
-del typing
-del _deprecated_config
-del _deprecated_source_info_util
 
 def backward_pass(jaxpr, reduce_axes, transform_stack,
                   consts, primals_in, cotangents_in):

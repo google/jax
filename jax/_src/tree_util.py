@@ -14,25 +14,27 @@
 from __future__ import annotations
 
 import collections
-from collections.abc import Hashable, Iterable
+from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
 import difflib
 import functools
 from functools import partial
 import operator as op
 import textwrap
-from typing import Any, Callable, NamedTuple, TypeVar, Union, overload
+from typing import Any, NamedTuple, TypeVar, Union, overload
 
 from jax._src import traceback_util
 from jax._src.lib import pytree
-from jax._src.util import safe_zip
+from jax._src.util import safe_zip, set_module
 from jax._src.util import unzip2
 
+
+export = set_module('jax.tree_util')
 
 traceback_util.register_exclusion(__file__)
 
 T = TypeVar("T")
-U = TypeVar("U", bound=type[Any])
+Typ = TypeVar("Typ", bound=type[Any])
 H = TypeVar("H", bound=Hashable)
 
 Leaf = Any
@@ -43,6 +45,13 @@ default_registry = pytree.default_registry()
 # reference.
 default_registry.__module__ = __name__
 default_registry.__name__ = "default_registry"
+
+# A copy of the default registry, where None is a leaf.
+none_leaf_registry = pytree.PyTreeRegistry(
+    enable_none=False, enable_tuple=True, enable_namedtuple=True,
+    enable_list=True, enable_dict=True)
+none_leaf_registry.__module__ = __name__
+none_leaf_registry.__name__ = "none_leaf_registry"
 
 # A special, internal pytree registry that includes everything in
 # `default_registry`, plus internal Python-defined types that we want
@@ -60,148 +69,119 @@ dispatch_registry = pytree.PyTreeRegistry(
 dispatch_registry.__module__ = __name__
 dispatch_registry.__name__ = "dispatch_registry"
 
+
+@export
 def tree_flatten(tree: Any,
                  is_leaf: Callable[[Any], bool] | None = None
                  ) -> tuple[list[Leaf], PyTreeDef]:
-  """Flattens a pytree.
-
-  The flattening order (i.e. the order of elements in the output list)
-  is deterministic, corresponding to a left-to-right depth-first tree
-  traversal.
-
-  Args:
-    tree: a pytree to flatten.
-    is_leaf: an optionally specified function that will be called at each
-      flattening step. It should return a boolean, with true stopping the
-      traversal and the whole subtree being treated as a leaf, and false
-      indicating the flattening should traverse the current object.
-
-  Returns:
-    A pair where the first element is a list of leaf values and the second
-    element is a treedef representing the structure of the flattened tree.
-
-  Example:
-     >>> import jax
-     >>> vals, treedef = jax.tree.flatten([1, (2, 3), [4, 5]])
-     >>> vals
-     [1, 2, 3, 4, 5]
-     >>> treedef
-     PyTreeDef([*, (*, *), [*, *]])
-
-  See Also:
-    - :func:`jax.tree.leaves`
-    - :func:`jax.tree.structure`
-    - :func:`jax.tree.unflatten`
-  """
+  """Alias of :func:`jax.tree.flatten`."""
   return default_registry.flatten(tree, is_leaf)
 
 
+@export
 def tree_unflatten(treedef: PyTreeDef, leaves: Iterable[Leaf]) -> Any:
-  """Reconstructs a pytree from the treedef and the leaves.
-
-  The inverse of :func:`tree_flatten`.
-
-  Args:
-    treedef: the treedef to reconstruct
-    leaves: the iterable of leaves to use for reconstruction. The iterable must
-      match the leaves of the treedef.
-
-  Returns:
-    The reconstructed pytree, containing the ``leaves`` placed in the structure
-    described by ``treedef``.
-
-  Example:
-     >>> import jax
-     >>> vals, treedef = jax.tree.flatten([1, (2, 3), [4, 5]])
-     >>> newvals = [100, 200, 300, 400, 500]
-     >>> jax.tree.unflatten(treedef, newvals)
-     [100, (200, 300), [400, 500]]
-
-  See Also:
-    - :func:`jax.tree.flatten`
-    - :func:`jax.tree.leaves`
-    - :func:`jax.tree.structure`
-  """
+  """Alias of :func:`jax.tree.unflatten`."""
   return treedef.unflatten(leaves)
 
 
+@export
 def tree_leaves(tree: Any,
                 is_leaf: Callable[[Any], bool] | None = None
                 ) -> list[Leaf]:
-  """Gets the leaves of a pytree.
-
-  Args:
-    tree: the pytree for which to get the leaves
-    is_leaf : an optionally specified function that will be called at each
-      flattening step. It should return a boolean, which indicates whether the
-      flattening should traverse the current object, or if it should be stopped
-      immediately, with the whole subtree being treated as a leaf.
-  Returns:
-    leaves: a list of tree leaves.
-
-  Example:
-     >>> import jax
-     >>> jax.tree.leaves([1, (2, 3), [4, 5]])
-     [1, 2, 3, 4, 5]
-
-  See Also:
-    - :func:`jax.tree.flatten`
-    - :func:`jax.tree.structure`
-    - :func:`jax.tree.unflatten`
-  """
+  """Alias of :func:`jax.tree.leaves`."""
   return default_registry.flatten(tree, is_leaf)[0]
 
 
+@export
 def tree_structure(tree: Any,
                    is_leaf: None | (Callable[[Any],
                                               bool]) = None) -> PyTreeDef:
-  """Gets the treedef for a pytree.
-
-  Args:
-    tree: the pytree for which to get the leaves
-    is_leaf : an optionally specified function that will be called at each
-      flattening step. It should return a boolean, which indicates whether the
-      flattening should traverse the current object, or if it should be stopped
-      immediately, with the whole subtree being treated as a leaf.
-  Returns:
-    pytreedef: a PyTreeDef representing the structure of the tree.
-  Example:
-     >>> import jax
-     >>> jax.tree.structure([1, (2, 3), [4, 5]])
-     PyTreeDef([*, (*, *), [*, *]])
-
-  See Also:
-    - :func:`jax.tree.flatten`
-    - :func:`jax.tree.leaves`
-    - :func:`jax.tree.unflatten`
-  """
+  """Alias of :func:`jax.tree.structure`."""
   return default_registry.flatten(tree, is_leaf)[1]
 
 
+@export
 def treedef_tuple(treedefs: Iterable[PyTreeDef]) -> PyTreeDef:
-  """Makes a tuple treedef from an iterable of child treedefs."""
-  return pytree.tuple(default_registry, list(treedefs))  # type: ignore
+  """Makes a tuple treedef from an iterable of child treedefs.
+
+  Args:
+    treedefs: iterable of PyTree structures
+
+  Returns:
+    a single treedef representing a tuple of the structures
+
+  Examples:
+    >>> import jax
+    >>> x = [1, 2, 3]
+    >>> y = {'a': 4, 'b': 5}
+    >>> x_tree = jax.tree.structure(x)
+    >>> y_tree = jax.tree.structure(y)
+    >>> xy_tree = jax.tree_util.treedef_tuple([x_tree, y_tree])
+    >>> xy_tree == jax.tree.structure((x, y))
+    True
+
+  See Also:
+    - :func:`jax.tree_util.treedef_children`
+  """
+  return pytree.tuple(default_registry, list(treedefs))
 
 
+@export
 def treedef_children(treedef: PyTreeDef) -> list[PyTreeDef]:
+  """Return a list of treedefs for immediate children
+
+  Args:
+    treedef: a single PyTreeDef
+
+  Returns:
+    a list of PyTreeDefs representing the children of treedef.
+
+  Examples:
+    >>> import jax
+    >>> x = [(1, 2), 3, {'a': 4}]
+    >>> treedef = jax.tree.structure(x)
+    >>> jax.tree_util.treedef_children(treedef)
+    [PyTreeDef((*, *)), PyTreeDef(*), PyTreeDef({'a': *})]
+    >>> _ == [jax.tree.structure(vals) for vals in x]
+    True
+
+  See Also:
+    - :func:`jax.tree_util.treedef_tuple`
+  """
   return treedef.children()
 
 
+@export
 def treedef_is_leaf(treedef: PyTreeDef) -> bool:
+  """Return True if the treedef represents a leaf.
+
+  Args:
+    treedef: tree to check
+
+  Returns:
+    True if treedef is a leaf (i.e. has a single node); False otherwise.
+
+  Examples:
+    >>> import jax
+    >>> tree1 = jax.tree.structure(1)
+    >>> jax.tree_util.treedef_is_leaf(tree1)
+    True
+    >>> tree2 = jax.tree.structure([1, 2])
+    >>> jax.tree_util.treedef_is_leaf(tree2)
+    False
+  """
   return treedef.num_nodes == 1
 
 
+# treedef_is_strict_leaf is not exported.
 def treedef_is_strict_leaf(treedef: PyTreeDef) -> bool:
   return treedef.num_nodes == 1 and treedef.num_leaves == 1
 
 
+@export
 def all_leaves(iterable: Iterable[Any],
                is_leaf: Callable[[Any], bool] | None = None) -> bool:
   """Tests whether all elements in the given iterable are all leaves.
-
-  >>> tree = {"a": [1, 2, 3]}
-  >>> assert all_leaves(jax.tree_util.tree_leaves(tree))
-  >>> assert not all_leaves([tree])
 
   This function is useful in advanced cases, for example if a library allows
   arbitrary map operations on a flat iterable of leaves it may want to check
@@ -212,6 +192,12 @@ def all_leaves(iterable: Iterable[Any],
 
   Returns:
     A boolean indicating if all elements in the input are leaves.
+
+  Examples:
+    >>> import jax
+    >>> tree = {"a": [1, 2, 3]}
+    >>> assert all_leaves(jax.tree_util.tree_leaves(tree))
+    >>> assert not all_leaves([tree])
   """
   if is_leaf is None:
     return pytree.all_leaves(default_registry, iterable)
@@ -223,15 +209,17 @@ def all_leaves(iterable: Iterable[Any],
 _Children = TypeVar("_Children", bound=Iterable[Any])
 _AuxData = TypeVar("_AuxData", bound=Hashable)
 
+
+@export
 def register_pytree_node(nodetype: type[T],
                          flatten_func: Callable[[T], tuple[_Children, _AuxData]],
-                         unflatten_func: Callable[[_AuxData, _Children], T]):
+                         unflatten_func: Callable[[_AuxData, _Children], T]) -> None:
   """Extends the set of types that are considered internal nodes in pytrees.
 
   See :ref:`example usage <pytrees>`.
 
   Args:
-    nodetype: a Python type to treat as an internal pytree node.
+    nodetype: a Python type to register as a pytree.
     flatten_func: a function to be used during flattening, taking a value of
       type ``nodetype`` and returning a pair, with (1) an iterable for the
       children to be flattened recursively, and (2) some hashable auxiliary data
@@ -240,109 +228,156 @@ def register_pytree_node(nodetype: type[T],
       returned by ``flatten_func`` and stored in the treedef, and the
       unflattened children. The function should return an instance of
       ``nodetype``.
+
+  See also:
+    - :func:`~jax.tree_util.register_static`: simpler API for registering a static pytree.
+    - :func:`~jax.tree_util.register_dataclass`: simpler API for registering a dataclass.
+    - :func:`~jax.tree_util.register_pytree_with_keys`
+    - :func:`~jax.tree_util.register_pytree_node_class`
+    - :func:`~jax.tree_util.register_pytree_with_keys_class`
+
+  Examples:
+    First we'll define a custom type:
+
+    >>> class MyContainer:
+    ...   def __init__(self, size):
+    ...     self.x = jnp.zeros(size)
+    ...     self.y = jnp.ones(size)
+    ...     self.size = size
+
+    If we try using this in a JIT-compiled function, we'll get an error because JAX
+    does not yet know how to handle this type:
+
+    >>> m = MyContainer(size=5)
+    >>> def f(m):
+    ...   return m.x + m.y + jnp.arange(m.size)
+    >>> jax.jit(f)(m)  # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+      ...
+    TypeError: Cannot interpret value of type <class 'jax.tree_util.MyContainer'> as an abstract array; it does not have a dtype attribute
+
+    In order to make our object recognized by JAX, we must register it as
+    a pytree:
+
+    >>> def flatten_func(obj):
+    ...   children = (obj.x, obj.y)  # children must contain arrays & pytrees
+    ...   aux_data = (obj.size,)  # aux_data must contain static, hashable data.
+    ...   return (children, aux_data)
+    ...
+    >>> def unflatten_func(aux_data, children):
+    ...   # Here we avoid `__init__` because it has extra logic we don't require:
+    ...   obj = object.__new__(MyContainer)
+    ...   obj.x, obj.y = children
+    ...   obj.size, = aux_data
+    ...   return obj
+    ...
+    >>> jax.tree_util.register_pytree_node(MyContainer, flatten_func, unflatten_func)
+
+    Now with this defined, we can use instances of this type in JIT-compiled functions.
+
+    >>> jax.jit(f)(m)
+    Array([1., 2., 3., 4., 5.], dtype=float32)
   """
   default_registry.register_node(nodetype, flatten_func, unflatten_func)
+  none_leaf_registry.register_node(nodetype, flatten_func, unflatten_func)
   dispatch_registry.register_node(nodetype, flatten_func, unflatten_func)
   _registry[nodetype] = _RegistryEntry(flatten_func, unflatten_func)
 
 
-def register_pytree_node_class(cls: U) -> U:
+@export
+def register_pytree_node_class(cls: Typ) -> Typ:
   """Extends the set of types that are considered internal nodes in pytrees.
 
   This function is a thin wrapper around ``register_pytree_node``, and provides
-  a class-oriented interface::
+  a class-oriented interface.
 
-    @register_pytree_node_class
-    class Special:
-      def __init__(self, x, y):
-        self.x = x
-        self.y = y
-      def tree_flatten(self):
-        return ((self.x, self.y), None)
-      @classmethod
-      def tree_unflatten(cls, aux_data, children):
-        return cls(*children)
+  Args:
+    cls: a type to register as a pytree
+
+  Returns:
+    The input class ``cls`` is returned unchanged after being added to JAX's pytree
+    registry. This return value allows ``register_pytree_node_class`` to be used as
+    a decorator.
+
+  See also:
+    - :func:`~jax.tree_util.register_static`: simpler API for registering a static pytree.
+    - :func:`~jax.tree_util.register_dataclass`: simpler API for registering a dataclass.
+    - :func:`~jax.tree_util.register_pytree_node`
+    - :func:`~jax.tree_util.register_pytree_with_keys`
+    - :func:`~jax.tree_util.register_pytree_with_keys_class`
+
+  Examples:
+    Here we'll define a custom container that will be compatible with :func:`jax.jit`
+    and other JAX transformations:
+
+    >>> import jax
+    >>> @jax.tree_util.register_pytree_node_class
+    ... class MyContainer:
+    ...   def __init__(self, x, y):
+    ...     self.x = x
+    ...     self.y = y
+    ...   def tree_flatten(self):
+    ...     return ((self.x, self.y), None)
+    ...   @classmethod
+    ...   def tree_unflatten(cls, aux_data, children):
+    ...     return cls(*children)
+    ...
+    >>> m = MyContainer(jnp.zeros(4), jnp.arange(4))
+    >>> def f(m):
+    ...   return m.x + 2 * m.y
+    >>> jax.jit(f)(m)
+    Array([0., 2., 4., 6.], dtype=float32)
   """
   register_pytree_node(cls, op.methodcaller("tree_flatten"), cls.tree_unflatten)
   return cls
 
 
+@export
 def tree_map(f: Callable[..., Any],
              tree: Any,
              *rest: Any,
              is_leaf: Callable[[Any], bool] | None = None) -> Any:
-  """Maps a multi-input function over pytree args to produce a new pytree.
-
-  Args:
-    f: function that takes ``1 + len(rest)`` arguments, to be applied at the
-      corresponding leaves of the pytrees.
-    tree: a pytree to be mapped over, with each leaf providing the first
-      positional argument to ``f``.
-    rest: a tuple of pytrees, each of which has the same structure as ``tree``
-      or has ``tree`` as a prefix.
-    is_leaf: an optionally specified function that will be called at each
-      flattening step. It should return a boolean, which indicates whether the
-      flattening should traverse the current object, or if it should be stopped
-      immediately, with the whole subtree being treated as a leaf.
-
-  Returns:
-    A new pytree with the same structure as ``tree`` but with the value at each
-    leaf given by ``f(x, *xs)`` where ``x`` is the value at the corresponding
-    leaf in ``tree`` and ``xs`` is the tuple of values at corresponding nodes in
-    ``rest``.
-
-  Examples:
-
-    >>> import jax.tree_util
-    >>> jax.tree_util.tree_map(lambda x: x + 1, {"x": 7, "y": 42})
-    {'x': 8, 'y': 43}
-
-    If multiple inputs are passed, the structure of the tree is taken from the
-    first input; subsequent inputs need only have ``tree`` as a prefix:
-
-    >>> jax.tree_util.tree_map(lambda x, y: [x] + y, [5, 6], [[7, 9], [1, 2]])
-    [[5, 7, 9], [6, 1, 2]]
-
-  See Also:
-    - :func:`jax.tree.leaves`
-    - :func:`jax.tree.reduce`
-  """
+  """Alias of :func:`jax.tree.map`."""
   leaves, treedef = tree_flatten(tree, is_leaf)
   all_leaves = [leaves] + [treedef.flatten_up_to(r) for r in rest]
   return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
 
 
+@export
 def build_tree(treedef: PyTreeDef, xs: Any) -> Any:
-  return treedef.from_iterable_tree(xs)
-
-
-def tree_transpose(outer_treedef: PyTreeDef, inner_treedef: PyTreeDef | None,
-                   pytree_to_transpose: Any) -> Any:
-  """Transform a tree having tree structure (outer, inner) into one having structure (inner, outer).
+  """Build a treedef from a nested iterable structure
 
   Args:
-    outer_treedef: PyTreeDef representing the outer tree.
-    inner_treedef: PyTreeDef representing the inner tree.
-      If None, then it will be inferred from outer_treedef and the structure of
-      pytree_to_transpose.
-    pytree_to_transpose: the pytree to be transposed.
+    treedef: the PyTreeDef structure to build.
+    xs: nested iterables matching the arity as the treedef
 
   Returns:
-    transposed_pytree: the transposed pytree.
+    object with structure defined by treedef
+
+  See Also:
+    - :func:`jax.tree.unflatten`
 
   Examples:
     >>> import jax
-    >>> tree = [(1, 2, 3), (4, 5, 6)]
-    >>> inner_structure = jax.tree.structure(('*', '*', '*'))
-    >>> outer_structure = jax.tree.structure(['*', '*'])
-    >>> jax.tree.transpose(outer_structure, inner_structure, tree)
-    ([1, 4], [2, 5], [3, 6])
+    >>> tree = [(1, 2), {'a': 3, 'b': 4}]
+    >>> treedef = jax.tree.structure(tree)
 
-    Inferring the inner structure:
+    Both ``build_tree`` and :func:`jax.tree_util.tree_unflatten` can reconstruct
+    the tree from new values, but ``build_tree`` takes these values in terms of
+    a nested rather than flat structure:
 
-    >>> jax.tree.transpose(outer_structure, None, tree)
-    ([1, 4], [2, 5], [3, 6])
+    >>> jax.tree_util.build_tree(treedef, [[10, 11], [12, 13]])
+    [(10, 11), {'a': 12, 'b': 13}]
+    >>> jax.tree_util.tree_unflatten(treedef, [10, 11, 12, 13])
+    [(10, 11), {'a': 12, 'b': 13}]
   """
+  return treedef.from_iterable_tree(xs)
+
+
+@export
+def tree_transpose(outer_treedef: PyTreeDef, inner_treedef: PyTreeDef | None,
+                   pytree_to_transpose: Any) -> Any:
+  """Alias of :func:`jax.tree.transpose`."""
   flat, treedef = tree_flatten(pytree_to_transpose)
   if inner_treedef is None:
     inner_treedef = tree_structure(outer_treedef.flatten_up_to(pytree_to_transpose)[0])
@@ -374,21 +409,9 @@ _registry = {
 
 def _replace_nones(sentinel, tree):
   """Replaces ``None`` in ``tree`` with ``sentinel``."""
-  if tree is None:
-    return sentinel
-  else:
-    handler = _registry.get(type(tree))
-    if handler:
-      children, metadata = handler.to_iter(tree)
-      proc_children = [_replace_nones(sentinel, child) for child in children]
-      return handler.from_iter(metadata, proc_children)
-    elif isinstance(tree, tuple) and hasattr(tree, "_fields"):
-      # handle namedtuple as a special case, based on heuristic
-      children = iter(tree)
-      proc_children = [_replace_nones(sentinel, child) for child in children]
-      return type(tree)(*proc_children)
-    else:
-      return tree
+  leaves, treedef = none_leaf_registry.flatten(tree)
+  leaves = map(lambda x: sentinel if x is None else x, leaves)
+  return treedef.unflatten(leaves)
 
 
 no_initializer = object()
@@ -410,57 +433,22 @@ def tree_reduce(function: Callable[[T, Any], T],
     ...
 
 
+@export
 def tree_reduce(function: Callable[[T, Any], T],
                 tree: Any,
                 initializer: Any = no_initializer,
                 is_leaf: Callable[[Any], bool] | None = None) -> T:
-  """Call reduce() over the leaves of a tree.
-
-  Args:
-    function: the reduction function
-    tree: the pytree to reduce over
-    initializer: the optional initial value
-    is_leaf : an optionally specified function that will be called at each
-      flattening step. It should return a boolean, which indicates whether the
-      flattening should traverse the current object, or if it should be stopped
-      immediately, with the whole subtree being treated as a leaf.
-
-  Returns:
-    result: the reduced value.
-
-  Examples:
-    >>> import jax
-    >>> import operator
-    >>> jax.tree.reduce(operator.add, [1, (2, 3), [4, 5, 6]])
-    21
-
-  See Also:
-    - :func:`jax.tree.leaves`
-    - :func:`jax.tree.map`
-  """
+  """Alias of :func:`jax.tree.reduce`."""
   if initializer is no_initializer:
     return functools.reduce(function, tree_leaves(tree, is_leaf=is_leaf))
   else:
     return functools.reduce(function, tree_leaves(tree, is_leaf=is_leaf), initializer)
 
-def tree_all(tree: Any) -> bool:
-  """Call all() over the leaves of a tree.
 
-  Args:
-    tree: the pytree to evaluate
-
-  Returns:
-    result: boolean True or False
-
-  Examples:
-
-    >>> import jax
-    >>> jax.tree.all([True, {'a': True, 'b': (True, True)}])
-    True
-    >>> jax.tree.all([False, (True, False)])
-    False
-  """
-  return all(tree_leaves(tree))
+@export
+def tree_all(tree: Any, *, is_leaf: Callable[[Any], bool] | None = None) -> bool:
+  """Alias of :func:`jax.tree.all`."""
+  return all(tree_leaves(tree, is_leaf=is_leaf))
 
 
 register_pytree_node(
@@ -475,7 +463,7 @@ def _flatten_defaultdict(d):
 register_pytree_node(
   collections.defaultdict,
   _flatten_defaultdict,
-  lambda s, values: collections.defaultdict(s[0], safe_zip(s[1], values)))  # type: ignore[index,call-overload]
+  lambda s, values: collections.defaultdict(s[0], safe_zip(s[1], values)))
 
 
 class _HashableCallableShim:
@@ -499,6 +487,7 @@ class _HashableCallableShim:
     return f'_HashableCallableShim({self.fun!r})'
 
 
+@export
 class Partial(functools.partial):
   """A version of functools.partial that works in pytrees.
 
@@ -535,8 +524,7 @@ class Partial(functools.partial):
   Array(3, dtype=int32, weak_type=True)
 
   Had we passed ``jnp.add`` to ``call_func`` directly, it would have resulted in
-  a
-  ``TypeError``.
+  a ``TypeError``.
 
   Note that if the result of ``Partial`` is used in the context where the
   value is traced, it results in all bound arguments being traced when passed
@@ -570,10 +558,11 @@ class Partial(functools.partial):
 register_pytree_node(
     Partial,
     lambda partial_: ((partial_.args, partial_.keywords), partial_.func),
-    lambda func, xs: Partial(func, *xs[0], **xs[1]),  # type: ignore[index]
+    lambda func, xs: Partial(func, *xs[0], **xs[1]),
 )
 
 
+# broadcast_prefix is not exported.
 def broadcast_prefix(prefix_tree: Any, full_tree: Any,
                      is_leaf: Callable[[Any], bool] | None = None
                      ) -> list[Any]:
@@ -586,35 +575,46 @@ def broadcast_prefix(prefix_tree: Any, full_tree: Any,
   tree_map(add_leaves, prefix_tree, full_tree, is_leaf=is_leaf)
   return result
 
-def flatten_one_level(pytree: Any) -> tuple[list[Any], Hashable]:
+
+# flatten_one_level is not exported.
+def flatten_one_level(pytree: Any) -> tuple[Iterable[Any], Hashable]:
   """Flatten the given pytree node by one level.
 
   Args:
     pytree: A valid pytree node, either built-in or registered via
-      ``register_pytree_node`` or ``register_pytree_with_keys``.
+      :func:`register_pytree_node` or related functions.
 
   Returns:
-    A pair of the pytree's flattened children and its hashable metadata.
+    A pair of the pytrees flattened children and its hashable metadata.
 
   Raises:
     ValueError: If the given pytree is not a built-in or registered container
     via ``register_pytree_node`` or ``register_pytree_with_keys``.
-  """
-  handler = _registry.get(type(pytree))
-  if handler:
-    children, meta = handler.to_iter(pytree)
-    return list(children), meta
-  elif isinstance(pytree, tuple) and hasattr(pytree, '_fields'):
-    # handle namedtuple as a special case, based on heuristic
-    return [getattr(pytree, s) for s in pytree._fields], None
-  else:
-    raise ValueError(f"can't tree-flatten type: {type(pytree)}")
 
+  Examples:
+    >>> import jax
+    >>> from jax._src.tree_util import flatten_one_level
+    >>> flattened, meta = flatten_one_level({'a': [1, 2], 'b': {'c': 3}})
+    >>> flattened
+    ([1, 2], {'c': 3})
+    >>> meta
+    ('a', 'b')
+  """
+  out = default_registry.flatten_one_level(pytree)
+  if out is None:
+    raise ValueError(f"can't tree-flatten type: {type(pytree)}")
+  else:
+    return out
+
+
+# prefix_errors is not exported
 def prefix_errors(prefix_tree: Any, full_tree: Any,
                   is_leaf: Callable[[Any], bool] | None = None,
                   ) -> list[Callable[[str], ValueError]]:
   return list(_prefix_error((), prefix_tree, full_tree, is_leaf))
 
+
+# equality_errors is not exported
 def equality_errors(
     tree1: Any, tree2: Any, is_leaf: Callable[[Any], bool] | None = None,
 ) -> Iterable[tuple[KeyPath, str, str, str]]:
@@ -659,6 +659,8 @@ def _equality_errors(path, t1, t2, is_leaf):
       return  # no more errors to find
   t1_children, t1_meta = flatten_one_level(t1)
   t2_children, t2_meta = flatten_one_level(t2)
+  t1_children = tuple(t1_children)
+  t2_children = tuple(t2_children)
   t1_keys, t2_keys = _child_keys(t1), _child_keys(t2)
   try:
     diff = ' '.join(repr(k.key) for k in
@@ -692,26 +694,37 @@ def _equality_errors(path, t1, t2, is_leaf):
     yield from _equality_errors((*path, k), c1, c2, is_leaf)
 
 
+@export
 @dataclass(frozen=True)
 class SequenceKey():
+  """Struct for use with :func:`jax.tree_util.register_pytree_with_keys`."""
   idx: int
   def __str__(self):
     return f'[{self.idx!r}]'
 
+
+@export
 @dataclass(frozen=True)
 class DictKey():
+  """Struct for use with :func:`jax.tree_util.register_pytree_with_keys`."""
   key: Hashable
   def __str__(self):
     return f'[{self.key!r}]'
 
+
+@export
 @dataclass(frozen=True)
 class GetAttrKey():
+  """Struct for use with :func:`jax.tree_util.register_pytree_with_keys`."""
   name: str
   def __str__(self):
     return f'.{self.name}'
 
+
+@export
 @dataclass(frozen=True)
 class FlattenedIndexKey():
+  """Struct for use with :func:`jax.tree_util.register_pytree_with_keys`."""
   key: int
   def __str__(self):
     return f'[<flat index {self.key}>]'
@@ -721,6 +734,8 @@ BuiltInKeyEntry = Union[SequenceKey, DictKey, GetAttrKey, FlattenedIndexKey]
 KeyEntry = TypeVar("KeyEntry", bound=Hashable)
 KeyPath = tuple[KeyEntry, ...]
 
+
+@export
 def keystr(keys: KeyPath):
   """Helper to pretty-print a tuple of keys.
 
@@ -729,6 +744,12 @@ def keystr(keys: KeyPath):
 
   Returns:
     A string that joins all string representations of the keys.
+
+  Examples:
+    >>> import jax
+    >>> keys = (0, 1, 'a', 'b')
+    >>> jax.tree_util.keystr(keys)
+    '01ab'
   """
   return ''.join([str(k) for k in keys])
 
@@ -769,6 +790,7 @@ _register_keypaths(
 )
 
 
+@export
 def register_pytree_with_keys(
     nodetype: type[T],
     flatten_with_keys: Callable[
@@ -799,6 +821,38 @@ def register_pytree_with_keys(
       in the same order as ``flatten_with_keys``, and return the same aux data.
       This argument is optional and only needed for faster traversal when
       calling functions without keys like ``tree_map`` and ``tree_flatten``.
+
+  Examples:
+    First we'll define a custom type:
+
+    >>> class MyContainer:
+    ...   def __init__(self, size):
+    ...     self.x = jnp.zeros(size)
+    ...     self.y = jnp.ones(size)
+    ...     self.size = size
+
+    Now register it using a key-aware flatten function:
+
+    >>> from jax.tree_util import register_pytree_with_keys_class, GetAttrKey
+    >>> def flatten_with_keys(obj):
+    ...   children = [(GetAttrKey('x'), obj.x),
+    ...               (GetAttrKey('y'), obj.y)]  # children must contain arrays & pytrees
+    ...   aux_data = (obj.size,)  # aux_data must contain static, hashable data.
+    ...   return children, aux_data
+    ...
+    >>> def unflatten(aux_data, children):
+    ...   # Here we avoid `__init__` because it has extra logic we don't require:
+    ...   obj = object.__new__(MyContainer)
+    ...   obj.x, obj.y = children
+    ...   obj.size, = aux_data
+    ...   return obj
+    ...
+    >>> jax.tree_util.register_pytree_node(MyContainer, flatten_with_keys, unflatten)
+
+    Now this can be used with functions like :func:`~jax.tree_util.tree_flatten_with_path`:
+
+    >>> m = MyContainer(4)
+    >>> leaves, treedef = jax.tree_util.tree_flatten_with_path(m)
   """
   if not flatten_func:
     def flatten_func_impl(tree):
@@ -812,25 +866,43 @@ def register_pytree_with_keys(
   )
 
 
-def register_pytree_with_keys_class(cls: U) -> U:
+@export
+def register_pytree_with_keys_class(cls: Typ) -> Typ:
   """Extends the set of types that are considered internal nodes in pytrees.
 
   This function is similar to ``register_pytree_node_class``, but requires a
   class that defines how it could be flattened with keys.
 
   It is a thin wrapper around ``register_pytree_with_keys``, and
-  provides a class-oriented interface::
+  provides a class-oriented interface:
 
-    @register_pytree_with_keys_class
-    class Special:
-      def __init__(self, x, y):
-        self.x = x
-        self.y = y
-      def tree_flatten_with_keys(self):
-        return (((GetAttrKey('x'), self.x), (GetAttrKey('y'), self.y)), None)
-      @classmethod
-      def tree_unflatten(cls, aux_data, children):
-        return cls(*children)
+  Args:
+    cls: a type to register as a pytree
+
+  Returns:
+    The input class ``cls`` is returned unchanged after being added to JAX's pytree
+    registry. This return value allows ``register_pytree_node_class`` to be used as
+    a decorator.
+
+  See also:
+    - :func:`~jax.tree_util.register_static`: simpler API for registering a static pytree.
+    - :func:`~jax.tree_util.register_dataclass`: simpler API for registering a dataclass.
+    - :func:`~jax.tree_util.register_pytree_node`
+    - :func:`~jax.tree_util.register_pytree_with_keys`
+    - :func:`~jax.tree_util.register_pytree_node_class`
+
+  Examples:
+    >>> from jax.tree_util import register_pytree_with_keys_class, GetAttrKey
+    >>> @register_pytree_with_keys_class
+    ... class Special:
+    ...   def __init__(self, x, y):
+    ...     self.x = x
+    ...     self.y = y
+    ...   def tree_flatten_with_keys(self):
+    ...     return (((GetAttrKey('x'), self.x), (GetAttrKey('y'), self.y)), None)
+    ...   @classmethod
+    ...   def tree_unflatten(cls, aux_data, children):
+    ...     return cls(*children)
   """
   flatten_func = (
       op.methodcaller("tree_flatten") if hasattr(cls, "tree_flatten") else None
@@ -842,23 +914,141 @@ def register_pytree_with_keys_class(cls: U) -> U:
   return cls
 
 
+@export
+def register_dataclass(
+    nodetype: Typ, data_fields: Sequence[str], meta_fields: Sequence[str]
+) -> Typ:
+  """Extends the set of types that are considered internal nodes in pytrees.
+
+  This differs from ``register_pytree_with_keys_class`` in that the C++
+  registries use the optimized C++ dataclass builtin instead of the argument
+  functions.
+
+  See :ref:`extending-pytrees` for more information about registering pytrees.
+
+  Args:
+    nodetype: a Python type to treat as an internal pytree node. This is assumed
+      to have the semantics of a :obj:`~dataclasses.dataclass`: namely, class
+      attributes represent the whole of the object state, and can be passed
+      as keywords to the class constructor to create a copy of the object.
+      All defined attributes should be listed among ``meta_fields`` or ``data_fields``.
+    meta_fields: auxiliary data field names. These fields *must* contain static,
+      hashable, immutable objects, as these objects are used to generate JIT cache
+      keys. In particular, ``meta_fields`` cannot contain :class:`jax.Array` or
+      :class:`numpy.ndarray` objects.
+    data_fields: data field names. These fields *must* be JAX-compatible objects
+      such as arrays (:class:`jax.Array` or :class:`numpy.ndarray`), scalars, or
+      pytrees whose leaves are arrays or scalars. Note that ``data_fields`` may be
+      ``None``, as this is recognized by JAX as an empty pytree.
+
+  Returns:
+    The input class ``nodetype`` is returned unchanged after being added to JAX's
+    pytree registry. This return value allows ``register_dataclass`` to be partially
+    evaluated and used as a decorator as in the example below.
+
+  Examples:
+    >>> from dataclasses import dataclass
+    >>> from functools import partial
+    >>>
+    >>> @partial(jax.tree_util.register_dataclass,
+    ...          data_fields=['x', 'y'],
+    ...          meta_fields=['op'])
+    ... @dataclass
+    ... class MyStruct:
+    ...   x: jax.Array
+    ...   y: jax.Array
+    ...   op: str
+    ...
+    >>> m = MyStruct(x=jnp.ones(3), y=jnp.arange(3), op='add')
+    >>> m
+    MyStruct(x=Array([1., 1., 1.], dtype=float32), y=Array([0, 1, 2], dtype=int32), op='add')
+
+    Now that this class is registered, it can be used with functions in :mod:`jax.tree_util`:
+
+    >>> leaves, treedef = jax.tree.flatten(m)
+    >>> leaves
+    [Array([1., 1., 1.], dtype=float32), Array([0, 1, 2], dtype=int32)]
+    >>> treedef
+    PyTreeDef(CustomNode(MyStruct[('add',)], [*, *]))
+    >>> jax.tree.unflatten(treedef, leaves)
+    MyStruct(x=Array([1., 1., 1.], dtype=float32), y=Array([0, 1, 2], dtype=int32), op='add')
+
+    In particular, this registration allows ``m`` to be passed seamlessly through code
+    wrapped in :func:`jax.jit` and other JAX transformations:
+
+    >>> @jax.jit
+    ... def compiled_func(m):
+    ...   if m.op == 'add':
+    ...     return m.x + m.y
+    ...   else:
+    ...     raise ValueError(f"{m.op=}")
+    ...
+    >>> compiled_func(m)
+    Array([1., 2., 3.], dtype=float32)
+  """
+  # Store inputs as immutable tuples in this scope, because we close over them
+  # for later evaluation. This prevents potentially confusing behavior if the
+  # caller were to pass in lists that are later mutated.
+  meta_fields = tuple(meta_fields)
+  data_fields = tuple(data_fields)
+
+  def flatten_with_keys(x):
+    meta = tuple(getattr(x, name) for name in meta_fields)
+    data = tuple((GetAttrKey(name), getattr(x, name)) for name in data_fields)
+    return data, meta
+
+  def unflatten_func(meta, data):
+    meta_args = tuple(zip(meta_fields, meta))
+    data_args = tuple(zip(data_fields, data))
+    kwargs = dict(meta_args + data_args)
+    return nodetype(**kwargs)
+
+  def flatten_func(x):
+    meta = tuple(getattr(x, name) for name in meta_fields)
+    data = tuple(getattr(x, name) for name in data_fields)
+    return data, meta
+
+  default_registry.register_dataclass_node(nodetype, list(data_fields), list(meta_fields))
+  none_leaf_registry.register_dataclass_node(nodetype, list(data_fields), list(meta_fields))
+  dispatch_registry.register_dataclass_node(nodetype, list(data_fields), list(meta_fields))
+  _registry[nodetype] = _RegistryEntry(flatten_func, unflatten_func)
+  _registry_with_keypaths[nodetype] = _RegistryWithKeypathsEntry(
+      flatten_with_keys, unflatten_func
+  )
+  return nodetype
+
+
+@export
 def register_static(cls: type[H]) -> type[H]:
   """Registers `cls` as a pytree with no leaves.
 
-  Instances are treated as static by `jax.jit`, `jax.pmap`, etc. This can be an
-  alternative to labeling inputs as static using `jax.jit`'s `static_argnums`
-  and `static_argnames` kwargs, `jax.pmap`'s `static_broadcasted_argnums`, etc.
+  Instances are treated as static by :func:`jax.jit`, :func:`jax.pmap`, etc. This can
+  be an alternative to labeling inputs as static using ``jit``'s ``static_argnums``
+  and ``static_argnames`` kwargs, ``pmap``'s ``static_broadcasted_argnums``, etc.
 
-  `cls` must be hashable, as defined in
-  https://docs.python.org/3/glossary.html#term-hashable.
+  Args:
+    cls: type to be registered as static. Must be hashable, as defined in
+      https://docs.python.org/3/glossary.html#term-hashable.
 
-  `register_static` can be applied to subclasses of builtin hashable classes
-  such as `str`, like this:
-  ```
-  @tree_util.register_static
-  class StaticStr(str):
-    pass
-  ```
+  Returns:
+    The input class ``cls`` is returned unchanged after being added to JAX's
+    pytree registry. This allows ``register_static`` to be used as a decorator.
+
+  Examples:
+    >>> import jax
+    >>> @jax.tree_util.register_static
+    ... class StaticStr(str):
+    ...   pass
+
+    This static string can now be used directly in :func:`jax.jit`-compiled
+    functions, without marking the variable static using ``static_argnums``:
+
+    >>> @jax.jit
+    ... def f(x, y, s):
+    ...   return x + y if s == 'add' else x - y
+    ...
+    >>> f(1, 2, StaticStr('add'))
+    Array(3, dtype=int32, weak_type=True)
   """
   flatten = lambda obj: ((), obj)
   unflatten = lambda obj, empty_iter_children: obj
@@ -866,6 +1056,7 @@ def register_static(cls: type[H]) -> type[H]:
   return cls
 
 
+@export
 def tree_flatten_with_path(
     tree: Any, is_leaf: Callable[[Any], bool] | None = None
 ) -> tuple[list[tuple[KeyPath, Any]], PyTreeDef]:
@@ -883,6 +1074,7 @@ def tree_flatten_with_path(
   return _generate_key_paths(tree, is_leaf), tree_def
 
 
+@export
 def tree_leaves_with_path(
     tree: Any, is_leaf: Callable[[Any], bool] | None = None
 ) -> list[tuple[KeyPath, Any]]:
@@ -893,10 +1085,15 @@ def tree_leaves_with_path(
       ``register_pytree_with_keys``.
   Returns:
     A list of key-leaf pairs, each of which contains a leaf and its key path.
+
+  See Also:
+    - :func:`jax.tree_util.tree_leaves`
+    - :func:`jax.tree_util.tree_flatten_with_path`
   """
   return _generate_key_paths(tree, is_leaf)
 
 
+# generate_key_paths is not exported.
 def generate_key_paths(
     tree: Any, is_leaf: Callable[[Any], bool] | None = None
 ) -> list[tuple[KeyPath, Any]]:
@@ -914,25 +1111,31 @@ def _generate_key_paths_(
     yield key_path, tree
     return
   key_handler = _registry_with_keypaths.get(type(tree))
-  handler = _registry.get(type(tree))
   if key_handler:
     key_children, _ = key_handler.flatten_with_keys(tree)
     for k, c in key_children:
       yield from _generate_key_paths_((*key_path, k), c, is_leaf)
-  elif handler:
-    children, _ = handler.to_iter(tree)
-    for i, c in enumerate(children):
-      k = FlattenedIndexKey(i)
-      yield from _generate_key_paths_((*key_path, k), c, is_leaf)
-  elif isinstance(tree, tuple) and hasattr(tree, '_fields'):
+    return
+
+  flat = default_registry.flatten_one_level(tree)
+  if flat is None:
+    yield key_path, tree  # strict leaf type
+    return
+
+  if (isinstance(tree, tuple) and hasattr(tree, '_fields') and
+      flat[1] == type(tree)):
     # handle namedtuple as a special case, based on heuristic
     key_children = [(GetAttrKey(s), getattr(tree, s)) for s in tree._fields]
     for k, c in key_children:
       yield from _generate_key_paths_((*key_path, k), c, is_leaf)
-  else:
-    yield key_path, tree  # strict leaf type
+    return
+
+  for i, c in enumerate(flat[0]):
+    k = FlattenedIndexKey(i)
+    yield from _generate_key_paths_((*key_path, k), c, is_leaf)
 
 
+@export
 def tree_map_with_path(f: Callable[..., Any],
                        tree: Any, *rest: Any,
                        is_leaf: Callable[[Any], bool] | None = None) -> Any:
@@ -954,6 +1157,11 @@ def tree_map_with_path(f: Callable[..., Any],
     leaf given by ``f(kp, x, *xs)`` where ``kp`` is the key path of the leaf at
     the corresponding leaf in ``tree``, ``x`` is the leaf value and ``xs`` is
     the tuple of values at corresponding nodes in ``rest``.
+
+  See Also:
+    - :func:`jax.tree_util.tree_map`
+    - :func:`jax.tree_util.tree_flatten_with_path`
+    - :func:`jax.tree_util.tree_leaves_with_path`
   """
 
   keypath_leaves, treedef = tree_flatten_with_path(tree, is_leaf)
@@ -1001,6 +1209,8 @@ def _prefix_error(
   # point, and because prefix_tree is not a leaf, each can be flattened once:
   prefix_tree_children, prefix_tree_meta = flatten_one_level(prefix_tree)
   full_tree_children, full_tree_meta = flatten_one_level(full_tree)
+  prefix_tree_children = tuple(prefix_tree_children)
+  full_tree_children = tuple(full_tree_children)
   prefix_tree_keys = _child_keys(prefix_tree)
   full_tree_keys = _child_keys(full_tree)
   # First we check special case types (list and tuple, though if they were

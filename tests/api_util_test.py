@@ -16,12 +16,12 @@
 import itertools as it
 from absl.testing import absltest
 from absl.testing import parameterized
+import jax
 from jax._src import api_util
 from jax import numpy as jnp
 from jax._src import test_util as jtu
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class ApiUtilTest(jtu.JaxTestCase):
@@ -43,7 +43,8 @@ class ApiUtilTest(jtu.JaxTestCase):
             expected += (False,)
           self.assertEqual(
               expected,
-              api_util.donation_vector(donate_argnums, (), args, kwargs))
+              api_util.donation_vector(donate_argnums, (),
+                                       jax.tree.structure((args, kwargs))))
 
   @parameterized.parameters(
       ((0,), (0,)),

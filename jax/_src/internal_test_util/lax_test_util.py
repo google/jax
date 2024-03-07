@@ -23,6 +23,7 @@ import collections
 import itertools
 from typing import Union, cast
 
+import jax
 from jax import lax
 from jax._src import dtypes
 from jax._src import test_util
@@ -30,8 +31,7 @@ from jax._src.util import safe_map, safe_zip
 
 import numpy as np
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 map, unsafe_map = safe_map, map
 zip, unsafe_zip = safe_zip, zip

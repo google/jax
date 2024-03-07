@@ -24,5 +24,6 @@ from jax._src.errors import (
   TracerBoolConversionError as TracerBoolConversionError,
   TracerIntegerConversionError as TracerIntegerConversionError,
   UnexpectedTracerError as UnexpectedTracerError,
+  KeyReuseError as KeyReuseError,
 )
 from jax._src.traceback_util import SimplifiedTraceback as SimplifiedTraceback

@@ -23,8 +23,7 @@ import numpy as np
 
 from jax.experimental.jax2tf.tests import tf_test_util
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class ControlFlowOpsTest(tf_test_util.JaxToTfTestCase):

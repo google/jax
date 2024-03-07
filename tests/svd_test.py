@@ -150,6 +150,26 @@ class SvdTest(jtu.JaxTestCase):
       np.testing.assert_almost_equal(diff, 1E-4, decimal=2)
 
   @jtu.sample_product(
+      [dict(m=m, r=r) for m, r in zip([8, 8, 8, 10], [3, 5, 7, 9])],
+  )
+  def testSvdWithOnRankDeficientInputZeroColumns(self, m, r):
+    """Tests SVD with rank-deficient input."""
+    with jax.default_matmul_precision('float32'):
+      np.random.seed(1235)
+      a = np.random.randn(m, m).astype(_SVD_TEST_DTYPE)
+      d = np.ones(m).astype(_SVD_TEST_DTYPE)
+      d[r:m] = 0
+      a = a @ np.diag(d)
+
+      with jax.default_matmul_precision('float32'):
+        u, s, v = svd.svd(a, full_matrices=True, hermitian=False)
+      diff = np.linalg.norm(a - (u * s) @ v)
+      np.testing.assert_almost_equal(diff, 1e-4, decimal=2)
+      # Check that u and v are orthogonal.
+      self.assertAllClose(u.T.conj() @ u, np.eye(m), atol=10 * _SVD_TEST_EPS)
+      self.assertAllClose(v.T.conj() @ v, np.eye(m), atol=10 * _SVD_TEST_EPS)
+
+  @jtu.sample_product(
     [dict(m=m, n=n) for m, n in zip([2, 8, 10, 20], [4, 6, 10, 18])],
     log_cond=np.linspace(1, _MAX_LOG_CONDITION_NUM, 4),
     full_matrices=[True, False],

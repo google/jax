@@ -12,22 +12,92 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import scipy.stats as osp_stats
 from jax import lax
-from jax._src.numpy.util import implements, promote_args_inexact
+from jax._src.numpy.util import promote_args_inexact
 from jax._src.typing import Array, ArrayLike
 
 
-@implements(osp_stats.gennorm.logpdf, update_doc=False)
-def logpdf(x: ArrayLike, p: ArrayLike) -> Array:
-  x, p = promote_args_inexact("gennorm.logpdf", x, p)
-  return lax.log(.5 * p) - lax.lgamma(1/p) - lax.abs(x)**p
+def logpdf(x: ArrayLike, beta: ArrayLike) -> Array:
+  r"""Generalized normal log probability distribution function.
 
-@implements(osp_stats.gennorm.cdf, update_doc=False)
-def cdf(x: ArrayLike, p: ArrayLike) -> Array:
-  x, p = promote_args_inexact("gennorm.cdf", x, p)
-  return .5 * (1 + lax.sign(x) * lax.igamma(1/p, lax.abs(x)**p))
+  JAX implementation of :obj:`scipy.stats.gennorm` ``logpdf``.
 
-@implements(osp_stats.gennorm.pdf, update_doc=False)
-def pdf(x: ArrayLike, p: ArrayLike) -> Array:
-  return lax.exp(logpdf(x, p))
+  The generalized normal probability distribution function is defined as
+
+  .. math::
+
+     f(x, \beta) = \frac{\beta}{2\Gamma(1/\beta)}\exp(-|x|^\beta)
+
+  where :math:`\Gamma` is the :func:`~jax.scipy.special.gamma` function, and
+  :math:`\beta > 0`.
+
+  Args:
+    x: arraylike, value at which to evaluate the PDF
+    beta: arraylike, distribution shape parameter
+
+  Returns:
+    array of logpdf values.
+
+  See Also:
+    - :func:`jax.scipy.stats.gennorm.cdf`
+    - :func:`jax.scipy.stats.gennorm.pdf`
+  """
+  x, beta = promote_args_inexact("gennorm.logpdf", x, beta)
+  return lax.log(.5 * beta) - lax.lgamma(1/beta) - lax.abs(x)**beta
+
+
+def cdf(x: ArrayLike, beta: ArrayLike) -> Array:
+  r"""Generalized normal cumulative distribution function.
+
+  JAX implementation of :obj:`scipy.stats.gennorm` ``cdf``.
+
+  The cdf is defined as
+
+  .. math::
+
+     f_{cdf}(x, k) = \int_{-\infty}^x f_{pdf}(y, k)\mathrm{d}y
+
+  where :math:`f_{pdf}` is the probability density function,
+  :func:`jax.scipy.stats.gennorm.pdf`.
+
+  Args:
+    x: arraylike, value at which to evaluate the CDF
+    beta: arraylike, distribution shape parameter
+
+  Returns:
+    array of cdf values.
+
+  See Also:
+    - :func:`jax.scipy.stats.gennorm.pdf`
+    - :func:`jax.scipy.stats.gennorm.logpdf`
+  """
+  x, beta = promote_args_inexact("gennorm.cdf", x, beta)
+  return .5 * (1 + lax.sign(x) * lax.igamma(1/beta, lax.abs(x)**beta))
+
+
+def pdf(x: ArrayLike, beta: ArrayLike) -> Array:
+  r"""Generalized normal probability distribution function.
+
+  JAX implementation of :obj:`scipy.stats.gennorm` ``pdf``.
+
+  The generalized normal probability distribution function is defined as
+
+  .. math::
+
+     f(x, \beta) = \frac{\beta}{2\Gamma(1/\beta)}\exp(-|x|^\beta)
+
+  where :math:`\Gamma` is the :func:`~jax.scipy.special.gamma` function, and
+  :math:`\beta > 0`.
+
+  Args:
+    x: arraylike, value at which to evaluate the PDF
+    beta: arraylike, distribution shape parameter
+
+  Returns:
+    array of pdf values.
+
+  See Also:
+    - :func:`jax.scipy.stats.gennorm.cdf`
+    - :func:`jax.scipy.stats.gennorm.logpdf`
+  """
+  return lax.exp(logpdf(x, beta))

@@ -31,8 +31,7 @@ from jax._src import test_util as jtu
 from jax._src.util import NumpyComplexWarning
 from jax.test_util import check_grads
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 compatible_shapes = [[(3,)],

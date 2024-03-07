@@ -13,7 +13,11 @@
 # limitations under the License.
 
 """Pallas utility functions."""
-import math
+
+from __future__ import annotations
+from typing import overload
+
+import jax
 from jax import lax
 from jax._src import core as jax_core
 from jax._src.util import split_list
@@ -30,9 +34,26 @@ def when(condition):
       lax.cond(condition, f, lambda: None)
   return _wrapped
 
-
+@overload
 def cdiv(a: int, b: int) -> int:
-  return (a + b - 1) // b
+  ...
+
+@overload
+def cdiv(a: int, b: jax.Array) -> jax.Array:
+  ...
+
+@overload
+def cdiv(a: jax.Array, b: int) -> jax.Array:
+  ...
+
+@overload
+def cdiv(a: jax.Array, b: jax.Array) -> jax.Array:
+  ...
+
+def cdiv(a: int | jax.Array, b: int | jax.Array) -> int | jax.Array:
+  if isinstance(a, int) and isinstance(b, int):
+    return (a + b - 1) // b
+  return lax.div(a + b - 1, b)
 
 
 def strides_from_shape(shape: tuple[int, ...]) -> tuple[int, ...]:
@@ -45,9 +66,10 @@ def strides_from_shape(shape: tuple[int, ...]) -> tuple[int, ...]:
 
 
 def next_power_of_2(x: int) -> int:
-  if x == 0:
-    return 1
-  return int(2 ** math.ceil(math.log2(x)))
+  """Returns the next power of two greater than or equal to `x`."""
+  if x < 0:
+    raise ValueError("`next_power_of_2` requires a non-negative integer.")
+  return 1 if x == 0 else 2 ** (x - 1).bit_length()
 
 
 def pattern_match_scan_to_fori_loop(
@@ -97,44 +119,42 @@ def pattern_match_while_to_fori_loop(
     cond_nconsts: int,
     body_jaxpr: jax_core.Jaxpr,
     body_nconsts: int,
-) -> tuple[jax_core.Jaxpr, bool]:
+) -> tuple[jax_core.Jaxpr | None, str | None]:
   # Try to pattern match to fori loop.
+  # Successful matches produce (jaxpr, None), while failures use the str
+  # component of the return tuple to capture information about the failure.
   if cond_nconsts:
-    raise NotImplementedError("Conditional jaxpr can't contain consts.")
+    return (None, "Conditional jaxpr can't contain consts.")
   _, cond_invars = split_list(cond_jaxpr.jaxpr.invars, [cond_nconsts])
   cond_in_avals = [v.aval for v in cond_invars]
   if len(cond_in_avals) < 2:
-    raise NotImplementedError("Conditional jaxpr have only two carry args.")
+    return (None, "Conditional jaxpr have only two carry args.")
   # Check that the first two carry values are scalar ints
   a1, a2 = cond_in_avals[:2]
   if a1.shape or a1.dtype not in (jnp.int32, jnp.int64):
-    raise NotImplementedError(
-        "First conditional jaxpr carry arg is not a scalar int."
-    )
+    return (None, "First conditional jaxpr carry arg is not a scalar int.")
   if a2.shape or a2.dtype not in (jnp.int32, jnp.int64):
-    raise NotImplementedError(
-        "Second conditional jaxpr carry arg is not a scalar int."
-    )
+    return (None, "Second conditional jaxpr carry arg is not a scalar int.")
   # Check that the only eqn in the cond checks the loop index condition
   v1, v2 = cond_invars[:2]
   outvar = cond_jaxpr.jaxpr.outvars[0]
   assert outvar.aval.dtype == jnp.bool_
   if len(cond_jaxpr.jaxpr.eqns) != 1:
-    raise NotImplementedError("Non-trivial conditional jaxprs not supported.")
+    return (None, "Non-trivial conditional jaxprs not supported.")
   eqn = cond_jaxpr.jaxpr.eqns[0]
   if eqn.primitive != lax.lt_p:
-    raise NotImplementedError("Non-trivial conditional jaxprs not supported.")
+    return (None, "Non-trivial conditional jaxprs not supported.")
   if eqn.outvars != [outvar]:
-    raise NotImplementedError("Non-trivial conditional jaxprs not supported.")
+    return (None, "Non-trivial conditional jaxprs not supported.")
   if eqn.invars != [v1, v2]:
-    raise NotImplementedError("Non-trivial conditional jaxprs not supported.")
+    return (None, "Non-trivial conditional jaxprs not supported.")
   # Check that the carry is updated in the body appropriately
   _, body_invars = split_list(body_jaxpr.jaxpr.invars, [body_nconsts])
   v1, v2 = body_invars[:2]
   vo1, vo2 = body_jaxpr.jaxpr.outvars[:2]
   # Upper bound should be constant
   if v2 is not vo2:
-    raise NotImplementedError("Loop upper bound is not constant.")
+    return (None, "Loop upper bound is not constant.")
   # Check that we increment the loop index in the body
   for i, eqn in enumerate(body_jaxpr.jaxpr.eqns):
     if eqn.primitive is lax.add_p:
@@ -145,7 +165,7 @@ def pattern_match_while_to_fori_loop(
               eqn_index = i
               break
   else:
-    raise NotImplementedError("Loop index not incremented in body.")
+    return (None, "Loop index not incremented in body.")
   jaxpr = body_jaxpr.jaxpr
   new_invars = (
       *jaxpr.invars[:body_nconsts],
@@ -158,4 +178,4 @@ def pattern_match_while_to_fori_loop(
       invars=new_invars,
       outvars=new_outvars,
   )
-  return jaxpr
+  return jaxpr, None

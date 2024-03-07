@@ -11,11 +11,12 @@ or deployed codebases.
    :maxdepth: 1
    :caption: Debugging and Performance
 
+   notebooks/thinking_in_jax
    profiling
    device_memory_profiling
    debugging/index
    gpu_performance_tips
-
+   persistent_compilation_cache
 
 .. toctree::
    :maxdepth: 1
@@ -31,6 +32,7 @@ or deployed codebases.
    :caption: Run Time
 
    aot
+   export/index
    errors
    transfer_guard
 

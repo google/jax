@@ -141,10 +141,10 @@ def conv_general_dilated(
     rhs_dilation = (1,) * (rhs.ndim - 2)
   if isinstance(padding, str):
     lhs_perm, rhs_perm, _ = dnums
-    rhs_shape = np.take(rhs.shape, rhs_perm)[2:]  # type: ignore[index]
+    rhs_shape = np.take(rhs.shape, rhs_perm)[2:]
     effective_rhs_shape = [core.dilate_dim(k, r) for k, r in zip(rhs_shape, rhs_dilation)]
     padding = lax.padtype_to_pads(
-        np.take(lhs.shape, lhs_perm)[2:], effective_rhs_shape,  # type: ignore[index]
+        np.take(lhs.shape, lhs_perm)[2:], effective_rhs_shape,
         window_strides, padding)
   else:
     try:
@@ -328,7 +328,7 @@ def conv_transpose(lhs: Array, rhs: Array, strides: Sequence[int],
       raise ValueError('No 4+ dimensional dimension_number defaults.')
   dn = conv_dimension_numbers(lhs.shape, rhs.shape, dimension_numbers)
   k_shape = np.take(rhs.shape, dn.rhs_spec)
-  k_sdims = k_shape[2:]  # type: ignore[index]
+  k_sdims = k_shape[2:]
   # Calculate correct output shape given padding and strides.
   pads: str | Sequence[tuple[int, int]]
   if isinstance(padding, str) and padding in {'SAME', 'VALID'}:
@@ -411,7 +411,7 @@ def _conv_general_dilated_shape_rule(
   rhs_trans = lax._dilate_shape(np.take(rhs.shape, rhs_perm), rhs_dilation)
   out_trans = conv_shape_tuple(lhs_trans, rhs_trans, window_strides, padding,
                                batch_group_count)
-  return tuple(np.take(out_trans, np.argsort(out_perm)))  # type: ignore[arg-type]
+  return tuple(np.take(out_trans, np.argsort(out_perm)))
 
 
 def _conv_general_dilated_dtype_rule(
@@ -719,10 +719,10 @@ def _conv_general_dilated_lower(
           dimension_numbers=dnums,
           feature_group_count=mlir.i64_attr(feature_group_count),
           batch_group_count=mlir.i64_attr(batch_group_count),
-          window_strides=mlir.dense_int_array_v6(window_strides),
+          window_strides=mlir.dense_int_array(window_strides),
           padding=mlir.dense_int_elements(padding),
-          lhs_dilation=mlir.dense_int_array_v6(lhs_dilation),
-          rhs_dilation=mlir.dense_int_array_v6(rhs_dilation),
+          lhs_dilation=mlir.dense_int_array(lhs_dilation),
+          rhs_dilation=mlir.dense_int_array(rhs_dilation),
           window_reversal=window_reversal,
           precision_config=lax.precision_attr(precision))
     ]
@@ -744,9 +744,9 @@ def _conv_general_dilated_lower(
           dimension_numbers=dnums,
           feature_group_count=mlir.i64_attr(feature_group_count),
           batch_group_count=mlir.i64_attr(batch_group_count),
-          window_strides=mlir.dense_int_array_v6(window_strides),
-          lhs_dilation=mlir.dense_int_array_v6(lhs_dilation),
-          rhs_dilation=mlir.dense_int_array_v6(rhs_dilation),
+          window_strides=mlir.dense_int_array(window_strides),
+          lhs_dilation=mlir.dense_int_array(lhs_dilation),
+          rhs_dilation=mlir.dense_int_array(rhs_dilation),
           window_reversal=window_reversal,
           precision_config=lax.precision_attr(precision))
     ]

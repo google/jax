@@ -15,12 +15,12 @@
 from __future__ import annotations
 
 from collections import OrderedDict, abc
-from collections.abc import Iterable, Sequence, Mapping
+from collections.abc import Callable, Iterable, Sequence, Mapping
 import contextlib
 from functools import wraps, partial, partialmethod, lru_cache
 import itertools as it
 import math
-from typing import Callable, Any, NamedTuple, Union
+from typing import Any, NamedTuple, Union, cast as type_cast
 
 import numpy as np
 
@@ -62,7 +62,7 @@ from jax._src.tree_util import (tree_flatten, tree_unflatten, all_leaves,
 from jax._src.util import (safe_map, safe_zip, HashableFunction, unzip2, unzip3,
                            as_hashable_function, distributed_debug_log,
                            tuple_insert, moveaxis, split_list, wrap_name,
-                           merge_lists, partition_list)
+                           merge_lists, partition_list, fun_name)
 
 source_info_util.register_exclusion(__file__)
 traceback_util.register_exclusion(__file__)
@@ -116,7 +116,7 @@ class SerialLoop:
   jointly over chunks of multiple axes (with the usual requirement that they
   do not coincide in a named shape of any value in the program).
 
-  Example::
+  Examples:
 
       # Processes `x` in a vectorized way, but in 20 micro-batches.
       xmap(f, in_axes=['i'], out_axes=[i], axis_resources={'i': SerialLoop(20)})(x)
@@ -161,7 +161,7 @@ def serial_loop(name: ResourceAxisName, length: int):
     name: Name of the loop in the resource environment.
     length: Number of iterations.
 
-  Example::
+  Examples:
 
     >>> x = jnp.linspace(0, jnp.pi, 4)
     ...
@@ -284,6 +284,13 @@ def xmap(fun: Callable,
          donate_argnums: int | Sequence[int] = (),
          backend: str | None = None) -> stages.Wrapped:
   """Assign a positional signature to a program that uses named array axes.
+
+  .. warning::
+    xmap is deprecated and will be removed in a future release. Use
+    :py:func:`~jax.shard_map` or :py:func:`~jax.vmap` with the
+    ``spmd_axis_name`` argument for expressing SPMD device-parallel
+    computations. Please file an issue on https://github.com/google/jax/issues
+    if neither are suitable for your use case.
 
   .. warning::
     This is an experimental feature and the details can change at
@@ -527,7 +534,7 @@ def xmap(fun: Callable,
     args_flat, in_tree = tree_flatten(args)
     fun_flat, out_tree = flatten_fun_nokwargs(lu.wrap_init(fun), in_tree)
     if donate_argnums:
-      donated_invars = donation_vector(donate_argnums, (), args, {})
+      donated_invars = donation_vector(donate_argnums, (), in_tree, kws=False)
     else:
       donated_invars = (False,) * len(args_flat)
     in_axes_flat = _flatten_axes("xmap in_axes", in_tree, in_axes, tupled_args=True)
@@ -570,7 +577,7 @@ def xmap(fun: Callable,
         in_axes_flat, args_flat)
 
     params = dict(
-      name=getattr(fun, '__name__', '<unnamed function>'),
+      name=fun_name(fun),
       in_axes=tuple(in_axes_flat),
       out_axes_thunk=out_axes_thunk,
       donated_invars=donated_invars,
@@ -620,21 +627,21 @@ def xmap(fun: Callable,
     in_tree = treedef_tuple([in_tree, tree_flatten({})[1]])
     in_avals = in_tree.unflatten(avals_flat)
     return stages.Lowered.from_flat_info(
-        computation, in_tree, in_avals, donate_argnums, out_tree(),  # type: ignore
-        no_kwargs=True)
+        computation, in_tree, in_avals, donate_argnums, out_tree())
 
   fun_mapped.lower = lower
-  return fun_mapped
+  return type_cast(stages.Wrapped, fun_mapped)
 
 def xmap_impl(fun: lu.WrappedFun, *args, name, in_axes, out_axes_thunk, donated_invars,
               global_axis_sizes, axis_resources, resource_env, backend,
               spmd_in_axes, spmd_out_axes_thunk):
   in_avals = [core.raise_to_shaped(core.get_aval(arg)) for arg in args]
-  xmap_callable = make_xmap_callable(
+  computation = make_xmap_callable(
       fun, name, in_axes, out_axes_thunk, donated_invars, global_axis_sizes,
       axis_resources, resource_env, backend,
       spmd_in_axes, spmd_out_axes_thunk,
-      mlir.LoweringParameters(), *in_avals).compile().unsafe_call
+      mlir.LoweringParameters(), *in_avals)
+  xmap_callable = computation.compile().unsafe_call
   distributed_debug_log(("Running xmapped function", name),
                         ("python function", fun.f),
                         ("mesh", resource_env.physical_mesh),
@@ -700,16 +707,17 @@ def make_xmap_callable(fun: lu.WrappedFun,
         f, 'xmap', name, mesh,
         in_shardings, out_shardings, donated_invars,
         use_spmd_lowering, in_avals,
-        tiling_method=tiling_method,
+        tiling_method=tiling_method, lowering_platforms=None,
         lowering_parameters=lowering_parameters)
   else:
     jaxpr, out_avals, consts = pe.trace_to_jaxpr_final(f, in_avals)
     return pxla.lower_sharding_computation(
         core.ClosedJaxpr(jaxpr, consts), 'jit', name,
         (UNSPECIFIED,) * len(in_avals), (UNSPECIFIED,) * len(out_avals),
-        donated_invars, in_avals, keep_unused=True, inline=False,
-        devices_from_context=None, lowering_parameters=lowering_parameters,
-        in_layouts=(None,) * len(in_avals), out_layouts=(None,) * len(out_avals))
+        (None,) * len(in_avals), (None,) * len(out_avals),
+        donated_invars, keep_unused=True, inline=False,
+        devices_from_context=None, lowering_platforms=None,
+        lowering_parameters=lowering_parameters, pgle_profiler=None)
 
 
 class EvaluationPlan(NamedTuple):
@@ -1808,9 +1816,10 @@ def _fix_inferred_spmd_sharding(jaxpr, resource_env, gen_fresh_name = None):
           [tmpvar], [outvar], sharding_constraint_p,
           dict(resource_env=resource_env,
                sharding=gspmd_sharding,
+               layout=None,
                unconstrained_dims=unconstrained_dims),
           set(),
-          eqn.source_info))
+          eqn.source_info, eqn.ctx))
   return jaxpr.replace(eqns=new_eqns)
 
 def _flatten_axes(what, tree, axes, tupled_args):
@@ -1832,7 +1841,7 @@ class NoQuotesStr(str):
 def _thread_local_flag_unsupported(_):
   raise RuntimeError("thread-local xmap flags not supported!")
 def _clear_compilation_cache(_):
-  make_xmap_callable.cache_clear()  # type: ignore
+  make_xmap_callable.cache_clear()  # pytype: disable=attribute-error
 
 def _ensure_spmd_and(f):
   def update(v):
@@ -1842,7 +1851,7 @@ def _ensure_spmd_and(f):
   return update
 
 
-SPMD_LOWERING = config.define_bool_state(
+SPMD_LOWERING = config.bool_state(
     name="experimental_xmap_spmd_lowering",
     default=False,
     help=("When set, multi-device xmap computations will be compiled through "
@@ -1850,7 +1859,7 @@ SPMD_LOWERING = config.define_bool_state(
           "Not supported on CPU!"),
     update_global_hook=_clear_compilation_cache,
     update_thread_local_hook=_thread_local_flag_unsupported)
-SPMD_LOWERING_MANUAL = config.define_bool_state(
+SPMD_LOWERING_MANUAL = config.bool_state(
     name="experimental_xmap_spmd_lowering_manual",
     default=False,
     help=("When set, multi-device xmap computations will be compiled using "
@@ -1859,7 +1868,7 @@ SPMD_LOWERING_MANUAL = config.define_bool_state(
           "Requires experimental_xmap_spmd_lowering!"),
     update_global_hook=_ensure_spmd_and(_clear_compilation_cache),
     update_thread_local_hook=_thread_local_flag_unsupported)
-_ENSURE_FIXED_SHARDING = config.define_bool_state(
+_ENSURE_FIXED_SHARDING = config.bool_state(
     name="experimental_xmap_ensure_fixed_sharding",
     default=False,
     help=("When set and `experimental_xmap_spmd_lowering` is enabled, the lowering will "

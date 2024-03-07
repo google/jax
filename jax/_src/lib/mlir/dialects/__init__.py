@@ -23,6 +23,15 @@ import jaxlib.mlir.dialects.func as func
 import jaxlib.mlir.dialects.scf as scf
 import jaxlib.mlir.dialects.sparse_tensor as sparse_tensor
 import jaxlib.mlir.dialects.vector as vector
+try:
+  # pytype: disable=import-error
+  import jaxlib.mlir.dialects.gpu as gpu
+  import jaxlib.mlir.dialects.nvgpu as nvgpu
+  import jaxlib.mlir.dialects.nvvm as nvvm
+  import jaxlib.mlir.dialects.llvm as llvm
+  # pytype: enable=import-error
+except ImportError:
+  pass
 
 from jax._src import lib
 

@@ -9,16 +9,6 @@ computation across multiple TPU cores from Colab. You can also run the same code
 directly on a [Cloud TPU
 VM](https://cloud.google.com/tpu/docs/jax-quickstart-tpu-vm).
 
-## Update (June 2021): introducing Cloud TPU VMs
-
-A new Cloud TPU architecture was recently
-[announced](https://cloud.google.com/blog/products/compute/introducing-cloud-tpu-vms)
-that gives you direct access to a VM with TPUs attached, enabling significant
-performance and usability improvements when using JAX on Cloud TPU. As of
-writing, Colab still uses the previous architecture, but the same JAX code
-generally will run on either architecture (there are a few features that are
-only available with the new architecture, such as complex number support).
-
 ## Example Cloud TPU notebooks
 
 The following notebooks showcase how to use and what you can do with Cloud TPUs on Colab:

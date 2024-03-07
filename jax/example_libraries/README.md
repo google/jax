@@ -44,7 +44,7 @@ net_init, net_apply = stax.serial(
 )
 
 # Initialize parameters, not committing to a batch shape
-rng = random.PRNGKey(0)
+rng = random.key(0)
 in_shape = (-1, 28, 28, 1)
 out_shape, net_params = net_init(rng, in_shape)
 

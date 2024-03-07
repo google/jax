@@ -15,10 +15,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import contextlib
 import math
-from typing import Any, Callable
+from typing import Any
 import unittest
 
 from absl import logging
@@ -32,9 +32,8 @@ import re
 
 import jax
 from jax.experimental import jax2tf
-from jax.experimental import export
-from jax.experimental.export import _shape_poly as shape_poly
 from jax.experimental import pjit
+from jax import export
 from jax import lax
 import jax.numpy as jnp
 from jax import random
@@ -43,6 +42,7 @@ from jax._src import config
 from jax._src import core
 from jax._src import test_util as jtu
 from jax._src import util
+from jax._src.export import shape_poly
 from jax._src.lax import lax as lax_internal
 from jax._src.lax import control_flow as lax_control_flow
 from jax._src.lib import xla_client
@@ -50,7 +50,7 @@ import numpy as np
 
 from jax.experimental.jax2tf.tests import tf_test_util
 
-import tensorflow as tf  # type: ignore[import]
+import tensorflow as tf
 
 config.parse_flags_with_absl()
 
@@ -218,7 +218,7 @@ class PolyHarness(Harness):
     if not self.skip_jax_run:
       res_jax = f_jax(*args)
       if self.check_result:
-        res_tf = tf.nest.map_structure(lambda t: t.numpy(), res_tf)  # type: ignore
+        res_tf = tf.nest.map_structure(lambda t: t.numpy(), res_tf)
         custom_assert_lims = [
             l for l in self.limitations if l.custom_assert is not None]
         assert len(custom_assert_lims) <= 1, custom_assert_lims
@@ -615,7 +615,7 @@ class ShapePolyTest(tf_test_util.JaxToTfTestCase):
              "Using the following polymorphic shapes specifications: args[0].shape = (2*b + a, a, c + b + a). "
              "Obtained dimension variables: 'a' = 2 from specification 'a' for dimension args[0].shape[1] (= 2), "
              "'b' = 0 from specification '2*b + a' for dimension args[0].shape[0] (= 2), . "
-             "Please see https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#shape-assertion-errors for more details."
+             "Please see https://jax.readthedocs.io/en/latest/export/shape_poly.html#shape-assertion-errors for more details."
            )),
       dict(shape=(3, 2, 6),  # a = 2, b = 0.5, c = 4 - b is not integer
            poly_spec="(a + 2*b, a, a + b + c)",
@@ -624,7 +624,7 @@ class ShapePolyTest(tf_test_util.JaxToTfTestCase):
              "Division had remainder 1 when computing the value of 'b'. "
              "Using the following polymorphic shapes specifications: args[0].shape = (2*b + a, a, c + b + a). "
              "Obtained dimension variables: 'a' = 2 from specification 'a' for dimension args[0].shape[1] (= 2), . "
-             "Please see https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#shape-assertion-errors for more details."
+             "Please see https://jax.readthedocs.io/en/latest/export/shape_poly.html#shape-assertion-errors for more details."
            )),
       dict(shape=(8, 2, 6),  # a = 2, b = 3 - inconsistency
            poly_spec="(a + 2*b, a, a + b)",
@@ -634,7 +634,7 @@ class ShapePolyTest(tf_test_util.JaxToTfTestCase):
              "Using the following polymorphic shapes specifications: args[0].shape = (2*b + a, a, b + a). "
              "Obtained dimension variables: 'a' = 2 from specification 'a' for dimension args[0].shape[1] (= 2), "
              "'b' = 4 from specification 'b + a' for dimension args[0].shape[2] (= 6), . "
-             "Please see https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#shape-assertion-errors for more details."
+             "Please see https://jax.readthedocs.io/en/latest/export/shape_poly.html#shape-assertion-errors for more details."
            )),
       dict(shape=(7, 2, 36),  # a = 2, b = 3, c = 6 - cannot solve c
            poly_spec="(2 * a + b, a, c * c)",
@@ -643,7 +643,7 @@ class ShapePolyTest(tf_test_util.JaxToTfTestCase):
              "We can only solve linear uni-variate constraints. "
              "Using the following polymorphic shapes specifications: args[0].shape = (b + 2*a, a, c^2). "
              "Unprocessed specifications: 'c^2' for dimension size args[0].shape[2]. "
-             "Please see https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#dimension-variables-must-be-solvable-from-the-input-shapes for more details."
+             "Please see https://jax.readthedocs.io/en/latest/export/shape_poly.html#dimension-variables-must-be-solvable-from-the-input-shapes for more details."
            )),
   ])
   def test_shape_constraints_errors(self, *,
@@ -2377,7 +2377,7 @@ _POLY_SHAPE_TEST_HARNESSES = [
     PolyHarness("scatter_grad", "",
                 lambda *args: jax.grad(
                     lambda *args:
-                        jnp.sum(lax.scatter(  # type: ignore
+                        jnp.sum(lax.scatter(
                           *args,
                           indices_are_sorted=False,
                           unique_indices=False,
@@ -2392,7 +2392,7 @@ _POLY_SHAPE_TEST_HARNESSES = [
     PolyHarness("scatter_grad", "poly_indices",
                 lambda *args: jax.grad(
                   lambda *args:
-                  jnp.sum(lax.scatter(  # type: ignore
+                  jnp.sum(lax.scatter(
                     *args,
                     indices_are_sorted=False,
                     unique_indices=False))
@@ -2523,6 +2523,12 @@ _POLY_SHAPE_TEST_HARNESSES = [
                 lambda x: jnp.tri(x.shape[0], M=x.shape[0] + 2) + x,
                 arg_descriptors=[RandArg((3, 1), _f32)],
                 polymorphic_shapes=["b, ..."]),
+    PolyHarness("tril", "",
+                lambda x: jnp.tril(jnp.ones((x.shape[0], x.shape[0] + x.shape[1]),
+                                            dtype=_f32),
+                                   k=x.shape[1]),
+                arg_descriptors=[RandArg((3, 4), _f32)],
+                polymorphic_shapes=["m, n"]),
     [
       PolyHarness("triangular_solve",
                   f"shape={jtu.format_shape_dtype_string(a_shape, dtype)}_{left_side=}_{a_poly=}_{b_poly=}",
@@ -2809,17 +2815,8 @@ class ShapePolyPrimitivesTest(tf_test_util.JaxToTfTestCase):
     if harness.group_name == "eig" and not jtu.test_device_matches(["cpu"]):
       raise unittest.SkipTest("JAX implements eig only on CPU.")
 
-    prev_jax_config_flags = {
-      fname: getattr(jax.config, fname)
-      for fname, fvalue in harness.override_jax_config_flags.items()
-    }
-    try:
-      for fname, fvalue in harness.override_jax_config_flags.items():
-        jax.config.update(fname, fvalue)
+    with jtu.global_config_context(**harness.override_jax_config_flags):
       harness.run_test(self)
-    finally:
-      for fname, _ in harness.override_jax_config_flags.items():
-        jax.config.update(fname, prev_jax_config_flags[fname])
 
 
 if __name__ == "__main__":

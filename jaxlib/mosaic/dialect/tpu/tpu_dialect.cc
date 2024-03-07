@@ -189,6 +189,9 @@ bool isGuaranteedDivisible(Value value, int64_t divisor, int64_t fuel) {
   if (fuel <= 0) {
     return false;
   }
+  if (divisor == 1) {
+    return true;
+  }
   if (auto assume_op = value.getDefiningOp<tpu::AssumeMultipleOp>()) {
     return assume_op.getMultiple() % divisor == 0;
   }

@@ -100,7 +100,7 @@ pybind_extension(
         "@local_config_rocm//rocm:hipblas",
         "@local_config_rocm//rocm:rocm_headers",
         "@nanobind",
-        "@tsl//tsl/python/lib/core:numpy",
+        "@xla//xla/tsl/python/lib/core:numpy",
     ],
 )
 
@@ -141,7 +141,7 @@ pybind_extension(
         "@local_config_rocm//rocm:hipsolver",
         "@local_config_rocm//rocm:rocm_headers",
         "@nanobind",
-        "@tsl//tsl/python/lib/core:numpy",
+        "@xla//xla/tsl/python/lib/core:numpy",
     ],
 )
 
@@ -189,7 +189,7 @@ pybind_extension(
         "@local_config_rocm//rocm:hipsparse",
         "@local_config_rocm//rocm:rocm_headers",
         "@nanobind",
-        "@tsl//tsl/python/lib/core:numpy",
+        "@xla//xla/tsl/python/lib/core:numpy",
     ],
 )
 
@@ -201,9 +201,13 @@ cc_library(
         ":hip_gpu_kernel_helpers",
         ":hip_lu_pivot_kernels_impl",
         ":hip_vendor",
-        "//jaxlib:kernel_helpers",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
         "@local_config_rocm//rocm:rocm_headers",
-        "@xla//xla/service:custom_call_status",
+        "@xla//xla/ffi/api:c_api",
+        "@xla//xla/ffi/api:ffi",
     ],
 )
 
@@ -214,11 +218,48 @@ rocm_library(
     deps = [
         ":hip_gpu_kernel_helpers",
         ":hip_vendor",
-        "//jaxlib:kernel_helpers",
         "@local_config_rocm//rocm:rocm_headers",
-        "@xla//xla/service:custom_call_status",
+        "@xla//xla/ffi/api:ffi",
     ],
 )
+
+cc_library(
+    name = "cholesky_update_kernel",
+    srcs = [
+        "//jaxlib/gpu:cholesky_update_kernel.cc",
+    ],
+    hdrs = ["//jaxlib/gpu:cholesky_update_kernel.h"],
+    features = ["-use_header_modules"],
+    deps = [
+        ":cholesky_update_kernel_impl",
+        ":hip_gpu_kernel_helpers",
+        ":hip_vendor",
+        ":hipsolver_kernels",
+        "//jaxlib:kernel_helpers",
+        "@xla//xla/service:custom_call_status",
+        "@com_google_absl//absl/status",
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+)
+
+rocm_library(
+    name = "cholesky_update_kernel_impl",
+    srcs = [
+        "//jaxlib/gpu:cholesky_update_kernel.cu.cc",
+    ],
+    hdrs = [
+        "//jaxlib/gpu:cholesky_update_kernel.h",
+    ],
+    deps = [
+        ":hip_gpu_kernel_helpers",
+        ":hip_vendor",
+        ":hipsolver_kernels",
+        "//jaxlib:kernel_helpers",
+        "@xla//xla/service:custom_call_status",
+        "@local_config_rocm//rocm:rocm_headers",
+    ],
+)
+
 
 pybind_extension(
     name = "_linalg",
@@ -230,11 +271,13 @@ pybind_extension(
     features = ["-use_header_modules"],
     module_name = "_linalg",
     deps = [
+        ":cholesky_update_kernel",
         ":hip_gpu_kernel_helpers",
         ":hip_lu_pivot_kernels",
         ":hip_lu_pivot_kernels_impl",
         ":hip_vendor",
         "//jaxlib:kernel_nanobind_helpers",
+        "@xla//xla/tsl/python/lib/core:numpy",
         "@local_config_rocm//rocm:rocm_headers",
         "@nanobind",
     ],
@@ -295,8 +338,6 @@ cc_library(
         ":hip_vendor",
         ":triton_utils",
         "//jaxlib/gpu:triton_cc_proto",
-        "@xla//xla/service:custom_call_status",
-        "@xla//xla/stream_executor/gpu:asm_compiler",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/container:flat_hash_map",
@@ -306,7 +347,9 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
-        "@tsl//tsl/platform:env",
+        "@xla//xla/service:custom_call_status",
+        "@xla//xla/stream_executor/gpu:asm_compiler",
+        "@xla//xla/tsl/util:env_var",
     ],
 )
 
@@ -347,6 +390,7 @@ pybind_extension(
         "@nanobind",
     ],
 )
+
 py_library(
     name = "rocm_gpu_support",
     deps = [
@@ -357,4 +401,13 @@ py_library(
         ":_sparse",
         ":_triton",
     ],
+)
+
+py_library(
+    name = "gpu_only_test_deps",
+    # `if_rocm_is_configured` will default to `[]`.
+    deps = if_rocm_is_configured([
+        ":rocm_gpu_support",
+        "//jaxlib:rocm_plugin_extension",
+    ]),
 )

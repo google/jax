@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@rules_python//python:defs.bzl", "py_test")
 load(
     "//jaxlib:jax.bzl",
     "jax_generate_backend_suites",
@@ -20,7 +21,6 @@ load(
     "py_deps",
     "pytype_test",
 )
-load("@rules_python//python:defs.bzl", "py_test")
 
 licenses(["notice"])
 
@@ -35,6 +35,7 @@ jax_test(
     name = "api_test",
     srcs = ["api_test.py"],
     shard_count = 10,
+    tags = ["test_cpu_thunks"],
 )
 
 jax_test(
@@ -54,6 +55,7 @@ py_test(
     deps = [
         "//jax",
         "//jax:experimental_array_api",
+        "//jax:test_util",
     ] + py_deps("absl/testing"),
 )
 
@@ -71,6 +73,11 @@ jax_test(
     shard_count = {
         "gpu": 5,
     },
+)
+
+jax_test(
+    name = "config_test",
+    srcs = ["config_test.py"],
 )
 
 jax_test(
@@ -137,6 +144,7 @@ jax_test(
     shard_count = {
         "tpu": 20,
         "cpu": 20,
+        "gpu": 10,
     },
 )
 
@@ -233,6 +241,9 @@ jax_test(
     shard_count = {
         "tpu": 5,
     },
+    deps = [
+        "//jax:experimental",
+    ],
 )
 
 jax_test(
@@ -256,6 +267,9 @@ jax_test(
 jax_test(
     name = "layout_test",
     srcs = ["layout_test.py"],
+    backend_tags = {
+        "tpu": ["requires-mem:16g"],  # Under tsan on 2x2 this test exceeds the default 12G memory limit.
+    },
     tags = ["multiaccelerator"],
 )
 
@@ -305,6 +319,9 @@ jax_test(
 jax_test(
     name = "array_test",
     srcs = ["array_test.py"],
+    backend_tags = {
+        "tpu": ["requires-mem:16g"],  # Under tsan on 2x2 this test exceeds the default 12G memory limit.
+    },
     tags = ["multiaccelerator"],
     deps = [
         "//jax:experimental",
@@ -336,6 +353,7 @@ jax_test(
 jax_test(
     name = "infeed_test",
     srcs = ["infeed_test.py"],
+    tags = ["test_cpu_thunks"],
     deps = [
         "//jax:experimental_host_callback",
     ],
@@ -345,6 +363,7 @@ jax_test(
     name = "jax_jit_test",
     srcs = ["jax_jit_test.py"],
     main = "jax_jit_test.py",
+    tags = ["test_cpu_thunks"],
 )
 
 py_test(
@@ -543,6 +562,21 @@ jax_test(
 )
 
 jax_test(
+    name = "lax_metal_test",
+    srcs = ["lax_metal_test.py"],
+    disable_backends = [
+        "cpu",
+        "gpu",
+        "tpu",
+    ],
+    tags = ["notap"],
+    deps = [
+        "//jax:internal_test_util",
+        "//jax:lax_reference",
+    ] + py_deps("numpy"),
+)
+
+jax_test(
     name = "lax_autodiff_test",
     srcs = ["lax_autodiff_test.py"],
     shard_count = {
@@ -616,6 +650,11 @@ jax_test(
 )
 
 jax_test(
+    name = "cholesky_update_test",
+    srcs = ["cholesky_update_test.py"],
+)
+
+jax_test(
     name = "metadata_test",
     srcs = ["metadata_test.py"],
     disable_backends = [
@@ -651,6 +690,7 @@ jax_test(
     name = "nn_test",
     srcs = ["nn_test.py"],
     shard_count = {
+        "cpu": 10,
         "tpu": 10,
         "gpu": 10,
     },
@@ -676,6 +716,7 @@ jax_test(
     backend_tags = {
         "tpu": [
             "noasan",  # Times out under asan.
+            "requires-mem:16g",  # Under tsan on 2x2 this test exceeds the default 12G memory limit.
         ],
     },
     shard_count = {
@@ -731,7 +772,11 @@ jax_test(
     name = "pytorch_interoperability_test",
     srcs = ["pytorch_interoperability_test.py"],
     disable_backends = ["tpu"],
+    # The following cases are disabled because they time out in Google's CI, mostly because the
+    # CUDA kernels in Torch take a very long time to compile.
     disable_configs = [
+        "gpu_p100",  # Pytorch P100 build times out in Google's CI.
+        "gpu_a100",  # Pytorch A100 build times out in Google's CI.
         "gpu_h100",  # Pytorch H100 build times out in Google's CI.
     ],
     tags = [
@@ -746,6 +791,14 @@ jax_test(
 jax_test(
     name = "qdwh_test",
     srcs = ["qdwh_test.py"],
+    backend_tags = {
+        "tpu": [
+            "noasan",  # Times out
+            "nomsan",  # Times out
+            "notsan",  # Times out
+        ],
+    },
+    shard_count = 10,
 )
 
 jax_test(
@@ -784,9 +837,12 @@ jax_test(
             "notsan",  # Times out
         ],
     },
+    backend_variant_args = {
+        "gpu": ["--jax_num_generated_cases=40"],
+    },
     shard_count = {
         "cpu": 40,
-        "gpu": 30,
+        "gpu": 40,
         "tpu": 40,
     },
     tags = ["noasan"],  # Times out
@@ -961,6 +1017,29 @@ jax_test(
 )
 
 jax_test(
+    name = "sparse_nm_test",
+    srcs = ["sparse_nm_test.py"],
+    config_tags_overrides = {
+        "gpu_a100": {
+            "ondemand": False,  # Include in presubmit.
+        },
+    },
+    disable_backends = [
+        "cpu",
+        "gpu",
+        "tpu",
+    ],
+    enable_configs = [
+        "gpu_a100",
+        "gpu_h100",
+    ],
+    deps = [
+        "//jax:experimental_sparse",
+        "//jax:pallas_gpu",
+    ],
+)
+
+jax_test(
     name = "sparsify_test",
     srcs = ["sparsify_test.py"],
     args = ["--jax_bcoo_cusparse_lowering=true"],
@@ -1012,6 +1091,11 @@ jax_test(
     name = "linear_search_test",
     srcs = ["third_party/scipy/line_search_test.py"],
     main = "third_party/scipy/line_search_test.py",
+)
+
+jax_test(
+    name = "blocked_sampler_test",
+    srcs = ["blocked_sampler_test.py"],
 )
 
 py_test(
@@ -1069,6 +1153,16 @@ py_test(
         "//jax:gfile_cache",
         "//jax:test_util",
     ],
+)
+
+py_test(
+    name = "lru_cache_test",
+    srcs = ["lru_cache_test.py"],
+    deps = [
+        "//jax",
+        "//jax:lru_cache",
+        "//jax:test_util",
+    ] + py_deps("filelock"),
 )
 
 jax_test(
@@ -1242,6 +1336,11 @@ jax_test(
 )
 
 jax_test(
+    name = "mutable_array_test",
+    srcs = ["mutable_array_test.py"],
+)
+
+jax_test(
     name = "for_loop_test",
     srcs = ["for_loop_test.py"],
     shard_count = {
@@ -1294,7 +1393,7 @@ jax_test(
     disable_configs = [
         "gpu_a100",  # Numerical precision problems.
     ],
-    shard_count = 8,
+    shard_count = 15,
     deps = [
         "//jax:rnn",
     ],
@@ -1328,13 +1427,9 @@ py_test(
     ],
 )
 
-py_test(
+jax_test(
     name = "logging_test",
     srcs = ["logging_test.py"],
-    deps = [
-        "//jax",
-        "//jax:test_util",
-    ],
 )
 
 jax_test(
@@ -1371,7 +1466,6 @@ jax_test(
     ],
     deps = [
         "//jax:internal_test_harnesses",
-        "//jax/experimental/export",
     ],
 )
 
@@ -1380,6 +1474,7 @@ jax_test(
     srcs = ["export_harnesses_multi_platform_test.py"],
     disable_configs = [
         "gpu_a100",  # TODO(b/269593297): matmul precision issues
+        "gpu_h100",  # Scarce resources.
     ],
     shard_count = {
         "cpu": 40,
@@ -1394,7 +1489,6 @@ jax_test(
     ],
     deps = [
         "//jax:internal_test_harnesses",
-        "//jax/experimental/export",
     ],
 )
 
@@ -1415,9 +1509,30 @@ jax_test(
         "tpu",
         "cpu",
     ],
-    shard_count = 4,
+    shard_count = {
+        "gpu": 4,
+    },
+    tags = ["multiaccelerator"],
     deps = [
         "//jax:fused_attention_stablehlo",
+    ],
+)
+
+py_test(
+    name = "pretty_printer_test",
+    srcs = ["pretty_printer_test.py"],
+    deps = [
+        "//jax",
+        "//jax:test_util",
+    ],
+)
+
+py_test(
+    name = "sourcemap_test",
+    srcs = ["sourcemap_test.py"],
+    deps = [
+        "//jax",
+        "//jax:test_util",
     ],
 )
 

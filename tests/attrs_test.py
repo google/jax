@@ -45,7 +45,6 @@ attrs.register(Thing)  # enables passing as arg into jitted function
 
 class AttrsTest(jtu.JaxTestCase):
 
-
   @parameterized.parameters([True, False])
   def test_jit_basic(self, jit: bool):
     thing = Thing(1.0)
@@ -66,6 +65,100 @@ class AttrsTest(jtu.JaxTestCase):
     self.assertEqual(thing.x, 8.0)
     double_it()
     self.assertEqual(thing.x, 16.0)
+
+  @parameterized.parameters([True, False])
+  def test_jit_basic_tree(self, jit: bool):
+    thing = Thing((1.0, 2.0))
+
+    def double_it() -> None:
+      (cur_x, cur_y) = jax_getattr(thing, "x")
+      jax_setattr(thing, "x", (cur_x * 2, cur_y * 2))
+
+    if jit:
+      double_it = jax.jit(double_it)
+
+    self.assertEqual(thing.x, (1.0, 2.0))
+    double_it()
+    self.assertEqual(thing.x, (2.0, 4.0))
+    double_it()
+    self.assertEqual(thing.x, (4.0, 8.0))
+    double_it()
+    self.assertEqual(thing.x, (8.0, 16.0))
+    double_it()
+    self.assertEqual(thing.x, (16.0, 32.0))
+
+  @parameterized.parameters([True, False])
+  def test_jit_basic_tree_changes(self, jit: bool):
+    thing = Thing(None)
+    count = 0
+
+    def double_it() -> None:
+      nonlocal count
+      count += 1
+      maybe_x = jax_getattr(thing, "x")
+      x = 1.0 if maybe_x is None else maybe_x
+      jax_setattr(thing, "x", 2 * x)
+
+    if jit:
+      double_it = jax.jit(double_it)
+
+    self.assertEqual(thing.x, None)
+    double_it()
+    self.assertEqual(thing.x, 2.0)
+    self.assertEqual(count, 1)
+    double_it()
+    self.assertEqual(thing.x, 4.0)
+    self.assertEqual(count, 2)
+    double_it()
+    self.assertEqual(thing.x, 8.0)
+    self.assertEqual(count, 2 + (not jit))
+
+  def test_jit_basic_tree_changes_multiple(self):
+    thing1 = Thing(None)
+    thing2 = Thing(0)
+    count = 0
+
+    @jax.jit
+    def double_it() -> None:
+      nonlocal count
+      count += 1
+
+      x1 = jax_getattr(thing1, "x")
+      if x1 is None:
+        jax_setattr(thing1, 'x', (None,))
+      elif isinstance(x1, tuple):
+        # depend on a new value
+        jax_setattr(thing1, 'x', jax_getattr(thing2, 'x') + 1)
+      else:
+        jax_setattr(thing2, 'x', jax_getattr(thing1, 'x'))
+        jax_setattr(thing1, 'x', None)
+
+    self.assertEqual(thing1.x, None)
+    self.assertEqual(thing2.x, 0)
+    double_it()
+    self.assertEqual(thing1.x, (None,))
+    self.assertEqual(thing2.x, 0)
+    self.assertEqual(count, 1)
+    double_it()
+    self.assertEqual(thing1.x, 1)
+    self.assertEqual(thing2.x, 0)
+    self.assertEqual(count, 2)
+    double_it()
+    self.assertEqual(thing1.x, None)
+    self.assertEqual(thing2.x, 1)
+    self.assertEqual(count, 3)
+    double_it()
+    self.assertEqual(thing1.x, (None,))
+    self.assertEqual(thing2.x, 1)
+    self.assertEqual(count, 3)
+    double_it()
+    self.assertEqual(thing1.x, 2)
+    self.assertEqual(thing2.x, 1)
+    self.assertEqual(count, 3)
+    double_it()
+    self.assertEqual(thing1.x, None)
+    self.assertEqual(thing2.x, 2)
+    self.assertEqual(count, 3)
 
   def test_jit_nesting_basic(self):
     thing = Thing(1.0)

@@ -3,6 +3,8 @@ on:
   schedule:
     - cron: "0 12 * * *" # Daily at 12:00 UTC
   workflow_dispatch: # allows triggering the workflow run manually
+  pull_request:
+    types: [ labeled ] # allow force-windows-run label
 
 env:
   DISTUTILS_USE_SDK: 1
@@ -10,13 +12,14 @@ env:
 
 jobs:
   win-wheels:
+    if: ${{ (github.event.action != 'labeled') || (github.event.label.name == 'windows:force-run')}}
     strategy:
       fail-fast: true
       matrix:
-        os: [win-2019-16core]
+        os: [windows-2019-32core]
         arch: [AMD64]
-        pyver: ['3.9']
-    name: ${{ matrix.os }} CI build
+        pyver: ['3.10']
+    name: Windows CI build
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -25,16 +28,14 @@ jobs:
         with:
           access_token: ${{ github.token }}
 
+      - name: Install LLVM/Clang
+        run: choco install llvm --version=18.1.4 --yes --no-progress --allow-downgrade
+
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # ratchet:actions/checkout@v4
         with:
           path: jax
 
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # ratchet:actions/checkout@v4
-        with:
-          repository: openxla/xla
-          path: xla
-
-      - uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # ratchet:actions/setup-python@v5
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # ratchet:actions/setup-python@v5
         with:
           python-version: ${{ matrix.pyver }}
           cache: 'pip'
@@ -46,10 +47,13 @@ jobs:
         run: |
           cd jax
           python -m pip install -r build/test-requirements.txt
+          python -m pip install --upgrade numpy==2.0.0 scipy==1.13.1
           "C:\\msys64\\;C:\\msys64\\usr\\bin\\;" >> $env:GITHUB_PATH
-          python.exe build\build.py ('--bazel_options=--override_repository=xla=${{ github.workspace }}\xla' -replace '\\','\\') --bazel_options=--color=yes
+          python.exe build\build.py `
+            --bazel_options=--color=yes `
+            --bazel_options=--config=win_clang
 
-      - uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # ratchet: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # ratchet: actions/upload-artifact@v4
         with:
           name: wheels
           path: ${{ github.workspace }}\jax\dist\*.whl

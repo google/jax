@@ -55,22 +55,6 @@ MeshDimAssignment = Union[ShardedAxis, Replicated]
 ShardingSpec = pmap_lib.ShardingSpec
 
 
-def _sharding_spec_mesh_shape(self):
-  sharded_axis_sizes = []
-  for sharding in self.sharding:
-    if isinstance(sharding, NoSharding):
-      continue
-    elif isinstance(sharding, Unstacked):
-      sharded_axis_sizes.append(sharding.size)
-    elif isinstance(sharding, Chunked):
-      sharded_axis_sizes.extend(sharding.chunks)
-    else:
-      util.assert_unreachable(sharding)
-  return tuple(sharded_axis_sizes[a.axis] if isinstance(a, ShardedAxis)
-               else a.replicas
-               for a in self.mesh_mapping)
-
-
 def _sharding_spec_indices(self, shape: tuple[int, ...]) -> np.ndarray:
   """Returns NumPy-style indices corresponding to a sharding spec.
 
@@ -134,7 +118,6 @@ def _sharding_spec_repr(self):
   return f'ShardingSpec({self.sharding}, {self.mesh_mapping})'
 
 
-ShardingSpec.mesh_shape = property(_sharding_spec_mesh_shape)
 ShardingSpec.indices = _sharding_spec_indices
 # mypy raises: error: Cannot assign to a method  [assignment]
 ShardingSpec.__repr__ = _sharding_spec_repr  # type: ignore

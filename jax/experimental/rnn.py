@@ -162,7 +162,7 @@ def get_num_params_in_lstm(input_size: int, hidden_size: int, num_layers: int,
   """Get param count in LSTM."""
   layer_shapes = _get_params_shapes_in_lstm(input_size, hidden_size, num_layers,
                                             bidirectional)
-  param_count = sum([math.prod(shape) for shape in layer_shapes])
+  param_count = sum(math.prod(shape) for shape in layer_shapes)
   return param_count
 
 
@@ -466,7 +466,7 @@ def lstm_bwd(input_size: int, hidden_size: int, num_layers: int, dropout: float,
   return (dx, dh_0, dc_0, dw, jnp.zeros_like(seq_lengths))
 
 
-def rnn_bwd_abstract_eval(dy_aval, dhn_aval, dcn_aval, x_aval, h0_aval, c0_aval,  # type: ignore
+def rnn_bwd_abstract_eval(dy_aval, dhn_aval, dcn_aval, x_aval, h0_aval, c0_aval,
                           w_aval, y_aval, reserve_space_aval,
                           seq_lengths_aval, input_size: int, hidden_size: int,
                           num_layers: int, dropout: float, bidirectional: bool,

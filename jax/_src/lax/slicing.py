@@ -14,12 +14,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import enum
 import operator
 from functools import partial
 import math
-from typing import Callable, NamedTuple
+from typing import NamedTuple
 import weakref
 
 import numpy as np
@@ -232,7 +232,7 @@ class GatherDimensionNumbers(NamedTuple):
       in the output of the gather. Must be a tuple of integers in ascending
       order.
     start_index_map: for each dimension in `start_indices`, gives the
-      corresponding dimension in `operand` that is to be sliced. Must be a
+      corresponding dimension in the `operand` that is to be sliced. Must be a
       tuple of integers with size equal to `start_indices.shape[-1]`.
 
   Unlike XLA's `GatherDimensionNumbers` structure, `index_vector_dim` is
@@ -261,8 +261,8 @@ class GatherScatterMode(enum.Enum):
     will be discarded.
   PROMISE_IN_BOUNDS:
     The user promises that indices are in bounds. No additional checking will be
-    performed. In practice, with the current XLA  implementation this means
-    that, out-of-bounds gathers will be clamped but out-of-bounds scatters will
+    performed. In practice, with the current XLA implementation this means
+    that out-of-bounds gathers will be clamped but out-of-bounds scatters will
     be discarded. Gradients will not be correct if indices are out-of-bounds.
   """
   CLIP = enum.auto()
@@ -370,7 +370,7 @@ class ScatterDimensionNumbers(NamedTuple):
       are the mirror image of `collapsed_slice_dims` in the case of `gather`.
     scatter_dims_to_operand_dims: for each dimension in `scatter_indices`, gives
       the corresponding dimension in `operand`. Must be a sequence of integers
-      with size equal to indices.shape[-1].
+      with size equal to `scatter_indices.shape[-1]`.
 
   Unlike XLA's `ScatterDimensionNumbers` structure, `index_vector_dim` is
   implicit; there is always an index vector dimension and it must always be the
@@ -1821,10 +1821,13 @@ def _gather_lower(ctx, operand, indices, *,
   assert mode in (GatherScatterMode.PROMISE_IN_BOUNDS,
                   GatherScatterMode.CLIP), mode
   dnums = hlo.GatherDimensionNumbers.get(
-    collapsed_slice_dims=list(dimension_numbers.collapsed_slice_dims),
-    index_vector_dim=len(ctx.avals_in[1].shape) - 1,
-    offset_dims=list(dimension_numbers.offset_dims),
-    start_index_map=list(dimension_numbers.start_index_map))
+      collapsed_slice_dims=list(dimension_numbers.collapsed_slice_dims),
+      operand_batching_dims=[],
+      start_indices_batching_dims=[],
+      index_vector_dim=len(ctx.avals_in[1].shape) - 1,
+      offset_dims=list(dimension_numbers.offset_dims),
+      start_index_map=list(dimension_numbers.start_index_map),
+  )
   if not core.is_constant_shape(slice_sizes):
     slice_sizes = mlir.eval_dynamic_shape_as_tensor(ctx, slice_sizes)
     # TODO(burmako): Fix overly conservative type inference of DynamicGatherOp.
@@ -1845,7 +1848,7 @@ def _gather_lower(ctx, operand, indices, *,
         operand,
         indices,
         dnums,
-        mlir.dense_int_array_v6(slice_sizes),
+        mlir.dense_int_array(slice_sizes),
         indices_are_sorted=ir.BoolAttr.get(indices_are_sorted))]
 
 mlir.register_lowering(gather_p, _gather_lower)
@@ -2475,10 +2478,13 @@ def _scatter_lower(ctx, operand, indices, updates, *,
 
   dnums = dimension_numbers
   scatter_dnums = hlo.ScatterDimensionNumbers.get(
-    update_window_dims=list(dnums.update_window_dims),
-    inserted_window_dims=list(dnums.inserted_window_dims),
-    scattered_dims_to_operand_dims=list(dnums.scatter_dims_to_operand_dims),
-    index_vector_dim=len(ctx.avals_in[1].shape) - 1)
+      update_window_dims=list(dnums.update_window_dims),
+      inserted_window_dims=list(dnums.inserted_window_dims),
+      input_batching_dims=[],
+      scatter_indices_batching_dims=[],
+      scattered_dims_to_operand_dims=list(dnums.scatter_dims_to_operand_dims),
+      index_vector_dim=len(ctx.avals_in[1].shape) - 1,
+  )
   result = mlir.aval_to_ir_types(aval_out)
   operand = [operand]
   updates = [updates]
@@ -2532,10 +2538,13 @@ def _scatter_add_lower_gpu(ctx, operand, indices, updates,
   aval_out, = ctx.avals_out
   dnums = dimension_numbers
   scatter_dnums = hlo.ScatterDimensionNumbers.get(
-    update_window_dims=list(dnums.update_window_dims),
-    inserted_window_dims=list(dnums.inserted_window_dims),
-    scattered_dims_to_operand_dims=list(dnums.scatter_dims_to_operand_dims),
-    index_vector_dim=len(ctx.avals_in[1].shape) - 1)
+      update_window_dims=list(dnums.update_window_dims),
+      inserted_window_dims=list(dnums.inserted_window_dims),
+      input_batching_dims=[],
+      scatter_indices_batching_dims=[],
+      scattered_dims_to_operand_dims=list(dnums.scatter_dims_to_operand_dims),
+      index_vector_dim=len(ctx.avals_in[1].shape) - 1,
+  )
   real_dtype = _real_dtype(aval_out.dtype)
   operand_type_part = mlir.aval_to_ir_types(
       core.ShapedArray(aval_out.shape, real_dtype))

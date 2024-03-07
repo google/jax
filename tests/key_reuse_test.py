@@ -21,13 +21,15 @@ import jax
 from jax import core
 import jax.numpy as jnp
 from jax._src import prng
+from jax._src import random
 from jax._src import test_util as jtu
+from jax.errors import KeyReuseError
 from jax.experimental.key_reuse._core import (
-  assert_consumed, assert_unconsumed, consume, consume_p)
-from jax.experimental.key_reuse import _core, KeyReuseError
+  assert_consumed, assert_unconsumed, consume, consume_p,
+  Source, Sink, Forward, KeyReuseSignature)
+from jax.experimental.key_reuse import _core
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 key = jax.eval_shape(jax.random.key, 0)
@@ -36,7 +38,7 @@ key1D = jax.eval_shape(lambda key: key[None], key)
 
 primitives_with_static_signatures = {
   consume_p: (consume, key),
-  prng.reuse_key_p: (prng.reuse_key, key),
+  random.random_clone_p: (random.clone, key),
   prng.random_bits_p: (jax.random.bits, key),
   # prng.random_fold_in_p: (jax.random.fold_in, key, 2),
   prng.random_seed_p: (jax.random.key, 0),
@@ -64,7 +66,7 @@ def apply_unknown_primitive(key):
 
 @jtu.with_config(
   jax_enable_custom_prng=False,
-  jax_enable_key_reuse_checks=False)
+  jax_debug_key_reuse=False)
 class KeyReuseUnitTestWithForwarding(jtu.JaxTestCase):
   def check_key_reuse(self, *args):
     return _core.check_key_reuse(*args)
@@ -91,12 +93,12 @@ class KeyReuseUnitTestWithForwarding(jtu.JaxTestCase):
       assert_consumed(key2)
     self.check_key_reuse(f, jax.random.key(0))
 
-  def test_reuse_key(self):
+  def test_random_clone(self):
     def f(key):
       assert_unconsumed(key)
       consume(key)
       assert_consumed(key)
-      key2 = prng.reuse_key(key)
+      key2 = jax.random.clone(key)
       assert_unconsumed(key2)
     self.check_key_reuse(f, jax.random.key(0))
 
@@ -205,6 +207,18 @@ class KeyReuseUnitTestWithForwarding(jtu.JaxTestCase):
       assert_consumed(key)
       assert_consumed(key2)
     self.check_key_reuse(f, jax.random.key(0))
+
+  def test_concatenate(self):
+    def f(key1, key2):
+      assert_unconsumed(key1)
+      assert_unconsumed(key2)
+      keys = jax.lax.concatenate([key1, key2], dimension=0)
+      assert_consumed(key1)
+      assert_consumed(key2)
+      assert_unconsumed(keys)
+    key1 = jax.random.split(jax.random.key(0))
+    key2 = jax.random.split(jax.random.key(1))
+    self.check_key_reuse(f, key1, key2)
 
   def test_slice(self):
     def f(keys):
@@ -329,10 +343,16 @@ class KeyReuseUnitTestWithForwarding(jtu.JaxTestCase):
     func, *args = primitives_with_static_signatures[primitive]
     signature = _core.key_reuse_signatures[primitive]
     jaxpr = jax.make_jaxpr(func)(*args)
-    self.assertEqual(signature, _core.get_jaxpr_type_signature(jaxpr.jaxpr))
+    self.assertEqual(signature, _core.jaxpr_type_signature(jaxpr.jaxpr))
+
+  @parameterized.parameters(*primitives_with_static_signatures)
+  def test_function_type_signature(self, primitive):
+    func, *args = primitives_with_static_signatures[primitive]
+    signature = _core.key_reuse_signatures[primitive]
+    self.assertEqual(signature, _core.function_type_signature(func, *args))
 
 
-@jtu.with_config(jax_enable_key_reuse_checks=False)
+@jtu.with_config(jax_debug_key_reuse=False)
 class KeyReuseIntegrationTest(jtu.JaxTestCase):
   random_bits_error = "In random_bits, argument [0-9]+ is already consumed.*"
   random_split_error = "In random_split, argument [0-9]+ is already consumed.*"
@@ -586,24 +606,42 @@ class KeyReuseIntegrationTest(jtu.JaxTestCase):
     self.check_key_reuse(jax.grad(f_good), x, key)
 
 
-@jtu.with_config(jax_enable_key_reuse_checks=True)
-class KeyReuseEager(jtu.JaxTestCase):
+@jtu.with_config(jax_debug_key_reuse=True)
+class KeyReuseEagerTest(jtu.JaxTestCase):
   jit_msg = "Previously-consumed key passed to jit-compiled function at index 0"
   eager_bits_msg = "Previously-consumed key passed to random_bits at index 0"
   traced_bits_msg = "In random_bits, argument 0 is already consumed."
 
+  def test_clone_eager(self):
+    key = jax.random.key(0)
+    key2 = jax.random.clone(key)
+    self.assertIsNot(key, key2)
+
+    _ = jax.random.uniform(key)
+    self.assertTrue(key._consumed)
+    self.assertFalse(key2._consumed)
+
   def test_simple_reuse_nojit(self):
     key = jax.random.key(0)
-    _ = jax.random.bits(key)
     with jax.disable_jit():
+      _ = jax.random.bits(key)
       with self.assertRaisesRegex(KeyReuseError, self.eager_bits_msg):
         _ = jax.random.bits(key)
 
   def test_simple_key_reuse_jit(self):
     key = jax.random.key(0)
-    _ = jax.random.bits(key)
+    _ = jax.jit(jax.random.bits)(key)
     with self.assertRaisesRegex(KeyReuseError, self.jit_msg):
       _ = jax.jit(jax.random.bits)(key)
+
+  def test_closed_over_key_reuse_jit(self):
+    key = jax.random.key(0)
+    @jax.jit
+    def f():
+      return jax.random.uniform(key)
+    _ = f()
+    with self.assertRaisesRegex(KeyReuseError, self.jit_msg):
+      _ = f()
 
   def test_key_reuse_within_jit(self):
     @jax.jit
@@ -614,9 +652,85 @@ class KeyReuseEager(jtu.JaxTestCase):
       f()
 
 
+class KeyReuseImplementationTest(jtu.JaxTestCase):
+
+  def assertEquivalent(self, a, b):
+    self.assertEqual(a, b)
+    self.assertEqual(hash(a), hash(b))
+
+  def assertNotEquivalent(self, a, b):
+    self.assertNotEqual(a, b)
+    self.assertNotEqual(hash(a), hash(b))
+
+  def test_source_sink_immutability(self):
+    mask = np.array([True, False])
+    orig_mask_writeable = mask.flags.writeable
+
+    sink = Sink(0, mask)
+    source = Source(0, mask)
+
+    self.assertFalse(sink.mask.flags.writeable)
+    self.assertFalse(source.mask.flags.writeable)
+    self.assertEqual(mask.flags.writeable, orig_mask_writeable)
+
+    with self.assertRaises(ValueError):
+      sink.idx = 1
+    with self.assertRaises(ValueError):
+      sink.mask = True
+    with self.assertRaises(ValueError):
+      source.idx = 1
+    with self.assertRaises(ValueError):
+      source.mask = True
+
+  def test_source_sink_forward_equivalence_semantics(self):
+
+    true_mask = np.array([True, True])
+    false_mask = np.array([False, False])
+    mixed_mask = np.array([True, False])
+
+    self.assertEquivalent(Source(0), Source(0, True))
+    self.assertEquivalent(Source(0, True), Source(0, true_mask))
+    self.assertEquivalent(Source(0, False), Source(0, false_mask))
+    self.assertEquivalent(Source(0, mixed_mask), Source(0, mixed_mask))
+    self.assertNotEquivalent(Source(0), Source(1))
+    self.assertNotEquivalent(Source(0), Source(0, False))
+    self.assertNotEquivalent(Source(0), Source(0, mixed_mask))
+
+    self.assertEquivalent(Sink(0), Sink(0, True))
+    self.assertEquivalent(Sink(0, True), Sink(0, true_mask))
+    self.assertEquivalent(Sink(0, False), Sink(0, false_mask))
+    self.assertEquivalent(Sink(0, mixed_mask), Sink(0, mixed_mask))
+    self.assertNotEquivalent(Sink(0), Sink(1))
+    self.assertNotEquivalent(Sink(0), Sink(0, False))
+    self.assertNotEquivalent(Sink(0), Sink(0, mixed_mask))
+
+    self.assertNotEquivalent(Source(0), Sink(0))
+
+    self.assertEquivalent(Forward(0, 1), Forward(0, 1))
+    self.assertNotEquivalent(Forward(0, 1), Forward(1, 0))
+
+  def test_signature_equality_semantics(self):
+    self.assertEquivalent(
+      KeyReuseSignature(Sink(0), Source(1), Forward(1, 0)),
+      KeyReuseSignature(Forward(1, 0), Source(1), Sink(0)))
+    self.assertEquivalent(
+      KeyReuseSignature(), KeyReuseSignature())
+    self.assertNotEquivalent(
+      KeyReuseSignature(Source(0)), KeyReuseSignature(Sink(0)))
+
+  def test_reprs(self):
+    self.assertEqual(repr(Sink(0)), "Sink(0)")
+    self.assertEqual(repr(Source(0)), "Source(0)")
+    self.assertEqual(repr(Forward(0, 1)), "Forward(0, 1)")
+    self.assertEqual(repr(KeyReuseSignature(Sink(1), Source(0))),
+                     "KeyReuseSignature(Sink(1), Source(0))")
+    self.assertEqual(repr(KeyReuseSignature(Sink(1), Sink(0))),
+                     "KeyReuseSignature(Sink(0), Sink(1))")
+
+
 
 @jtu.with_config(jax_enable_checks=False)
-class KeyReuseGlobalFlags(jtu.JaxTestCase):
+class KeyReuseGlobalFlagsTest(jtu.JaxTestCase):
   def test_key_reuse_flag(self):
 
     @jax.jit
@@ -629,14 +743,14 @@ class KeyReuseGlobalFlags(jtu.JaxTestCase):
 
     key = jax.random.key(0)
 
-    with jax.enable_key_reuse_checks(False):
+    with jax.debug_key_reuse(False):
       f_good(key)
       f_bad(key)  # No failure
 
     f_bad.clear_cache()
     f_good.clear_cache()
 
-    with jax.enable_key_reuse_checks(True):
+    with jax.debug_key_reuse(True):
       f_good(key)
       with self.assertRaisesRegex(KeyReuseError, "In random_bits.*"):
         f_bad(key)

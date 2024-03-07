@@ -12,13 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-import scipy.stats as osp_stats
-
 from jax import lax
 import jax.numpy as jnp
 from jax._src.lax.lax import _const as _lax_const
-from jax._src.numpy.util import promote_dtypes_inexact, implements
+from jax._src.numpy.util import promote_dtypes_inexact
 from jax.scipy.special import gammaln, xlogy
 from jax._src.typing import Array, ArrayLike
 
@@ -28,8 +25,30 @@ def _is_simplex(x: Array) -> Array:
   return jnp.all(x > 0, axis=0) & (abs(x_sum - 1) < 1E-6)
 
 
-@implements(osp_stats.dirichlet.logpdf, update_doc=False)
 def logpdf(x: ArrayLike, alpha: ArrayLike) -> Array:
+  r"""Dirichlet log probability distribution function.
+
+  JAX implementation of :obj:`scipy.stats.dirichlet` ``logpdf``.
+
+  The Dirichlet probability density function is
+
+  .. math::
+
+     f(\mathbf{x}) = \frac{1}{B(\mathbf{\alpha})} \prod_{i=1}^K x_i^{\alpha_i - 1}
+
+  where :math:`B(\mathbf{\alpha})` is the :func:`~jax.scipy.special.beta` function
+  in a :math:`K`-dimensional vector space.
+
+  Args:
+    x: arraylike, value at which to evaluate the PDF
+    alpha: arraylike, distribution shape parameter
+
+  Returns:
+    array of logpdf values.
+
+  See Also:
+    :func:`jax.scipy.stats.dirichlet.pdf`
+  """
   return _logpdf(*promote_dtypes_inexact(x, alpha))
 
 def _logpdf(x: Array, alpha: Array) -> Array:
@@ -52,6 +71,28 @@ def _logpdf(x: Array, alpha: Array) -> Array:
   return jnp.where(_is_simplex(x), log_probs, -jnp.inf)
 
 
-@implements(osp_stats.dirichlet.pdf, update_doc=False)
 def pdf(x: ArrayLike, alpha: ArrayLike) -> Array:
+  r"""Dirichlet probability distribution function.
+
+  JAX implementation of :obj:`scipy.stats.dirichlet` ``pdf``.
+
+  The Dirichlet probability density function is
+
+  .. math::
+
+     f(\mathbf{x}) = \frac{1}{B(\mathbf{\alpha})} \prod_{i=1}^K x_i^{\alpha_i - 1}
+
+  where :math:`B(\mathbf{\alpha})` is the :func:`~jax.scipy.special.beta` function
+  in a :math:`K`-dimensional vector space.
+
+  Args:
+    x: arraylike, value at which to evaluate the PDF
+    alpha: arraylike, distribution shape parameter
+
+  Returns:
+    array of pdf values.
+
+  See Also:
+    :func:`jax.scipy.stats.dirichlet.logpdf`
+  """
   return lax.exp(logpdf(x, alpha))

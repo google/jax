@@ -30,9 +30,10 @@ executable protocols described above.
 """
 from __future__ import annotations
 
+import functools
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Protocol, Union
+from typing import Any, NamedTuple, Protocol, Union, runtime_checkable
 import warnings
 
 import jax
@@ -44,7 +45,8 @@ from jax._src import traceback_util
 from jax._src import tree_util
 from jax._src.tree_util import tree_unflatten, keystr
 from jax._src import util
-from jax._src.layout import SpecifiedLayout
+from jax._src.sharding_impls import is_unspecified_or_auto
+from jax._src.layout import Layout
 from jax._src.interpreters import mlir
 from jax._src.lib.mlir import ir
 from jax._src.lib import xla_client as xc
@@ -71,7 +73,7 @@ class Executable(Protocol):
     # TODO(frostig): improve annotation (sequences of arrays/buffers)
     raise NotImplementedError
 
-  def input_shardings(self) -> Sequence[jax.sharding.XLACompatibleSharding]:
+  def input_shardings(self) -> Sequence[jax.sharding.Sharding]:
     """Flat sequence of input shardings.
 
     May raise ``NotImplementedError`` if unavailable, e.g. based on backend,
@@ -79,7 +81,7 @@ class Executable(Protocol):
     """
     raise NotImplementedError
 
-  def output_shardings(self) -> Sequence[jax.sharding.XLACompatibleSharding]:
+  def output_shardings(self) -> Sequence[jax.sharding.Sharding]:
     """Flat sequence of output shardings.
 
     May raise ``NotImplementedError`` if unavailable, e.g. based on backend,
@@ -87,12 +89,10 @@ class Executable(Protocol):
     """
     raise NotImplementedError
 
-  # Layouts are exposed via jax.experimental.layouts
-  # TODO(frostig,yashkatariya): expose here when no longer experimental.
-  def _input_layouts(self):
+  def input_layouts(self):
     raise NotImplementedError
 
-  def _output_layouts(self):
+  def output_layouts(self):
     raise NotImplementedError
 
   def as_text(self) -> str:
@@ -219,19 +219,19 @@ class XlaExecutable(Executable):
   def call(self, *args_flat) -> Sequence[Any]:
     raise NotImplementedError("must override")
 
-  def input_shardings(self) -> Sequence[jax.sharding.XLACompatibleSharding]:
+  def input_shardings(self) -> Sequence[jax.sharding.Sharding]:
     raise NotImplementedError(
         "compiled executable carries no input sharding information")
 
-  def output_shardings(self) -> Sequence[jax.sharding.XLACompatibleSharding]:
+  def output_shardings(self) -> Sequence[jax.sharding.Sharding]:
     raise NotImplementedError(
         "compiled executable carries no output sharding information")
 
-  def _input_layouts(self):
+  def input_layouts(self):
     raise NotImplementedError(
         "compiled executable carries no input layout information")
 
-  def _output_layouts(self):
+  def output_layouts(self):
     raise NotImplementedError(
         "compiled executable carries no input layout information")
 
@@ -314,9 +314,11 @@ class XlaLowering(Lowering):
 
   def hlo(self) -> xc.XlaComputation:
     """Return an HLO representation of this computation."""
+    hlo = self.stablehlo()
+    m: str | bytes
+    m = mlir.module_to_bytecode(hlo)
     return xla_extension.mlir.mlir_module_to_xla_computation(
-        mlir.module_to_string(self.stablehlo()),
-        use_tuple_args=self.compile_args["tuple_args"])
+        m, use_tuple_args=self.compile_args["tuple_args"])
 
   def mhlo(self) -> ir.Module:
     """Return an MHLO representation of this computation."""
@@ -368,10 +370,25 @@ class XlaLowering(Lowering):
 
 # -- Public-facing API, plus helpers
 
-@dataclass
+@dataclass(frozen=True)
 class ArgInfo:
-  aval: core.AbstractValue
+  _aval: core.AbstractValue
   donated: bool
+
+  @property
+  def shape(self):
+    return self._aval.shape  # pytype: disable=attribute-error
+
+  @property
+  def dtype(self):
+    return self._aval.dtype  # pytype: disable=attribute-error
+
+
+@dataclass(frozen=True)
+class OutInfo:
+  shape: tuple[int, ...]
+  dtype: jax.typing.DTypeLike
+  sharding: jax.sharding.Sharding | None = None
 
 
 class Stage:
@@ -385,7 +402,7 @@ class Stage:
   @property
   def in_avals(self):
     """Tree of input avals."""
-    return tree_util.tree_map(lambda x: x.aval, self.args_info)
+    return tree_util.tree_map(lambda x: x._aval, self.args_info)
 
   @property
   def donate_argnums(self):
@@ -407,6 +424,37 @@ class CompiledCallParams(NamedTuple):
   no_kwargs: bool
   in_tree: tree_util.PyTreeDef
   out_tree: tree_util.PyTreeDef
+
+
+class Traced(Stage):
+  __slots__ = ["jaxpr", "args_info", "fun_name", "_out_tree", "_lower_callable",
+               "_args_flat", "_arg_names", "_num_consts"]
+
+  def __init__(self, jaxpr: core.ClosedJaxpr, args_info, fun_name, out_tree,
+               lower_callable, args_flat=None, arg_names=None,
+               num_consts: int = 0):
+    self.jaxpr = jaxpr
+    self.args_info = args_info
+    self.fun_name = fun_name
+    self._out_tree = out_tree
+    self._lower_callable = lower_callable
+    self._args_flat = args_flat
+    self._arg_names = arg_names
+    self._num_consts = num_consts
+
+  @property
+  def out_info(self):
+    return self._out_tree.unflatten(
+        [OutInfo(o.shape, o.dtype) for o in self.jaxpr.out_avals])
+
+  def lower(self, lowering_platforms: tuple[str, ...] | None = None,
+            _private_parameters: mlir.LoweringParameters | None = None):
+    if _private_parameters is None:
+      _private_parameters = mlir.LoweringParameters()
+    new_callable = functools.partial(
+        self._lower_callable, lowering_platforms=lowering_platforms,
+        lowering_parameters=_private_parameters)
+    return Lowered(new_callable(), self.args_info, self._out_tree)
 
 
 class Compiled(Stage):
@@ -496,28 +544,33 @@ class Compiled(Stage):
     return self._executable.runtime_executable()
 
   @property
-  def input_shardings(self):  # PyTree[sharding.XLACompatibleSharding]
+  def input_shardings(self):  # PyTree[sharding.Sharding]
     shardings_flat = self._executable.input_shardings()
+    # Some input shardings got DCE'd
+    if self.in_tree.num_leaves > len(shardings_flat):
+      iter_shardings_flat = iter(shardings_flat)
+      shardings_flat = [next(iter_shardings_flat) if i in self._executable._kept_var_idx
+                        else None for i in range(self.in_tree.num_leaves)]
     return tree_util.tree_unflatten(self.in_tree, shardings_flat)  # pytype: disable=attribute-error
 
   @property
-  def output_shardings(self):  # PyTree[sharding.XLACompatibleSharding]
+  def output_shardings(self):  # PyTree[sharding.Sharding]
     shardings_flat = self._executable.output_shardings()
     return tree_util.tree_unflatten(self.out_tree, shardings_flat)  # pytype: disable=attribute-error
 
-  def _input_layouts(self):
+  def input_layouts(self):
     layouts_flat = self._executable.input_layouts()
-    assert all(isinstance(l, SpecifiedLayout) for l in layouts_flat)
+    assert all(isinstance(l, Layout) for l in layouts_flat)
     # Some input layouts got DCE'd
     if self.in_tree.num_leaves > len(layouts_flat):
       iter_layouts_flat = iter(layouts_flat)
       layouts_flat = [next(iter_layouts_flat) if i in self._executable._kept_var_idx
-                      else None for i in range(self.in_tree.num_leaves)]
+                      else Layout() for i in range(self.in_tree.num_leaves)]
     return tree_util.tree_unflatten(self.in_tree, layouts_flat)  # pytype: disable=attribute-error
 
-  def _output_layouts(self):
+  def output_layouts(self):
     layouts_flat = self._executable.output_layouts()
-    assert all(isinstance(l, SpecifiedLayout) for l in layouts_flat)
+    assert all(isinstance(l, Layout) for l in layouts_flat)
     return tree_util.tree_unflatten(self.out_tree, layouts_flat)  # pytype: disable=attribute-error
 
   @staticmethod
@@ -540,18 +593,18 @@ class Compiled(Stage):
       leaf = PytreeLeaf()
       this_dummy = tree_unflatten(in_tree, [leaf] * in_tree.num_leaves)
       other_dummy = tree_unflatten(
-          params.in_tree, [leaf] * params.in_tree.num_leaves)  # type: ignore
+          params.in_tree, [leaf] * params.in_tree.num_leaves)
       errs = list(tree_util.equality_errors(this_dummy, other_dummy))
       msg = []
       msg.append(
           "Function compiled with input pytree does not match the input pytree"
           f" it was called with. There are {len(errs)} mismatches, including:")
       for path, thing1, thing2, explanation in errs:
-        fst, *rest = path  # type: ignore
+        fst, *rest = path
         base = ['args', 'kwargs'][fst.idx]
         msg.append(
-            f"    * at {base}{keystr(rest)}, seen {thing2} but now given"  # type: ignore
-            f" {thing1}, so {explanation}")
+            f"    * at {base}{keystr(tuple(rest))}, seen {thing2} but now"
+            f" given {thing1}, so {explanation}")
       raise TypeError('\n'.join(msg))
     try:
       out_flat = params.executable.call(*args_flat)
@@ -601,11 +654,10 @@ class Lowered(Stage):
   querying properties of lowered computations across JAX's various
   lowering paths (:func:`~jax.jit`, :func:`~jax.pmap`, etc.).
   """
-  __slots__ = ["args_info", "out_tree", "_lowering", "_no_kwargs"]
-
+  __slots__ = ["_lowering", "args_info", "out_tree", "_no_kwargs"]
+  _lowering: XlaLowering
   args_info: Any                # PyTree of ArgInfo
   out_tree: tree_util.PyTreeDef
-  _lowering: XlaLowering
   _no_kwargs: bool
 
   def __init__(
@@ -614,10 +666,11 @@ class Lowered(Stage):
       args_info,  # PyTree of ArgInfo
       out_tree: tree_util.PyTreeDef,
       no_kwargs: bool = False):
+
     self._lowering = lowering
-    self._no_kwargs = no_kwargs
     self.args_info = args_info
     self.out_tree = out_tree
+    self._no_kwargs = no_kwargs
 
   @classmethod
   def from_flat_info(cls,
@@ -641,6 +694,14 @@ class Lowered(Stage):
         make_args_info(in_tree, in_avals, donate_argnums),
         out_tree,
         no_kwargs=no_kwargs)
+
+  @property
+  def out_info(self):  # PyTree of OutInfo
+    out_avals = self._lowering.compile_args["global_out_avals"]
+    out_shardings = self._lowering.compile_args["out_shardings"]
+    return self.out_tree.unflatten(
+        [OutInfo(o.shape, o.dtype, None if is_unspecified_or_auto(s) else s)
+         for o, s in zip(out_avals, out_shardings)])
 
   def compile(
       self, compiler_options: CompilerOptions | None = None) -> Compiled:
@@ -701,8 +762,9 @@ class Lowered(Stage):
       return None
 
 
+@runtime_checkable
 class Wrapped(Protocol):
-  """A function ready to be specialized, lowered, and compiled.
+  """A function ready to be traced, lowered, and compiled.
 
   This protocol reflects the output of functions such as
   ``jax.jit``. Calling it results in JIT (just-in-time) lowering,
@@ -712,6 +774,17 @@ class Wrapped(Protocol):
 
   def __call__(self, *args, **kwargs):
     """Executes the wrapped function, lowering and compiling as needed."""
+    raise NotImplementedError
+
+  def trace(self, *args, **kwargs) -> Traced:
+    """Trace this function explicitly for the given arguments.
+
+    A traced function is staged out of Python and translated to a jaxpr. It is
+    ready for lowering but not yet lowered.
+
+    Returns:
+      A ``Traced`` instance representing the tracing.
+    """
     raise NotImplementedError
 
   def lower(self, *args, **kwargs) -> Lowered:

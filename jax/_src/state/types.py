@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import dataclasses
 import math
-from typing import Any, Generic, TypeVar, Union
+from typing import Any, Union
 
 from jax._src import core
 from jax._src import effects
@@ -74,8 +74,6 @@ StateEffect = Union[ReadEffect, WriteEffect, AccumEffect]
 
 # ## `Ref`s
 
-Aval = TypeVar("Aval", bound=core.AbstractValue)
-
 @dataclasses.dataclass
 class RefIndexer:
   ref_or_view: Any
@@ -97,7 +95,11 @@ class RefView:
   indexers: tuple[indexing.NDIndexer, ...]
 
   @property
-  def shape(self) -> tuple[int, ...]:
+  def is_dynamic_size(self):
+    return self.indexers[-1].is_dynamic_size
+
+  @property
+  def shape(self) -> tuple[int | Array, ...]:
     assert (
         len(self.indexers) > 0
     ), "Should not be able to create a trivial RefView"
@@ -124,7 +126,7 @@ class RefView:
 
 
 # We need an aval for `Ref`s so we can represent `get` and `swap` in Jaxprs.
-class AbstractRef(core.AbstractValue, Generic[Aval]):
+class AbstractRef(core.AbstractValue):
   __slots__ = ["inner_aval"]
 
   def __init__(self, inner_aval: core.AbstractValue):
@@ -212,6 +214,6 @@ def get_ref_state_effects(
 
 def shaped_array_ref(shape: tuple[int, ...], dtype,
                      weak_type: bool = False,
-                     named_shape = None) -> AbstractRef[core.AbstractValue]:
+                     named_shape = None) -> AbstractRef:
   return AbstractRef(core.ShapedArray(shape, dtype, weak_type=weak_type,
                                       named_shape=named_shape))

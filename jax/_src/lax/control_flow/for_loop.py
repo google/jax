@@ -15,10 +15,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import functools
 import operator
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 import jax.numpy as jnp
 from jax import lax
@@ -177,7 +177,7 @@ Y = TypeVar('Y')
 
 def scan(f: Callable[[Carry, X], tuple[Carry, Y]],
          init: Carry,
-         xs: X,
+         xs: X | None = None,
          length: int | None = None,
          reverse: bool = False,
          unroll: int = 1) -> tuple[Carry, Y]:
@@ -441,7 +441,7 @@ def _for_partial_eval(trace: pe.JaxprTrace, *tracers: pe.JaxprTracer,
   else:
     raise Exception("Invalid fixpoint")
   del out_unknowns  # redundant since it's the same as `in_unknowns`
-  tracers = tuple(trace.instantiate_const(t) if uk else t  # type: ignore
+  tracers = tuple(trace.instantiate_const(t) if uk else t
                   for t, uk in zip(tracers, in_unknowns))
 
   # We use `partial_eval_jaxpr_custom` here because it won't remove effectful

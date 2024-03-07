@@ -21,24 +21,24 @@ See README.md for how these are used.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import functools
 import logging
 import re
 import time
-from typing import Any, Callable, Optional
+from typing import Any
 from absl import flags
 
-import flax  # type: ignore[import]
+import flax
 from flax import linen as nn
 
 import jax
 import jax.numpy as jnp
 
-from matplotlib import pyplot as plt  # type: ignore
+from matplotlib import pyplot as plt
 import numpy as np
 import optax
-import tensorflow as tf  # type: ignore
+import tensorflow as tf
 import tensorflow_datasets as tfds  # type: ignore
 
 _MOCK_DATA = flags.DEFINE_boolean("mock_data", False,
@@ -128,7 +128,7 @@ class PureJaxMNIST:
     final_w, final_b = params[-1]
     logits = jnp.dot(x, final_w) + final_b
     return logits - jax.scipy.special.logsumexp(
-      logits, axis=1, keepdims=True)  # type: ignore[attr-defined]
+      logits, axis=1, keepdims=True)
 
   @staticmethod
   def loss(params, inputs, labels):

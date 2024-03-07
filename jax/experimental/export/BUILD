@@ -14,11 +14,11 @@
 
 # JAX-export provides APIs for exporting StableHLO for serialization purposes.
 
+load("@rules_python//python:defs.bzl", "py_library")
 load(
     "//jaxlib:jax.bzl",
     "py_deps",
 )
-load("@rules_python//python:defs.bzl", "py_library")
 
 licenses(["notice"])
 
@@ -31,11 +31,6 @@ py_library(
     name = "export",
     srcs = [
         "__init__.py",
-        "_export.py",
-        "_serialization.py",
-        "_shape_poly.py",
-        "_shape_poly_decision.py",
-        "serialization_generated.py",
     ],
     srcs_version = "PY3",
     # TODO: b/255503696: enable pytype

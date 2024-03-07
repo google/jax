@@ -16,8 +16,9 @@
 from __future__ import annotations
 
 import collections
+from collections.abc import Callable
 import functools
-from typing import Callable, Dict, List, NamedTuple, Set, Tuple
+from typing import Dict, List, NamedTuple, Set, Tuple
 from jax import util as jax_util
 from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_mask as mask_lib
 import numpy as np
@@ -161,11 +162,11 @@ class _HashableNDArray:
 
 
 def _get_mask_info_for_shard(
-    output_shape: Tuple[int, int, int],
+    output_shape: tuple[int, int, int],
     has_mask_next: bool,
     mask: mask_lib.MultiHeadMask,
-    block_shape: Tuple[int, int],
-    coords_to_partial_mask_block_index: Dict[Tuple[int, int, int], int],
+    block_shape: tuple[int, int],
+    coords_to_partial_mask_block_index: dict[tuple[int, int, int], int],
     masks_per_head_shard: int,
     head_start: int,
     num_heads: int,
@@ -173,7 +174,7 @@ def _get_mask_info_for_shard(
     q_seq_shard_size: int,
     blocked_q_seq_start: int,
     is_dkv: bool,
-) -> Tuple[np.ndarray, np.ndarray | None]:
+) -> tuple[np.ndarray, np.ndarray | None]:
   """Process a slice of the mask to compute data_next and mask_next.
 
   Args:
@@ -310,7 +311,7 @@ def _get_mask_info_for_shard(
 @functools.lru_cache(maxsize=12)
 def _process_mask(
     mask: mask_lib.MultiHeadMask,  # [num_heads, q_seq_len, kv_seq_len]
-    block_shape: Tuple[int, int],
+    block_shape: tuple[int, int],
     is_dkv: bool,
     *,
     downcast_smem_data: bool = True,
@@ -394,18 +395,18 @@ def _process_mask(
     id_map = collections.defaultdict(lambda: len(id_map))
     return {obj: id_map[obj] for obj in objects}
 
-  unique_masks_dict: Dict[mask_lib.Mask, int] = assign_unique_ids(
+  unique_masks_dict: dict[mask_lib.Mask, int] = assign_unique_ids(
       head_mask for head_mask in mask.masks
   )
 
   # Build a mapping of heads to unique masks and masks to unique masks.
 
-  head_to_mask_id: List[int] = [0] * head_count
-  head_shard_to_mask_ids: List[Set[int]] = [set() for _ in range(head_shards)]
-  mask_id_to_heads: List[List[int]] = [
+  head_to_mask_id: list[int] = [0] * head_count
+  head_shard_to_mask_ids: list[set[int]] = [set() for _ in range(head_shards)]
+  mask_id_to_heads: list[list[int]] = [
       [] for _ in range(len(unique_masks_dict))
   ]
-  mask_id_to_head_shards: List[Set[int]] = [
+  mask_id_to_head_shards: list[set[int]] = [
       set() for _ in range(len(unique_masks_dict))
   ]
 
@@ -426,7 +427,7 @@ def _process_mask(
   # MaskInfo class and runtime overhead to perform an indirect lookup. Since
   # having multiple masks per head-shard is not a common case we leave this for
   # future work.
-  max_masks_per_head_shard = max([len(x) for x in head_shard_to_mask_ids])
+  max_masks_per_head_shard = max(len(x) for x in head_shard_to_mask_ids)
   masks_per_head_shard = 1 if max_masks_per_head_shard == 1 else heads_per_shard
 
   unique_masks = [
@@ -436,10 +437,10 @@ def _process_mask(
   # TODO(amagni): checking the validity of the masks is slow for large masks.
   # Disable it for now, reevalute in the future.
 
-  partial_mask_block_ids: Dict[_HashableNDArray, int] = collections.defaultdict(
+  partial_mask_block_ids: dict[_HashableNDArray, int] = collections.defaultdict(
       lambda: len(partial_mask_block_ids)
   )
-  block_id_to_block_coords: Dict[int, List[Tuple[int, ...]]] = (
+  block_id_to_block_coords: dict[int, list[tuple[int, ...]]] = (
       collections.defaultdict(list)
   )
 
@@ -697,7 +698,7 @@ def _process_mask(
       # maintain the SPMD paradigm.
       padding_axis = 1 if is_dkv else 2
 
-      max_size = max([x.shape[padding_axis] for x in block_mask_shards])
+      max_size = max(x.shape[padding_axis] for x in block_mask_shards)
       padded_block_mask_shards = []
       padded_data_next_shards = []
       padded_mask_next_shards = []
@@ -791,7 +792,7 @@ def _shrink_mask_info(
 
   # Pad each row in the non-zero indices to match the width of the longest
   # row. This avoids having jagged rows.
-  max_non_zero_cols = max([len(x) for x in grouped_non_zero_cols])
+  max_non_zero_cols = max(len(x) for x in grouped_non_zero_cols)
   padded_non_zero_cols = []
   padding = -1
   for row in grouped_non_zero_cols:
@@ -856,7 +857,7 @@ def _shrink_mask_info_dkv(
 
   # Pad each col in the non-zero indices to match the height of the longest
   # col. This avoids having jagged cols.
-  max_non_zero_rows = max([len(x) for x in grouped_non_zero_rows])
+  max_non_zero_rows = max(len(x) for x in grouped_non_zero_rows)
   padded_non_zero_rows = []
   padding = -1
   for col in grouped_non_zero_rows:

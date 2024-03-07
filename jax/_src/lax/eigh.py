@@ -554,6 +554,7 @@ def eigh(
     if compute_slice:
       eig_vals = eig_vals[subset_by_index[0] : subset_by_index[1]]
       eig_vecs = eig_vecs[:, subset_by_index[0] : subset_by_index[1]]
+    return eig_vals, eig_vecs
 
   n = N if n is None else n
   with jax.default_matmul_precision(precision):

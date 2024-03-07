@@ -26,8 +26,7 @@ from jax._src import test_util as jtu
 from jax._src.internal_test_util import lax_test_util
 from jax._src import util
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 map, unsafe_map = util.safe_map, map
 zip, unsafe_zip = util.safe_zip, zip

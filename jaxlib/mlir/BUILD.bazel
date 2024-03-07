@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("//jaxlib:symlink_files.bzl", "symlink_inputs")
+load("//jaxlib:symlink_files.bzl", "symlink_files", "symlink_inputs")
 
 package(
     default_visibility = [
@@ -44,7 +44,10 @@ symlink_inputs(
     name = "ir",
     rule = py_library,
     symlinked_inputs = {"srcs": {
-        ".": ["@llvm-project//mlir/python:IRPyFiles"],
+        ".": [
+            "@llvm-project//mlir/python:IRPyFiles",
+            "@llvm-project//mlir/python:IRPyIFiles",
+        ],
     }},
     deps = [
         ":mlir",
@@ -197,7 +200,10 @@ symlink_inputs(
     name = "pass_manager",
     rule = py_library,
     symlinked_inputs = {"srcs": {
-        ".": ["@llvm-project//mlir/python:PassManagerPyFiles"],
+        ".": [
+            "@llvm-project//mlir/python:PassManagerPyFiles",
+            "@llvm-project//mlir/python:PassManagerPyIFiles",
+        ],
     }},
     deps = [
         ":mlir",
@@ -217,3 +223,82 @@ symlink_inputs(
         "//jaxlib/mlir/_mlir_libs:_stablehlo",
     ],
 )
+
+symlink_inputs(
+    name = "nvgpu_dialect",
+    rule = py_library,
+    symlinked_inputs = {"srcs": {"dialects": [
+        "@llvm-project//mlir/python:NVGPUOpsPyFiles",
+    ]}},
+    deps = [
+        ":core",
+        ":ir",
+        ":mlir",
+        "//jaxlib/mlir/_mlir_libs:_mlirDialectsNVGPU",
+    ],
+)
+
+symlink_inputs(
+    name = "nvvm_dialect",
+    rule = py_library,
+    symlinked_inputs = {"srcs": {"dialects": [
+        "@llvm-project//mlir/python:NVVMOpsPyFiles",
+    ]}},
+    deps = [
+        ":core",
+        ":ir",
+        ":mlir",
+    ],
+)
+
+symlink_files(
+    name = "gpu_files",
+    srcs = ["@llvm-project//mlir/python:GPUOpsPyFiles"],
+    dst = "dialects",
+    flatten = True,
+)
+
+symlink_files(
+    name = "gpu_package_files",
+    srcs = ["@llvm-project//mlir/python:GPUOpsPackagePyFiles"],
+    dst = "dialects/gpu",
+    flatten = True,
+)
+
+symlink_files(
+    name = "gpu_package_passes_files",
+    srcs = ["@llvm-project//mlir/python:GPUOpsPackagePassesPyFiles"],
+    dst = "dialects/gpu/passes",
+    flatten = True,
+)
+
+py_library(
+    name = "gpu_dialect",
+    srcs = [
+        ":gpu_files",
+        ":gpu_package_files",
+        ":gpu_package_passes_files",
+    ],
+    deps = [
+        ":core",
+        ":ir",
+        ":mlir",
+        "//jaxlib/mlir/_mlir_libs:_mlirDialectsGPU",
+        "//jaxlib/mlir/_mlir_libs:_mlirGPUPasses",
+    ],
+)
+
+symlink_inputs(
+    name = "llvm_dialect",
+    rule = py_library,
+    symlinked_inputs = {"srcs": {"dialects": [
+        "@llvm-project//mlir/python:LLVMOpsPyFiles",
+    ]}},
+    deps = [
+        ":core",
+        ":ir",
+        ":mlir",
+        "//jaxlib/mlir/_mlir_libs:_mlirDialectsLLVM",
+    ],
+)
+

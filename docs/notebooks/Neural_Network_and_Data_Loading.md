@@ -5,7 +5,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.0
+    jupytext_version: 1.16.1
 kernelspec:
   display_name: Python 3
   language: python
@@ -15,6 +15,8 @@ kernelspec:
 +++ {"id": "18AF5Ab4p6VL"}
 
 # Training a Simple Neural Network, with PyTorch Data Loading
+
+<!--* freshness: { reviewed: '2024-05-03' } *-->
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/Neural_Network_and_Data_Loading.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/google/jax/blob/main/docs/notebooks/Neural_Network_and_Data_Loading.ipynb)
 
@@ -35,7 +37,7 @@ limitations under the License.
 
 ![JAX](https://raw.githubusercontent.com/google/jax/main/images/jax_logo_250px.png)
 
-Let's combine everything we showed in the [quickstart notebook](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/quickstart.ipynb) to train a simple neural network. We will first specify and train a simple MLP on MNIST using JAX for the computation. We will use PyTorch's data loading API to load images and labels (because it's pretty great, and the world doesn't need yet another data loading library).
+Let's combine everything we showed in the [quickstart](https://colab.research.google.com/github/google/jax/blob/main/docs/quickstart.html) to train a simple neural network. We will first specify and train a simple MLP on MNIST using JAX for the computation. We will use PyTorch's data loading API to load images and labels (because it's pretty great, and the world doesn't need yet another data loading library).
 
 Of course, you can use JAX with any API that is compatible with NumPy to make specifying the model a bit more plug-and-play. Here, just for explanatory purposes, we won't use any neural network libraries or special APIs for building our model.
 
@@ -71,7 +73,7 @@ step_size = 0.01
 num_epochs = 8
 batch_size = 128
 n_targets = 10
-params = init_network_params(layer_sizes, random.PRNGKey(0))
+params = init_network_params(layer_sizes, random.key(0))
 ```
 
 +++ {"id": "BtoNk_yxWtIw"}
@@ -109,7 +111,7 @@ Let's check that our prediction function only works on single images.
 :outputId: 9d3b29e8-fab3-4ecb-9f63-bc8c092f9006
 
 # This works on single examples
-random_flattened_image = random.normal(random.PRNGKey(1), (28 * 28,))
+random_flattened_image = random.normal(random.key(1), (28 * 28,))
 preds = predict(params, random_flattened_image)
 print(preds.shape)
 ```
@@ -119,7 +121,7 @@ print(preds.shape)
 :outputId: d5d20211-b6da-44e9-f71e-946f2a9d0fc4
 
 # Doesn't work with a batch
-random_flattened_images = random.normal(random.PRNGKey(1), (10, 28 * 28))
+random_flattened_images = random.normal(random.key(1), (10, 28 * 28))
 try:
   preds = predict(params, random_flattened_images)
 except TypeError:

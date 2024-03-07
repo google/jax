@@ -11,1261 +11,1055 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Module for emitting custom TPU pipelines within a Pallas call."""
 
+"""Module for emitting custom TPU pipelines within a Pallas call."""
+from __future__ import annotations
+
+from collections.abc import Sequence
 import dataclasses
+import enum
 import functools
-import math
-from typing import Any, Callable, Generic, NamedTuple, Optional, Protocol, Sequence, TypeVar, Union, cast
+import itertools
+import operator
+from typing import Union, Any
 
 import jax
 from jax import lax
 from jax import tree_util
-from jax._src.api_util import flatten_axes
-from jax._src.pallas import core
-from jax._src.pallas import primitives
+from jax._src import util as jax_util
+from jax._src.pallas import core as pallas_core
 from jax._src.pallas.mosaic import core as tpu_core
 from jax._src.pallas.mosaic import primitives as tpu_primitives
-from jax._src.state import indexing
-from jax._src.util import split_list
+from jax.experimental import pallas as pl
 import jax.numpy as jnp
+import numpy as np
+
 
 SMEM = tpu_core.TPUMemorySpace.SMEM
 VMEM = tpu_core.TPUMemorySpace.VMEM
 DMA = tpu_core.SemaphoreType.DMA
 REF = tpu_core.MemoryRef
+SemaphoreType = tpu_core.SemaphoreType
+ArrayRef = Union[REF, jax.Array]
 
-partial = functools.partial
+GridIndices = tuple[jax.Array, ...]
+CondVal = Union[jax.Array, bool]
+PipelineBlockSpecs = Union[Sequence[pallas_core.BlockSpec], Any]
+PipelineRefs = Union[Sequence[REF], Any]
 
-T = TypeVar("T")
+
+# TODO(sharadmv): make this a parameter and make it queryable from the Device.
+_TILING = (8, 128)
+
+def _broadcast_pytree_to(from_pytree, to_pytree):
+  """Broadcast a prefix pytree to a given full tree."""
+  proxy = object()
+  treedef = tree_util.tree_structure(to_pytree)
+  broadcast_leaves = []
+  def add_leaves(i, x):
+    broadcast_leaves.extend(
+        [i] * tree_util.tree_structure(x).num_leaves)
+  try:
+    tree_util.tree_map(add_leaves, from_pytree, to_pytree,
+                       is_leaf=lambda x: x is None)
+  except ValueError:
+    raise ValueError(f"Cannot broadcast tree {from_pytree} "
+                     f"to full tree structure {treedef}.") from None
+  broadcast_leaves = [None if a is proxy else a for a in broadcast_leaves]
+  assert len(broadcast_leaves) == treedef.num_leaves
+  return tree_util.tree_unflatten(treedef, broadcast_leaves)
+
+
+def _get_tpu_generation() -> int:
+  kind = jax.devices()[0].device_kind
+  if kind.endswith(' lite'):
+    kind = kind[:-len(' lite')]
+  assert kind[:5] == "TPU v", kind
+  return int(kind[5])
+
+def _make_tiling(shape: tuple[int, ...], dtype: np.dtype) -> tuple[int, ...]:
+  # For a n-dimensional shape, returns (8, 128) for the last 2 dimensions
+  # and 1 for the leading n - 2. For example, (256, 256) -> (8, 128) and
+  # (2, 3, 128, 128) -> (1, 1, 8, 128).
+  if len(shape) < 2:
+    raise ValueError(f"Shape must have at least 2 dimensions: {shape=}")
+  leading_dims, final_dims = shape[:-2], shape[-2:]
+  # We want to find the minimum power of 2 that fits the second-minor dimension
+  # of shape, with maximum value 8.
+  second_minor, _ = final_dims
+  packing = 4 // dtype.itemsize
+  max_tiling = _TILING[0]
+  second_minor_tiling = (1 + int(_get_tpu_generation() < 4)) * packing
+  while second_minor_tiling < min(second_minor, max_tiling):
+    second_minor_tiling *= 2
+  return (*(1,) * len(leading_dims), second_minor_tiling, _TILING[1])
+
+
+def _mod(a, n):
+  """"Calculates a mod n for positive and negative a with |a| <= n."""
+  return lax.rem(a + n, n)
+
+
+def _round_up_to_nearest_multiple(s: int, multiple: int) -> int:
+  if s % multiple == 0:
+    return s
+  # Subtract off the remainder, then add multiple
+  return s - s % multiple + multiple
+
+
+def _make_ds(
+    idx: jax.Array | int, size: jax.Array | int
+) -> pl.Slice:
+  """Make a DMA slice with mosaic size hints."""
+  out = pl.ds(idx * size, size)
+  assert isinstance(out, pl.Slice)
+  return out
+
+
+def _make_block_slice(
+    block_index: jax.Array, block_size: int, size: int, tiling: int
+) -> pl.Slice | slice:
+  # Computes a slice given a block index and block size. In the default case,
+  # we return slice(block_index * block_size, (block_index + 1) * block_size).
+  # However, if the total size of the ref does not divide block size and we are
+  # selecting the last block, we need to pick the lowest tiling size multiple
+  # that contains the block.
+  if size % block_size == 0:
+    return _make_ds(block_index, block_size)
+  if block_size % tiling != 0:
+    raise ValueError(f"Block size must divide tiling: {block_size=}, {tiling=}")
+  num_blocks = pl.cdiv(size, block_size)
+  is_last = block_index == num_blocks - 1
+  rounded_size = jnp.where(
+      is_last,
+      _round_up_to_nearest_multiple(size % block_size, tiling),
+      block_size,
+  )
+  rounded_size = pl.multiple_of(rounded_size, tiling)
+  return pl.ds(block_index * block_size, rounded_size)
+
+
+def _tuples_differ(xs, ys):
+  """Dynamic index-tuple comparison calculation."""
+  differences = jax.tree.map(lambda x, y: x != y, xs, ys)
+  return functools.reduce(lambda x, y: x | y, differences, False)
+
+
+def _grid_size(grid):
+  """Dynamic grid size calculation."""
+  size = jnp.array(1, jnp.int32)
+  for dim in grid:
+    size *= dim
+  return size
+
+
+def _get_indices(step, grid, offsets):
+  """Get indices for a given step and grid."""
+  extended_grid = grid + (1,)
+  strides = tuple(
+      itertools.accumulate(extended_grid[::-1], func=operator.mul))[::-1]
+  indices = tuple(
+      lax.div(lax.rem(step, a), b)
+      for a, b in zip(strides[:-1], strides[1:])
+  )
+  return tuple(a + b for a, b in zip(indices, offsets, strict=True))
+
+
+class BufferType(enum.Enum):
+  """Buffer type for the arguments to an emitted pipeline."""
+  INPUT = 1
+  OUTPUT = 2
+  ACCUMULATOR = 3
 
 
 @tree_util.register_pytree_node_class
 @dataclasses.dataclass(frozen=True)
-class PipelineArg(Generic[T]):
-  """Wrapper for pipeline arguments that exist for inputs, outputs, and accums."""
-  input: T
-  out: T
-  in_out: T
+class BufferedRef:
+  """A helper class to automate VMEM double buffering in pallas pipelines.
 
-  @property
-  def input_and_in_out(self) -> T:
-    return cast(Any, self.input) + cast(Any, self.in_out)
+  Attributes:
+    spec: pallas blockspec.
+    dtype: dtype for buffers.
+    buffer_type: enum indicating whether this is an input, output, or in/out
+      accumulator buffered reference.
+    vmem_ref: a double-buffer to hold a working buffer and a dirty buffer used
+      to copy into and out of.  In the case of a BufferedRef targeting a VMEM
+      reference, this simply points to the existing ref.
+    accum_ref: accumulating buffer used by accumulator BufferedRefs.
+    current_slot: current slot index to the working buffer.
+    next_slot: slot that will point to the working buffer in the next iteration.
+    sem_recv: semaphore for input DMAs.
+    sem_send: semaphore for output DMAs.
+
+    block_shape: passthrough property for the BlockSpec's block_shape.
+    compute_index: passthrough property for the BlockSpec's compute_index.
+    memory_space: passthrough property for the BlockSpec's memory_space.
+    current_ref: points to the current working slice of the double-buffer.
+    is_input: whether this BufferedRef acts as a pipeline input.
+    is_output: whether this BufferedRef acts as a pipeline output.
+    is_accumulator: whether this BufferedRef is an accumulator.
+  """
+  spec: pl.BlockSpec       # static metadata
+  dtype: Any               # static metadata
+  buffer_type: BufferType  # static metadata
+  vmem_ref: REF | None
+  accum_ref: REF | None
+  current_slot: ArrayRef | None
+  next_slot: ArrayRef | None
+  sem_recv: SemaphoreType | None
+  sem_send: SemaphoreType | None
 
   def tree_flatten(self):
-    return ((self.input, self.out, self.in_out), None)
+    return ((self.vmem_ref, self.accum_ref, self.current_slot,
+             self.next_slot, self.sem_recv, self.sem_send),
+            (self.spec, self.dtype, self.buffer_type))
 
   @classmethod
-  def tree_unflatten(cls, _, children):
-    return cls(*children)
+  def tree_unflatten(cls, meta, data):
+    return cls(*meta, *data)
 
+  @classmethod
+  def create(cls, spec, dtype, buffer_type) -> BufferedRef:
+    """Create a BufferedRef.
 
-class PipelineBuffer(NamedTuple):
-  """Current and next buffer indices for an input/output/accum ref."""
-  current: Union[REF, jax.Array]
-  next: Union[REF, jax.Array]
+    Args:
+      spec: pallas blockspec.
+      dtype: dtype for buffers.
+      buffer_type: enum indicating whether this is an input, output, or in/out
+        accumulator buffered reference.
 
-# TODO(enriqueps): Add SMEM support.
-class PipelineAllocation(NamedTuple):
-  """Allocated VMEM ref and semaphore for an input/output/accum ref."""
-  vmem_ref: REF
-  semaphore: tpu_core.SemaphoreType
+    Returns:
+      Initialized BufferedRef
+    """
+    block_shape = tuple([1 if x is None else x for x in spec.block_shape])
+    if spec.memory_space == VMEM:
+      # We don't need to do any double-buffering in the case that our pipeline
+      # reference is already in VMEM, we just need allocate the accumulation
+      # buffer and we will refer to the original reference slices directly.
+      return cls(
+          spec=spec, dtype=dtype,
+          buffer_type=buffer_type,
+          vmem_ref=None,  # to be bound to existing ref by the pipeline routine
+          accum_ref=(VMEM(block_shape, dtype)
+                     if buffer_type is BufferType.ACCUMULATOR else None),
+          current_slot=None, next_slot=None, sem_recv=None, sem_send=None)
+    else:
+      return cls(
+          spec=spec, dtype=dtype,
+          buffer_type=buffer_type,
+          vmem_ref=VMEM((2,) + block_shape, dtype),
+          accum_ref=(VMEM(block_shape, dtype)
+                     if buffer_type is BufferType.ACCUMULATOR else None),
+          current_slot=SMEM((1,), jnp.int32),
+          next_slot=SMEM((1,), jnp.int32),
+          sem_recv=(None if buffer_type is BufferType.OUTPUT
+                    else SemaphoreType.DMA),
+          sem_send=(None if buffer_type is BufferType.INPUT
+                    else SemaphoreType.DMA),)
 
-# PyTree versions of the various arguments.
-PipelineBlockSpecs = Union[Sequence[core.BlockSpec], Any]
-PipelineRefs = Union[Sequence[REF], Any]
-PipelineBuffers = Union[Sequence[PipelineBuffer], Any]
-PipelineAllocations = Union[Sequence[PipelineAllocation], Any]
+  @classmethod
+  def input(cls, spec, dtype):
+    return cls.create(spec, dtype, BufferType.INPUT)
 
-GridIndices = tuple[jax.Array, ...]
-CondVal = Union[jax.Array, bool]
+  @classmethod
+  def output(cls, spec, dtype):
+    return cls.create(spec, dtype, BufferType.OUTPUT)
 
+  @classmethod
+  def accumulator(cls, spec, dtype):
+    return cls.create(spec, dtype, BufferType.ACCUMULATOR)
 
-def _broadcast_pytree_to(name: str, from_pytree: Any, to_pytree: Any) -> Any:
-  """Broadcasts a prefix-pytree of to_pytree, to the shape of to_pytree.
+  @property
+  def block_shape(self):
+    return self.spec.block_shape
 
-  Useful for supporting passing in prefixes of things as arguments, like in
-  jax.vmap.
+  @property
+  def compute_index(self):
+    return self.spec.compute_index
 
-  Args:
-    name: Name for error messages.
-    from_pytree: Prefix tree.
-    to_pytree: Target pytree.
+  @property
+  def memory_space(self):
+    return self.spec.memory_space
 
-  Returns:
-    Broadcasted pytree.
-  """
-  to_treedef = tree_util.tree_structure(to_pytree)
-  return tree_util.tree_unflatten(
-      to_treedef, flatten_axes(name, to_treedef, from_pytree)
-  )
+  @property
+  def current_ref(self):
+    buffer_slice = tuple(
+        [0 if x is None else slice(None) for x in self.block_shape])
+    if self.memory_space == VMEM:
+      return self.vmem_ref.at[buffer_slice]
+    else:
+      return self.vmem_ref.at[(self.current_slot[0], *buffer_slice)]
 
+  @property
+  def is_input(self):
+    return self.buffer_type in [BufferType.INPUT, BufferType.ACCUMULATOR]
 
-def _tree_map_with_kwargs(f, *args, **kwargs):
-  """jax.tree_util.tree_map that supports kwargs."""
-  kwargs_keys = kwargs.keys()
-  kwargs_values = kwargs.values()
-  return tree_util.tree_map(
-      lambda arg0, partial_f, *args: partial_f(arg0, *args),
-      args[0],
-      tree_util.tree_map(
-          lambda _, *tree_mapped_kwargs_values: partial(
-              f, **dict(zip(kwargs_keys, tree_mapped_kwargs_values))
-          ),
-          args[0],
-          *kwargs_values,
-          is_leaf=lambda x: x is None,
-      ),
-      *args[1:],
-  )
+  @property
+  def is_output(self):
+    return self.buffer_type in [BufferType.OUTPUT, BufferType.ACCUMULATOR]
 
+  @property
+  def is_accumulator(self):
+    return self.buffer_type == BufferType.ACCUMULATOR
 
-def _get_next_indices(grid: core.StaticGrid, indices: GridIndices) -> GridIndices:
-  """Takes a grid and current indices and returns the next indices.
+  def bind_existing_ref(self, vmem_ref, indices):
+    """For handling VMEM references, the pipeline aliases the existing ref."""
+    if self.memory_space == VMEM:
+      return dataclasses.replace(
+          self, vmem_ref=vmem_ref.at[self.compute_slice(indices)])
+    return self
 
-  grid: (3, 4, 5)
-  indices: [1, 0, 4]
-  returns: [1, 1, 0]
+  def compute_slice(self, grid_indices):
+    """Compute DMA slice from grid indices."""
+    block_shape = tuple([1 if x is None else x for x in self.block_shape])
+    indices = self.compute_index(*grid_indices)
+    return jax.tree.map(_make_ds, indices, block_shape)
 
-  Args:
-    grid: Grid spec.
-    indices: Current indices.
+  def init_slots(self):
+    """Initialize slot indices."""
+    if self.memory_space == VMEM: return
+    self.current_slot[0] = 0
+    self.next_slot[0] = 0
 
-  Returns:
-    Incremented indices.
-  """
-  next_indices = []
-  carry = True
-  for dim_size, index in reversed(list(zip(grid, indices))):
-    i = jnp.where(carry, index + 1, index)
-    carry = dim_size == i
-    next_indices.append(jnp.where(carry, 0, i))
-  return tuple(reversed(next_indices))
+  def swap_slots(self):
+    """Switch to the next slot."""
+    if self.memory_space == VMEM: return
+    self.current_slot[0] = self.next_slot[0]
 
+  def get_dma_slice(self, src_shape, src_dtype, grid_indices):
+    # We need to handle blocks that might go OOB in the src array. An in bounds
+    # block looks like this (for array shape (600, 600) and block shape
+    # (256, 256)):
+    #
+    # +--------------+------------------|
+    # | Block (0,0)  |                  |
+    # | (256, 256)   |                  |
+    # +--------------+                  |
+    # |    A (600, 600)                 |
+    # |                                 |
+    # +---------------------------------+
+    #
+    # For in-bounds blocks, we don't need to do anything special.
+    # An out-of-bounds block looks like this:
+    #
+    # +--------------+------------------|
+    # |                                 |
+    # |                                 |
+    # +                                 |
+    # |    A (600, 600)                 |
+    # +--------------+                  |
+    # | Block (2,0)  |                  |
+    # + --------------------------------|
+    # | XXXXXXXXXX   |
+    # +--------------+
+    # where the X's indicate where the block is out of bounds.
+    #
+    # When we have an out of bounds block like this, we need to truncate it to
+    # a tile boundary (tiles are (8, 128) along the two minormost dimensions).
+    # In this case, we'll have a block that is indexing the
+    # 512:768 elements of A along the first dimension. We need to convert 768
+    # into 600 (600 % 8 == 0), so our indexing will look like this:
 
-def _replace_nones_in_block_spec(block_spec: core.BlockSpec) -> core.BlockSpec:
-  """Replaces Nones in a block spec shape with 1s."""
-  block_shape = cast(tuple[int, ...], block_spec.block_shape)
-  block_shape = tuple([1 if dim is None else dim for dim in block_shape])
-  return dataclasses.replace(block_spec, block_shape=block_shape)
+    # +--------------+------------------|
+    # |                                 |
+    # |                                 |
+    # +                                 |
+    # |    A (600, 600)                 |
+    # +--------------+                  |
+    # | Block (2,0)  |                  |
+    # + --------------------------------|
+    # where it is now a (88, 256) sized block.
+    #
+    # Suppose A is now (601, 600), instead of picking a (88, 256)-sized block
+    # for the last iteration on that dimension, we will pick the next highest
+    # tile multiple, i.e. (96, 256).
+    if len(src_shape) < 2:
+      raise NotImplementedError("Must use >1D values.")
 
-
-def _run_block_spec(
-    block_spec: core.BlockSpec, indices: GridIndices
-) -> tuple[Union[slice, indexing.Slice], ...]:
-  """Runs a block spec for the given indices and returns the slices.
-
-  Args:
-    block_spec: Block spec to run.
-    indices: Grid indices to run on.
-
-  Returns:
-    Array slices for the block spec.
-  """
-  index_map = block_spec.index_map
-  if index_map is None:
-    raise ValueError("Block spec index_map is None.")
-  block_indices = index_map(*indices)
-  return tuple(
-      indexing.ds(
-          primitives.multiple_of(index * block_size, block_size), block_size
-      )
-      for index, block_size in zip(
-          block_indices, cast(Any, block_spec.block_shape)
-      )
-  )
-
-
-def _dma_slice_not_equal(
-    dma_slice_a: tuple[Union[slice, indexing.Slice], ...],
-    dma_slice_b: tuple[Union[slice, indexing.Slice], ...],
-) -> jax.Array:
-  """Returns True if the two slices are not equal."""
-  dma_slice_not_equal = cast(jax.Array, False)
-  for a, b in zip(dma_slice_a, dma_slice_b):
-    dma_slice_not_equal = jnp.logical_or(
-        dma_slice_not_equal, a.start != b.start
+    tiling = _make_tiling(src_shape, src_dtype)
+    block_shape = tuple(1 if b is None else b for b in self.block_shape)
+    block_indices = self.compute_index(*grid_indices)
+    return jax.tree.map(
+        _make_block_slice, block_indices, block_shape, src_shape, tiling
     )
-  return dma_slice_not_equal
+
+  def copy_in(self, src_ref, grid_indices):
+    """Starts copy of HBM dma slice into the current slot."""
+    assert self.is_input
+    if self.memory_space == VMEM: return
+    next_slot = lax.rem(self.current_slot[0] + 1, 2)
+    self.next_slot[0] = next_slot
+    src_slice = self.get_dma_slice(src_ref.shape, src_ref.dtype, grid_indices)
+    dst_slice = tuple(pl.ds(0, s.size) for s in src_slice)
+    tpu_primitives.make_async_copy(
+        src_ref.at[src_slice],
+        self.vmem_ref.at[next_slot].at[dst_slice],
+        self.sem_recv).start()
+
+  def copy_out(self, dst_ref, grid_indices):
+    """Starts copy of HBM dma slice from the current slot."""
+    assert self.is_output
+    if self.memory_space == VMEM: return
+    slot = self.current_slot[0]
+    self.next_slot[0] = lax.rem(slot + 1, 2)
+    dst_slice = self.get_dma_slice(dst_ref.shape, dst_ref.dtype, grid_indices)
+    src_slice = tuple(pl.ds(0, s.size) for s in dst_slice)
+    tpu_primitives.make_async_copy(
+        self.vmem_ref.at[slot].at[src_slice],
+        dst_ref.at[dst_slice],
+        self.sem_send).start()
+
+  def wait_in(self, src_ref, grid_indices):
+    """Waits for input copy to finish."""
+    assert self.is_input
+    if self.memory_space == VMEM: return
+    src_slice = self.get_dma_slice(src_ref.shape, src_ref.dtype, grid_indices)
+    dst_slice = tuple(pl.ds(0, s.size) for s in src_slice)
+    tpu_primitives.make_async_copy(
+        src_ref.at[src_slice],                   # nb: doesn't matter
+        self.vmem_ref.at[self.current_slot[0]].at[dst_slice],  # only dst shape is important
+        self.sem_recv).wait()
+
+  def wait_out(self, dst_ref, grid_indices):
+    """Waits for output copy to finish."""
+    assert self.is_output
+    if self.memory_space == VMEM: return
+    prev_slot = lax.rem(self.current_slot[0] + 1, 2)
+    dst_slice = self.get_dma_slice(dst_ref.shape, dst_ref.dtype, grid_indices)
+    src_slice = tuple(pl.ds(0, s.size) for s in dst_slice)
+    tpu_primitives.make_async_copy(
+        self.vmem_ref.at[prev_slot].at[src_slice],  # nb: doesn't matter
+        dst_ref.at[dst_slice],        # only dst shape is important
+        self.sem_send).wait()
+
+  # Accumulator methods
+  #
+  # Accumulating inline in VMEM saves half the HBM<->VMEM bandwidth cost of
+  # doing another full loop around HBM to do a reduction, at the current cost
+  # of allocating another VMEM buffer.
+  #
+  # NB: there's no actual need to have an additional accumulation buffer, if
+  # we just rewrote inner kernels to handle the initial-zero-init and output
+  # reduction, we don't need to waste VMEM.  Consider removing this magic
+  # init and reduce support.
+
+  def set_accumulator(self, init=False):
+    """Set accumulator or zero it out to initialize."""
+    assert self.is_accumulator
+    if self.accum_ref is not None:
+      def _init():
+        self.accum_ref[...] = jnp.zeros_like(self.accum_ref[...])
+      def _set():
+        self.accum_ref[...] = self.current_ref[...].astype(self.accum_ref)
+      lax.cond(init, _init, _set)
+
+  def accumulate(self):
+    """Add into the current slot."""
+    assert self.is_accumulator
+    if self.accum_ref is not None:
+      accum_dtype = jnp.float32
+      if self.vmem_ref.dtype == jnp.int32:
+        accum_dtype = jnp.int32
+      # TODO(levskaya): we could generalize init and reduction functions,
+      # could it ever be useful to support more generic monoids?
+      self.current_ref[...] = (
+          self.current_ref[...].astype(accum_dtype) +
+          self.accum_ref[...].astype(accum_dtype)
+      ).astype(self.vmem_ref.dtype)
 
 
-def _block_copy(
-    block_spec: core.BlockSpec,
-    ref: REF,
-    allocation: Optional[PipelineAllocation],
-    buffers: PipelineBuffer,
-    accum_allocation: Optional[PipelineAllocation] = None,
-    accum_buffers: Optional[PipelineBuffer] = None,
-    *,
-    indices: tuple[
-        GridIndices,
-        GridIndices,
-        GridIndices,
-    ],
-    is_input: bool,
-    is_wait: bool,
-    force_copy: Optional[Union[jax.Array, bool]] = None,
-    force_skip: Optional[Union[jax.Array, bool]] = None,
-    use_accum: Optional[Union[jax.Array, bool]] = None,
-    accum_if_skipping: Optional[Union[jax.Array, bool]] = None,
-    zero_accum_if_skipping: Optional[Union[jax.Array, bool]] = None,
+# Helper to tree map over BufferedRefs as leaves.
+map_brefs = functools.partial(
+    jax.tree.map,
+    is_leaf=lambda x: isinstance(x, BufferedRef))
+
+
+class Scheduler:
+  """Sequences input and output copies and waits for a pipeline."""
+
+  def __init__(self,
+               step: jax.Array,
+               grid: tuple[int | jax.Array, ...],
+               grid_offsets: tuple[int | jax.Array, ...],
+               first_cycle=None,
+               last_cycle=None,
+               init_accumulators=None,
+              ):
+    """Initializes scheduler.
+
+      Args:
+        step: inner step number.
+        grid: pallas grid for BufferedRefs.
+        grid_offsets: offsets for grid indices (used for megacore).
+        first_cycle: whether this is the first invocation of the pipeline.
+        last_cycle: whether this is the last invocation of the pipeline.
+        init_accumulators: do we zero-initialize accumulator state for this
+          invocation of the pipeline.
+    """
+    self.step = step
+    self.grid = grid
+    self.first_cycle = first_cycle
+    self.last_cycle = last_cycle
+    self.init_accumulators = init_accumulators
+
+    # Total number of linear steps.
+    self.num_steps = _grid_size(grid)
+
+    # First and last inner step conditionals.
+    self.first_step = step == 0
+    self.last_step = step == self.num_steps - 1
+
+    # First and last total step conditionals.
+    self.first_step_ever = first_cycle & self.first_step
+    self.last_step_ever = last_cycle & self.last_step
+
+    # Cyclic steps
+    self.prev_step = _mod(step - 1, self.num_steps)
+    self.next_step = _mod(step + 1, self.num_steps)
+
+    # Derived grid indices for present, previous, and next steps.
+    self.indices = _get_indices(step, grid, grid_offsets)
+    self.prev_indices = _get_indices(
+        self.prev_step, grid, grid_offsets
+    )
+    self.next_indices = _get_indices(
+        self.next_step, grid, grid_offsets
+    )
+
+  def grid_env(self):
+    return pallas_core.grid_env(
+        list(map(pallas_core.GridAxis, self.indices, self.grid)))
+
+  def has_changed(self, buffered_ref):
+    indices = buffered_ref.compute_index(*self.indices)
+    prev_indices = buffered_ref.compute_index(*self.prev_indices)
+    return _tuples_differ(indices, prev_indices)
+
+  def will_change(self, buffered_ref):
+    indices = buffered_ref.compute_index(*self.indices)
+    next_indices = buffered_ref.compute_index(*self.next_indices)
+    return _tuples_differ(indices, next_indices)
+
+  def alias_local_refs(self, buffered_ref, ref):
+    return buffered_ref.bind_existing_ref(ref, self.indices)
+
+  # SCHEDULE ----------------------------------------------------------------
+
+  # Below is the sequence of conditional waits and copies used for inputs,
+  # outputs, and in-out accumulators.
+
+  def initialize(self, buffered_ref, src_ref, schedule=None):
+    pred = self.first_step_ever
+    if schedule is not None:
+      pred = schedule['prologue_copy_in'](self, buffered_ref, src_ref)
+
+    with jax.named_scope("ep_initialize"):
+      @pl.when(self.first_step_ever)
+      def _init_slots():
+        buffered_ref.init_slots()
+
+      @pl.when(pred)
+      def _start():
+        if buffered_ref.is_input:
+          buffered_ref.copy_in(src_ref, self.indices)
+
+      buffered_ref.swap_slots()
+
+  def wait_in(self, buffered_ref, src_ref, schedule=None):
+    pred = self.has_changed(buffered_ref) | self.first_step
+    if schedule is not None:
+      pred = schedule['wait_in'](self, buffered_ref, src_ref)
+
+    @jax.named_scope("ep_wait_in")
+    def _wait():
+      if buffered_ref.is_input:
+        buffered_ref.wait_in(src_ref, self.indices)
+      if buffered_ref.is_accumulator:
+        buffered_ref.set_accumulator(self.init_accumulators)
+    @jax.named_scope("ep_set_accum")
+    def _no_wait():
+      if buffered_ref.is_accumulator:
+        @pl.when(self.first_step)
+        def _set_accumulator():
+          buffered_ref.set_accumulator(self.init_accumulators)
+    lax.cond(pred, _wait, _no_wait)
+
+  def copy_in(self, buffered_ref, src_ref, schedule=None):
+    pred = self.will_change(buffered_ref) & ~self.last_step_ever
+    if schedule is not None:
+      pred = schedule['copy_in'](self, buffered_ref, src_ref)
+
+    @pl.when(pred)
+    @jax.named_scope("ep_copy_in")
+    def _send():
+      if buffered_ref.is_input:
+        @pl.when(~self.last_step)
+        def _copy_in():
+          buffered_ref.copy_in(src_ref, self.next_indices)
+
+  # --> Call prefetch here to grab the first inputs of next cycle.
+
+  # convenience method for prefetch callbacks.
+  def prefetch(self, buffered_ref, src_ref, schedule=None):
+    pred = ((self.will_change(buffered_ref) | self.last_step) &
+            ~self.last_step_ever)
+    if schedule is not None:
+      pred = schedule['prefetch'](self, buffered_ref, src_ref)
+
+    @pl.when(pred)
+    @jax.named_scope("ep_prefetch")
+    def _send():
+      if buffered_ref.is_input:
+        @pl.when(self.last_step)
+        def _prefetch_in():
+          buffered_ref.copy_in(src_ref, self.next_indices)
+
+  def wait_out(self, buffered_ref, dst_ref, schedule=None):
+    pred = ((self.has_changed(buffered_ref) | self.first_step) &
+            ~self.first_step_ever)
+    if schedule is not None:
+      pred = schedule['wait_out'](self, buffered_ref, dst_ref)
+
+    @pl.when(pred)
+    @jax.named_scope("ep_wait_out")
+    def _wait():
+      if buffered_ref.is_output:
+        buffered_ref.wait_out(dst_ref, self.prev_indices)
+
+  # --> Call "postyeet" here, after last output copy is finished from previous
+  #     cycle
+
+  def copy_out(self, buffered_ref, dst_ref, schedule=None):
+    pred = self.will_change(buffered_ref) | self.last_step
+    if schedule is not None:
+      pred = schedule['copy_out'](self, buffered_ref, dst_ref)
+
+    @jax.named_scope("ep_copy_out")
+    def _copy_out_and_accumulate():
+      if buffered_ref.is_accumulator:
+        buffered_ref.accumulate()
+      if buffered_ref.is_output:
+        buffered_ref.copy_out(dst_ref, self.indices)
+    @jax.named_scope("ep_accum")
+    def _just_accumulate():
+      if buffered_ref.is_accumulator:
+        @pl.when(self.last_step)
+        def _accumulate():
+          buffered_ref.accumulate()
+    lax.cond(pred, _copy_out_and_accumulate, _just_accumulate)
+
+  def finalize(self, buffered_ref, dst_ref, schedule=None):
+    pred = self.last_step_ever
+    if schedule is not None:
+      pred = schedule['epilogue_wait_out'](self, buffered_ref, dst_ref)
+
+    @pl.when(pred)
+    @jax.named_scope("ep_finalize")
+    def _end():
+      if buffered_ref.is_output:
+        buffered_ref.swap_slots()  # formally correct, not actually necessary.
+        buffered_ref.wait_out(dst_ref, self.indices)
+
+  # END SCHEDULE --------------------------------------------------------------
+
+
+# Scheduling overrides.
+
+# When trying to fuse across pipelines that use accumulator arguments, we
+# sometimes need to mess with the default scheduling above to avoid data-races
+# or to maximize performance.  A schedule is simply a set of functions that
+# calculate predicates for whether or not the pipeline input and output
+# BufferedRefs should do copies and waits.
+
+
+# Copy of the default pipeline schedule.  The default schedule tacitly assumes
+# that the source and target HBM Refs change with each cycle.
+_default_schedule = dict(
+    prologue_copy_in=lambda s, bref, _: s.first_step_ever,
+    wait_in=lambda s, bref, _: s.has_changed(bref) | s.first_step,
+    copy_in=lambda s, bref, _: s.will_change(bref) & ~s.last_step_ever,
+    prefetch=lambda s, bref, _: (
+        (s.will_change(bref) | s.last_step) & ~s.last_step_ever),
+    wait_out=lambda s, bref, _: (
+        (s.has_changed(bref) | s.first_step) & ~s.first_step_ever),
+    copy_out=lambda s, bref, _: s.will_change(bref) | s.last_step,
+    epilogue_wait_out=lambda s, bref, _: s.last_step_ever,
+)
+
+
+# Alternative schedule needed for accumulators reading and writing to a fixed
+# HBM reference to avoid HBM data races for trivially small grids: only
+# read/write when tiles change or at the very beginning or end of a fused
+# pipeline schedule.
+_fixed_schedule = dict(
+    prologue_copy_in=lambda s, bref, _: s.first_step_ever,
+    wait_in=lambda s, bref, _: s.has_changed(bref) | s.first_step_ever,
+    copy_in=lambda s, bref, _: s.will_change(bref) & ~s.last_step_ever,
+    prefetch=lambda s, bref, _: s.will_change(bref) & ~s.last_step_ever,
+    wait_out=lambda s, bref, _: s.has_changed(bref) & ~s.first_step_ever,
+    copy_out=lambda s, bref, _: s.will_change(bref) | s.last_step_ever,
+    epilogue_wait_out=lambda s, bref, _: s.last_step_ever,
+)
+
+
+def get_pipeline_schedule(schedule) -> Any:
+  """Retrieve a named pipeline schedule or pass through fully specified one."""
+  predefined_schedules = {
+      'default': _default_schedule,
+      'fixed': _fixed_schedule
+  }
+  if isinstance(schedule, str):
+    return predefined_schedules[schedule].copy()
+  return schedule
+
+
+# Main pipeline methods
+
+
+def make_pipeline_allocations(
+    *refs,
+    in_specs=None,
+    out_specs=None,
+    should_accumulate_out=False,
 ):
-  """General purpose input/output block copys.
+  """Create BufferedRefs for the pipeline.
 
-  Basic flow:
-
-  - Wait on input copy if previous block spec was different.
-  - Start input copy if block spec is changing and it's not the last step.
-  - Wait on output copy if previous block spec was different.
-  - Start output copy if block spec is changing or is last step.
-
-  The step constraints are enforced with force_copy and caller conds.
+  This function creates buffered refs for an inner pipeline that can be
+  created at the top-level of a pallas call such that they may be reused across
+  multiple invocations of the inner pipeline.
 
   Args:
-    block_spec: Block spec.
-    ref: HBM ref.
-    allocation: VMEM ref and semaphore. If this is None it means the source refs
-      are already in VMEM and we can avoid copy operations.
-    buffers: Current and next buffer indices.
-    accum_allocation: Accumulator VMEM ref and semaphore.
-    accum_buffers: Accumulator current and next buffer indices.
-    indices: Current grid indices.
-    is_input: True if is input copy.
-    is_wait: True if we want to wait on instead of start a copy.
-    force_copy: Force copy if this condition is True. force_skip overrides this.
-    force_skip: Force skipping the operation if this condition is True.
-    use_accum: Whether to add the accum to the VMEM ref before copying.
-    accum_if_skipping: Whether to accumulate into the current accum buffer if
-      skipping copy.
-    zero_accum_if_skipping: Whether to zero out the existing accum before
-      accumulating into it if skipping copy.
+    in_specs: input pallas block specs
+    out_specs: output pallas block specs
+    should_accumulate_out: booleans to indicate which outputs should be treated
+      as accumulators.
 
   Returns:
-    Current and next buffer indices, swapped if a copy was started.
+    A list of BufferedRefs, one corresponding to each ref specified in the
+    in_specs and out_specs.
   """
-  if allocation is None:
-    # Has existing allocation.
-    return buffers
-  (vmem_ref, sem) = allocation.vmem_ref, allocation.semaphore
-  (prev_indices, curr_indices, next_indices) = indices
-
-  prev_dma_slice = _run_block_spec(block_spec, prev_indices)
-  dma_slice = _run_block_spec(block_spec, curr_indices)
-  next_dma_slice = _run_block_spec(block_spec, next_indices)
-
-  prev_dma_slice_changed = _dma_slice_not_equal(prev_dma_slice, dma_slice)
-  dma_slice_is_changing = _dma_slice_not_equal(dma_slice, next_dma_slice)
-
-  buffer, next_buffer = buffers.current, buffers.next
-  if is_input:
-    if is_wait:
-      # We wait for inputs of the current body iteration.
-      used_dma_slice = dma_slice
-      used_buffer = buffer
-    else:
-      # We send to the next ones.
-      used_dma_slice = next_dma_slice
-      used_buffer = next_buffer
-  else:
-    if is_wait:
-      # We wait for the outputs of the previous body iteration.
-      used_dma_slice = prev_dma_slice
-      used_buffer = next_buffer
-    else:
-      # We send the current ones.
-      used_dma_slice = dma_slice
-      used_buffer = buffer
-
-  if is_input:
-    from_ref = ref.at[used_dma_slice]
-    to_ref = vmem_ref.at[used_buffer]
-  else:
-    from_ref = vmem_ref.at[used_buffer]
-    to_ref = ref.at[used_dma_slice]
-
-  async_copy = tpu_primitives.make_async_copy(
-      from_ref,
-      to_ref,
-      sem,
-  )
-
-  if is_wait:
-    cond = prev_dma_slice_changed
-    do_fn = async_copy.wait
-    advance_buffers = False
-  else:
-    cond = dma_slice_is_changing
-    do_fn = async_copy.start
-    advance_buffers = True
-
-  if force_copy is not None:
-    cond = jnp.logical_or(cond, force_copy)
-  if force_skip is not None:
-    cond = jnp.logical_and(cond, jnp.logical_not(force_skip))
-
-  def do_and_advance_buffers():
-    if accum_allocation is not None:
-
-      def accum():
-        with tpu_primitives.trace("ep_accum_copy"):
-          accum_dtype = jnp.float32
-          if vmem_ref.dtype == jnp.int32:
-            accum_dtype = jnp.int32
-          accum_vmem_ref = accum_allocation.vmem_ref
-          vmem_ref[used_buffer] = (
-              vmem_ref[used_buffer].astype(accum_dtype)
-              + accum_vmem_ref[accum_buffers.current].astype(accum_dtype)
-          ).astype(vmem_ref.dtype)
-
-      lax.cond(use_accum, accum, lambda: None)
-
-    do_fn()
-    if advance_buffers:
-      return PipelineBuffer(next_buffer, buffer)
-    return buffers
-
-  def dont_advance_buffers():
-    if accum_allocation is not None:
-
-      def accum():
-        with tpu_primitives.trace("ep_accum_store"):
-
-          def zero_accum():
-            accum_vmem_ref = accum_allocation.vmem_ref
-            accum_vmem_ref[...] = jnp.zeros_like(accum_vmem_ref[...])
-
-          lax.cond(zero_accum_if_skipping, zero_accum, lambda: None)
-
-          accum_dtype = jnp.float32
-          if vmem_ref.dtype == jnp.int32:
-            accum_dtype = jnp.int32
-          accum_vmem_ref = accum_allocation.vmem_ref
-          accum_vmem_ref[accum_buffers.current] = (
-              accum_vmem_ref[accum_buffers.current].astype(accum_dtype)
-              + vmem_ref[used_buffer].astype(accum_dtype)
-          ).astype(accum_vmem_ref.dtype)
-
-      lax.cond(accum_if_skipping, accum, lambda: None)
-
-    return buffers
-
-  return lax.cond(cond, do_and_advance_buffers, dont_advance_buffers)
-
-
-# Start copying an input's next block to its next buffer.
-_start_block_copy_in = partial(_block_copy, is_input=True, is_wait=False)
-# Wait for the copy of an input's current block to its current buffer.
-_wait_block_copy_in = partial(_block_copy, is_input=True, is_wait=True)
-# Start copying an output's current block from its current buffer.
-_start_block_copy_out = partial(_block_copy, is_input=False, is_wait=False)
-# Wait for the copy of an output's previous block from its previous buffer.
-_wait_block_copy_out = partial(_block_copy, is_input=False, is_wait=True)
-
-
-class PipelineBody(Protocol):
-  """Body of a pipeline."""
-
-  def __call__(self, *ref_args: PipelineRefs) -> None:
-    ...
-
-
-class MakePipelineRefs(Protocol):
-  """Makes pipeline refs from flat user friendly function args."""
-
-  def __call__(self, *ref_args: PipelineRefs) -> PipelineArg[PipelineRefs]:
-    ...
-
-
-class MakePipelineAllocations(Protocol):
-  """Makes pipeline allocations from flat user friendly function args."""
-
-  def __call__(
-      self, *ref_args: PipelineRefs, return_treedef: bool = False
-  ) -> Any:
-    ...
-
-
-@dataclasses.dataclass(frozen=True)
-class PipelinePrefetchArgs:
-  """Args for pipeline prefetch."""
-  pipeline_refs: PipelineArg[PipelineRefs]
-  pipeline_allocations: PipelineArg[PipelineAllocations]
-  pipeline_buffers: PipelineArg[PipelineBuffers]
-
-
-class StartPipelinePrefetch(Protocol):
-  """Starts pipeline prefetch.
-
-  Use force_copy if a spec's indices don't change from last to first grid
-  indices and you still want to force a copy. This must be used in conjunction
-  with the prologue's return value to force a wait.
-  """
-
-  def __call__(
-      self,
-      prefetch_args: PipelinePrefetchArgs,
-      *,
-      force_copy: Union[
-          bool, tuple[Union[CondVal, Any], Union[CondVal, Any]]
-      ] = False,
-      force_skip: Union[
-          bool, tuple[Union[CondVal, Any], Union[CondVal, Any]]
-      ] = False,
-  ) -> tuple[PipelineBuffers, PipelineBuffers]:
-    ...
-
-
-@dataclasses.dataclass(frozen=True)
-class ManualPrefetchArgs:
-  """Args for pipeline prefetch."""
-
-  pipeline_specs: PipelineBlockSpecs
-  pipeline_refs: PipelineRefs
-  pipeline_allocations: PipelineAllocations
-  pipeline_buffers: PipelineBuffers
-
-
-class StartManualPrefetch(Protocol):
-  """Starts manual prefetch.
-
-  Use force_copy if a spec's indices don't change from last to first grid
-  indices and you still want to force a copy. This must be used in conjunction
-  with the prologue's return value to force a wait.
-  """
-
-  def __call__(
-      self,
-      prefetch_args: ManualPrefetchArgs,
-      *,
-      indices: GridIndices,
-      force_copy: Union[bool, Union[CondVal, Any]] = False,
-      force_skip: Union[bool, Union[CondVal, Any]] = False,
-  ) -> PipelineBuffers:
-    ...
-
-
-@dataclasses.dataclass(frozen=True)
-class PipelineCallbackArgs:
-  """Args for pipeline prologue and epilogue."""
-  pipeline_specs: PipelineArg[PipelineBlockSpecs]
-  pipeline_refs: PipelineArg[PipelineRefs]
-  pipeline_buffer_refs: PipelineArg[PipelineBuffers]
-  pipeline_allocations: PipelineArg[PipelineAllocations]
-  pipeline_buffers: PipelineArg[PipelineBuffers]
-  make_pipeline_refs: MakePipelineRefs
-  start_pipeline_prefetch: StartPipelinePrefetch
-  start_manual_prefetch: StartManualPrefetch
-  run_manual_compute: Callable[[Callable[[], None]], None]
-
-
-PipelinePrologue = Callable[
-    [PipelineCallbackArgs],
-    # Returns a tuple of tuples of prefix-pytrees for inputs and accums. The
-    # first specifies which ones to skip the prologue input copy for and the
-    # second specifies which ones to force the prologue input wait on.
-    tuple[
-        tuple[Union[CondVal, Any], Union[CondVal, Any]],
-        tuple[Union[CondVal, Any], Union[CondVal, Any]],
-    ],
-]
-PipelineEpilogue = Callable[
-    [PipelineCallbackArgs], tuple[PipelineBuffers, PipelineBuffers]
-]
-PipelineOutPrologue = Callable[[PipelineCallbackArgs], Union[CondVal, Any]]
-PipelineOutEpilogue = Callable[[PipelineCallbackArgs], Union[CondVal, Any]]
-
-
-class Pipeline(Protocol):
-
-  def __call__(
-      self,
-      *ref_args: PipelineRefs,
-      scratchs: PipelineRefs = None,
-      allocations: Union[None, Any] = None,
-      init_allocations: CondVal = False,
-      prologue: Union[PipelinePrologue, None] = None,
-      epilogue: Union[PipelineEpilogue, None] = None,
-      out_prologue: Union[PipelineOutPrologue, None] = None,
-      out_epilogue: Union[PipelineOutEpilogue, None] = None,
-  ) -> None:
-    ...
-
-
-def emit_pipeline_with_allocations(
-    body: PipelineBody,
-    *,
-    grid: core.StaticGrid,
-    in_specs: PipelineBlockSpecs,
-    out_specs: PipelineBlockSpecs,
-    should_accumulate_out: Union[Sequence[bool], Any] = False,
-) -> tuple[Pipeline, MakePipelineAllocations]:
-  """Wraps body function in a custom pipeline defined by grid and specs.
-
-  This has the same semantics as pallas_call but is meant to be called inside
-  pallas_call for nesting grids. This is useful when you need to have separate
-  windowing strategies for example for communication vs. computation.
-
-  By default outputs are written to but `should_accumulate_out` can be used to
-  specify which outputs we should add to instead. This is so we can reduce
-  across pipeline calls within and across parent grid iterations.
-
-  This is like `pltpu.emit_pipeline` but also returns a function for creating
-  the allocation descriptors for the pipeline so they can be allocated at a
-  parent grid and passed in so they live across the parent grid's iterations.
-
-  Args:
-    body: Pipeline body.
-    grid: Pallas grid.
-    in_specs: Input block specs.
-    out_specs: Output block specs.
-    should_accumulate_out: Prefix-pytree of out_specs specifying which should be
-      accumulated into with True.
-
-  Returns:
-    Tuple of wrapped pipelined body and a function to create the allocation
-    descriptors.
-  """
+  # TODO(levskaya): generalize argument tree handling here and in emit_pipeline.
+  num_in_specs = len(in_specs)
   if not isinstance(in_specs, (list, tuple)):
-    in_specs = [in_specs]
+    in_specs = (in_specs,)
   if not isinstance(out_specs, (list, tuple)):
-    out_specs = [out_specs]
-  should_accumulate_out = _broadcast_pytree_to(
-      "should_accumulate_out", should_accumulate_out, out_specs
-  )
-  in_out_specs = tree_util.tree_map(
-      lambda spec, accum: spec if accum else None,
-      out_specs,
-      should_accumulate_out,
-  )
-  pipeline_specs: PipelineArg[PipelineBlockSpecs] = PipelineArg(
-      in_specs, out_specs, in_out_specs
-  )
-  del in_specs, out_specs, should_accumulate_out, in_out_specs
-  pipeline_specs_with_nones = pipeline_specs
-  pipeline_specs = jax.tree_util.tree_map(
-      _replace_nones_in_block_spec, pipeline_specs_with_nones
-  )
+    out_specs = (out_specs,)
+  if isinstance(in_specs, list):
+    in_specs = tuple(in_specs)
+  if isinstance(out_specs, list):
+    out_specs = tuple(out_specs)
+  in_refs = refs[:num_in_specs]
+  out_refs = refs[num_in_specs:]
+  def make_input_bref(in_spec, in_ref):
+    return BufferedRef.input(in_spec, in_ref.dtype)
+  in_brefs = jax.tree.map(make_input_bref, in_specs, in_refs)
+  def make_output_bref(out_spec, out_ref, accumulate):
+    if accumulate:
+      return BufferedRef.accumulator(out_spec, out_ref.dtype)
+    return BufferedRef.output(out_spec, out_ref.dtype)
+  out_brefs = jax.tree.map(
+      make_output_bref, out_specs, out_refs, should_accumulate_out)
+  return (*in_brefs, *out_brefs)
 
-  def make_pipeline_refs(
-      *ref_args: PipelineRefs,
-  ) -> PipelineArg[PipelineRefs]:
-    in_refs, out_refs = split_list(ref_args, [len(pipeline_specs.input)])
-    return PipelineArg(in_refs, out_refs, out_refs)
 
-  def start_pipeline_prefetch(
-      prefetch_args: PipelinePrefetchArgs,
-      *,
-      indices: GridIndices,
-      force_copy: Union[
-          bool, tuple[Union[CondVal, Any], Union[CondVal, Any]]
-      ] = False,
-      force_skip: Union[
-          bool, tuple[Union[CondVal, Any], Union[CondVal, Any]]
-      ] = False,
-  ) -> tuple[PipelineBuffers, PipelineBuffers]:
-    if isinstance(force_copy, bool):
-      force_copy = (force_copy, force_copy)
-    if isinstance(force_skip, bool):
-      force_skip = (force_skip, force_skip)
-    force_input_copy, force_in_out_copy = force_copy
-    force_input_copy = _broadcast_pytree_to(
-        "force_input_copy",
-        force_input_copy,
-        pipeline_specs.input,
+class GridDimensionSemantics:
+  pass
+PARALLEL = GridDimensionSemantics()
+ARBITRARY = GridDimensionSemantics()
+
+
+def _partition_grid(
+    grid: tuple[int | jax.Array, ...],
+    core_axis: int | None,
+    dimension_semantics: tuple[GridDimensionSemantics, ...] | None,
+) -> tuple[tuple[int | jax.Array, ...], tuple[int | jax.Array, ...]]:
+  if core_axis is None:
+    # We aren't partitioning the grid
+    return grid, (0,) * len(grid)
+  num_cores = pl.num_programs(core_axis)
+  # Check that num_cores is statically known
+  if not isinstance(num_cores, int):
+    raise NotImplementedError(
+        f"Cannot partition grid over dynamic number of cores: {core_axis=}"
     )
-    force_in_out_copy = _broadcast_pytree_to(
-        "force_in_out_copy",
-        force_in_out_copy,
-        pipeline_specs.in_out,
+  if num_cores == 1:
+    # We aren't partitioning the grid
+    return grid, (0,) * len(grid)
+
+  # If dimension_semantics aren't provided, we assume it is all arbitrary.
+  if dimension_semantics is None:
+    dimension_semantics = (ARBITRARY,) * len(grid)
+  if len(dimension_semantics) != len(grid):
+    raise ValueError("dimension_semantics must be the same length as grid.")
+
+  parallel_dimensions = {i for i, d in enumerate(dimension_semantics)
+                         if d == PARALLEL}
+  # If there are no parallel dimensions, we can't partition the grid
+  if not parallel_dimensions:
+    # TODO(sharadmv): enable running kernel on just one core
+    raise NotImplementedError(
+        "Cannot partition over cores without parallel grid dimensions:"
+        f" {dimension_semantics=}"
     )
-    force_input_skip, force_in_out_skip = force_skip
-    force_input_skip = _broadcast_pytree_to(
-        "force_input_skip",
-        force_input_skip,
-        pipeline_specs.input,
+  if all(not isinstance(grid[i], int) for i in parallel_dimensions):
+    raise NotImplementedError(
+        f"Cannot partition cores over only dynamic grid dimensions: {grid=}"
     )
-    force_in_out_skip = _broadcast_pytree_to(
-        "force_in_out_skip",
-        force_in_out_skip,
-        pipeline_specs.in_out,
+  # Try to find a divisible dimension to partition the grid on
+  divisible_dimensions = {
+      i for i in parallel_dimensions
+      if isinstance(grid[i], int) and grid[i] % num_cores == 0
+  }
+  if divisible_dimensions:
+    first_divisible_dimension, *_ = (
+        i for i in range(len(dimension_semantics)) if i in divisible_dimensions
     )
-    next_in_and_in_out_buffers = _tree_map_with_kwargs(
-        partial(_start_block_copy_in, indices=indices),
-        pipeline_specs.input_and_in_out,
-        prefetch_args.pipeline_refs.input_and_in_out,
-        prefetch_args.pipeline_allocations.input_and_in_out,
-        prefetch_args.pipeline_buffers.input_and_in_out,
-        force_copy=force_input_copy + force_in_out_copy,
-        force_skip=force_input_skip + force_in_out_skip,
+    partitioned_dim_size = grid[first_divisible_dimension] // num_cores
+    partitioned_dim_offset = pl.program_id(core_axis) * partitioned_dim_size
+    new_grid = jax_util.tuple_update(
+        grid, first_divisible_dimension, partitioned_dim_size
     )
-    next_in_buffers, next_in_out_buffers = split_list(
-        next_in_and_in_out_buffers, [len(pipeline_specs.input)]
+    offsets = jax_util.tuple_update(
+        (0,) * len(grid), first_divisible_dimension, partitioned_dim_offset
     )
-    return next_in_buffers, next_in_out_buffers
-
-  def start_manual_prefetch(
-      prefetch_args: ManualPrefetchArgs,
-      *,
-      indices: GridIndices,
-      force_copy: Union[bool, Union[CondVal, Any]] = False,
-      force_skip: Union[bool, Union[CondVal, Any]] = False,
-  ) -> PipelineBuffers:
-    force_copy = _broadcast_pytree_to(
-        "force_input_copy",
-        force_copy,
-        prefetch_args.pipeline_specs,
+  else:
+    # No divisible dimensions, so we can't evenly partition the grid. Let's pick
+    # the largest dimension and try to divide it as evenly as possible.
+    # TODO(sharadmv): take the product of many nondivisible dimensions to
+    # potentially divide it more evenly
+    largest_parallel_dimension = max(grid[i] for i in parallel_dimensions
+                                     if isinstance(grid[i], int))  # type: ignore
+    partition_dimension, *_ = (
+        i
+        for i, d in enumerate(grid)
+        if isinstance(d, int) and d == largest_parallel_dimension
     )
-    force_skip = _broadcast_pytree_to(
-        "force_skip",
-        force_skip,
-        prefetch_args.pipeline_specs,
+    base_num_iters, rem = divmod(grid[partition_dimension], num_cores)
+    assert rem > 0, rem
+    # We have some remainder iterations that we need to assign somewhere. We
+    # know that rem < num_cores, so we can assign one extra iteration to each
+    # core except for the last (num_cores - rem).
+    core_index = pl.program_id(core_axis)
+    num_iters = jnp.where(core_index < rem, base_num_iters + 1,
+                          base_num_iters)
+    new_grid = jax_util.tuple_update(grid, partition_dimension, num_iters)
+    # Ordinarily, we would compute the offset as:
+    #   grid_offset = pl.program_id(core_axis) * num_iters
+    # However, since we have some cores that don't have an extra iteration, we
+    # need to adjust the offset by `rem`.
+    grid_offset = jnp.where(
+        core_index < rem,
+        core_index * num_iters,
+        core_index * base_num_iters + rem,
     )
-    next_buffers = _tree_map_with_kwargs(
-        partial(_start_block_copy_in, indices=indices),
-        prefetch_args.pipeline_specs,
-        prefetch_args.pipeline_refs,
-        prefetch_args.pipeline_allocations,
-        prefetch_args.pipeline_buffers,
-        force_copy=force_copy,
-        force_skip=force_skip,
+    offsets = jax_util.tuple_update(
+        (0,) * len(grid), partition_dimension, grid_offset
     )
-    return next_buffers
-
-  def run_manual_compute(fn: Callable[[], None]) -> None:
-    fn()
-
-  def make_pipeline_allocations(
-      *ref_args: PipelineRefs,
-      return_treedef: bool = False,
-  ) -> tuple[tuple[Any, tree_util.PyTreeDef], Any]:
-    pipeline_buffers = tree_util.tree_map(
-        lambda _: PipelineBuffer(*((SMEM((1,), jnp.int32),) * 2)),
-        pipeline_specs,
-    )
-    pipeline_refs = make_pipeline_refs(*ref_args)
-
-    def make_allocation(spec, ref):
-      if ref.memory_space == VMEM:
-        # Don't make an allocation the ref is already in VMEM, we can use it
-        # directly for free.
-        return None
-      return PipelineAllocation(
-          VMEM((2, *spec.block_shape), getattr(ref, "dtype", ref)),
-          DMA,
-      )
-
-    pipeline_allocations = tree_util.tree_map(
-        make_allocation, pipeline_specs, pipeline_refs
-    )
-
-    def grab_allocation(_, ref):
-      if ref.memory_space == VMEM:
-        return ref
-      return None
-
-    pipeline_existing_allocations = tree_util.tree_map(
-        grab_allocation, pipeline_specs, pipeline_refs
-    )
-
-    def make_in_out_existing_allocations(spec, ref):
-      if ref.memory_space == VMEM:
-        return VMEM(spec.block_shape, getattr(ref, "dtype", ref))
-      return None
-
-    in_out_existing_allocations = tree_util.tree_map(
-        make_in_out_existing_allocations,
-        pipeline_specs.in_out,
-        pipeline_refs.in_out,
-    )
-
-    flat_allocations, allocations_treedef = tree_util.tree_flatten((
-        pipeline_buffers,
-        pipeline_allocations,
-        in_out_existing_allocations,
-    ))
-    if return_treedef:
-      flat_allocations = cast(Any, (tuple(flat_allocations), allocations_treedef))
-    return (
-        (flat_allocations, allocations_treedef),
-        pipeline_existing_allocations,
-    )
-
-  def pipeline(
-      *ref_args: PipelineRefs,
-      scratchs: Union[PipelineRefs, None] = None,
-      allocations: Union[
-          None,
-          tuple[PipelineArg[PipelineBuffers], PipelineArg[PipelineAllocations]],
-      ] = None,
-      init_allocations: CondVal = False,
-      prologue: Union[PipelinePrologue, None] = None,
-      epilogue: Union[PipelineEpilogue, None] = None,
-      out_prologue: Union[PipelineOutPrologue, None] = None,
-      out_epilogue: Union[PipelineOutEpilogue, None] = None,
-  ) -> None:
-    use_in_out = jnp.logical_not(init_allocations)
-    if scratchs is None:
-      scratchs = []
-    if not isinstance(scratchs, (list, tuple)):
-      scratchs = [scratchs]
-
-    def pipeline_body(
-        pipeline_refs: PipelineArg[PipelineRefs],
-        pipeline_existing_allocations: PipelineArg[PipelineRefs],
-        pipeline_buffer_refs: PipelineArg[PipelineBuffers],
-        pipeline_allocations: PipelineArg[PipelineAllocations],
-        in_out_existing_allocations: PipelineRefs,
-    ):
-
-      def init_pipeline_allocations():
-        def init_buffer_ref(_, buffer_ref):
-          buffer_ref.current[0] = 0
-          buffer_ref.next[0] = 1
-
-        tree_util.tree_map(
-            init_buffer_ref,
-            pipeline_specs,
-            pipeline_buffer_refs,
-        )
-
-      do_init_pipeline_allocations = jnp.logical_or(
-          allocations is None, init_allocations
-      )
-      lax.cond(
-          do_init_pipeline_allocations,
-          init_pipeline_allocations,
-          lambda: None,
-      )
-
-      zero_indices = (jnp.array(0, dtype=jnp.int32),) * len(grid)
-      last_indices = tuple(
-          [jnp.asarray(dim_size - 1, dtype=jnp.int32) for dim_size in grid]
-      )
-      indices = zero_indices
-      pipeline_buffers: PipelineArg[PipelineBuffers] = tree_util.tree_map(
-          lambda buffer_ref: buffer_ref[0],
-          pipeline_buffer_refs,
-      )
-      if prologue is not None:
-        (skip_input_prologue, skip_in_out_prologue), (
-            force_input_prologue_wait,
-            force_in_out_prologue_wait,
-        ) = prologue(
-            PipelineCallbackArgs(
-                pipeline_specs=pipeline_specs,
-                pipeline_refs=pipeline_refs,
-                pipeline_buffer_refs=pipeline_buffer_refs,
-                pipeline_allocations=pipeline_allocations,
-                pipeline_buffers=pipeline_buffers,
-                make_pipeline_refs=make_pipeline_refs,
-                start_pipeline_prefetch=partial(
-                    cast(Any, start_pipeline_prefetch),
-                    indices=(last_indices, zero_indices, indices),
-                ),
-                start_manual_prefetch=partial(
-                    cast(Any, start_manual_prefetch),
-                    indices=(last_indices, zero_indices, indices),
-                ),
-                run_manual_compute=run_manual_compute,
-            )
-        )
-      else:
-        skip_input_prologue = False
-        skip_in_out_prologue = False
-        force_input_prologue_wait = False
-        force_in_out_prologue_wait = False
-      skip_input_prologue = _broadcast_pytree_to(
-          "skip_input_prologue",
-          skip_input_prologue,
-          pipeline_specs.input,
-      )
-      skip_in_out_prologue = _broadcast_pytree_to(
-          "skip_in_out_prologue",
-          skip_in_out_prologue,
-          pipeline_specs.out,
-      )
-      force_input_prologue_wait = _broadcast_pytree_to(
-          "force_input_prologue_wait",
-          force_input_prologue_wait,
-          pipeline_specs.input,
-      )
-      force_in_out_prologue_wait = _broadcast_pytree_to(
-          "force_in_out_prologue_wait",
-          force_in_out_prologue_wait,
-          pipeline_specs.out,
-      )
-      _tree_map_with_kwargs(
-          partial(
-              _start_block_copy_in,
-              indices=(indices, indices, indices),
-              force_copy=True,
-          ),
-          pipeline_specs.input,
-          pipeline_refs.input,
-          pipeline_allocations.input,
-          tree_util.tree_map(
-              lambda _, buffers: PipelineBuffer(buffers.next, buffers.current),
-              pipeline_specs.input,
-              pipeline_buffers.input,
-          ),
-          force_skip=skip_input_prologue,
-      )
-      lax.cond(
-          use_in_out,
-          lambda: _tree_map_with_kwargs(
-              partial(
-                  _start_block_copy_in,
-                  indices=(indices, indices, indices),
-                  force_copy=True,
-              ),
-              pipeline_specs.in_out,
-              pipeline_refs.in_out,
-              pipeline_allocations.in_out,
-              tree_util.tree_map(
-                  lambda _, buffers: PipelineBuffer(
-                      buffers.next, buffers.current
-                  ),
-                  pipeline_specs.in_out,
-                  pipeline_buffers.in_out,
-              ),
-              force_skip=skip_in_out_prologue,
-          ),
-          lambda: pipeline_buffers.in_out,
-      )
-      total_iterations = math.prod(grid)
-
-      def fori_loop_body(
-          i: jax.Array,
-          carry: tuple[
-              GridIndices,
-              GridIndices,
-              PipelineArg[PipelineBuffers],
-          ],
-      ) -> tuple[
-          GridIndices,
-          GridIndices,
-          PipelineArg[PipelineBuffers],
-      ]:
-        (prev_indices, indices, pipeline_buffers) = carry
-        next_indices = _get_next_indices(grid, indices)
-        copy_indices = (prev_indices, indices, next_indices)
-
-        with tpu_primitives.trace("ep_wait_input"):
-          input_copy_args = [
-              pipeline_specs.input,
-              pipeline_refs.input,
-              pipeline_allocations.input,
-              pipeline_buffers.input,
-          ]
-          in_out_copy_args = [
-              pipeline_specs.in_out,
-              pipeline_refs.in_out,
-              pipeline_allocations.in_out,
-              pipeline_buffers.in_out,
-          ]
-          input_force_copy = lambda skip, wait: jnp.logical_and(
-              i == 0, jnp.logical_or(jnp.logical_not(skip), wait)
-          )
-          _tree_map_with_kwargs(
-              partial(
-                  _wait_block_copy_in,
-                  indices=copy_indices,
-              ),
-              *input_copy_args,
-              force_copy=tree_util.tree_map(
-                  input_force_copy,
-                  skip_input_prologue,
-                  force_input_prologue_wait,
-              ),
-          )
-          lax.cond(
-              use_in_out,
-              lambda: _tree_map_with_kwargs(
-                  partial(
-                      _wait_block_copy_in,
-                      indices=copy_indices,
-                  ),
-                  *in_out_copy_args,
-                  force_copy=tree_util.tree_map(
-                      input_force_copy,
-                      skip_in_out_prologue,
-                      force_in_out_prologue_wait,
-                  ),
-              ),
-              lambda: pipeline_buffers.in_out,
-          )
-
-          def start_next_iteration_in_block_copies():
-            next_in_buffers = tree_util.tree_map(
-                partial(
-                    _start_block_copy_in,
-                    indices=copy_indices,
-                ),
-                *input_copy_args,
-            )
-            next_in_out_buffers = lax.cond(
-                use_in_out,
-                lambda: tree_util.tree_map(
-                    partial(
-                        _start_block_copy_in,
-                        indices=copy_indices,
-                    ),
-                    *in_out_copy_args,
-                ),
-                lambda: pipeline_buffers.in_out,
-            )
-            return next_in_buffers, next_in_out_buffers
-
-          @tpu_primitives.trace("ep_run_epilogue")
-          def run_epilogue():
-            if epilogue is None:
-              return pipeline_buffers.input, pipeline_buffers.in_out
-            return epilogue(
-                PipelineCallbackArgs(
-                    pipeline_specs=pipeline_specs,
-                    pipeline_refs=pipeline_refs,
-                    pipeline_buffer_refs=pipeline_buffer_refs,
-                    pipeline_allocations=pipeline_allocations,
-                    pipeline_buffers=pipeline_buffers,
-                    make_pipeline_refs=make_pipeline_refs,
-                    start_pipeline_prefetch=partial(
-                        cast(Any, start_pipeline_prefetch),
-                        indices=(prev_indices, indices, zero_indices),
-                    ),
-                    start_manual_prefetch=partial(
-                        cast(Any, start_manual_prefetch),
-                        indices=(prev_indices, indices, zero_indices),
-                    ),
-                    run_manual_compute=run_manual_compute,
-                )
-            )
-
-          next_in_buffers, next_in_out_buffers = lax.cond(
-              i == total_iterations - 1,
-              run_epilogue,
-              start_next_iteration_in_block_copies,
-          )
-
-        with tpu_primitives.trace("ep_kernel"):
-
-          def grab_body_ref(
-              spec_with_nones,
-              spec,
-              allocation,
-              buffers,
-              existing_allocation,
-              in_out_existing_allocation=None,
-          ):
-            if existing_allocation is None:
-              buffer_slice = tuple([
-                  0 if dim is None else slice(None)
-                  for dim in spec_with_nones.block_shape
-              ])
-              return allocation.vmem_ref.at[(buffers.current, *buffer_slice)]
-            dma_slice = _run_block_spec(spec, indices)
-            dma_slice = tuple([
-                0 if dim is None else _slice
-                for dim, _slice in zip(spec_with_nones.block_shape, dma_slice)
-            ])
-            if in_out_existing_allocation is None:
-              return existing_allocation.at[dma_slice]
-            return in_out_existing_allocation.at[dma_slice]
-
-          in_args = tree_util.tree_map(
-              grab_body_ref,
-              pipeline_specs_with_nones.input,
-              pipeline_specs.input,
-              pipeline_allocations.input,
-              pipeline_buffers.input,
-              pipeline_existing_allocations.input,
-          )
-          out_args = tree_util.tree_map(
-              grab_body_ref,
-              pipeline_specs_with_nones.out,
-              pipeline_specs.out,
-              pipeline_allocations.out,
-              pipeline_buffers.out,
-              pipeline_existing_allocations.out,
-              in_out_existing_allocations,
-          )
-          with core.grid_env(cast(Any, zip(indices, grid))):
-            body(*in_args, *out_args, *scratchs)
-
-          def accum_existing_in_out_existing_allocation(
-              spec,
-              existing_allocation,
-              in_out_existing_allocation,
-          ):
-            if (
-                existing_allocation is not None
-                and in_out_existing_allocation is not None
-            ):
-              dma_slice = _run_block_spec(spec, indices)
-              next_dma_slice = _run_block_spec(spec, next_indices)
-              dma_slice_is_changing = _dma_slice_not_equal(
-                  dma_slice, next_dma_slice
-              )
-
-              def init():
-                existing_allocation[dma_slice] = in_out_existing_allocation[
-                    dma_slice
-                ]
-
-              def accum():
-                existing_allocation[dma_slice] = (
-                    existing_allocation[dma_slice].astype(jnp.float32)
-                    + in_out_existing_allocation[dma_slice].astype(jnp.float32)
-                ).astype(existing_allocation.dtype)
-
-              lax.cond(
-                  jnp.logical_or(
-                      dma_slice_is_changing, i == total_iterations - 1
-                  ),
-                  lambda: lax.cond(use_in_out, accum, init),
-                  lambda: None,
-              )
-
-          tree_util.tree_map(
-              accum_existing_in_out_existing_allocation,
-              pipeline_specs.out,
-              pipeline_existing_allocations.out,
-              in_out_existing_allocations,
-          )
-
-        with tpu_primitives.trace("ep_wait_output"):
-
-          def run_out_prologue():
-            if out_prologue is not None:
-              skip_out_prologue_wait = out_prologue(
-                  PipelineCallbackArgs(
-                      pipeline_specs=pipeline_specs,
-                      pipeline_refs=pipeline_refs,
-                      pipeline_buffer_refs=pipeline_buffer_refs,
-                      pipeline_allocations=pipeline_allocations,
-                      pipeline_buffers=pipeline_buffers,
-                      make_pipeline_refs=make_pipeline_refs,
-                      start_pipeline_prefetch=partial(
-                          cast(Any, start_pipeline_prefetch),
-                          indices=copy_indices,
-                      ),
-                      start_manual_prefetch=partial(
-                          cast(Any, start_manual_prefetch),
-                          indices=copy_indices,
-                      ),
-                      run_manual_compute=run_manual_compute,
-                  )
-              )
-              skip_out_prologue_wait = _broadcast_pytree_to(
-                  "skip_out_prologue_wait",
-                  skip_out_prologue_wait,
-                  pipeline_specs.out,
-              )
-              _tree_map_with_kwargs(
-                  partial(
-                      _wait_block_copy_out,
-                      indices=copy_indices,
-                  ),
-                  pipeline_specs.out,
-                  pipeline_refs.out,
-                  pipeline_allocations.out,
-                  pipeline_buffers.out,
-                  force_skip=skip_out_prologue_wait,
-              )
-
-          @tpu_primitives.trace("ep_wait_prev_iteration_out_block_copies")
-          def wait_prev_iteration_out_block_copies():
-            tree_util.tree_map(
-                partial(
-                    _wait_block_copy_out,
-                    indices=copy_indices,
-                ),
-                pipeline_specs.out,
-                pipeline_refs.out,
-                pipeline_allocations.out,
-                pipeline_buffers.out,
-            )
-
-          lax.cond(
-              i == 0,
-              run_out_prologue,
-              wait_prev_iteration_out_block_copies,
-          )
-          if out_epilogue is not None:
-            skip_out_epilogue_wait = out_epilogue(
-                PipelineCallbackArgs(
-                    pipeline_specs=pipeline_specs,
-                    pipeline_refs=pipeline_refs,
-                    pipeline_buffer_refs=pipeline_buffer_refs,
-                    pipeline_allocations=pipeline_allocations,
-                    pipeline_buffers=pipeline_buffers,
-                    make_pipeline_refs=make_pipeline_refs,
-                    start_pipeline_prefetch=cast(
-                        Any, lambda *args, **kwargs: None
-                    ),
-                    start_manual_prefetch=cast(
-                        Any, lambda *args, **kwargs: None
-                    ),
-                    run_manual_compute=cast(Any, lambda *args, **kwargs: None),
-                )
-            )
-          else:
-            skip_out_epilogue_wait = cast(Any, False)
-          skip_out_epilogue_wait = _broadcast_pytree_to(
-              "skip_out_epilogue_wait",
-              skip_out_epilogue_wait,
-              pipeline_specs.out,
-          )
-          force_start_block_copy_out = jax.tree_util.tree_map(
-              lambda skip_out_wait: jnp.logical_and(
-                  jnp.logical_not(skip_out_wait), i == total_iterations - 1
-              ),
-              skip_out_epilogue_wait,
-          )
-          next_out_buffers = _tree_map_with_kwargs(
-              partial(
-                  _start_block_copy_out,
-                  indices=copy_indices,
-                  use_accum=use_in_out,
-                  # If an output tile doesn't change from last to first, we need
-                  # to add its accum since the body overwrites outputs each
-                  # pipeline.
-                  accum_if_skipping=i == total_iterations - 1,
-                  # Initialize the accum if this is the first time this is
-                  # happening.
-                  zero_accum_if_skipping=do_init_pipeline_allocations,
-              ),
-              pipeline_specs.out,
-              pipeline_refs.out,
-              pipeline_allocations.out,
-              pipeline_buffers.out,
-              pipeline_allocations.in_out,
-              pipeline_buffers.in_out,
-              force_copy=force_start_block_copy_out,
-          )
-
-        prev_indices = indices
-        indices = next_indices
-        return (
-            prev_indices,
-            indices,
-            PipelineArg(next_in_buffers, next_out_buffers, next_in_out_buffers),
-        )
-
-      (prev_indices, indices, pipeline_buffers) = lax.fori_loop(
-          0,
-          total_iterations,
-          fori_loop_body,
-          (last_indices, indices, pipeline_buffers),
-      )
-
-      def set_buffer_ref(buffer_ref, buffer):
-        buffer_ref[0] = buffer
-
-      tree_util.tree_map(
-          set_buffer_ref,
-          pipeline_buffer_refs,
-          pipeline_buffers,
-      )
-
-      with tpu_primitives.trace("ep_end_pipeline"):
-        with tpu_primitives.trace("ep_wait_output"):
-          if out_epilogue is not None:
-            skip_out_epilogue_wait = out_epilogue(
-                PipelineCallbackArgs(
-                    pipeline_specs=pipeline_specs,
-                    pipeline_refs=pipeline_refs,
-                    pipeline_buffer_refs=pipeline_buffer_refs,
-                    pipeline_allocations=pipeline_allocations,
-                    pipeline_buffers=pipeline_buffers,
-                    make_pipeline_refs=make_pipeline_refs,
-                    start_pipeline_prefetch=partial(
-                        cast(Any, start_pipeline_prefetch),
-                        indices=(prev_indices, indices, zero_indices),
-                    ),
-                    start_manual_prefetch=partial(
-                        cast(Any, start_manual_prefetch),
-                        indices=(prev_indices, indices, zero_indices),
-                    ),
-                    run_manual_compute=run_manual_compute,
-                )
-            )
-          else:
-            skip_out_epilogue_wait = None
-          skip_out_epilogue_wait = _broadcast_pytree_to(
-              "skip_out_epilogue_wait",
-              skip_out_epilogue_wait,
-              pipeline_specs.out,
-          )
-          _tree_map_with_kwargs(
-              partial(
-                  _wait_block_copy_out,
-                  indices=(prev_indices, indices, zero_indices),
-                  force_copy=True,
-              ),
-              pipeline_specs.out,
-              pipeline_refs.out,
-              pipeline_allocations.out,
-              pipeline_buffers.out,
-              force_skip=skip_out_epilogue_wait,
-          )
-
-    pipeline_refs = make_pipeline_refs(*ref_args)
-    if allocations is None:
-      (flat_allocations, allocations_treedef), existing_allocations = (
-          make_pipeline_allocations(*ref_args)
-      )
-      tpu_primitives.run_scoped(
-          partial(pipeline_body, pipeline_refs, existing_allocations),
-          *tree_util.tree_unflatten(allocations_treedef, flat_allocations),
-      )
-    else:
-      (_, allocations_treedef), existing_allocations = (
-          make_pipeline_allocations(*ref_args)
-      )
-      pipeline_body(
-          pipeline_refs,
-          existing_allocations,
-          *tree_util.tree_unflatten(allocations_treedef, list(allocations)),
-      )
-
-  return pipeline, lambda *args, **kwargs: tuple(
-      make_pipeline_allocations(*args, **kwargs)[0][0]
-  )
+  return new_grid, offsets
 
 
 def emit_pipeline(
-    body: PipelineBody,
+    body,
     *,
-    grid: core.StaticGrid,
-    in_specs: PipelineBlockSpecs,
-    out_specs: PipelineBlockSpecs,
-    should_accumulate_out: Union[Sequence[bool], Any] = False,
-) -> Pipeline:
-  """Wraps body function in a custom pipeline defined by grid and specs.
+    grid: tuple[int | jax.Array, ...],
+    in_specs=None,
+    out_specs=None,
+    should_accumulate_out=False,
+    core_axis: int | None = None,
+    dimension_semantics: tuple[GridDimensionSemantics, ...] | None = None
+):
+  """Creates a function to emit a manual pallas pipeline.
 
   This has the same semantics as pallas_call but is meant to be called inside
   pallas_call for nesting grids. This is useful when you need to have separate
-  windowing strategies for example for communication vs. computation.
+  windowing strategies for communication and computation.
 
-  By default outputs are written to but `should_accumulate_out` can be used to
-  specify which outputs we should add to instead. This is so we can reduce
-  across pipeline calls within and across parent grid iterations.
+  The new argument `should_accumulate_out` can be used to specify which outputs
+  we should accumulate into automatically within and across pipeline
+  invocations.
 
   Args:
-    body: Pipeline body.
-    grid: Pallas grid.
-    in_specs: Input block specs.
-    out_specs: Output block specs.
-    should_accumulate_out: Prefix-pytree of out_specs specifying which should be
-      accumulated into with True.
+    body: pallas kernel to set up pipeline for.
+    grid: a pallas grid definition.
+    in_specs: input pallas block specs
+    out_specs: output pallas block specs
+    should_accumulate_out: booleans to indicate which outputs should be treated
+      as accumulators.
+    core_axis: optional int, indicates whether or not to partition the grid
+      along the core axis.
+    dimension_semantics: optional tuple of GridDimensionSemantics (e.g. PARALLEL
+      or ARBITRARY).
+  """
+  if any(not isinstance(d, (int, jax.Array)) for d in grid):
+    grid_types = tuple(type(d) for d in grid)
+    raise ValueError(
+        f"Grid must consist of Python integers and JAX Arrays: {grid_types}"
+    )
+  grid, grid_offsets = _partition_grid(grid, core_axis, dimension_semantics)
+
+  num_steps = _grid_size(grid)
+  if not isinstance(in_specs, (list, tuple)):
+    in_specs = (in_specs,)
+  if not isinstance(out_specs, (list, tuple)):
+    out_specs = (out_specs,)
+  if isinstance(in_specs, list):
+    in_specs = tuple(in_specs)
+  if isinstance(out_specs, list):
+    out_specs = tuple(out_specs)
+  should_accumulate_out = _broadcast_pytree_to(should_accumulate_out, out_specs)
+
+  def pipeline(
+    *refs: Any,
+    scratches=None,
+    allocations=None,
+    first_cycle: CondVal = True,
+    last_cycle: CondVal = True,
+    init_accumulators: CondVal = False,
+    prefetch=None,
+    postyeet=None,
+    schedule=None,
+  ):
+    """
+    Run the pipeline.
+
+    Args:
+      *ref_args: a list of pallas refs (or more generally a list of pytrees of
+        pallas refs)
+      scratches: scratch buffers for the inner kernel
+      allocations: a list of BufferedRefs, one corresponding to each ref
+      first_cycle: boolean indicating if this is the first invocation of the
+        inner pipeline cycle.
+      last_cycle: boolean indicating if this is the last invocation of the
+        inner pipeline cycle.
+      init_accumulators: whether to zero-init accumulators during this cycle.
+      prefetch: callback called as fn(*brefs, scheduler) that is used to fetch
+        the next cycle invocations first inputs.  Called during the inputs phase
+        in the final inner step.
+      postyeet: callback called as fn(*brefs, scheduler) that is used to finish
+        any writes or transfers from the last output of the previous cycle.
+        Called during the outputs phase in the first inner step.
+      schedule: manually specified pipeline schedules for brefs, None indicates
+        default schedule.
+    """
+    if scratches is None:
+      scratches = ()
+    if allocations is None:
+      # run with inline scoped allocations
+      return tpu_primitives.run_scoped(
+          lambda allocations: pipeline(
+              *refs,
+              scratches=scratches,
+              allocations=allocations,
+              first_cycle=first_cycle,
+              last_cycle=last_cycle,
+              init_accumulators=init_accumulators,
+              prefetch=prefetch,
+              postyeet=postyeet,
+              schedule=schedule,
+          ),
+          make_pipeline_allocations(
+              *refs,
+              in_specs=in_specs,
+              out_specs=out_specs,
+              should_accumulate_out=should_accumulate_out),
+      )
+    if isinstance(allocations, list):
+      allocations = tuple(allocations)
+    # Normalize custom schedule arguments.
+    if schedule is None:
+      schedule = map_brefs(lambda x: None, allocations)
+    if not isinstance(schedule, (list, tuple)):
+      schedule = map_brefs(lambda x: schedule, allocations)
+    if isinstance(schedule, list):
+      schedule = tuple(schedule)
+    schedule = map_brefs(
+        lambda _, x: get_pipeline_schedule(x), allocations, schedule)
+
+    def loop_body(step, _):
+      nonlocal allocations
+      scheduler = Scheduler(
+          step,
+          grid,
+          grid_offsets=grid_offsets,
+          first_cycle=first_cycle,
+          last_cycle=last_cycle,
+          init_accumulators=init_accumulators)
+
+      # prepare any local VMEM aliases
+      brefs = map_brefs(scheduler.alias_local_refs, allocations, refs)
+
+      # loop input handling phase
+      map_brefs(scheduler.initialize, brefs, refs, schedule)
+      map_brefs(scheduler.wait_in, brefs, refs, schedule)
+      map_brefs(scheduler.copy_in, brefs, refs, schedule)
+
+      # prefetch inputs for the *next* invocation of this pipeline
+      with jax.named_scope("ep_prefetch"):
+        if prefetch is not None:
+          lax.cond(step == num_steps - 1,
+                  lambda: prefetch(*brefs, scheduler),
+                  lambda: None)
+
+      # run the kernel!
+      current_refs = map_brefs(lambda x: x.current_ref, brefs)
+      with jax.named_scope("ep_run_kernel"):
+        with scheduler.grid_env():
+          body(*current_refs, *scratches)
+
+      # loop output handling phase
+      map_brefs(scheduler.wait_out, brefs, refs, schedule)
+      # handle writes for the *last* invocation of this pipeline's outputs
+      with jax.named_scope("ep_postyeet"):
+        if postyeet is not None:
+          lax.cond(step == 0,
+                  lambda: postyeet(*brefs, scheduler),
+                  lambda: None)
+      map_brefs(scheduler.copy_out, brefs, refs, schedule)
+      map_brefs(scheduler.finalize, brefs, refs, schedule)
+
+      return ()
+
+    # run pipeline
+    lax.fori_loop(0, num_steps, loop_body, ())
+
+  return pipeline
+
+
+def emit_pipeline_with_allocations(
+    body,
+    *,
+    grid,
+    in_specs=None,
+    out_specs=None,
+    should_accumulate_out=False,
+):
+  """Creates pallas pipeline and top-level allocation preparation functions.
+
+  Args:
+    body: pallas kernel to set up pipeline for.
+    grid: a pallas grid definition.
+    in_specs: input pallas block specs
+    out_specs: output pallas block specs
+    should_accumulate_out: booleans to indicate which outputs should be treated
+      as accumulators.
 
   Returns:
-    Wrapped pipelined body.
+    (emit_pipeline, make_allocations) function pair, where:
+    emit_pipeline is the pallas pipeline function.
+    make_allocations is a function to create buffered refs for the inner
+      pipeline that can be created at the top-level of a pallas call to be
+      reused across multiple invocations of the inner pipeline.
+
   """
-  return emit_pipeline_with_allocations(
+  make_allocations = functools.partial(make_pipeline_allocations,
+                    in_specs=in_specs,
+                    out_specs=out_specs,
+                    should_accumulate_out=should_accumulate_out)
+  pipeline = emit_pipeline(
       body,
       grid=grid,
       in_specs=in_specs,
       out_specs=out_specs,
-      should_accumulate_out=should_accumulate_out,
-  )[0]
+      should_accumulate_out=should_accumulate_out)
+
+  return pipeline, make_allocations

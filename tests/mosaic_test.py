@@ -14,9 +14,9 @@
 from absl.testing import absltest
 from jax._src import test_util as jtu
 
-from jax import config
+import jax
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class ImportTest(jtu.JaxTestCase):

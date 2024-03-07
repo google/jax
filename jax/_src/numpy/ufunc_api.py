@@ -16,10 +16,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 import math
 import operator
-from typing import Any, Callable
+from typing import Any
 
 import jax
 from jax._src.typing import Array, ArrayLike, DTypeLike
@@ -258,7 +259,7 @@ class ufunc:
     _, result = jax.lax.scan(scan_fun, (0, arr[0].astype(dtype)), None, length=arr.shape[0])
     return _moveaxis(result, 0, axis)
 
-  @implements(np.ufunc.accumulate, module="numpy.ufunc")
+  @implements(np.ufunc.at, module="numpy.ufunc")
   @partial(jax.jit, static_argnums=[0], static_argnames=['inplace'])
   def at(self, a: ArrayLike, indices: Any, b: ArrayLike | None = None, /, *,
          inplace: bool = True) -> Array:
@@ -354,7 +355,7 @@ def frompyfunc(func: Callable[..., Any], /, nin: int, nout: int,
   """Create a JAX ufunc from an arbitrary JAX-compatible scalar function.
 
   Args:
-    func : a callable that takes `nin` scalar arguments and return `nout` outputs.
+    func : a callable that takes `nin` scalar arguments and returns `nout` outputs.
     nin: integer specifying the number of scalar inputs
     nout: integer specifying the number of scalar outputs
     identity: (optional) a scalar specifying the identity of the operation, if any.

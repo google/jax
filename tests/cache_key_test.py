@@ -155,6 +155,23 @@ class CacheKeyTest(jtu.JaxTestCase):
         cache_key.get(computation2, devices, compile_options, backend),
     )
 
+  def test_different_device_assignment(self):
+    computation = jax.jit(lambda x, y: x + y).lower(1, 1).compiler_ir()
+    devices = np.array([[jax.local_devices()[0]]])
+    compile_options_1 = compiler.get_compile_options(
+        num_replicas=1, num_partitions=1, device_assignment=np.array([[0]])
+    )
+    compile_options_2 = compiler.get_compile_options(
+        num_replicas=1, num_partitions=1, device_assignment=np.array([[1]])
+    )
+    backend = xla_bridge.get_backend()
+    hash_1 = cache_key.get(computation, devices, compile_options_1, backend)
+    hash_2 = cache_key.get(computation, devices, compile_options_2, backend)
+    if backend.platform == "gpu":
+      self.assertEqual(hash_1, hash_2)
+    else:
+      self.assertNotEqual(hash_1, hash_2)
+
   @parameterized.parameters([False, True])
   def test_identical_computations_different_metadata(self, include_metadata):
     f = lambda x, y: lax.mul(lax.add(x, y), 2)

@@ -15,13 +15,12 @@ import itertools
 
 from absl.testing import absltest
 
+import jax
 from jax._src import test_util as jtu
 import jax.scipy.fft as jsp_fft
 import scipy.fft as osp_fft
 
-from jax import config
-
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 float_dtypes = jtu.dtypes.floating
 real_dtypes = float_dtypes + jtu.dtypes.integer + jtu.dtypes.boolean

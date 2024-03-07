@@ -142,9 +142,16 @@ def new_name_stack(name: str = '') -> NameStack:
   return name_stack
 
 
-class SourceInfo(NamedTuple):
+class SourceInfo:
   traceback: Traceback | None
   name_stack: NameStack
+
+  # It's slightly faster to use a class with __slots__ than a NamedTuple.
+  __slots__ = ['traceback', 'name_stack']
+
+  def __init__(self, traceback: Traceback | None, name_stack: NameStack):
+    self.traceback = traceback
+    self.name_stack = name_stack
 
   def replace(self, *, traceback: Traceback | None = None,
       name_stack: NameStack | None = None) -> SourceInfo:
@@ -188,7 +195,7 @@ def user_frames(source_info: SourceInfo) -> Iterator[Frame]:
   # frames, to allow testing this mechanism from tests.
   traceback = source_info.traceback
   code, lasti = traceback.raw_frames() if traceback else ([], [])
-  return (raw_frame_to_frame(code[i], lasti[i]) for i in range(len(code))  # type: ignore
+  return (raw_frame_to_frame(code[i], lasti[i]) for i in range(len(code))
           if is_user_filename(code[i].co_filename))
 
 @functools.lru_cache(maxsize=64)

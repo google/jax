@@ -13,10 +13,10 @@
 # limitations under the License.
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 import functools
 import re
-from typing import Any, Callable
+from typing import Any
 
 from jax._src import api
 from jax import lax
@@ -124,7 +124,7 @@ def _parse_input_dimensions(
     shapes.append(arg.shape[:ndim])
   broadcast_shape = lax.broadcast_shapes(*shapes)
   # TODO(mattjj): this code needs updating for dynamic shapes (hence ignore)
-  return broadcast_shape, dim_sizes  # type: ignore
+  return broadcast_shape, dim_sizes
 
 
 def _check_output_dims(

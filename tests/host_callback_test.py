@@ -14,7 +14,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import contextlib
+from collections.abc import Callable, Sequence
 from functools import partial
 import itertools
 import logging
@@ -22,7 +23,6 @@ import os
 import re
 import threading
 import time
-from typing import Callable
 import unittest
 from unittest import skip, SkipTest
 
@@ -30,7 +30,6 @@ from absl.testing import absltest
 
 import jax
 from jax import ad_checkpoint
-from jax import config
 from jax import dtypes
 from jax import lax
 from jax import numpy as jnp
@@ -42,11 +41,13 @@ from jax._src import xla_bridge
 from jax._src import test_util as jtu
 from jax._src.lib import xla_client
 
+from jax.experimental.host_callback import _deprecated_id_print as hcb_id_print
+
 xops = xla_client.ops
 
 import numpy as np
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class _TestingOutputStream:
@@ -91,8 +92,10 @@ testing_stream = _TestingOutputStream()
 
 def fun1(a):
   """Function used for several `id_tap` tests."""
-  y = hcb.id_print(a * 2., what="a * 2", output_stream=testing_stream)
-  y = hcb.id_print(y * 3., what="y * 3", output_stream=testing_stream, result=y)
+  y = hcb_id_print(a * 2., what="a * 2", output_stream=testing_stream,
+                   callback_flavor=hcb.CallbackFlavor.DEBUG)
+  y = hcb_id_print(y * 3., what="y * 3", output_stream=testing_stream, result=y,
+                   callback_flavor=hcb.CallbackFlavor.DEBUG)
   return y ** 2  # Some computation to make the gradient interesting
 
 
@@ -107,7 +110,7 @@ def maybe_print(do_print: bool,
                 device_index: int = 0):
   """Conditionally print on testing_string"""
   if do_print:
-    return hcb.id_print(
+    return hcb_id_print(
         arg,
         what=what,
         output_stream=testing_stream,
@@ -193,18 +196,13 @@ def helper_log_ir(name,
   logging.info(f"Optimized HLO[{name}]: {jax_optimized_hlo}")
 
 
-prev_xla_flags = None
-
+_exit_stack = contextlib.ExitStack()
 
 def setUpModule():
-  global prev_xla_flags
-  # This will control the CPU devices. On TPU we always have 2 devices
-  prev_xla_flags = jtu.set_host_platform_device_count(2)
+  _exit_stack.enter_context(jtu.set_host_platform_device_count(2))
 
-
-# Reset to previous configuration in case other test modules will be run.
 def tearDownModule():
-  prev_xla_flags()
+  _exit_stack.close()
 
 
 def assertMultiDeviceOutputEqual(tst: jtu.JaxTestCase,
@@ -233,15 +231,28 @@ def assertMultiDeviceOutputEqual(tst: jtu.JaxTestCase,
   return assertMultiLineStrippedEqual(tst, expected, what)
 
 
+class HostCallbackImportsTest(jtu.JaxTestCase):
+  @jtu.ignore_warning(
+      category=DeprecationWarning,
+      message="The host_callback APIs are deprecated")
+  def test_deprecated_imports(self):
+    if hasattr(hcb, "id_print"):
+      id_print = hcb.id_print
+      self.assertIs(id_print, hcb_id_print)
+
 class HostCallbackTapTest(jtu.JaxTestCase):
 
   def setUp(self):
-    super().setUp()
+    # skipping here skips teardown, so do this before super().setUp().
     if jtu.test_device_matches(["gpu"]) and jax.device_count() > 1:
       raise SkipTest("host_callback broken on multi-GPU platforms (#6447)")
     if xla_bridge.using_pjrt_c_api():
       raise SkipTest("host_callback not implemented in PJRT C API")
-
+    super().setUp()
+    self.enter_context(jtu.ignore_warning(
+      category=DeprecationWarning, message="The host_callback APIs are deprecated"))
+    self.enter_context(jtu.ignore_warning(
+      category=DeprecationWarning, message="backend and device argument"))
     testing_stream.reset()
     testing_stream._test_method_name = self._testMethodName
     self.old_flags = os.getenv("XLA_FLAGS", "")
@@ -252,6 +263,10 @@ class HostCallbackTapTest(jtu.JaxTestCase):
       xla_bridge.get_backend.cache_clear()
     hcb.barrier_wait("HostCallbackTapTest.tearDown")
     super().tearDown()
+
+  def supported_only_in_legacy_mode(self):
+    if not hcb._HOST_CALLBACK_LEGACY.value:
+      self.skipTest("Not supported when JAX_HOST_CALLBACK_LEGACY=False")
 
   def test_tap_eval(self):
     self.assertAllClose((5. * 2.) ** 2, fun1(5.))
@@ -264,7 +279,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_with_tuple_results(self):
     def func2(x):
-      x1, y1 = hcb.id_print((x * 2., x * 3.), output_stream=testing_stream)
+      x1, y1 = hcb_id_print((x * 2., x * 3.), output_stream=testing_stream)
       return x1 + y1
 
     self.assertEqual(3. * (2. + 3.), func2(3.))
@@ -275,7 +290,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_with_dict_results(self):
     def func2(x):
-      res = hcb.id_print(dict(a=x * 2., b=x * 3.), output_stream=testing_stream)
+      res = hcb_id_print(dict(a=x * 2., b=x * 3.), output_stream=testing_stream)
       return res["a"] + res["b"]
 
     self.assertEqual(3. * (2. + 3.), func2(3.))
@@ -285,7 +300,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_with_result(self):
     def func2(x):
-      x1 = hcb.id_print((x * 2., x * 3.), result=x * 4.,
+      x1 = hcb_id_print((x * 2., x * 3.), result=x * 4.,
                         output_stream=testing_stream)
       return x1
 
@@ -320,8 +335,9 @@ class HostCallbackTapTest(jtu.JaxTestCase):
                                  testing_stream.output)
 
   def test_tap_with_device(self):
+    self.supported_only_in_legacy_mode()
     def func2(x):
-      x1 = hcb.id_print((x * 2., x * 3.), result=x * 4.,
+      x1 = hcb_id_print((x * 2., x * 3.), result=x * 4.,
                         output_stream=testing_stream,
                         tap_with_device=True)
       return x1
@@ -335,34 +351,46 @@ class HostCallbackTapTest(jtu.JaxTestCase):
   def test_tap_eval_exception(self):
     if not hcb._HOST_CALLBACK_OUTFEED.value:
       raise SkipTest("TODO: implement error handling for customcall")
+
     # Simulate a tap error
     def tap_err(*args, **kwargs):
       raise ValueError("Some user message")
 
     def func(x):
-      x1 = hcb.id_print(x + 1, what="x1", output_stream=testing_stream)
+      x1 = hcb_id_print(x + 1, what="x1", output_stream=testing_stream)
       x2 = hcb.id_tap(tap_err, x1 + 1)
-      x3 = hcb.id_print(x2 + 1, what="x3", output_stream=testing_stream)
+      x3 = hcb_id_print(x2 + 1, what="x3", output_stream=testing_stream)
       return x3
 
-    with self.assertRaisesRegex(
-       hcb.CallbackException,
-       re.compile("There were exceptions during callback processing. Last one was:.*"
-                  "ValueError: Some user message", re.DOTALL)):
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      ctx = self.assertRaisesRegex(
+        hcb.CallbackException,
+        re.compile("There were exceptions during callback processing. Last one was:.*"
+                  "ValueError: Some user message", re.DOTALL))
+    else:
+      ctx = self.assertRaisesRegex(Exception, "Some user message")
+
+    with ctx:
       func(0)
       hcb.barrier_wait()
 
-    # We should have received everything before the error
-    assertMultiLineStrippedEqual(self, """
-        what: x1
-        1
-        what: x3
-        3""", testing_stream.output)
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      # We should have received everything before the error
+      assertMultiLineStrippedEqual(self, """
+          what: x1
+          1
+          what: x3
+          3""", testing_stream.output)
+    else:
+      # We should have received everything before the error
+      assertMultiLineStrippedEqual(self, """
+          what: x1
+          1""", testing_stream.output)
 
   def test_tap_empty(self):
     """Tap empty arrays."""
-    hcb.id_print((), output_stream=testing_stream)
-    hcb.id_print((1., np.ones((2, 0))), what="second", output_stream=testing_stream)
+    hcb_id_print((), output_stream=testing_stream)
+    hcb_id_print((1., np.ones((2, 0))), what="second", output_stream=testing_stream)
     hcb.barrier_wait()
     assertMultiLineStrippedEqual(self, """
         (  )
@@ -370,7 +398,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
         ( 1.00 [] )""", testing_stream.output)
 
   def test_tap_jit_simple(self):
-    jit_fun1 = jax.jit(lambda x: 3. * hcb.id_print(
+    jit_fun1 = jax.jit(lambda x: 3. * hcb_id_print(
         2. * x, what="here", output_stream=testing_stream))
     self.assertAllClose(6. * 5., jit_fun1(5.))
     hcb.barrier_wait()
@@ -380,7 +408,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_jit_no_invars(self):
     def func():  # jitted function does not take arguments
-      return hcb.id_print(42, output_stream=testing_stream)
+      return hcb_id_print(42, output_stream=testing_stream)
 
     self.assertAllClose(42, jax.jit(func)())
     hcb.barrier_wait()
@@ -389,7 +417,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_jit_multiple_invars(self):
     def func(x1, x2):
-      return hcb.id_print(x1 + x2, output_stream=testing_stream)
+      return hcb_id_print(x1 + x2, output_stream=testing_stream)
 
     self.assertAllClose(42, jax.jit(func)(40, 2))
     hcb.barrier_wait()
@@ -398,7 +426,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_jit_constant(self):
     def func(x):
-      return hcb.id_print(42, result=x, output_stream=testing_stream)
+      return hcb_id_print(42, result=x, output_stream=testing_stream)
 
     self.assertAllClose(5, jax.jit(func)(5))
     hcb.barrier_wait()
@@ -407,13 +435,17 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_jit_sequence1(self):
     def func(x):
-      x1 = hcb.id_print(x, where="1", output_stream=testing_stream)
-      return hcb.id_print(x1 + 1, where="2", output_stream=testing_stream)
+      x1 = hcb_id_print(x, where="1", output_stream=testing_stream)
+      return hcb_id_print(x1 + 1, where="2", output_stream=testing_stream)
 
     logging.info("%s: %s", self._testMethodName,
                  jax.make_jaxpr(func)(1))
-    logging.info("%s: %s", self._testMethodName,
-                 jax.xla_computation(func, backend=jtu.device_under_test())(1).as_hlo_text())
+    logging.info(
+        "%s: %s",
+        self._testMethodName,
+        jax.jit(func)
+        .trace(1)
+        .lower(lowering_platforms=(jtu.device_under_test(),)).as_text("hlo"))
     self.assertEqual(2, jax.jit(func)(1))
     hcb.barrier_wait()
 
@@ -427,8 +459,8 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     """A sequence of JIT."""
 
     def func(x):
-      x1 = hcb.id_print(x, where="1", output_stream=testing_stream)
-      x2 = hcb.id_print(x1 + 1, where="2", output_stream=testing_stream)
+      x1 = hcb_id_print(x, where="1", output_stream=testing_stream)
+      x2 = hcb_id_print(x1 + 1, where="2", output_stream=testing_stream)
       return x2
 
     self.assertEqual(2, jax.jit(func)(1))
@@ -448,8 +480,8 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     """We can id_print even if we don't use the result."""
 
     def func(x):
-      hcb.id_print(x, where="1", output_stream=testing_stream)
-      hcb.id_print(x + 1, where="2", output_stream=testing_stream)
+      hcb_id_print(x, where="1", output_stream=testing_stream)
+      hcb_id_print(x + 1, where="2", output_stream=testing_stream)
       return x + 1
 
     self.assertEqual(2, jax.jit(func)(1))
@@ -467,14 +499,14 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_jit_nested(self):
     def func(x):
-      x1 = hcb.id_print(x, where="1", output_stream=testing_stream)
+      x1 = hcb_id_print(x, where="1", output_stream=testing_stream)
 
       def func_nested(x):
-        x2 = hcb.id_print(x + 1, where="nested", output_stream=testing_stream)
+        x2 = hcb_id_print(x + 1, where="nested", output_stream=testing_stream)
         return x2
 
       x3 = jax.jit(func_nested)(x1)
-      return hcb.id_print(x3 + 1, where="3", output_stream=testing_stream)
+      return hcb_id_print(x3 + 1, where="3", output_stream=testing_stream)
 
     self.assertEqual(3, jax.jit(func)(1))
     hcb.barrier_wait()
@@ -488,11 +520,12 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_jit_devices(self):
     """Running on multiple devices."""
+    self.supported_only_in_legacy_mode()
     logging.info("%s: has devices %s", self._testMethodName, local_devices())
 
     def func(x, device_id):
-      x1 = hcb.id_print(x, dev=str(device_id), output_stream=testing_stream)
-      x2 = hcb.id_print(x1 + 1, dev=str(device_id), output_stream=testing_stream)
+      x1 = hcb_id_print(x, dev=str(device_id), output_stream=testing_stream)
+      x2 = hcb_id_print(x1 + 1, dev=str(device_id), output_stream=testing_stream)
       return x2
 
     for d in local_devices():
@@ -614,16 +647,16 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     """A conditional"""
 
     def func(x):
-      x1 = hcb.id_print(x, where="1", output_stream=testing_stream)
-      x2 = hcb.id_print(x1 + 1, where="2", output_stream=testing_stream)
+      x1 = hcb_id_print(x, where="1", output_stream=testing_stream)
+      x2 = hcb_id_print(x1 + 1, where="2", output_stream=testing_stream)
 
       x4 = lax.cond(x % 2 == 0,
-                    lambda x: hcb.id_print(x, where="cond_t",
+                    lambda x: hcb_id_print(x, where="cond_t",
                                            output_stream=testing_stream),
-                    lambda x: hcb.id_print(-1, where="cond_f", result=x,
+                    lambda x: hcb_id_print(-1, where="cond_f", result=x,
                                            output_stream=testing_stream),
                     x2 + 1)
-      x5 = hcb.id_print(x4 + 1, where="end", output_stream=testing_stream)
+      x5 = hcb_id_print(x4 + 1, where="end", output_stream=testing_stream)
       return x5
 
     transform = jax.jit if with_jit else lambda f: f
@@ -642,21 +675,21 @@ class HostCallbackTapTest(jtu.JaxTestCase):
   @jtu.sample_product(with_jit=[True, False])
   def test_tap_while_cond(self, with_jit=False):
     def func(x):
-      x1 = hcb.id_print(x, where="1", output_stream=testing_stream)
-      x2 = hcb.id_print(x1 + 1, where="2", output_stream=testing_stream)
+      x1 = hcb_id_print(x, where="1", output_stream=testing_stream)
+      x2 = hcb_id_print(x1 + 1, where="2", output_stream=testing_stream)
 
       def body(x):
-        x3 = hcb.id_print(x, where="w_b_1", output_stream=testing_stream)
+        x3 = hcb_id_print(x, where="w_b_1", output_stream=testing_stream)
         x4 = lax.cond(x % 2 == 0,
-                      lambda x: hcb.id_print(x, where="w_b_t",
+                      lambda x: hcb_id_print(x, where="w_b_t",
                                              output_stream=testing_stream),
-                      lambda x: hcb.id_print(-1, where="w_b_f",
+                      lambda x: hcb_id_print(-1, where="w_b_f",
                                              result=x, output_stream=testing_stream),
                       x3 + 1)
-        return hcb.id_print(x4, where="w_b_2", output_stream=testing_stream)
+        return hcb_id_print(x4, where="w_b_2", output_stream=testing_stream)
 
       x10 = lax.while_loop(lambda x: x <= 3, body, x2)
-      res = hcb.id_print(x10, where="end", output_stream=testing_stream)
+      res = hcb_id_print(x10, where="end", output_stream=testing_stream)
       return res
 
     transform = jax.jit if with_jit else lambda f: f
@@ -686,14 +719,14 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     """While with printing in the conditional."""
 
     def func(x):
-      x1 = hcb.id_print(x, where="1")
-      x10 = lax.while_loop(lambda x: hcb.id_print(x < 3,
+      x1 = hcb_id_print(x, where="1")
+      x10 = lax.while_loop(lambda x: hcb_id_print(x < 3,
                                                   where="w_p",
                                                   output_stream=testing_stream),
-                           lambda x: hcb.id_print(x + 1, where="w_b",
+                           lambda x: hcb_id_print(x + 1, where="w_b",
                                                   output_stream=testing_stream),
                            x1)
-      res = hcb.id_print(x10, where="3", output_stream=testing_stream)
+      res = hcb_id_print(x10, where="3", output_stream=testing_stream)
       return res
 
     self.assertEqual(3, jax.jit(func)(1))
@@ -716,19 +749,19 @@ class HostCallbackTapTest(jtu.JaxTestCase):
   @jtu.sample_product(with_jit=[True, False])
   def test_tap_scan_cond(self, with_jit=True):
     def func(x):
-      x1 = hcb.id_print(x, where="1", output_stream=testing_stream)
-      x2 = hcb.id_print(x1 + 1, where="2", output_stream=testing_stream)
+      x1 = hcb_id_print(x, where="1", output_stream=testing_stream)
+      x2 = hcb_id_print(x1 + 1, where="2", output_stream=testing_stream)
 
       def body(c, x):
-        x3 = hcb.id_print(x, where="s_1", output_stream=testing_stream)
+        x3 = hcb_id_print(x, where="s_1", output_stream=testing_stream)
         x4 = lax.cond(x % 2 == 0,
-                      lambda x: hcb.id_print(x, where="s_t", output_stream=testing_stream),
-                      lambda x: hcb.id_print(-1, where="s_f", result=x, output_stream=testing_stream),
+                      lambda x: hcb_id_print(x, where="s_t", output_stream=testing_stream),
+                      lambda x: hcb_id_print(-1, where="s_f", result=x, output_stream=testing_stream),
                       x3 + 1)
-        return (c, hcb.id_print(x4, where="s_2", output_stream=testing_stream))
+        return (c, hcb_id_print(x4, where="s_2", output_stream=testing_stream))
 
       _, x10 = lax.scan(body, x2, jnp.arange(3))
-      res = hcb.id_print(x10, where="10", output_stream=testing_stream)
+      res = hcb_id_print(x10, where="10", output_stream=testing_stream)
       return res
 
     if with_jit:
@@ -777,7 +810,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
       args = [jnp.arange(np.prod(shape), dtype=dtype).reshape(shape)]
     if nr_args > 1:
       args = args * nr_args
-    jit_fun1 = jax.jit(lambda xs: hcb.id_print(
+    jit_fun1 = jax.jit(lambda xs: hcb_id_print(
         xs,
         a_new_test="************",
         testcase_name=f"{shape=}_{dtype=}_{nr_args=}"))
@@ -787,11 +820,11 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_jit_large(self):
     arg = jnp.arange(10000, dtype=jnp.int32).reshape((10, 10, 5, -1))
-    jax.jit(hcb.id_print)(arg)
+    jax.jit(hcb_id_print)(arg)
 
   def test_tap_jit_several_together(self):
     arg = jnp.arange(50, dtype=jnp.int32).reshape((10, 5))
-    jax.jit(lambda x, y: hcb.id_print((x, y, x * 2)))(arg, jnp.ones(100, dtype=jnp.int32))
+    jax.jit(lambda x, y: hcb_id_print((x, y, x * 2)))(arg, jnp.ones(100, dtype=jnp.int32))
 
   def test_tap_jit_interleaving(self):
     # Several jit's without data dependencies; they may interfere
@@ -825,24 +858,29 @@ class HostCallbackTapTest(jtu.JaxTestCase):
       raise NotImplementedError
 
     def func(x):
-      x1 = hcb.id_print(x + 1, what="x1", output_stream=testing_stream)
+      x1 = hcb_id_print(x + 1, what="x1", output_stream=testing_stream)
       x2 = hcb.id_tap(tap_err, x1 + 1)
-      x3 = hcb.id_print(x2 + 1, what="x3", output_stream=testing_stream)
+      x3 = hcb_id_print(x2 + 1, what="x3", output_stream=testing_stream)
       return x3
 
-    res = jax.jit(func)(0)  # No error yet
-    with self.assertRaises(hcb.CallbackException):
-      hcb.barrier_wait()
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      res = jax.jit(func)(0)  # No error yet
+      with self.assertRaises(hcb.CallbackException):
+        hcb.barrier_wait()
 
-    # Even though the receiver thread raised, the main thread should still
-    # return 3.
-    self.assertEqual(3, res)
-    # We should have received all others
-    assertMultiLineStrippedEqual(self, """
-        what: x1
-        1
-        what: x3
-        3""", testing_stream.output)
+      # Even though the receiver thread raised, the main thread should still
+      # return 3.
+      self.assertEqual(3, res)
+      # We should have received all others
+      assertMultiLineStrippedEqual(self, """
+          what: x1
+          1
+          what: x3
+          3""", testing_stream.output)
+    else:
+      with self.assertRaisesRegex(Exception, "NotImplementedError"):
+        res = jax.jit(func)(0)
+        hcb.barrier_wait()
 
   def test_tap_while(self):
     """Executing while, even without JIT uses compiled code"""
@@ -851,7 +889,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     def func(x):
       return lax.while_loop(
           lambda c: c[1] < 5,
-          lambda c: (y, hcb.id_print(c[1], output_stream=testing_stream) + 1),
+          lambda c: (y, hcb_id_print(c[1], output_stream=testing_stream) + 1),
           (x, 1))
 
     func(y)
@@ -877,8 +915,9 @@ class HostCallbackTapTest(jtu.JaxTestCase):
   def test_tap_grad_primal_unused(self):
     # The output of id_print is not needed for backwards pass
     def func(x):
-      return 2. * hcb.id_print(x * 3., what="x * 3",
-                               output_stream=testing_stream)
+      return 2. * hcb_id_print(x * 3., what="x * 3",
+                               output_stream=testing_stream,
+                               callback_flavor=hcb.CallbackFlavor.DEBUG)
 
     grad_func = jax.grad(func)
     arg = jnp.float32(5.)
@@ -886,21 +925,22 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     # making the Jaxpr does not print anything
     hcb.barrier_wait()
 
-    treedef = jax.tree.structure(arg)
-    assertMultiLineStrippedEqual(
-        self, f"""
-      {{ lambda ; a:f32[]. let
-          b:f32[] = mul a 3.00
-          c:f32[] = outside_call[
-            arg_treedef={treedef}
-            callback=...
-            device_index=0
-            identity=True
-          ] b
-          _:f32[] = mul 2.00 c
-          d:f32[] = mul 2.00 1.00
-          e:f32[] = mul d 3.00
-        in (e,) }}""", jaxpr)
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      treedef = jax.tree.structure(arg)
+      assertMultiLineStrippedEqual(
+          self, f"""
+        {{ lambda ; a:f32[]. let
+            b:f32[] = mul a 3.00
+            c:f32[] = outside_call[
+              arg_treedef={treedef}
+              callback=...
+              device_index=0
+              identity=True
+            ] b
+            _:f32[] = mul 2.00 c
+            d:f32[] = mul 2.00 1.00
+            e:f32[] = mul d 3.00
+          in (e,) }}""", jaxpr)
     assertMultiLineStrippedEqual(self, "", testing_stream.output)
     testing_stream.reset()
 
@@ -914,9 +954,11 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_grad_simple(self):
     def func(x):
-      y = hcb.id_print(x * 2., what="x * 2", output_stream=testing_stream)
-      return x * hcb.id_print(y * 3., what="y * 3",
-                              output_stream=testing_stream)
+      y = hcb_id_print(x * 2., what="x * 2", output_stream=testing_stream,
+                       callback_flavor=hcb.CallbackFlavor.DEBUG)
+      return x * hcb_id_print(y * 3., what="y * 3",
+                              output_stream=testing_stream,
+                              callback_flavor=hcb.CallbackFlavor.DEBUG)
 
     grad_func = jax.grad(func)
 
@@ -931,7 +973,8 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_grad_grad(self):
     def func(x):
-      y = hcb.id_print(x * 2., what="x * 2", output_stream=testing_stream)
+      y = hcb_id_print(x * 2., what="x * 2", output_stream=testing_stream,
+                       callback_flavor=hcb.CallbackFlavor.DEBUG)
       return x * (y * 3.)
 
     grad_func = jax.grad(jax.grad(func))
@@ -950,9 +993,10 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_grad_pytree(self):
     def func(x):
-      x4, x5 = hcb.id_print((x * 2., x * 3.), what="pair",
+      x4, x5 = hcb_id_print((x * 2., x * 3.), what="pair",
                             result=(x * 4., x * 5.),
-                            output_stream=testing_stream)
+                            output_stream=testing_stream,
+                            callback_flavor=hcb.CallbackFlavor.DEBUG)
       return x4 + 2. * x5
 
     x = jnp.float32(5.)
@@ -967,15 +1011,18 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_jvp_float0(self):
     def f(x, yint):
-      x, yint = hcb.id_tap(lambda arg, _: arg, (x, yint))
+      x, yint = hcb.id_tap(lambda arg, _: arg, (x, yint),
+                           callback_flavor=hcb.CallbackFlavor.DEBUG)
       return x * yint
 
     res = jax.jvp(f, (2., 3), (0.2, np.zeros((), dtypes.float0)))
     self.assertAllClose((6., 0.6), res)
 
   def test_tap_grad_float0(self):
+
     def func(x, yint):
-      x, yint = hcb.id_print((x, yint), what="pair", output_stream=testing_stream)
+      x, yint = hcb_id_print((x, yint), what="pair", output_stream=testing_stream,
+                             callback_flavor=hcb.CallbackFlavor.DEBUG)
       return x * yint.astype(x.dtype)
 
     grad_func = jax.grad(func)
@@ -993,7 +1040,8 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     x = (np.array([.7, .8], dtype=np.float32),
          np.array([11, 12, 13], dtype=np.int32))
     def f_jax(x):
-      x = hcb.id_print(x, result=x, output_stream=testing_stream)  # result= is important
+      x = hcb_id_print(x, result=x, output_stream=testing_stream,
+                       callback_flavor=hcb.CallbackFlavor.DEBUG)  # result= is important
       return (3. * x[0], x[1])
 
     def f_jax_vjp(x):
@@ -1015,7 +1063,8 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     x = (np.array([.7, .8], dtype=np.float32),
          np.array([11, 12, 13], dtype=np.int32))
     def f_jax(x):
-      x = hcb.id_print(x, result=x, output_stream=testing_stream)  # result= is important
+      x = hcb_id_print(x, result=x, output_stream=testing_stream,
+                       callback_flavor=hcb.CallbackFlavor.DEBUG)  # result= is important
       return (jnp.sin(x[0]), x[1])
 
     def wrap_vjp(f, args, res_f_of_args):
@@ -1059,32 +1108,52 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     vargs = jnp.array([jnp.float32(4.), jnp.float32(5.)])
     vmap_fun1(vargs)
     hcb.barrier_wait()
-    assertMultiLineStrippedEqual(self, """
-        transforms: [('batch', {'batch_dims': (0,)})] what: a * 2
-        [ 8.00 10.00]
-        transforms: [('batch', {'batch_dims': (0,)})] what: y * 3
-        [24.00 30.00]""", testing_stream.output)
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      assertMultiLineStrippedEqual(self, """
+          transforms: [('batch', {'batch_dims': (0,)})] what: a * 2
+          [ 8.00 10.00]
+          transforms: [('batch', {'batch_dims': (0,)})] what: y * 3
+          [24.00 30.00]""", testing_stream.output)
+    else:
+      assertMultiLineStrippedEqual(self, """
+          what: a * 2
+          8.00
+          what: a * 2
+          10.00
+          what: y * 3
+          24.00
+          what: y * 3
+          30.00
+      """, testing_stream.output)
 
   def test_tap_vmap_not_batched(self):
     x = 3.
 
     def func(y):
       # x is not mapped, y is mapped
-      _, y = hcb.id_print((x, y), output_stream=testing_stream)
+      _, y = hcb_id_print((x, y), output_stream=testing_stream,
+                          callback_flavor=hcb.CallbackFlavor.DEBUG)
       return x + y
 
     vmap_func = jax.vmap(func)
     vargs = jnp.array([jnp.float32(4.), jnp.float32(5.)])
     _ = vmap_func(vargs)
     hcb.barrier_wait()
-    assertMultiLineStrippedEqual(self, """
-      transforms: [('batch', {'batch_dims': (None, 0)})]
-      ( 3.00 [4.00 5.00] )""", testing_stream.output)
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      assertMultiLineStrippedEqual(self, """
+        transforms: [('batch', {'batch_dims': (None, 0)})]
+        ( 3.00 [4.00 5.00] )""", testing_stream.output)
+    else:
+      assertMultiLineStrippedEqual(self, """
+        ( 3.00 4.00 )
+        ( 3.00 5.00 )
+        """, testing_stream.output)
 
   def test_tap_vmap_vmap(self):
     # A 2D tensor with x[i, j] = i + j using 2 vmap
     def sum(x, y):
-      return hcb.id_print(x + y, output_stream=testing_stream)
+      return hcb_id_print(x + y, output_stream=testing_stream,
+                          callback_flavor=hcb.CallbackFlavor.DEBUG)
 
     def sum_rows(xv, y):
       return jax.vmap(sum, in_axes=(0, None))(xv, y)
@@ -1097,22 +1166,44 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     # assertMultiLineStrippedEqual(self, "", str(jax.make_jaxpr(sum_all)(xv, yv)))
     _ = sum_all(xv, yv)
     hcb.barrier_wait()
-    assertMultiLineStrippedEqual(self, """
-        transforms: [('batch', {'batch_dims': (0,)}), ('batch', {'batch_dims': (0,)})]
-        [[0 1 2 3 4]
-        [1 2 3 4 5]
-        [2 3 4 5 6]]""", testing_stream.output)
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      assertMultiLineStrippedEqual(self, """
+          transforms: [('batch', {'batch_dims': (0,)}), ('batch', {'batch_dims': (0,)})]
+          [[0 1 2 3 4]
+          [1 2 3 4 5]
+          [2 3 4 5 6]]""", testing_stream.output)
+    else:
+      assertMultiLineStrippedEqual(self, """
+          0
+          1
+          2
+          1
+          2
+          3
+          2
+          3
+          4
+          3
+          4
+          5
+          4
+          5
+          6
+      """, testing_stream.output)
 
   def test_tap_vmap_while(self):
     """Vmap of while."""
 
     def func(x):
       # like max(x, 2)
-      x1 = hcb.id_print(x, where="before:x", output_stream=testing_stream)
+      x1 = hcb_id_print(x, where="before:x", output_stream=testing_stream,
+                        callback_flavor=hcb.CallbackFlavor.DEBUG)
       x2 = lax.while_loop(
-          lambda x: x < 2, lambda x: hcb.id_print(
-              x + 1, where="body:x+1", output_stream=testing_stream), x1)
-      res = hcb.id_print(x2, where="after:x", output_stream=testing_stream)
+          lambda x: x < 2, lambda x: hcb_id_print(
+              x + 1, where="body:x+1", output_stream=testing_stream,
+              callback_flavor=hcb.CallbackFlavor.DEBUG), x1)
+      res = hcb_id_print(x2, where="after:x", output_stream=testing_stream,
+                         callback_flavor=hcb.CallbackFlavor.DEBUG)
       return res
 
     inputs = np.arange(5, dtype=np.int32)
@@ -1121,72 +1212,93 @@ class HostCallbackTapTest(jtu.JaxTestCase):
         jax.jit(jax.vmap(func))(inputs),
         check_dtypes=False)
     hcb.barrier_wait()
-    assertMultiLineStrippedEqual(
-        self, """
-        transforms: [('batch', {'batch_dims': (0,)})] where: before:x
-        [0 1 2 3 4]
-        transforms: [('batch', {'batch_dims': (0,)})] where: body:x+1
-        [1 2 3 4 5]
-        transforms: [('batch', {'batch_dims': (0,)})] where: body:x+1
-        [2 3 3 4 5]
-        transforms: [('batch', {'batch_dims': (0,)})] where: after:x
-        [2 2 2 3 4]""", testing_stream.output)
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      assertMultiLineStrippedEqual(
+          self, """
+          transforms: [('batch', {'batch_dims': (0,)})] where: before:x
+          [0 1 2 3 4]
+          transforms: [('batch', {'batch_dims': (0,)})] where: body:x+1
+          [1 2 3 4 5]
+          transforms: [('batch', {'batch_dims': (0,)})] where: body:x+1
+          [2 3 3 4 5]
+          transforms: [('batch', {'batch_dims': (0,)})] where: after:x
+          [2 2 2 3 4]""", testing_stream.output)
+    else:
+      pass  # order of vmaps is not guaranteed
 
   def test_tap_vmap_while_tap_cond(self):
     """Vmap of while, with a tap in the conditional."""
 
     def func(x):
       # like max(x, 2)
-      x1 = hcb.id_print(x, where="1", output_stream=testing_stream)
-      x2 = lax.while_loop(lambda x: hcb.id_print(x < 2, where="w_c",
-                                                 output_stream=testing_stream),
-                          lambda x: hcb.id_print(x + 1, where="w_b",
-                                                 output_stream=testing_stream),
+      x1 = hcb_id_print(x, where="1", output_stream=testing_stream,
+                        callback_flavor=hcb.CallbackFlavor.DEBUG)
+      x2 = lax.while_loop(lambda x: hcb_id_print(x < 2, where="w_c",
+                                                 output_stream=testing_stream,
+                                                 callback_flavor=hcb.CallbackFlavor.DEBUG),
+                          lambda x: hcb_id_print(x + 1, where="w_b",
+                                                 output_stream=testing_stream,
+                                                 callback_flavor=hcb.CallbackFlavor.DEBUG),
                           x1)
-      res = hcb.id_print(x2, where="3", output_stream=testing_stream)
+      res = hcb_id_print(x2, where="3", output_stream=testing_stream,
+                         callback_flavor=hcb.CallbackFlavor.DEBUG)
       return res
 
     inputs = np.arange(5, dtype=np.int32)
     res = jax.jit(jax.vmap(func))(inputs)
     hcb.barrier_wait()
     self.assertAllClose(np.array([2, 2, 2, 3, 4]), res, check_dtypes=False)
-    assertMultiLineStrippedEqual(self, """
-        transforms: [('batch', {'batch_dims': (0,)})] where: 1
-        [0 1 2 3 4]
-        transforms: [('batch', {'batch_dims': (0,)})] where: w_c
-        [ True  True False False False]
-        transforms: [('batch', {'batch_dims': (0,)})] where: w_b
-        [1 2 3 4 5]
-        transforms: [('batch', {'batch_dims': (0,)})] where: w_c
-        [ True False False False False]
-        transforms: [('batch', {'batch_dims': (0,)})] where: w_b
-        [2 3 3 4 5]
-        transforms: [('batch', {'batch_dims': (0,)})] where: w_c
-        [False False False False False]
-        transforms: [('batch', {'batch_dims': (0,)})] where: 3
-        [2 2 2 3 4]""", testing_stream.output)
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      assertMultiLineStrippedEqual(self, """
+          transforms: [('batch', {'batch_dims': (0,)})] where: 1
+          [0 1 2 3 4]
+          transforms: [('batch', {'batch_dims': (0,)})] where: w_c
+          [ True  True False False False]
+          transforms: [('batch', {'batch_dims': (0,)})] where: w_b
+          [1 2 3 4 5]
+          transforms: [('batch', {'batch_dims': (0,)})] where: w_c
+          [ True False False False False]
+          transforms: [('batch', {'batch_dims': (0,)})] where: w_b
+          [2 3 3 4 5]
+          transforms: [('batch', {'batch_dims': (0,)})] where: w_c
+          [False False False False False]
+          transforms: [('batch', {'batch_dims': (0,)})] where: 3
+          [2 2 2 3 4]""", testing_stream.output)
+    else:
+      pass  # order of vmap is not guaranteed
 
   def test_tap_transforms_doc(self):
     # Examples from the documentation
     def power3(x):
       y = x * x
       # Print both 'x' and 'x^2'. Must pack as a tuple.
-      hcb.id_print((x, y), what="x,x^2", output_stream=testing_stream)
+      hcb_id_print((x, y), what="x,x^2", output_stream=testing_stream,
+                   callback_flavor=hcb.CallbackFlavor.DEBUG)
       return y * x
 
     print(f"impl = {power3(3.)}")
     hcb.barrier_wait()
-    expected = """
-        what: x,x^2
-       ( 3. 9. )"""
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      expected = """
+            what: x,x^2
+           ( 3. 9. )"""
+    else:
+      expected = """
+            what: x,x^2
+           ( 3.0 9.0 )"""
     self.assertMultiLineStrippedEqual(expected, testing_stream.output)
     testing_stream.reset()
 
     print(f"jvp = {jax.jvp(power3, (3.,), (0.1,))}")
     hcb.barrier_wait()
-    expected = """
-         what: x,x^2
-         ( 3. 9. )"""
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      expected = """
+            what: x,x^2
+           ( 3. 9. )"""
+    else:
+      expected = """
+            what: x,x^2
+           ( 3.0 9.0 )"""
     self.assertMultiLineStrippedEqual(expected, testing_stream.output)
     testing_stream.reset()
 
@@ -1197,32 +1309,41 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     @print_tangents.defjvp
     def print_tangents_jvp(primals, tangents):
       arg_dot, = tangents
-      hcb.id_print(arg_dot, what="tangents", output_stream=testing_stream)
+      hcb_id_print(arg_dot, what="tangents", output_stream=testing_stream,
+                   callback_flavor=hcb.CallbackFlavor.DEBUG)
       return primals, tangents
 
     def power3_with_tangents(x):
       y = x * x
       # Print both 'x' and 'x^2'. Must pack as a tuple.
-      hcb.id_print((x, y), what="x,x^2", output_stream=testing_stream)
+      hcb_id_print((x, y), what="x,x^2", output_stream=testing_stream,
+                   callback_flavor=hcb.CallbackFlavor.DEBUG)
       print_tangents((x, y))
       return y * x
 
     print(f"jvp = {jax.jvp(power3_with_tangents, (3.,), (0.1,))}")
     hcb.barrier_wait()
-    expected = """
-      what: x,x^2
-      ( 3. 9. )
-      what: tangents
-      ( 0.1 0.6 )"""
-    self.assertMultiLineStrippedEqual(expected, testing_stream.output)
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      expected = """
+        what: x,x^2
+        ( 3. 9. )
+        what: tangents
+        ( 0.1 0.6 )"""
+      self.assertMultiLineStrippedEqual(expected, testing_stream.output)
+
     testing_stream.reset()
 
     print(f"grad = {jax.grad(power3)(3.)}")
     hcb.barrier_wait()
     # Only the primals by default
-    expected = """
-       what: x,x^2
-       ( 3. 9. )"""
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      expected = """
+         what: x,x^2
+         ( 3. 9. )"""
+    else:
+      expected = """
+         what: x,x^2
+         ( 3.0 9.0 )"""
     self.assertMultiLineStrippedEqual(expected, testing_stream.output)
     testing_stream.reset()
 
@@ -1236,7 +1357,8 @@ class HostCallbackTapTest(jtu.JaxTestCase):
       return print_cotangents(arg), None
     # f_bwd: (residual, CT b) -> [CT a]
     def print_cotangents_bwd(residual, ct_b):
-      hcb.id_print(ct_b, what="cotangents", output_stream=testing_stream)
+      hcb_id_print(ct_b, what="cotangents", output_stream=testing_stream,
+                   callback_flavor=hcb.CallbackFlavor.DEBUG)
       return ct_b,
 
     print_cotangents.defvjp(print_cotangents_fwd, print_cotangents_bwd)
@@ -1244,18 +1366,26 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     def power3_with_cotangents(x):
       y = x * x
       # Print both 'x' and 'x^2'. Must pack as a tuple.
-      hcb.id_print((x, y), what="x,x^2", output_stream=testing_stream)
+      hcb_id_print((x, y), what="x,x^2", output_stream=testing_stream,
+                   callback_flavor=hcb.CallbackFlavor.DEBUG)
       # Must use the output of print_cotangents
       (x1, y1) = print_cotangents((x, y))
       return y1 * x1
 
     print(f"grad = {jax.grad(power3_with_cotangents)(3.)}")
     hcb.barrier_wait()
-    expected = """
-      what: x,x^2
-      ( 3. 9. )
-      what: cotangents
-      ( 9. 3. )"""
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      expected = """
+        what: x,x^2
+        ( 3. 9. )
+        what: cotangents
+        ( 9. 3. )"""
+    else:
+      expected = """
+        what: x,x^2
+        ( 3.0 9.0 )
+        what: cotangents
+        ( 9.0 3.0 )"""
     self.assertMultiLineStrippedEqual(expected, testing_stream.output)
     testing_stream.reset()
 
@@ -1263,50 +1393,89 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
     print(f"vmap = {jax.vmap(power3)(np.array([2., 3.]))}")
     hcb.barrier_wait()
-    expected = """
-       transforms: [('batch', {'batch_dims': (0, 0)})] what: x,x^2
-       ( [2. 3.] [4. 9.] )"""
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      expected = """
+         transforms: [('batch', {'batch_dims': (0, 0)})] what: x,x^2
+         ( [2. 3.] [4. 9.] )"""
+    else:
+      expected = """
+        what: x,x^2
+        ( 2.0 4.0 )
+        what: x,x^2
+        ( 3.0 9.0 )
+        """
     self.assertMultiLineStrippedEqual(expected, testing_stream.output)
     testing_stream.reset()
 
     print(f"vmap o grad {jax.vmap(jax.grad(power3))(np.array([2., 3.]))}")
     hcb.barrier_wait()
-    expected = """
-       transforms: [('batch', {'batch_dims': (0, 0)})] what: x,x^2
-       ( [2. 3.] [4. 9.] )"""
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      expected = """
+         transforms: [('batch', {'batch_dims': (0, 0)})] what: x,x^2
+         ( [2. 3.] [4. 9.] )"""
+    else:
+      expected = """
+        what: x,x^2
+        ( 2.0 4.0 )
+        what: x,x^2
+        ( 3.0 9.0 )
+        """
     self.assertMultiLineStrippedEqual(expected, testing_stream.output)
     testing_stream.reset()
 
     print(f"vmap o grad {jax.vmap(jax.grad(power3_with_cotangents))(np.array([2., 3.]))}")
     hcb.barrier_wait()
-    expected = """
-      transforms: [('batch', {'batch_dims': (0, 0)})] what: x,x^2
-      ( [2. 3.] [4. 9.] )
-      transforms: [('batch', {'batch_dims': (0, 0)})] what: cotangents
-      ( [4. 9.] [2. 3.] )"""
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      expected = """
+        transforms: [('batch', {'batch_dims': (0, 0)})] what: x,x^2
+        ( [2. 3.] [4. 9.] )
+        transforms: [('batch', {'batch_dims': (0, 0)})] what: cotangents
+        ( [4. 9.] [2. 3.] )"""
+    else:
+      expected = """
+        what: x,x^2
+        ( 2.0 4.0 )
+        what: x,x^2
+        ( 3.0 9.0 )
+        what: cotangents
+        ( 4.0 2.0 )
+        what: cotangents
+        ( 9.0 3.0 )
+        """
     self.assertMultiLineStrippedEqual(expected, testing_stream.output)
     testing_stream.reset()
 
     print(f"grad o remat = {jax.grad(lambda x: power3(ad_checkpoint.checkpoint(power3)(x)))(3.)}")
     hcb.barrier_wait()
-    expected = """
-      what: x,x^2
-      ( 3. 9. )
-      what: x,x^2
-      ( 27. 729. )
-      what: x,x^2
-      ( 3. 9. )"""
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      expected = """
+        what: x,x^2
+        ( 3. 9. )
+        what: x,x^2
+        ( 27. 729. )
+        what: x,x^2
+        ( 3. 9. )"""
+    else:
+      expected = """
+        what: x,x^2
+        ( 3.0 9.0 )
+        what: x,x^2
+        ( 27.0 729.0 )
+        what: x,x^2
+        ( 3.0 9.0 )
+        """
     self.assertMultiLineStrippedEqual(expected, testing_stream.output)
     testing_stream.reset()
 
   def test_tap_pmap(self):
+    self.supported_only_in_legacy_mode()
     if len(local_devices()) < 2:
       raise SkipTest("test requires at least 2 devices")
 
     def power3(x):
       y = x * x
       # Print both 'x' and 'x^2'. Must pack as a tuple.
-      _, y = hcb.id_print((x, y),
+      _, y = hcb_id_print((x, y),
                           what="x,x^2",
                           output_stream=testing_stream,
                           tap_with_device=True)
@@ -1326,6 +1495,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
       ( 4 16 )""")
 
   def test_tap_pmap_vmap(self):
+    self.supported_only_in_legacy_mode()
     # A matrix M[ij] = i * 10 + j
     nr_devices = len(local_devices())
     shape = (nr_devices, 3)
@@ -1353,6 +1523,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_pmap_pmap_vmap(self):
     # A matrix M[ijk] = i * 100 + j * 10 + k
+    self.supported_only_in_legacy_mode()
     nr_devices = len(local_devices())
     if nr_devices % 2 != 0:
       raise SkipTest("test works only on even number of devices")
@@ -1386,6 +1557,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
   def test_tap_pmap_pmap_extra(self):
     """pmap of a pmap surrounded by extra code."""
     # A matrix M[ij] = i * 10 + j
+    self.supported_only_in_legacy_mode()
     nr_devices = len(local_devices())
     if nr_devices != 2:
       raise SkipTest("test works only on 2 devices")
@@ -1419,6 +1591,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
       [[203.00 205.00 207.00]]""")
 
   def test_tap_jvp_pmap_vmap(self):
+    self.supported_only_in_legacy_mode()
     # A matrix M[ijk] = i * 100 + j * 10 * k
     nr_devices = len(local_devices())
     shape = (nr_devices, 2, 3)
@@ -1445,6 +1618,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
         [220.00 222.00 224.00]]""")
 
   def test_tap_vmap_pmap(self):
+    self.supported_only_in_legacy_mode()
     # A matrix M[ijk] = i * 100 + j * 10 * k
     nr_devices = len(local_devices())
     shape = (2, nr_devices, 3)
@@ -1472,6 +1646,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
   @ignore_jit_of_pmap_warning()
   def test_tap_jit_pmap_extra(self):
     """jit of a pmap surrounded by extra code."""
+    self.supported_only_in_legacy_mode()
     # A matrix M[ij] = i * 10 + j
     nr_devices = len(local_devices())
     assert nr_devices in (1, 2)
@@ -1540,6 +1715,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   @jtu.sample_product(device_index=[0, 1])
   def test_tap_pjit(self, device_index=0):
+    self.supported_only_in_legacy_mode()
     if (device_index != 0 and
         not hcb._HOST_CALLBACK_OUTFEED.value and
         jtu.test_device_matches(["cpu"])):
@@ -1560,7 +1736,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     @partial(jax.named_call, name="fun1")  # for xprof debugging
     def fun1(x):
       z = jnp.dot(x, y)
-      return hcb.id_print(z, what="z",
+      return hcb_id_print(z, what="z",
                           output_stream=testing_stream,
                           tap_with_device=True, device_index=device_index)
 
@@ -1589,17 +1765,17 @@ class HostCallbackTapTest(jtu.JaxTestCase):
   def test_tap_scan_custom_jvp(self):
     """custom JVP, inside scan.
     This exercises the custom_jvp_call_jaxpr primitives."""
-
+    self.supported_only_in_legacy_mode()
     @jax.custom_jvp
     def f(x):
-      return x * hcb.id_print(x, output_stream=testing_stream, what="x")
+      return x * hcb_id_print(x, output_stream=testing_stream, what="x")
 
     @f.defjvp
     def f_jvp(primals, tangents):
       x, = primals
       x_dot, = tangents
       primal_out = f(x)
-      tangent_out = 3. * x * hcb.id_print(x_dot, output_stream=testing_stream, what="x_dot")
+      tangent_out = 3. * x * hcb_id_print(x_dot, output_stream=testing_stream, what="x_dot")
       return primal_out, tangent_out
 
     def g(x):
@@ -1633,10 +1809,10 @@ class HostCallbackTapTest(jtu.JaxTestCase):
   def test_tap_scan_custom_vjp(self):
     """custom VJP, inside scan.
     This exercises the custom_vjp_call_jaxpr primitives."""
-
+    self.supported_only_in_legacy_mode()
     @jax.custom_vjp
     def f(x):
-      return x * hcb.id_print(x, output_stream=testing_stream, what="x")
+      return x * hcb_id_print(x, output_stream=testing_stream, what="x")
 
     # f_fwd: a -> (b, residual)
     def f_fwd(x):
@@ -1644,7 +1820,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
     # f_bwd: (residual, CT b) -> [CT a]
     def f_bwd(residual, ct_b):
-      return residual * hcb.id_print(ct_b, output_stream=testing_stream, what="ct_b"),
+      return residual * hcb_id_print(ct_b, output_stream=testing_stream, what="ct_b"),
 
     f.defvjp(f_fwd, f_bwd)
 
@@ -1682,7 +1858,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
     def func(x):
       for i in range(5):
-        x = hcb.id_print(x * i, what="x times i")
+        x = hcb_id_print(x * i, what="x times i")
       return x
 
     jax.jit(func)(np.arange(6, dtype=np.float32).reshape((2, 3)))
@@ -1692,7 +1868,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
     def func(x):
       for i in range(1, 4):
-        x = hcb.id_print(x * i, what=f"x times {i}", output_stream=testing_stream)
+        x = hcb_id_print(x * i, what=f"x times {i}", output_stream=testing_stream)
       return x
 
     jax.jit(func)(np.arange(6, dtype=np.float32).reshape((2, 3)))
@@ -1741,12 +1917,12 @@ class HostCallbackTapTest(jtu.JaxTestCase):
         comp, token, 123,
         [xops.Constant(comp, np.zeros((2, 3), dtype=np.float32))], 0)
     with self.assertRaisesRegex(
-        RuntimeError, ".*does not match previous shape element_type.*"):
+        RuntimeError, ".*does not match previous shape .*\n?element_type.*"):
       hcb._callback_handler_data.receiver.add_outfeed(
           comp, token, 123,
           [xops.Constant(comp, np.zeros((2, 3), dtype=np.int32))], 0)
     with self.assertRaisesRegex(
-        RuntimeError, ".*does not match previous shape element_type.*"):
+        RuntimeError, ".*does not match previous shape .*\n?element_type.*"):
       hcb._callback_handler_data.receiver.add_outfeed(
           comp, token, 123,
           [xops.Constant(comp, np.zeros((2,), dtype=np.float32))], 0)
@@ -1773,7 +1949,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     from jax.experimental.ode import odeint
 
     def f(x, t, k):
-      x = hcb.id_print(x)
+      x = hcb_id_print(x, callback_flavor=hcb.CallbackFlavor.DEBUG)
       return -k * x
 
     def loss(k=1.0):
@@ -1785,7 +1961,8 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   def test_tap_remat_0(self):
     def f(i, k):
-      x = hcb.id_print(k + i, output_stream=testing_stream)
+      x = hcb_id_print(k + i, output_stream=testing_stream,
+                       callback_flavor=hcb.CallbackFlavor.DEBUG)
       return k * x
 
     def loss(k):
@@ -1804,10 +1981,11 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     use_remat=["old", "new", "none"],
   )
   def test_tap_remat(self, use_result=False, grad_func="grad", use_remat="new"):
+    self.supported_only_in_legacy_mode()
     if use_remat == "old": raise SkipTest()
 
     def f(x):
-      id_print_result = hcb.id_print(x, output_stream=testing_stream)
+      id_print_result = hcb_id_print(x, output_stream=testing_stream)
       if use_result:
         x = id_print_result
       return 3. * x
@@ -1867,11 +2045,16 @@ class HostCallbackCallTest(jtu.JaxTestCase):
   """Tests for hcb.call"""
 
   def setUp(self):
-    super().setUp()
+    # skipping here skips teardown, so do this before super().setUp().
     if jtu.test_device_matches(["gpu"]) and jax.device_count() > 1:
       raise SkipTest("host_callback broken on multi-GPU platforms (#6447)")
     if xla_bridge.using_pjrt_c_api():
       raise SkipTest("host_callback not implemented in PJRT C API")
+    super().setUp()
+    self.enter_context(jtu.ignore_warning(
+      category=DeprecationWarning, message="The host_callback APIs are deprecated"))
+    self.enter_context(jtu.ignore_warning(
+      category=DeprecationWarning, message="backend and device argument"))
 
     testing_stream.reset()
     testing_stream._test_method_name = self._testMethodName
@@ -1879,6 +2062,10 @@ class HostCallbackCallTest(jtu.JaxTestCase):
   def tearDown(self) -> None:
     hcb.barrier_wait("HostCallbackCallTest.tearDown")
     super().tearDown()
+
+  def supported_only_in_legacy_mode(self):
+    if not hcb._HOST_CALLBACK_LEGACY.value:
+      self.skipTest("Not supported when JAX_HOST_CALLBACK_LEGACY=False")
 
   def call_log_testing_stream(self, func, arg, *, result_shape, name=""):
     """Call `func` and log inputs and outputs to the testing stream"""
@@ -1916,6 +2103,7 @@ class HostCallbackCallTest(jtu.JaxTestCase):
     with jtu.count_primitive_compiles() as count:
       for _ in range(3):
         self.assertAllClose(2 * arg, fun(arg))
+    r = jax.make_jaxpr(fun)(arg)
     self.assertEqual(count[0], 1)
 
   @jtu.sample_product(
@@ -2124,6 +2312,7 @@ class HostCallbackCallTest(jtu.JaxTestCase):
     helper_print_optimized_hlo(fun2, m)
 
   def test_call_with_device(self):
+    self.supported_only_in_legacy_mode()
     def callback_func(x, device=None):
       testing_stream.write(f"device: {device}\n Called with {x}")
       return x
@@ -2139,6 +2328,7 @@ class HostCallbackCallTest(jtu.JaxTestCase):
          Called with 3.00""")
 
   def test_call_pmap(self):
+    self.supported_only_in_legacy_mode()
     # Works for 1 or 2 devices
     def callback_func(x, device=None):
       testing_stream.write(f"device: {device}\n Called with {x}")
@@ -2163,10 +2353,14 @@ class HostCallbackCallTest(jtu.JaxTestCase):
     def f_outside(x): return x
 
     def fun(x):
-      return hcb.call(f_outside, x, result_shape=x)
+      return hcb.call(f_outside, x, result_shape=x,
+                      callback_flavor=hcb.CallbackFlavor.PURE)
 
-    with self.assertRaisesRegex(NotImplementedError,
-                                "batching rules are implemented only for id_tap, not for call"):
+    if hcb._HOST_CALLBACK_LEGACY.value:
+      with self.assertRaisesRegex(NotImplementedError,
+                                  "batching rules are implemented only for id_tap, not for call"):
+        jax.vmap(fun)(np.ones((2, 3)))
+    else:
       jax.vmap(fun)(np.ones((2, 3)))
 
   @jtu.sample_product(device_index=[0, 1])
@@ -2256,6 +2450,7 @@ class HostCallbackCallTest(jtu.JaxTestCase):
       hcb.barrier_wait("Waiting for error")
 
   def test_call_error_callback_throws_exception(self):
+    self.supported_only_in_legacy_mode()
     def f_outside(x):
       raise ValueError("user exception")
     def fun(x):
@@ -2265,6 +2460,7 @@ class HostCallbackCallTest(jtu.JaxTestCase):
                                       "ValueError: user exception")
 
   def test_call_error_callback_returns_unexpected_shape(self):
+    self.supported_only_in_legacy_mode()
     def fun(x):
       return hcb.call(lambda x: (x, x), x, result_shape=x)
 
@@ -2272,6 +2468,7 @@ class HostCallbackCallTest(jtu.JaxTestCase):
                                       "Callback func .* should have returned a result with pytree")
 
   def test_call_error_then_compute(self):
+    self.supported_only_in_legacy_mode()
     # Continue computation on device after error
     def f_outside(x):
       raise ValueError("user exception")
@@ -2283,7 +2480,9 @@ class HostCallbackCallTest(jtu.JaxTestCase):
                                       "ValueError: user exception")
 
 
-def call_jax_other_device(jax_outside_fun, arg, *, device):
+def call_jax_other_device(
+    jax_outside_fun, arg, *, device,
+    callback_flavor: hcb.CallbackFlavor = hcb.CallbackFlavor.IO_CALLBACK):
   """Calls a JAX function on a specific device with simple support for reverse AD.
 
   Functions whose name starts with "jax_outside" are called on another device,
@@ -2296,7 +2495,8 @@ def call_jax_other_device(jax_outside_fun, arg, *, device):
   @jax.custom_vjp
   def make_call(arg):
     return hcb.call(run_jax_outside_fun, arg,
-                    result_shape=jax.eval_shape(jax_outside_fun, arg))
+                    result_shape=jax.eval_shape(jax_outside_fun, arg),
+                    callback_flavor=callback_flavor)
 
   # Define the fwd and bwd custom_vjp functions
   def make_call_vjp_fwd(arg):
@@ -2323,6 +2523,8 @@ class CallJaxTest(jtu.JaxTestCase):
   """Tests using `call_jax_other_device`."""
 
   def setUp(self):
+    if not hcb._HOST_CALLBACK_LEGACY.value:
+      self.skipTest("Not supported when JAX_HOST_CALLBACK_LEGACY=False")
     if jtu.test_device_matches(["gpu"]) and jax.device_count() > 1:
       raise SkipTest("host_callback broken on multi-GPU platforms (#6447)")
     if xla_bridge.using_pjrt_c_api():
@@ -2336,6 +2538,9 @@ class CallJaxTest(jtu.JaxTestCase):
         raise SkipTest("Test needs at least two devices. On CPU use XLA_FLAGS=--xla_force_host_platform_device_count=2")
       self.outside_device = jax.devices("cpu")[1]
     super().setUp()
+    self.enter_context(jtu.ignore_warning(
+      category=DeprecationWarning, message="The host_callback APIs are deprecated"))
+
 
   def test_jax_impl(self):
     def f_jax(x):
@@ -2403,6 +2608,12 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
     if xla_bridge.using_pjrt_c_api():
       raise SkipTest("host_callback not implemented in PJRT C API")
     super().setUp()
+    self.enter_context(jtu.ignore_warning(
+      category=DeprecationWarning, message="The host_callback APIs are deprecated"))
+
+  def supported_only_in_legacy_mode(self):
+    if not hcb._HOST_CALLBACK_LEGACY.value:
+      self.skipTest("Not supported when JAX_HOST_CALLBACK_LEGACY=False")
 
   def assertRewrite(self, expected: str, func: Callable, args: Sequence,
                     has_input_token=True, has_output_token=True):
@@ -2443,7 +2654,7 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
                                     callback=...
                                     has_token=True
                                     identity=True ] b d e
-          in (c, f, g) }""", lambda x: hcb.id_print(x + x), [0])
+          in (c, f, g) }""", lambda x: hcb_id_print(x + x), [0])
 
   def test_simple_outfeed_without_input_token(self):
     self.assertRewrite("""
@@ -2455,7 +2666,7 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
                                     callback=...
                                     has_token=True
                                     identity=True ] c e f
-          in (d,) }""", lambda x1, x2: hcb.id_print(x1 + x2), [1, 2],
+          in (d,) }""", lambda x1, x2: hcb_id_print(x1 + x2), [1, 2],
                        has_input_token=False, has_output_token=False)
 
   def test_simple_outfeed_without_input_token_nor_invars(self):
@@ -2467,13 +2678,13 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
                                     callback=...
                                     has_token=True
                                     identity=True ] 42 b c
-          in (a,) }""", lambda: hcb.id_print(42), [],
+          in (a,) }""", lambda: hcb_id_print(42), [],
                        has_input_token=False, has_output_token=False)
 
   def test_multiple_tap_without_dependencies(self):
     def f(x):
-      hcb.id_print(x, what="x")
-      hcb.id_print(x + 1, what="x + 1")
+      hcb_id_print(x, what="x")
+      hcb_id_print(x + 1, what="x + 1")
       return 2
 
     self.assertRewrite("""
@@ -2494,7 +2705,7 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
 
     def func(x, z):
       return lax.cond(z > 0, (1, 2), lambda a: (a[0], jnp.zeros(5)),
-                      z, lambda a: (hcb.id_print(a), y))
+                      z, lambda a: (hcb_id_print(a), y))
 
     self.assertRewrite("""
         { lambda a ; b c h i.
@@ -2510,8 +2721,7 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
                                  { lambda  ; f_ a b c g h.
                                    let d = broadcast_in_dim[ broadcast_dimensions=(  )
                                                              shape=(5,) ] 0.00
-                                   in (a, d, g, h) } )
-                      linear=(False, False, False, False, False, False) ] e a 1 2 c h i
+                                   in (a, d, g, h) } ) ] e a 1 2 c h i
           in (f, g, j, k) }""", func, [y, 5])
 
   def test_while(self):
@@ -2522,7 +2732,7 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
       # x: f32[5]
       # c: (f32[5], f32)
       return lax.while_loop(lambda c: c[1] < jnp.sum(c[0] + ct_cond),
-                            lambda c: (ct_body, hcb.id_print(c[1]) + 1.),
+                            lambda c: (ct_body, hcb_id_print(c[1]) + 1.),
                             (x, np.float32(1.)))
 
     self.assertRewrite("""
@@ -2550,8 +2760,8 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
     ct_cond = jnp.ones(2)  # captured const for the conditional
 
     def func(x):
-      return lax.while_loop(lambda c: hcb.id_print(ct_cond, result=c[1]) < 5,
-                            lambda c: (ct_body, hcb.id_print(c[1]) + 1),
+      return lax.while_loop(lambda c: hcb_id_print(ct_cond, result=c[1]) < 5,
+                            lambda c: (ct_body, hcb_id_print(c[1]) + 1),
                             (x, 1))
 
     self.assertRewrite("""
@@ -2601,7 +2811,7 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
     y = jnp.ones(5)  # captured const
 
     def func(x):
-      return lax.scan(lambda c, a: (hcb.id_print(c), y), (1, 2), x)
+      return lax.scan(lambda c, a: (hcb_id_print(c), y), (1, 2), x)
 
     self.assertRewrite("""
         { lambda a ; b f g.
@@ -2624,17 +2834,17 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
   def test_scan_custom_jvp(self):
     """custom JVP, inside scan.
     This exercises the custom_jvp_call_jaxpr primitives."""
-
+    self.supported_only_in_legacy_mode()
     @jax.custom_jvp
     def f(x):
-      return x * hcb.id_print(x)
+      return x * hcb_id_print(x)
 
     @f.defjvp
     def f_jvp(primals, tangents):
       x, = primals
       x_dot, = tangents
       primal_out = f(x)
-      tangent_out = 3. * x * hcb.id_print(x_dot)
+      tangent_out = 3. * x * hcb_id_print(x_dot)
       return primal_out, tangent_out
 
     def g(x):
@@ -2706,10 +2916,10 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
   def test_scan_custom_vjp(self):
     """custom VJP, inside scan.
     This exercises the custom_vjp_call_jaxpr primitives."""
-
+    self.supported_only_in_legacy_mode()
     @jax.custom_vjp
     def f(x):
-      return x * hcb.id_print(x)
+      return x * hcb_id_print(x)
 
     # f_fwd: a -> (b, residual)
     def f_fwd(x):
@@ -2717,7 +2927,7 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
 
     # f_bwd: (residual, CT b) -> [CT a]
     def f_bwd(residual, ct_b):
-      return residual * hcb.id_print(ct_b),
+      return residual * hcb_id_print(ct_b),
 
     f.defvjp(f_fwd, f_bwd)
 
@@ -2792,7 +3002,7 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
 
   def test_remat_loop(self):
     def f(k, x):
-      x = hcb.id_print(k + x)
+      x = hcb_id_print(k + x)
       return -k * x
 
     def loss(k):
@@ -2849,8 +3059,9 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
           in (c, d, e) }""", tap_scalar, [np.int32(3)])
 
   def test_pmap(self):
+    self.supported_only_in_legacy_mode()
     def f(xv):
-      jax.pmap(lambda x: jnp.sin(hcb.id_print(x, tap_with_device=True)),
+      jax.pmap(lambda x: jnp.sin(hcb_id_print(x, tap_with_device=True)),
                axis_name="i")(xv)
 
     self.assertRewrite("""

@@ -9,7 +9,7 @@ program:
 >>> import numpy as np
 >>> import jax.numpy as jnp
 >>> from jax import random
->>> x = random.uniform(random.PRNGKey(0), (1000, 1000))
+>>> x = random.uniform(random.key(0), (1000, 1000))
 >>> # Printing the result (i.e. evaluating `repr(result)` or `str(result)`)
 >>> # will block until the value is ready.
 >>> jnp.dot(x, x) + 3.  # doctest: +SKIP

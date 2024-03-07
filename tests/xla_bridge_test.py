@@ -20,13 +20,13 @@ import warnings
 from absl import logging
 from absl.testing import absltest
 
+from jax import version
 from jax._src import compiler
 from jax._src import config
 from jax._src import test_util as jtu
 from jax._src import xla_bridge as xb
 from jax._src.interpreters import xla
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 
 config.parse_flags_with_absl()
 
@@ -56,9 +56,7 @@ class XlaBridgeTest(jtu.JaxTestCase):
         num_replicas=1, num_partitions=1, fdo_profile=b"test_profile"
     )
     self.assertEqual(
-        compile_options.executable_build_options.fdo_profile,
-        b"test_profile" if xla_extension_version >= 242 else "test_profile"
-    )
+        compile_options.executable_build_options.fdo_profile, b"test_profile")
 
   def test_autofdo_profile(self):
 
@@ -146,7 +144,7 @@ class XlaBridgeTest(jtu.JaxTestCase):
     with warnings.catch_warnings(record=True) as w:
       warnings.simplefilter("always")
 
-      def _mock_tpu_client(library_path=None):
+      def _mock_tpu_client_with_options(library_path=None, options=None):
         time_to_wait = 5
         start = time.time()
         while not w:
@@ -160,8 +158,11 @@ class XlaBridgeTest(jtu.JaxTestCase):
         msg = str(w[-1].message)
         self.assertIn("Did you run your code on all TPU hosts?", msg)
 
+      def _mock_tpu_client(library_path=None):
+        _mock_tpu_client_with_options(library_path=library_path, options=None)
+
       with mock.patch.object(xc, "make_tpu_client",
-                             side_effect=_mock_tpu_client):
+                            side_effect=_mock_tpu_client_with_options):
         xb.tpu_client_timer_callback(0.01)
 
   def test_register_plugin(self):
@@ -196,7 +197,12 @@ class XlaBridgeTest(jtu.JaxTestCase):
     self.assertIn("name2", xb._backend_factories)
     self.assertEqual(registration.priority, 400)
     self.assertTrue(registration.experimental)
-    mock_make.assert_called_once_with("name1", {}, None)
+
+    options = {}
+    if xb.get_backend().platform == 'tpu':
+      options["ml_framework_name"] = "JAX"
+      options["ml_framework_version"] = version.__version__
+    mock_make.assert_called_once_with("name1", options, None)
 
   def test_register_plugin_with_config(self):
     test_json_file_path = os.path.join(
@@ -223,16 +229,19 @@ class XlaBridgeTest(jtu.JaxTestCase):
     self.assertIn("name1", xb._backend_factories)
     self.assertEqual(registration.priority, 400)
     self.assertTrue(registration.experimental)
-    mock_make.assert_called_once_with(
-        "name1",
-        {
-            "int_option": 64,
-            "int_list_option": [32, 64],
-            "string_option": "string",
-            "float_option": 1.0,
-        },
-        None,
-    )
+
+    # The expectation is specified in example_pjrt_plugin_config.json.
+    options = {
+        "int_option": 64,
+        "int_list_option": [32, 64],
+        "string_option": "string",
+        "float_option": 1.0,
+        }
+    if xb.get_backend().platform == 'tpu':
+      options["ml_framework_name"] = "JAX"
+      options["ml_framework_version"] = version.__version__
+
+    mock_make.assert_called_once_with("name1", options, None)
 
 
 class GetBackendTest(jtu.JaxTestCase):

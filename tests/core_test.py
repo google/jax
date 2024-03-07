@@ -406,7 +406,7 @@ class JaxprTypeChecks(jtu.JaxTestCase):
   def test_check_jaxpr_jit_invalid(self):
     jaxpr = make_jaxpr(jax.jit(lambda x, y: x + 1))(1., 2.).jaxpr
     pjit_eqn, = jaxpr.eqns
-    jaxpr._eqns[0] = pjit_eqn._replace(invars=())
+    jaxpr._eqns[0] = pjit_eqn.replace(invars=())
     self.assertRaisesRegex(
         core.JaxprTypeError,
         '0 operands cannot call jaxpr with 2 inputs',
@@ -750,16 +750,12 @@ class DynamicShapesTest(jtu.JaxTestCase):
       core.check_jaxpr(jaxpr)
 
   def test_check_jaxpr_key_reuse(self):
-    with config.enable_key_reuse_checks(True):
-      try:
-        from jax.experimental.key_reuse import KeyReuseError
-      except ImportError:
-        self.skipTest("Test requires jax.experimental.key_reuse")
+    with config.debug_key_reuse(True):
       def f(seed):
         key = jax.random.key(seed)
         return jax.random.uniform(key) + jax.random.normal(key)
       with jax.enable_checks(True):
-        with self.assertRaises(KeyReuseError):
+        with self.assertRaises(jax.errors.KeyReuseError):
           jax.jit(f)(0)
 
 

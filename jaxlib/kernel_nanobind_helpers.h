@@ -21,7 +21,7 @@ limitations under the License.
 #include "nanobind/nanobind.h"
 #include "absl/base/casts.h"
 #include "jaxlib/kernel_helpers.h"
-#include "tsl/python/lib/core/numpy.h"  // NOLINT
+#include "xla/tsl/python/lib/core/numpy.h"  // NOLINT
 
 namespace jax {
 

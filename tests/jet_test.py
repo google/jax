@@ -29,8 +29,7 @@ from jax.example_libraries import stax
 from jax.experimental.jet import jet, fact, zero_series
 from jax import lax
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 def jvp_taylor(fun, primals, series):
   # Computes the Taylor series the slow way, with nested jvp.
@@ -95,6 +94,8 @@ class JetTest(jtu.JaxTestCase):
                         check_dtypes=check_dtypes)
 
   @jtu.skip_on_devices("tpu")
+  # Default tolerance too tight on A100 after openxla/xla@a58070090
+  @jax.default_matmul_precision("float32")
   def test_dot(self):
     M, K, N = 2, 3, 4
     order = 3
@@ -241,6 +242,8 @@ class JetTest(jtu.JaxTestCase):
   def test_floor(self):      self.unary_check(jnp.floor)
   @jtu.skip_on_devices("tpu")
   def test_ceil(self):       self.unary_check(jnp.ceil)
+  @jtu.skip_on_devices("tpu")
+  def test_trunc(self):       self.unary_check(jnp.trunc)
   @jtu.skip_on_devices("tpu")
   def test_round(self):      self.unary_check(lax.round)
   @jtu.skip_on_devices("tpu")

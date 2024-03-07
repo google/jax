@@ -18,6 +18,7 @@ Key Creation & Manipulation
   wrap_key_data
   fold_in
   split
+  clone
 
 Random Samplers
 ~~~~~~~~~~~~~~~

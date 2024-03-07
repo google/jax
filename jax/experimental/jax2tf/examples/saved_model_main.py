@@ -30,11 +30,11 @@ import os
 from absl import app
 from absl import flags
 
-from jax.experimental.jax2tf.examples import mnist_lib  # type: ignore
-from jax.experimental.jax2tf.examples import saved_model_lib  # type: ignore
+from jax.experimental.jax2tf.examples import mnist_lib
+from jax.experimental.jax2tf.examples import saved_model_lib
 
 import numpy as np
-import tensorflow as tf  # type: ignore
+import tensorflow as tf
 import tensorflow_datasets as tfds  # type: ignore
 
 _MODEL = flags.DEFINE_enum(

@@ -12,20 +12,66 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-import scipy.stats as osp_stats
 from jax import lax
 import jax.numpy as jnp
 from jax._src.lax.lax import _const as _lax_const
-from jax._src.numpy.util import implements, promote_args_inexact
+from jax._src.numpy.util import promote_args_inexact
 from jax._src.typing import Array, ArrayLike
 
-@implements(osp_stats.vonmises.logpdf, update_doc=False)
+
 def logpdf(x: ArrayLike, kappa: ArrayLike) -> Array:
+  r"""von Mises log probability distribution function.
+
+  JAX implementation of :obj:`scipy.stats.vonmises` ``logpdf``.
+
+  The von Mises probability distribution function is given by
+
+  .. math::
+
+     f(x, \kappa) = \frac{1}{2\pi I_0(\kappa)}e^{\kappa\cos x}
+
+  Where :math:`I_0` is the modified Bessel function :func:`~jax.scipy.special.i0`
+  and :math:`\kappa\ge 0`, and the distribution is normalized in the interval
+  :math:`-\pi \le x \le \pi`.
+
+  Args:
+    x: arraylike, value at which to evaluate the PDF
+    kappa: arraylike, distribution shape parameter
+
+  Returns:
+    array of logpdf values.
+
+  See Also:
+    :func:`jax.scipy.stats.vonmises.pdf`
+  """
   x, kappa = promote_args_inexact('vonmises.logpdf', x, kappa)
   zero = _lax_const(kappa, 0)
   return jnp.where(lax.gt(kappa, zero), kappa * (jnp.cos(x) - 1) - jnp.log(2 * jnp.pi * lax.bessel_i0e(kappa)), jnp.nan)
 
-@implements(osp_stats.vonmises.pdf, update_doc=False)
+
 def pdf(x: ArrayLike, kappa: ArrayLike) -> Array:
+  r"""von Mises probability distribution function.
+
+  JAX implementation of :obj:`scipy.stats.vonmises` ``pdf``.
+
+  The von Mises probability distribution function is given by
+
+  .. math::
+
+     f(x, \kappa) = \frac{1}{2\pi I_0(\kappa)}e^{\kappa\cos x}
+
+  Where :math:`I_0` is the modified Bessel function :func:`~jax.scipy.special.i0`
+  and :math:`\kappa\ge 0`, and the distribution is normalized in the interval
+  :math:`-\pi \le x \le \pi`.
+
+  Args:
+    x: arraylike, value at which to evaluate the PDF
+    kappa: arraylike, distribution shape parameter
+
+  Returns:
+    array of pdf values.
+
+  See Also:
+    :func:`jax.scipy.stats.vonmises.logpdf`
+  """
   return lax.exp(logpdf(x, kappa))

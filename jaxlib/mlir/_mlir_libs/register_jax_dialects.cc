@@ -3,8 +3,12 @@
 
 #include "mlir-c/Dialect/Arith.h"
 #include "mlir-c/Dialect/Func.h"
+#include "mlir-c/Dialect/GPU.h"
+#include "mlir-c/Dialect/LLVM.h"
 #include "mlir-c/Dialect/Math.h"
 #include "mlir-c/Dialect/MemRef.h"
+#include "mlir-c/Dialect/NVGPU.h"
+#include "mlir-c/Dialect/NVVM.h"
 #include "mlir-c/Dialect/SCF.h"
 #include "mlir-c/Dialect/Vector.h"
 #include "mlir-c/Transforms.h"
@@ -24,6 +28,11 @@ PYBIND11_MODULE(register_jax_dialects, m) {
     REGISTER_DIALECT(memref);
     REGISTER_DIALECT(scf);
     REGISTER_DIALECT(vector);
+    // For Mosaic GPU
+    REGISTER_DIALECT(gpu);
+    REGISTER_DIALECT(nvgpu);
+    REGISTER_DIALECT(nvvm);
+    REGISTER_DIALECT(llvm);
     mlirRegisterTransformsPasses();
     // Transforms used by JAX.
     mlirRegisterTransformsStripDebugInfo();

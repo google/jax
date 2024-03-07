@@ -19,11 +19,14 @@ from __future__ import annotations
 import unittest
 
 from absl.testing import absltest
+from absl.testing import parameterized
 import jax
 from jax._src import test_util as jtu
 from jax._src import util
 from jax._src.state import indexing
 import numpy as np
+import jax.numpy as jnp
+from jax.experimental import pallas as pl
 
 try:
   import hypothesis as hp
@@ -97,25 +100,18 @@ class IndexerTest(jtu.JaxTestCase):
   def test_invalid_ndindexer(self):
     indices = (0, 0, 0)
     shape = (5, 5)
-    with self.assertRaises(ValueError):
+    with self.assertRaisesRegex(
+        ValueError, "`indices` must not be longer than `shape`"
+    ):
       _ = NDIndexer.from_indices_shape(indices, shape)
 
-  def test_invalid_ndindexer_oob_int(self):
-    indices = (4, 0)
-    shape = (3, 5)
-    with self.assertRaises(ValueError):
-      _ = NDIndexer.from_indices_shape(indices, shape)
-
-  def test_invalid_ndindexer_oob_slice_start(self):
-    indices = (slice(3, 2), 0)
-    shape = (3, 5)
-    with self.assertRaises(ValueError):
-      _ = NDIndexer.from_indices_shape(indices, shape)
-
-  def test_invalid_ndindexer_oob_slice_end(self):
-    indices = (Slice(2, 2), 0)
-    shape = (3, 5)
-    with self.assertRaises(ValueError):
+  @parameterized.parameters(
+      ((4, 0), (3, 5)),
+      ((slice(3, 2), 0), (3, 5)),
+      ((Slice(2, 2), 0), (3, 5)),
+  )
+  def test_invalid_ndindexer_oob(self, indices, shape):
+    with self.assertRaisesRegex(ValueError, "Out of bound"):
       _ = NDIndexer.from_indices_shape(indices, shape)
 
   def test_ndindexer_with_padding(self):
@@ -123,6 +119,12 @@ class IndexerTest(jtu.JaxTestCase):
     shape = (5, 5)
     indexer = NDIndexer.from_indices_shape(indices, shape)
     self.assertTupleEqual(indexer.get_indexer_shape(), shape)
+
+  def test_ndindexer_with_ellipsis(self):
+    indices = (..., 4)
+    shape = (5, 5)
+    indexer = NDIndexer.from_indices_shape(indices, shape)
+    self.assertTupleEqual(indexer.get_indexer_shape(), (5,))
 
   def test_ndindexer_with_slices(self):
     indices = (slice(2, 3), slice(4, 7))
@@ -151,6 +153,14 @@ class IndexerTest(jtu.JaxTestCase):
     shape = (5, 5)
     indexer = NDIndexer.from_indices_shape(indices, shape)
     self.assertTupleEqual(indexer.get_indexer_shape(), (10, 20))
+
+  def test_ndindexer_with_arrays_and_invalid_broadcasting(self):
+    indices = (np.arange(10)[None], np.arange(20)[None, :])
+    shape = (5, 5)
+    with self.assertRaisesRegex(
+        ValueError, "Cannot broadcast shapes for indexing"
+    ):
+      indexer = NDIndexer.from_indices_shape(indices, shape)
 
   def test_indexer_with_all_types(self):
     indices = (0, slice(10), np.arange(5))
@@ -195,6 +205,109 @@ class IndexerTest(jtu.JaxTestCase):
     )
     self.assertTupleEqual((*indexer.int_indexer_shape, *rest_shape),
                           indexer.get_indexer_shape())
+
+
+  def test_multi_indexing_interpreter_only(self):
+    # Interpreter only test! YMMV actually compiling this.
+    def permute(left, right, left_out_ref, right_out_ref):
+      left_out = jnp.zeros_like(left)
+      left_out = left_out.at[:, 0].set(left[:, 0])
+      left_out = left_out.at[:, 1].set(right[:, 0])
+      left_out = left_out.at[:, 2:].set(left[:, 1:-1])
+
+      right_out = jnp.zeros_like(right)
+      right_out = right_out.at[:, :-1].set(right[:, 1:])
+      right_out = right_out.at[:, -1].set(left[:, -1])
+
+      left_out_ref[...] = left_out
+      right_out_ref[...] = right_out
+
+    def invoke_permutes(x_ref, y_ref, x_out_ref, y_out_ref):
+      shape = x_ref.shape
+      _, n = shape[-2], shape[-1]
+      x_ref = x_ref.at[: n // 2, : n // 2]
+      y_ref = y_ref.at[: n // 2, : n // 2]
+      x_out_ref = x_out_ref.at[: n // 2, : n // 2]
+      y_out_ref = y_out_ref.at[: n // 2, : n // 2]
+      permute(x_ref, y_ref, x_out_ref, y_out_ref)
+
+    n = 8
+    x = jnp.ones([n, n])
+    y = jnp.ones([n, n])
+    jitted_permute = jax.jit(invoke_permutes)
+    grid = (1,)
+    pl.pallas_call(
+        jitted_permute,
+        grid=grid,
+        out_shape=[
+            jax.ShapeDtypeStruct(x.shape, x.dtype),
+            jax.ShapeDtypeStruct(x.shape, y.dtype),
+        ],
+        in_specs=[
+            pl.BlockSpec(x.shape, lambda i: (0, 0)),
+            pl.BlockSpec(y.shape, lambda i: (0, 0)),
+        ],
+        out_specs=[
+            pl.BlockSpec(x.shape, lambda i: (0, 0)),
+            pl.BlockSpec(y.shape, lambda i: (0, 0)),
+        ],
+        interpret=True,
+    )(x, y)
+
+  def test_ellipsis_indexing_iterpret_only(self):
+    # Interpreter only test! YMMV actually compiling this.
+    def permute_columns_in_row_kernel(left, right, new_left, new_right):
+      shape = left.shape
+      k = shape[-1]
+      ndim = len(shape)
+      left_slices = [
+          left[..., :1],
+          right[..., :1],
+          left[..., 1:k-1]
+      ]
+      right_slices = [
+          right[..., 1:k],
+          left[..., k-1:k]
+      ]
+      new_left[...] = np.concatenate(left_slices, axis=ndim - 1)
+      new_right[...] = np.concatenate(right_slices, axis=ndim - 1)
+
+    left = jnp.array([[1, 2, 3], [4, 5, 6]], dtype=jnp.float32)
+    right = jnp.array([[7, 8, 9], [10, 11, 12]], dtype=jnp.float32)
+
+    output_shape = left.shape
+
+    # hack to reuse the same fn for np cat
+    import jax.numpy as np  # noqa: F811
+    left_out, right_out = pl.pallas_call(
+        permute_columns_in_row_kernel,
+        grid=(1,),
+        out_shape=[
+            jax.ShapeDtypeStruct(output_shape, jnp.float32),
+            jax.ShapeDtypeStruct(output_shape, jnp.float32)
+        ],
+        in_specs=[
+            pl.BlockSpec(left.shape, lambda i: (0, 0)),
+            pl.BlockSpec(right.shape, lambda i: (0, 0))
+        ],
+        out_specs=[
+            pl.BlockSpec(output_shape, lambda i: (0, 0)),
+            pl.BlockSpec(output_shape, lambda i: (0, 0))
+        ],
+        interpret=True,
+    )(left, right)
+
+
+    import numpy as np  # noqa: F811
+    left_np = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float32)
+    right_np = np.array([[7, 8, 9], [10, 11, 12]], dtype=np.float32)
+    left_out_np = left_np.copy()
+    right_out_np = right_np.copy()
+
+
+    permute_columns_in_row_kernel(left_np, right_np, left_out_np, right_out_np)
+    np.testing.assert_array_equal(left_out_np, left_out)
+    np.testing.assert_array_equal(right_out_np, right_out)
 
 
 if __name__ == "__main__":

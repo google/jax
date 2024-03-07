@@ -30,7 +30,7 @@ limitations under the License.
 #include "jaxlib/gpu/sparse_kernels.h"
 #include "jaxlib/gpu/vendor.h"
 #include "jaxlib/kernel_nanobind_helpers.h"
-#include "tsl/python/lib/core/numpy.h"
+#include "xla/tsl/python/lib/core/numpy.h"
 
 namespace nb = nanobind;
 

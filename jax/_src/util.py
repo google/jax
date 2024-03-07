@@ -15,13 +15,13 @@
 from __future__ import annotations
 
 import abc
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 import functools
 from functools import partial
 import itertools as it
 import logging
 import operator
-from typing import (Any, Callable, Generic, TypeVar, overload, TYPE_CHECKING, cast)
+from typing import (Any, Generic, TypeVar, overload, TYPE_CHECKING, cast)
 import weakref
 
 import numpy as np
@@ -131,6 +131,15 @@ def split_list(args: Sequence[T], ns: Sequence[int]) -> list[list[T]]:
   lists.append(args)
   return lists
 
+def split_list_checked(args: Sequence[T], ns: Sequence[int]) -> list[list[T]]:
+  args = list(args)
+  assert sum(ns) == len(args)
+  lists = []
+  for n in ns:
+    lists.append(args[:n])
+    args = args[n:]
+  return lists
+
 def partition_list(bs: Sequence[bool], l: Sequence[T]) -> tuple[list[T], list[T]]:
   assert len(bs) == len(l)
   lists = [], []  # type: ignore
@@ -138,10 +147,13 @@ def partition_list(bs: Sequence[bool], l: Sequence[T]) -> tuple[list[T], list[T]
     lists[b].append(x)
   return lists
 
-def merge_lists(bs: Sequence[bool], l0: Sequence[T], l1: Sequence[T]) -> list[T]:
+def merge_lists(bs: Sequence[bool],
+                l0: Sequence[T1],
+                l1: Sequence[T2]
+                ) -> list[T1 | T2]:
   assert sum(bs) == len(l1) and len(bs) - sum(bs) == len(l0)
   i0, i1 = iter(l0), iter(l1)
-  out = [next(i1) if b else next(i0) for b in bs]
+  out: list[T1 | T2] = [next(i1) if b else next(i0) for b in bs]
   sentinel = object()
   assert next(i0, sentinel) is next(i1, sentinel) is sentinel
   return out
@@ -273,7 +285,11 @@ def split_merge(predicate, xs):
 
   return lhs, rhs, merge
 
-def cache(max_size=4096):
+
+def _ignore(): return None
+
+
+def cache(max_size=4096, trace_context_in_key=True):
   def wrap(f):
     @functools.lru_cache(max_size)
     def cached(_, *args, **kwargs):
@@ -283,17 +299,26 @@ def cache(max_size=4096):
     def wrapper(*args, **kwargs):
       if config.check_tracer_leaks.value:
         return f(*args, **kwargs)
-      else:
-        return cached(config.trace_context(), *args, **kwargs)
+      return cached(config.trace_context() if trace_context_in_key else _ignore(),
+                    *args, **kwargs)
 
     wrapper.cache_clear = cached.cache_clear
     wrapper.cache_info = cached.cache_info
+    cache_clearing_funs.add(wrapper.cache_clear)
     return wrapper
   return wrap
 
+cache_clearing_funs = weakref.WeakSet()  # type: ignore
+
+def clear_all_caches():
+  global cache_clearing_funs
+  for clear in cache_clearing_funs:
+    clear()
+
 memoize = cache(max_size=None)
 
-def weakref_lru_cache(call: Callable, maxsize=2048):
+def weakref_lru_cache(call: Callable, maxsize=2048,
+                      trace_context_in_key: bool = True):
   """
   Least recently used cache decorator with weakref support.
 
@@ -302,7 +327,9 @@ def weakref_lru_cache(call: Callable, maxsize=2048):
   behave similar to `functools.lru_cache`.
   """
   global _weakref_lru_caches
-  cached_call = xc.weakref_lru_cache(config.trace_context, call, maxsize)
+  cached_call = xc.weakref_lru_cache(
+      config.trace_context if trace_context_in_key else _ignore,
+      call, maxsize)
   _weakref_lru_caches.add(cached_call)
   return cached_call
 
@@ -348,6 +375,9 @@ class WrapKwArgs:
 def wrap_name(name, transform_name):
   return transform_name + '(' + name + ')'
 
+def fun_name(fun: Callable):
+  return getattr(fun, "__name__", "<unnamed function>")
+
 def canonicalize_axis(axis, num_dims) -> int:
   """Canonicalize an axis in [-num_dims, num_dims) to [0, num_dims)."""
   axis = operator.index(axis)
@@ -387,7 +417,7 @@ def wraps(
   """
   def wrapper(fun: T) -> T:
     try:
-      name = getattr(wrapped, "__name__", "<unnamed function>")
+      name = fun_name(wrapped)
       doc = getattr(wrapped, "__doc__", "") or ""
       fun.__dict__.update(getattr(wrapped, "__dict__", {}))
       fun.__annotations__ = getattr(wrapped, "__annotations__", {})

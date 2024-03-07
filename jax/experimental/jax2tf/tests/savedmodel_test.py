@@ -19,14 +19,13 @@ import jax
 from jax import lax
 import jax.numpy as jnp
 import numpy as np
-import tensorflow as tf  # type: ignore[import]
+import tensorflow as tf
 
 from jax.experimental import jax2tf
 from jax.experimental.jax2tf.tests import tf_test_util
 from jax._src import test_util as jtu
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class SavedModelTest(tf_test_util.JaxToTfTestCase):

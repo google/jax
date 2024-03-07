@@ -14,12 +14,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import contextlib
 import dataclasses
 import re
 import os
-from typing import Any, Callable, Optional
+from typing import Any
 
 from absl.testing import absltest
 from absl import logging
@@ -31,13 +31,13 @@ from jax._src import test_util as jtu
 from jax import tree_util
 
 from jax.experimental import jax2tf
-from jax.experimental import export
+from jax import export
 from jax._src import config
 from jax._src import xla_bridge
 import numpy as np
-import tensorflow as tf  # type: ignore[import]
-from tensorflow.compiler.xla import xla_data_pb2  # type: ignore[import]
-from tensorflow.compiler.tf2xla.python import xla as tfxla  # type: ignore[import]
+import tensorflow as tf
+from tensorflow.compiler.xla import xla_data_pb2
+from tensorflow.compiler.tf2xla.python import xla as tfxla
 
 DType = Any
 
@@ -158,7 +158,7 @@ def ComputeTfValueAndGrad(tf_f: Callable, tf_args: Sequence,
 @jtu.with_config(jax_numpy_rank_promotion="allow",
                  jax_numpy_dtype_promotion='standard',
                  jax_legacy_prng_key="allow",
-                 jax_enable_key_reuse_checks=False)
+                 jax_debug_key_reuse=False)
 class JaxToTfTestCase(jtu.JaxTestCase):
   # We want most tests to use the maximum available version, from the locally
   # installed tfxla module and export.
@@ -180,18 +180,18 @@ class JaxToTfTestCase(jtu.JaxTestCase):
     # We run the tests using the maximum version supported, even though
     # the default serialization version may be held back for a while to
     # ensure compatibility
-    version = config.jax_serialization_version.value
+    version = config.jax_export_calling_convention_version.value
     if self.use_max_serialization_version:
       # Use the largest supported by both export and tfxla.call_module
-      version = min(export.maximum_supported_serialization_version,
+      version = min(export.maximum_supported_calling_convention_version,
                     tfxla.call_module_maximum_supported_version())
       self.assertGreaterEqual(version,
-                              export.minimum_supported_serialization_version)
-      self.enter_context(config.jax_serialization_version(version))
+                              export.minimum_supported_calling_convention_version)
+      self.enter_context(config.jax_export_calling_convention_version(version))
     logging.info(
       "Using JAX serialization version %s (export.max_version %s, tf.XlaCallModule max version %s)",
       version,
-      export.maximum_supported_serialization_version,
+      export.maximum_supported_calling_convention_version,
       tfxla.call_module_maximum_supported_version())
 
     with contextlib.ExitStack() as stack:
@@ -293,7 +293,7 @@ class JaxToTfTestCase(jtu.JaxTestCase):
         logging.info(log_message(f"Using tol={max_tol} due to {max_tol_lim}"))
 
       # Convert results to np.arrays
-      result_tf = tf.nest.map_structure(lambda t: t.numpy(), result_tf)  # type: ignore
+      result_tf = tf.nest.map_structure(lambda t: t.numpy(), result_tf)
 
       custom_assert_lim = [l for l in jax2tf_limits if l.custom_assert]
       assert len(custom_assert_lim) <= 1, f"Expecting at most one applicable limitation with custom_assert, found {custom_assert_lim}"

@@ -22,11 +22,11 @@ from absl.testing import parameterized
 
 import itertools as it
 import jax.numpy as jnp
+import jax
 from jax import jit, jvp, vjp
 import jax._src.test_util as jtu
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 npr.seed(0)
 

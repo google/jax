@@ -28,8 +28,7 @@ from jax._src import test_util as jtu
 import jax.numpy as jnp  # scan tests use numpy
 import jax.scipy as jsp
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 def high_precision_dot(a, b):

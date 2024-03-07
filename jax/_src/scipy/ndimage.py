@@ -12,20 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import functools
 import itertools
 import operator
-import textwrap
-from typing import Callable
-
-import scipy.ndimage
 
 from jax._src import api
 from jax._src import util
 from jax import lax
 import jax.numpy as jnp
-from jax._src.numpy.util import implements
 from jax._src.typing import ArrayLike, Array
 from jax._src.util import safe_zip as zip
 
@@ -120,22 +115,69 @@ def _map_coordinates(input: ArrayLike, coordinates: Sequence[ArrayLike],
     else:
       all_valid = functools.reduce(operator.and_, validities)
       contribution = jnp.where(all_valid, input_arr[indices], cval)
-    outputs.append(_nonempty_prod(weights) * contribution)
+    outputs.append(_nonempty_prod(weights) * contribution)  # type: ignore
   result = _nonempty_sum(outputs)
   if jnp.issubdtype(input_arr.dtype, jnp.integer):
     result = _round_half_away_from_zero(result)
   return result.astype(input_arr.dtype)
 
 
-@implements(scipy.ndimage.map_coordinates, lax_description=textwrap.dedent("""\
+"""
     Only nearest neighbor (``order=0``), linear interpolation (``order=1``) and
     modes ``'constant'``, ``'nearest'``, ``'wrap'`` ``'mirror'`` and ``'reflect'`` are currently supported.
-    Note that interpolation near boundaries differs from the scipy function,
-    because we fixed an outstanding bug (https://github.com/scipy/scipy/issues/2640);
-    this function interprets the ``mode`` argument as documented by SciPy, but
-    not as implemented by SciPy.
-    """))
+
+    """
+
 def map_coordinates(
-    input: ArrayLike, coordinates: Sequence[ArrayLike], order: int, mode: str = 'constant', cval: ArrayLike = 0.0,
+    input: ArrayLike, coordinates: Sequence[ArrayLike], order: int,
+    mode: str = 'constant', cval: ArrayLike = 0.0,
 ):
+  """
+  Map the input array to new coordinates using interpolation.
+
+  JAX implementation of :func:`scipy.ndimage.map_coordinates`
+
+  Given an input array and a set of coordinates, this function returns the
+  interpolated values of the input array at those coordinates.
+
+  Args:
+    input: N-dimensional input array from which values are interpolated.
+    coordinates: length-N sequence of arrays specifying the coordinates
+      at which to evaluate the interpolated values
+    order: The order of interpolation. JAX supports the following:
+
+      * 0: Nearest-neighbor
+      * 1: Linear
+
+    mode: Points outside the boundaries of the input are filled according to the given mode.
+      JAX supports one of ``('constant', 'nearest', 'mirror', 'wrap', 'reflect')``. Note the
+      ``'wrap'`` mode in JAX behaves as ``'grid-wrap'`` mode in SciPy, and ``'constant'``
+      mode in JAX behaves as ``'grid-constant'`` mode in SciPy. This discrepancy was caused
+      by a former bug in those modes in SciPy (https://github.com/scipy/scipy/issues/2640),
+      which was first fixed in JAX by changing the behavior of the existing modes, and later
+      on fixed in SciPy, by adding modes with new names, rather than fixing the existing
+      ones, for backwards compatibility reasons. Default is 'constant'.
+    cval: Value used for points outside the boundaries of the input if ``mode='constant'``
+      Default is 0.0.
+
+  Returns:
+    The interpolated values at the specified coordinates.
+
+  Examples:
+    >>> input = jnp.arange(12.0).reshape(3, 4)
+    >>> input
+    Array([[ 0.,  1.,  2.,  3.],
+           [ 4.,  5.,  6.,  7.],
+           [ 8.,  9., 10., 11.]], dtype=float32)
+    >>> coordinates = [jnp.array([0.5, 1.5]),
+    ...                jnp.array([1.5, 2.5])]
+    >>> jax.scipy.ndimage.map_coordinates(input, coordinates, order=1)
+    Array([3.5, 8.5], dtype=float32)
+
+  Note:
+    Interpolation near boundaries differs from the scipy function, because JAX
+    fixed an outstanding bug; see https://github.com/google/jax/issues/11097.
+    This function interprets the ``mode`` argument as documented by SciPy, but
+    not as implemented by SciPy.
+  """
   return _map_coordinates(input, coordinates, order, mode, cval)

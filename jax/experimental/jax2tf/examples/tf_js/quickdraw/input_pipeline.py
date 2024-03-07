@@ -11,11 +11,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from jax import numpy as jnp # type: ignore
+from jax import numpy as jnp
 
-import numpy as np # type: ignore
+import numpy as np
 import os
-import requests # type: ignore
+import requests
 
 def download_dataset(dir_path, nb_classes):
 

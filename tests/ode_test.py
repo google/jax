@@ -24,8 +24,7 @@ from jax.experimental.ode import odeint
 
 import scipy.integrate as osp_integrate
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class ODETest(jtu.JaxTestCase):

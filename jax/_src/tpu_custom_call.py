@@ -19,30 +19,43 @@ from __future__ import annotations
 
 import base64
 import collections.abc
+from collections.abc import Callable, Sequence
 import dataclasses
 import functools
 import io
 import os
 import time
-from typing import Any, Callable
+from typing import Any
 
-from absl import flags
 import jax
 from jax import core
 from jax._src import config
+from jax._src import sharding_impls
+from jax._src.interpreters import mlir
 from jax._src.lib import tpu
 from jax._src.lib import xla_client
-from jax._src.lib.mlir.dialects import hlo
-from jax._src.interpreters import mlir
-from jax._src import sharding_impls
 from jax.interpreters import xla
 from jaxlib.mlir import ir
-from jaxlib.mlir.dialects import stablehlo
-import numpy as np
+from jaxlib.mlir.dialects import mhlo
+from jaxlib.mlir.passmanager import PassManager
 
-FLAGS = flags.FLAGS
+try:
+  from absl import flags
+  FLAGS = flags.FLAGS
+except ImportError:
+  FLAGS = {}
 
-_MOSAIC_ALLOW_HLO = config.define_bool_state(
+_MOSAIC_USE_PYTHON_PIPELINE = config.bool_state(
+    name="mosaic_use_python_pipeline",
+    default=False,
+    help=(
+        "Run the initial Mosaic MLIR passes from Python, when as_tpu_kernel"
+        " is called (for Pallas, this happens at JAX lowering time), instead of"
+        " later within XLA."
+    ),
+)
+
+_MOSAIC_ALLOW_HLO = config.bool_state(
     name="jax_mosaic_allow_hlo",
     default=False,
     help="Allow hlo dialects in Mosaic",
@@ -79,6 +92,9 @@ class CustomCallBackendConfig:
   needs_layout_passes: bool
   vmem_limit_bytes: int | None
   flags: dict[str, bool | int | float] | None
+  allow_input_fusion: list[bool] | None
+  serialization_format: int | None
+  internal_scratch_in_bytes: int | None
 
   # We omit the body while printing, because primitive params get embedded
   # in HLO metadata, and the body blows up its size.
@@ -104,10 +120,24 @@ class CustomCallBackendConfig:
     if self.needs_hlo_passes:
       config.write(b', "needs_hlo_passes": ')
       config.write(str(self.needs_hlo_passes).lower().encode("ascii"))
+    if self.serialization_format is not None:
+      config.write(b', "serialization_format": ')
+      config.write(str(self.serialization_format).lower().encode("ascii"))
     if self.needs_layout_passes:
       config.write(b', "needs_layout_passes": ')
       config.write(str(self.needs_layout_passes).lower().encode("ascii"))
-    config.write(b"}")
+    if self.allow_input_fusion is not None:
+      config.write(b', "allow_input_fusion": [')
+      for i, value in enumerate(self.allow_input_fusion):
+        config.write(b"true" if value else b"false")
+        # config.write(str(value).lower().encode("ascii"))
+        if i + 1 != len(self.allow_input_fusion):
+          config.write(b",")
+      config.write(b"]")
+    if self.internal_scratch_in_bytes is not None:
+      config.write(b', "internal_scratch_in_bytes": ')
+      config.write(str(self.internal_scratch_in_bytes).encode("ascii"))
+    config.write(b"}")  # End of custom_call_config.
     if self.device_type is not None:
       config.write(b', "device_type": ')
       config.write(
@@ -141,6 +171,9 @@ class CustomCallBackendConfig:
         if i + 1 != len(self.flags):
           config.write(b",")
       config.write(b"]")
+    # Prevent the compiler from sharding the custom call beyond what Mosaic does
+    # based on user annotations
+    config.write(b', "implicit_sharding": {"type": "MANUAL"}')
     config.write(b"}")
     return config.getvalue()
 
@@ -150,13 +183,8 @@ def _tpu_custom_call_abstract_eval(*_, out_avals, **__):
   return out_avals
 
 
-def _aval_to_layout(aval):
-  arange = np.arange(aval.ndim, dtype=np.dtype(np.int64))[::-1].copy()
-  return ir.DenseIntElementsAttr.get(arange, type=ir.IndexType.get())
-
-
-def _avals_to_layouts(avals):
-  return ir.ArrayAttr.get([_aval_to_layout(a) for a in avals])
+def _avals_to_layouts(avals) -> Sequence[Sequence[int]]:
+  return [tuple(range(a.ndim - 1, -1, -1)) for a in avals]
 
 
 def _tpu_custom_call_lowering(
@@ -164,18 +192,11 @@ def _tpu_custom_call_lowering(
     *in_nodes,  # pylint: disable=missing-function-docstring
     config: CustomCallBackendConfig,
     kernel_name: str | None,
-    kernel_regeneration_metadata: bytes | None,
     out_avals: Any,
     input_output_aliases: tuple[tuple[int, int], ...],
 ) -> ...:
   i32_type = ir.IntegerType.get_signless(32)
-  multiple_results = len(out_avals) > 1
-  if multiple_results:
-    result_type = ir.TupleType.get_tuple(
-        [mlir.aval_to_ir_type(aval) for aval in out_avals]
-    )
-  else:
-    result_type = mlir.aval_to_ir_type(out_avals[0])
+  result_types = [mlir.aval_to_ir_type(aval) for aval in out_avals]
   axis_context = ctx.module_context.axis_context
   if isinstance(axis_context, sharding_impls.SPMDAxisContext):
     if axis_context.manual_axes != frozenset(axis_context.mesh.axis_names):
@@ -193,49 +214,142 @@ def _tpu_custom_call_lowering(
     raise NotImplementedError(
         "Replica lowering for Mosaic kernels not implemented."
     )
-  call = stablehlo.CustomCallOp(
-      [result_type],
-      in_nodes,
-      call_target_name=ir.StringAttr.get(b"tpu_custom_call"),
-      has_side_effect=ir.BoolAttr.get(False),
-      backend_config=ir.StringAttr.get(config.to_json()),
-      api_version=ir.IntegerAttr.get(i32_type, 1),
-      called_computations=ir.ArrayAttr.get([]),
+  if all(core.is_constant_shape(aval_out.shape) for aval_out in ctx.avals_out):
+    result_shapes = None
+  else:
+    result_shapes = [
+        mlir.shape_tensor(mlir.eval_dynamic_shape(ctx, aval_out.shape))
+        for aval_out in ctx.avals_out]
+  extra_attributes = None
+  # Add kernel_name and kernel_metadata as attributes to the custom call op.
+  # This is because we do not want to pollute the backend_config with this
+  # information.
+  if kernel_name is not None:
+    extra_attributes = dict(kernel_name=ir.StringAttr.get(kernel_name))
+  call = mlir.custom_call(
+      "tpu_custom_call",
+      result_types=result_types,
+      operands=in_nodes,
+      backend_config=config.to_json(),
+      api_version=1,
+      operand_output_aliases=dict(input_output_aliases),
       operand_layouts=_avals_to_layouts(ctx.avals_in),
       result_layouts=_avals_to_layouts(ctx.avals_out),
-      output_operand_aliases=ir.ArrayAttr.get([
-          hlo.OutputOperandAlias.get(
-              # if len(result_types) == 1 then the aliasing refers implicitly to
-              # the only output.
-              output_tuple_indices=[output_idx]
-              if len(out_avals) > 1
-              else [],
-              operand_index=input_idx,
-              operand_tuple_indices=[],
-          )
-          for input_idx, output_idx in input_output_aliases
-      ]),
-  )
+      result_shapes=result_shapes,
+      extra_attributes=extra_attributes)
 
-  # Add kernel_name and kernel_regeneration_metadata as attributes to the
-  # custom call op. This is because we do not want to pollute the backend_config
-  # with this information.
-  if kernel_name is not None:
-    call.attributes["kernel_name"] = ir.StringAttr.get(kernel_name)
-  if kernel_regeneration_metadata is not None:
-    call.attributes["kernel_regeneration_metadata"] = ir.StringAttr.get(
-        base64.b64encode(kernel_regeneration_metadata)
-    )
-  if multiple_results:
-    results = [stablehlo.get_tuple_element(call, mlir.i32_attr(i))
-               for i in range(len(out_avals))]
-  else:
-    results = call.results
-  return results
+  return call.results
 
 
 mlir.register_lowering(tpu_custom_call_p, _tpu_custom_call_lowering,
                        platform="tpu")
+
+
+def _lower_tpu_kernel(
+    module: ir.Module,
+    hardware_generation: int,
+) -> ir.Module:
+  """Runs MLIR passes lowering the given module to an MLIR module.
+
+  Uses Python versions of infer-memref-layout and apply-vector-layout.
+
+  Args:
+    module: The MLIR module to lower.
+    hardware_generation: The TPU hardware generation to target.
+
+  Returns:
+    An MLIR module implementing the kernel.
+  """
+  try:
+    module.operation.verify()
+  except ir.MLIRError as e:
+    raise ValueError("The compiled module fails MLIR verification") from e
+
+  with module.context as ctx, module.operation.location as _:
+    ctx.append_dialect_registry(mlir.upstream_dialects)
+    ctx.load_all_available_dialects()
+    tpu.register_dialect(ctx)
+    mhlo.register_mhlo_dialect(ctx)
+    mhlo.register_mhlo_passes()
+
+    dump_mlir(module, "original")
+
+    if _MOSAIC_ALLOW_HLO.value:
+      # Run hlo dialect conversion: hlo -> linalg -> vector.
+      pipeline = [
+          "hlo-legalize-to-arithmetic",
+          "func.func(hlo-legalize-to-linalg)",
+          "func.func(linalg-vectorization)",
+      ]
+      pipeline = PassManager.parse(f"builtin.module({','.join(pipeline)})")
+      pipeline.run(module.operation)
+      dump_mlir(module, "post-hlo-conversion")
+
+    pipeline = [
+        f"func.func(tpu-infer-memref-layout{{hardware-generation={hardware_generation}}})"
+    ]
+    pipeline = PassManager.parse(f"builtin.module({','.join(pipeline)})")
+    pipeline.run(module.operation)
+    dump_mlir(module, "post-infer-memref-layout")
+
+    pipeline = [
+        "canonicalize",
+        "cse",
+    ]
+    pipeline = PassManager.parse(f"builtin.module({','.join(pipeline)})")
+    pipeline.run(module.operation)
+    dump_mlir(module, "post-infer-memref-layout-simplify")
+
+    try:
+      on_device_checks = FLAGS["xla_mosaic_on_device_checks"].value
+    except KeyError:
+      on_device_checks = False
+
+    if checks := on_device_checks:
+      checks = set(checks.split(","))
+      if checks == {"bounds"}:  # We only support one kind of checks now.
+        pipeline = PassManager.parse(
+            "builtin.module(func.func(debug-assert-insertion))"
+        )
+        pipeline.run(module.operation)
+        dump_mlir(module, "post-assert-insertion")
+      elif checks:
+        checks.discard("bounds")
+        raise ValueError(
+            f"Unrecognized on-device check categories: {', '.join(checks)}"
+        )
+
+    pipeline = [
+        "func.func(tpu-infer-vector-layout{sublane-count=8 lane-count=128})",
+    ]
+    pipeline = PassManager.parse(f"builtin.module({','.join(pipeline)})")
+    pipeline.run(module.operation)
+    dump_mlir(module, "post-infer-vector-layout")
+
+    sl_cnt = 8
+    l_cnt = 128
+    mxu_size = 128 if hardware_generation < 6 else 256
+    pipeline = [
+        "func.func(tpu-apply-vector-layout{"
+        f" sublane-count={sl_cnt} lane-count={l_cnt}"
+        f" hardware-generation={hardware_generation}"
+        f" mxu-contracting-size={mxu_size} mxu-noncontracting-size={mxu_size}"
+        f" max-sublanes-in-scratch={sl_cnt * (sl_cnt + 1)}"
+        "})"
+    ]
+    pipeline = PassManager.parse(f"builtin.module({','.join(pipeline)})")
+    pipeline.run(module.operation)
+    dump_mlir(module, "post-apply-vector-layout")
+
+    pipeline = [
+        "canonicalize",
+        "cse",
+    ]
+    pipeline = PassManager.parse(f"builtin.module({','.join(pipeline)})")
+    pipeline.run(module.operation)
+    dump_mlir(module, "post-apply-vector-layout-simplify")
+
+    return module
 
 
 def as_tpu_kernel(
@@ -246,29 +360,52 @@ def as_tpu_kernel(
     backend: str | xla_client.Client = "tpu",
     device_type: str | None = None,
     kernel_name: str | None = None,
-    kernel_regeneration_metadata: bytes | None = None,
     vmem_limit_bytes: int | None = None,
     flags: dict[str, bool | int | float] | None = None,
+    allow_input_fusion: list[bool] | None = None,
     input_output_aliases: tuple[tuple[int, int], ...] = (),
+    internal_scratch_in_bytes: int | None = None,
 ) -> Callable[..., Any]:
   """Turns an MLIR Mosaic kernel into a JAX-compatible function."""
   # We use jax.jit to make sure we hit the fast compilation cache.
-  some_tpu = jax.devices(backend)[0]
-  device_kind = some_tpu.device_kind
-  if not device_kind.startswith("TPU v"):
-    raise ValueError(f"Unrecognized TPU device kind: {device_kind}.")
+
   if vmem_limit_bytes is not None and not isinstance(vmem_limit_bytes, int):
     raise ValueError(
         "vmem_limit_bytes must be an int: provided with a"
         f" {type(vmem_limit_bytes)}."
     )
-  hardware_generation = int(device_kind[len("TPU v")])
   has_communication, has_custom_barrier = tpu.private_has_communication(
       module.operation
   )
-  bytecode_buffer = io.BytesIO()
-  module.operation.write_bytecode(bytecode_buffer, desired_version=0)
-  asm = bytecode_buffer.getvalue()
+  needs_hlo_passes = _MOSAIC_ALLOW_HLO.value
+  needs_layout_passes = not device_type
+  # We'll mutate the module, so clone it
+  with module.context as ctx, module.operation.location as _:
+    module = ir.Module.parse(
+        module.operation.get_asm(binary=True, enable_debug_info=True)
+    )
+    if needs_layout_passes and _MOSAIC_USE_PYTHON_PIPELINE.value:
+      some_tpu = jax.devices(backend)[0]
+      device_kind = some_tpu.device_kind
+      if not device_kind.startswith("TPU v"):
+        raise ValueError(
+            f"Unrecognized TPU device kind: {device_kind}. "
+            "tpu_custom_call cannot be lowered on a machine without TPUs "
+            "when mosaic_use_python_pipeline=True.")
+      hardware_generation = int(device_kind[len("TPU v")])
+      module = _lower_tpu_kernel(module, hardware_generation)
+      needs_hlo_passes = False
+      needs_layout_passes = False
+    prev_allow_unregistered_dialects = ctx.allow_unregistered_dialects
+    ctx.allow_unregistered_dialects = True
+    try:
+      pipeline = PassManager.parse("builtin.module(mosaic-serde{serialize=true})")
+      pipeline.run(module.operation)
+    finally:
+      ctx.allow_unregistered_dialects = prev_allow_unregistered_dialects
+    bytecode_buffer = io.BytesIO()
+    module.operation.write_bytecode(bytecode_buffer, desired_version=0)
+    asm = bytecode_buffer.getvalue()
 
   # TODO(amagni): Kernel name and regeneration metadata could alternatively be
   # added as a custom attribute to the MLIR call op rather than including them
@@ -276,17 +413,18 @@ def as_tpu_kernel(
   return _lowered_as_tpu_kernel(
       asm,
       out_type,
-      needs_hlo_passes=_MOSAIC_ALLOW_HLO.value,
-      needs_layout_passes=not device_type,
+      needs_hlo_passes=needs_hlo_passes,
+      needs_layout_passes=needs_layout_passes,
       device_type=device_type,
       has_communication=has_communication,
       has_custom_barrier=has_custom_barrier,
       kernel_name=kernel_name,
-      kernel_regeneration_metadata=kernel_regeneration_metadata,
       cost_estimate=cost_estimate,
       vmem_limit_bytes=vmem_limit_bytes,
       flags=flags,
+      allow_input_fusion=allow_input_fusion,
       input_output_aliases=input_output_aliases,
+      internal_scratch_in_bytes=internal_scratch_in_bytes,
   )
 
 
@@ -301,10 +439,12 @@ def _lowered_as_tpu_kernel(
     has_communication: bool = False,
     has_custom_barrier: bool = False,
     kernel_name: str | None = None,
-    kernel_regeneration_metadata: bytes | None = None,
     vmem_limit_bytes: int | None = None,
     flags: dict[str, bool | int | float] | None = None,
+    allow_input_fusion: list[bool] | None = None,
     input_output_aliases: tuple[tuple[int, int], ...] = (),
+    serialization_format: int | None = 1,
+    internal_scratch_in_bytes: int | None = None,
 ):
   """Turns a low-level MLIR Mosaic kernel into a JAX-compatible function."""
   unpack = False
@@ -333,12 +473,14 @@ def _lowered_as_tpu_kernel(
         needs_layout_passes,
         vmem_limit_bytes,
         flags,
+        allow_input_fusion,
+        serialization_format,
+        internal_scratch_in_bytes,
     )
     result = tpu_custom_call_p.bind(
         *args,
         config=config,
         kernel_name=kernel_name,
-        kernel_regeneration_metadata=kernel_regeneration_metadata,
         out_avals=out_avals,
         input_output_aliases=input_output_aliases,
     )
@@ -355,6 +497,6 @@ def dump_mlir(module: ir.Module, name: str):
   if should_dump == "sponge":
     outdir = os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR", None)
     if outdir:
-      path = os.path.join(outdir, f"{time.time_ns()}-mosaic-dump-{name}.txt")
+      path = os.path.join(outdir, f"{time.time_ns()}-mosaic-dump-{name}-py.txt")
       with open(path, "w") as f:
         f.write(str(module))

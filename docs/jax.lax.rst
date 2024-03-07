@@ -158,7 +158,6 @@ Operators
     sub
     tan
     tanh
-    tie_in
     top_k
     transpose
     zeros_like_array

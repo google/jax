@@ -152,6 +152,7 @@ from jax._src.lax.lax import (
   population_count_p as population_count_p,
   pow as pow,
   pow_p as pow_p,
+  ragged_dot as ragged_dot,
   real as real,
   real_p as real_p,
   reciprocal as reciprocal,
@@ -210,7 +211,6 @@ from jax._src.lax.lax import (
   tan_p as tan_p,
   tanh as tanh,
   tanh_p as tanh_p,
-  tie_in as _deprecated_tie_in,
   top_k as top_k,
   top_k_p as top_k_p,
   transpose as transpose,
@@ -342,6 +342,7 @@ from jax._src.lax.parallel import (
   all_to_all_p as all_to_all_p,
   axis_index as axis_index,
   axis_index_p as axis_index_p,
+  pbroadcast as pbroadcast,
   pmax as pmax,
   pmax_p as pmax_p,
   pmean as pmean,
@@ -375,18 +376,13 @@ from jax._src.dispatch import device_put_p as device_put_p
 
 
 _deprecations = {
-  # Added January 18 2023
+  # Finalized 2024-05-13; remove after 2024-08-13
   "tie_in": (
     "jax.lax.tie_in is deprecated: it has been a no-op since JAX v0.2.0. "
-    "Replace z = tie_in(x, y) with z = y.", _deprecated_tie_in,
+    "Replace z = tie_in(x, y) with z = y.", None,
   ),
 }
 
-import typing as _typing
-if _typing.TYPE_CHECKING:
-  tie_in = _deprecated_tie_in
-else:
-  from jax._src.deprecations import deprecation_getattr as _deprecation_getattr
-  __getattr__ = _deprecation_getattr(__name__, _deprecations)
-  del _deprecation_getattr
-del _typing
+from jax._src.deprecations import deprecation_getattr as _deprecation_getattr
+__getattr__ = _deprecation_getattr(__name__, _deprecations)
+del _deprecation_getattr

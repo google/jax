@@ -233,6 +233,7 @@ from jax._src.numpy.lax_numpy import (
     tensordot as tensordot,
     tile as tile,
     trace as trace,
+    trapezoid as trapezoid,
     transpose as transpose,
     tri as tri,
     tril as tril,
@@ -252,6 +253,7 @@ from jax._src.numpy.lax_numpy import (
     unpackbits as unpackbits,
     unravel_index as unravel_index,
     unsignedinteger as unsignedinteger,
+    unstack as unstack,
     unwrap as unwrap,
     vander as vander,
     vdot as vdot,
@@ -294,6 +296,7 @@ from jax._src.numpy.reductions import (
     count_nonzero as count_nonzero,
     cumsum as cumsum,
     cumprod as cumprod,
+    cumulative_sum as cumulative_sum,
     max as max,
     mean as mean,
     median as median,
@@ -447,7 +450,15 @@ from jax._src.numpy.array_methods import register_jax_array_methods
 register_jax_array_methods()
 del register_jax_array_methods
 
-try:
-  from numpy import issubsctype as _deprecated_issubsctype
-except ImportError:
-  _deprecated_issubsctype = None
+
+_deprecations = {
+  # Deprecated 18 Sept 2023 and removed 06 Feb 2024
+  "trapz": (
+    "jnp.trapz is deprecated; use jnp.trapezoid instead.",
+    None
+  ),
+}
+
+from jax._src.deprecations import deprecation_getattr as _deprecation_getattr
+__getattr__ = _deprecation_getattr(__name__, _deprecations)
+del _deprecation_getattr

@@ -55,12 +55,13 @@ class ScanOp(ScanOp):  # type: ignore
       self,
       operands: Sequence[ir.Value],
       axis: int,
+      reverse: bool = False,
       *,
       loc: ir.Location | None = None,
       ip: ir.InsertionPoint | None = None,
   ):
     return_types = [op.type for op in operands]
-    super().__init__(return_types, operands, axis, loc=loc, ip=ip)
+    super().__init__(return_types, operands, axis, reverse, loc=loc, ip=ip)
 
 
 # TODO(slebedev): Consider overriding instead.

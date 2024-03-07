@@ -26,7 +26,6 @@ from absl.testing import absltest
 import jax
 import jax.numpy as jnp
 import jax.profiler
-from jax import config
 import jax._src.test_util as jtu
 from jax._src import profiler
 
@@ -50,7 +49,7 @@ try:
 except ImportError:
   pass
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class ProfilerTest(unittest.TestCase):

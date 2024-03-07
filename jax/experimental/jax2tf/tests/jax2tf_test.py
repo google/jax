@@ -15,9 +15,7 @@
 
 Specific JAX primitive conversion tests are in primitives_test."""
 import collections
-from collections.abc import Sequence
 import contextlib
-import functools
 import math
 import os
 import re
@@ -29,29 +27,38 @@ from absl.testing import absltest, parameterized
 import jax
 from jax import ad_checkpoint
 from jax import dtypes
+from jax import export
 from jax import lax
 from jax import numpy as jnp
 from jax import sharding
 from jax._src import config
 from jax._src import core
+from jax._src.maps import xmap
 from jax._src import source_info_util
 from jax._src import test_util as jtu
 from jax._src import xla_bridge as xb
 from jax.experimental import jax2tf
-from jax.experimental import export
 from jax.experimental.jax2tf.tests import tf_test_util
-from jax.experimental.maps import xmap
 from jax.experimental.shard_map import shard_map
 from jax.experimental import pjit
 from jax.sharding import PartitionSpec as P
 
 import numpy as np
-import tensorflow as tf  # type: ignore[import]
+import tensorflow as tf
 # pylint: disable=g-direct-tensorflow-import
-from tensorflow.compiler.tf2xla.python import xla as tfxla  # type: ignore[import]
+from tensorflow.compiler.tf2xla.python import xla as tfxla
 # pylint: enable=g-direct-tensorflow-import
 
 config.parse_flags_with_absl()
+_exit_stack = contextlib.ExitStack()
+
+# TODO(necula): Remove once tensorflow is 2.10.0 everywhere.
+def setUpModule():
+  if not hasattr(tfxla, "optimization_barrier"):
+    _exit_stack.enter_context(jtu.global_config_context(jax_remat_opt_barrier=False))
+
+def tearDownModule():
+  _exit_stack.close()
 
 
 class Jax2TfTest(tf_test_util.JaxToTfTestCase):
@@ -970,8 +977,8 @@ class Jax2TfTest(tf_test_util.JaxToTfTestCase):
       self.assertIn("my_test_function_jax/mul", self.TfToHlo(run_tf))
     else:
       graph_def = str(tf.function(run_tf, autograph=False).get_concrete_function().graph.as_graph_def())
-      if "my_test_function_jax/pjit_fn_/Mul" not in graph_def:
-        self.assertIn("my_test_function_jax/jit_fn_/Mul", graph_def)
+      if "my_test_function_jax/pjit_multiply_/Mul" not in graph_def:
+        self.assertIn("my_test_function_jax/jit_multiply_/Mul", graph_def)
 
   def test_bfloat16_constant(self):
     # Re: https://github.com/google/jax/issues/3942
@@ -1307,7 +1314,7 @@ class Jax2TfTest(tf_test_util.JaxToTfTestCase):
     shape = (3, 2)
     x = np.arange(math.prod(shape), dtype=np.float32).reshape(shape)
 
-    jax_comp = jax.xla_computation(f_while)(x)
+    jax_comp = jax.jit(f_while).lower(x).compiler_ir('hlo')
     backend = xb.get_backend()
     modules = backend.compile(jax_comp).hlo_modules()
     jax_opt_hlo = modules[0].to_string()
@@ -1496,10 +1503,10 @@ class Jax2TfTest(tf_test_util.JaxToTfTestCase):
       transformed_func = dict(
           none=func,
           jit=jax.jit(func),
-          jit_in_shardings_None=jax.jit(func, in_shardings=None),  # type: ignore
-          jit_in_shardings_P=jax.jit(func, in_shardings=(P("a"),)),  # type: ignore
+          jit_in_shardings_None=jax.jit(func, in_shardings=None),
+          jit_in_shardings_P=jax.jit(func, in_shardings=(P("a"),)),
           jit_in_shardings_Sharding=jax.jit(
-              func, in_shardings=(sharding.NamedSharding(mesh, P("a")),)),  # type: ignore
+              func, in_shardings=(sharding.NamedSharding(mesh, P("a")),)),
           pjit=pjit.pjit(func),
           pjit_in_shardings_None=pjit.pjit(func, in_shardings=None,
                                            out_shardings=None),
@@ -1552,7 +1559,7 @@ class Jax2TfTest(tf_test_util.JaxToTfTestCase):
       # Run the JAX native version, to check it works, and to fill caches.
       _ = func_to_convert(*args)
       exported = export.export(
-          func_to_convert,
+          (jax.jit(func_to_convert) if not hasattr(func_to_convert, "trace") else func_to_convert),
           lowering_platforms=("tpu",)
       )(*(core.ShapedArray(a.shape, a.dtype) for a in args))
 
@@ -1730,6 +1737,15 @@ class Jax2TfTest(tf_test_util.JaxToTfTestCase):
     f_switch_tf = jax2tf.convert(f_switch, enable_xla=False)
     self.assertIn("switch_case", self.TfToHlo(f_switch_tf, np.pi))
 
+  @jtu.skip_on_flag("jax2tf_default_native_serialization", False)
+  def test_ragged_dot(self):
+    dtype = np.float32
+    m, k, n, num_groups = 5, 4, 3, 2
+    lhs = np.arange(m * k, dtype=dtype).reshape((m, k))
+    rhs = np.arange(num_groups * k * n, dtype=dtype).reshape((num_groups, k, n))
+    group_sizes = np.array([3, 2], dtype=np.int32)
+    self.ConvertAndCompare(jax.lax.ragged_dot, lhs, rhs, group_sizes)
+
 
 @jtu.with_config(jax_enable_custom_prng=True)
 class Jax2tfWithCustomPRNGTest(tf_test_util.JaxToTfTestCase):
@@ -1770,7 +1786,4 @@ class Jax2TfVersioningTest(tf_test_util.JaxToTfTestCase):
 
 
 if __name__ == "__main__":
-  # TODO: Remove once tensorflow is 2.10.0 everywhere.
-  if not hasattr(tfxla, "optimization_barrier"):
-    jax.config.update("jax_remat_opt_barrier", False)
   absltest.main(testLoader=jtu.JaxTestLoader())

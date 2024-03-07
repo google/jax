@@ -17,7 +17,6 @@
 load("//jaxlib:symlink_files.bzl", "symlink_files")
 load(
     "//jaxlib:jax.bzl",
-    "if_windows",
     "py_library_providing_imports_info",
     "pybind_extension",
     "pytype_library",
@@ -30,10 +29,16 @@ package(
     default_visibility = ["//:__subpackages__"],
 )
 
+# This makes xla_extension module accessible from jax._src.lib.
+genrule(
+    name = "xla_extension_py",
+    outs = ["xla_extension.py"],
+    cmd = "echo 'from xla.xla.python.xla_extension import *\n' > $@",
+)
+
 py_library_providing_imports_info(
     name = "jaxlib",
     srcs = [
-        "ducc_fft.py",
         "gpu_common_utils.py",
         "gpu_linalg.py",
         "gpu_prng.py",
@@ -46,23 +51,27 @@ py_library_providing_imports_info(
         "lapack.py",
         ":version",
         ":xla_client",
+        ":xla_extension_py",
     ],
-    data = [":xla_extension"],
+    data = [":ffi_headers"],
     lib_rule = pytype_library,
     deps = [
         ":cpu_feature_guard",
         ":utils",
-        "//jaxlib/cpu:_ducc_fft",
         "//jaxlib/cpu:_lapack",
         "//jaxlib/mlir",
         "//jaxlib/mlir:arithmetic_dialect",
         "//jaxlib/mlir:builtin_dialect",
         "//jaxlib/mlir:chlo_dialect",
         "//jaxlib/mlir:func_dialect",
+        "//jaxlib/mlir:gpu_dialect",
         "//jaxlib/mlir:ir",
+        "//jaxlib/mlir:llvm_dialect",
         "//jaxlib/mlir:math_dialect",
         "//jaxlib/mlir:memref_dialect",
         "//jaxlib/mlir:mhlo_dialect",
+        "//jaxlib/mlir:nvgpu_dialect",
+        "//jaxlib/mlir:nvvm_dialect",
         "//jaxlib/mlir:pass_manager",
         "//jaxlib/mlir:scf_dialect",
         "//jaxlib/mlir:sparse_tensor_dialect",
@@ -70,6 +79,7 @@ py_library_providing_imports_info(
         "//jaxlib/mlir:vector_dialect",
         "//jaxlib/mosaic",
         "//jaxlib/triton",
+        "@xla//xla/python:xla_extension",
     ],
 )
 
@@ -88,12 +98,9 @@ symlink_files(
 )
 
 symlink_files(
-    name = "xla_extension",
-    srcs = if_windows(
-        ["@xla//xla/python:xla_extension.pyd"],
-        ["@xla//xla/python:xla_extension.so"],
-    ),
-    dst = ".",
+    name = "ffi_headers",
+    srcs = ["@xla//xla/ffi/api:all_headers"],
+    dst = "include/xla/ffi/api",
     flatten = True,
 )
 
@@ -126,7 +133,7 @@ cc_library(
     features = ["-use_header_modules"],
     deps = [
         ":kernel_helpers",
-        "@tsl//tsl/python/lib/core:numpy",
+        "@xla//xla/tsl/python/lib/core:numpy",
         "@com_google_absl//absl/base",
         "@nanobind",
     ],
@@ -189,11 +196,13 @@ pybind_extension(
     srcs = ["cuda_plugin_extension.cc"],
     module_name = "cuda_plugin_extension",
     deps = [
+        "@com_google_absl//absl/status",
         "@nanobind",
         "//jaxlib:kernel_nanobind_helpers",
         "@xla//third_party/python_runtime:headers",
-        "@xla//xla:status",
+        "@local_config_cuda//cuda:cuda_headers",
         "@xla//xla:util",
+        "@xla//xla/ffi/api:c_api",
         "@xla//xla/pjrt:status_casters",
         "@xla//xla/pjrt/c:pjrt_c_api_gpu_extension_hdrs",
         "@xla//xla/pjrt/c:pjrt_c_api_hdrs",
@@ -202,7 +211,29 @@ pybind_extension(
         "@xla//xla/python:py_client_gpu",
         "@xla//xla/tsl/cuda:cublas",
         "@xla//xla/tsl/cuda:cudart",
-        "@tsl//tsl/python/lib/core:numpy",
+        "@xla//xla/tsl/python/lib/core:numpy",
+    ],
+)
+
+pybind_extension(
+    name = "rocm_plugin_extension",
+    srcs = ["rocm_plugin_extension.cc"],
+    module_name = "rocm_plugin_extension",
+    deps = [
+        "//jaxlib:kernel_nanobind_helpers",
+        "@xla//third_party/python_runtime:headers",
+        "@xla//xla:status",
+        "@xla//xla:util",
+        "@xla//xla/ffi/api:c_api",
+        "@xla//xla/pjrt:status_casters",
+        "@xla//xla/pjrt/c:pjrt_c_api_gpu_extension_hdrs",
+        "@xla//xla/pjrt/c:pjrt_c_api_hdrs",
+        "@xla//xla/pjrt/c:pjrt_c_api_helpers",
+        "@xla//xla/python:py_client_gpu",
+        "@xla//xla/tsl/python/lib/core:numpy",
+        "@com_google_absl//absl/status",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@nanobind",
     ],
 )
 

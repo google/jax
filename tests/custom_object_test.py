@@ -18,9 +18,9 @@ import unittest
 
 import numpy as np
 
+import jax
 import jax.numpy as jnp
 from jax import jit, lax, make_jaxpr
-from jax import config
 from jax.interpreters import mlir
 from jax.interpreters import xla
 
@@ -34,7 +34,7 @@ from jax._src.lib import xla_client
 xc = xla_client
 xb = xla_bridge
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 # TODO(jakevdp): use a setup/teardown method to populate and unpopulate all the
 # dictionaries associated with the following objects.

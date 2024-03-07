@@ -29,7 +29,9 @@ Breaking changes will be announced via the
 """
 
 from jax.extend import (
+    backend as backend,
     core as core,
+    ffi as ffi,
     linear_util as linear_util,
     random as random,
     source_info_util as source_info_util,

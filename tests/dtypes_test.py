@@ -27,6 +27,7 @@ import numpy as np
 
 import jax
 from jax import numpy as jnp
+from jax._src import earray
 from jax._src import config
 from jax._src import dtypes
 from jax._src import test_util as jtu
@@ -66,8 +67,8 @@ complex_dtypes = [np.dtype('complex64'), np.dtype('complex128')]
 all_dtypes = (bool_dtypes + signed_dtypes + unsigned_dtypes + float_dtypes +
               complex_dtypes)
 
-scalar_types = [jnp.bool_, jnp.int8, jnp.int16, jnp.int32, jnp.int64,
-                jnp.uint8, jnp.uint16, jnp.uint32, jnp.uint64,
+scalar_types = [jnp.bool_, jnp.int4, jnp.int8, jnp.int16, jnp.int32, jnp.int64,
+                jnp.uint4, jnp.uint8, jnp.uint16, jnp.uint32, jnp.uint64,
                 jnp.bfloat16, jnp.float16, jnp.float32, jnp.float64,
                 jnp.complex64, jnp.complex128]
 
@@ -93,6 +94,7 @@ _EXPECTED_CANONICALIZE_X32[np.complex128] = np.complex64
 _EXPECTED_CANONICALIZE_X32[np.longlong] = np.int32
 
 UINT_DTYPES = {
+  4: jnp.uint4,
   8: np.uint8,
   16: np.uint16,
   32: np.uint32,
@@ -283,13 +285,15 @@ class DtypesTest(jtu.JaxTestCase):
       self.assertTrue(dtypes.issubdtype(np.dtype(t).type, t))
       self.assertTrue(dtypes.issubdtype(t, np.dtype(t).type))
       self.assertTrue(dtypes.issubdtype(t, np.dtype(t)))
-      if t != jnp.bfloat16:
-        for category in [np.generic, jnp.inexact, jnp.integer, jnp.signedinteger,
-                         jnp.unsignedinteger, jnp.floating, jnp.complexfloating]:
-          self.assertEqual(dtypes.issubdtype(t, category),
-                           np.issubdtype(np.dtype(t).type, category))
-          self.assertEqual(dtypes.issubdtype(t, category),
-                           np.issubdtype(np.dtype(t).type, category))
+      if t in [jnp.int4, jnp.uint4, jnp.bfloat16]:
+        # These dtype have no equivalent in NumPy.
+        continue
+      for category in [np.generic, jnp.inexact, jnp.integer, jnp.signedinteger,
+                       jnp.unsignedinteger, jnp.floating, jnp.complexfloating]:
+        self.assertEqual(dtypes.issubdtype(t, category),
+                         np.issubdtype(np.dtype(t).type, category))
+        self.assertEqual(dtypes.issubdtype(t, category),
+                         np.issubdtype(np.dtype(t).type, category))
 
   def testIsSubdtypeExtended(self):
     self.assertTrue(dtypes.issubdtype(dtypes.extended, dtypes.extended))
@@ -553,6 +557,73 @@ class DtypesTest(jtu.JaxTestCase):
     scale = jnp.float32(1.)
     _, new_scale = jax.jit(jax.grad(outer, (0, 1)))(jnp.float32(3.14), scale)
     self.assertAllClose(new_scale, jnp.float32(1.0))
+
+  def test_check_dtype_non_hashable(self):
+    # regression test for issue with checking non-hashable custom dtype
+    class MyDtype:
+      __hash__ = None
+      dtype = np.dtype('float32')
+    dtypes.check_user_dtype_supported(MyDtype())
+
+  def test_check_dtype_array(self):
+    x = jnp.arange(4)
+    msg = "Passing an array as a dtype argument is deprecated"
+    with self.assertWarnsRegex(DeprecationWarning, msg):
+      dtypes.check_user_dtype_supported(x)
+    with self.assertWarnsRegex(DeprecationWarning, msg):
+      jax.jit(dtypes.check_user_dtype_supported)(x)
+
+
+class EArrayTest(jtu.JaxTestCase):
+
+  @parameterized.parameters([True, False])
+  def test_extended_dtypes_at_rest(self, jit):
+    # Test a trivial isomorphic-to-float32 extended dtype working with EArray
+    from jax._src import core
+    from jax._src.interpreters import pxla
+
+    class foo(dtypes.extended): pass
+
+    class FooTyRules:
+
+      @staticmethod
+      def convert_to(foo_dtype, target_dtype):
+        return True
+
+      @staticmethod
+      def physical_element_aval(foo_dtype):
+        return core.ShapedArray((), dtypes.dtype('float32'))
+
+      @staticmethod
+      def global_sharded_result_handler(aval, out_sharding, committed):
+        phys_sharding = out_sharding  # unlike KeyTyRules, assume same shape
+        phys_aval = core.physical_aval(aval)
+        phys_handler_maker = pxla.global_result_handlers[core.ShapedArray]
+        phys_handler = phys_handler_maker(phys_aval, phys_sharding, committed)
+        return lambda bufs: earray.EArray(aval, phys_handler(bufs))
+
+    @dataclasses.dataclass(frozen=True)
+    class FooTy(dtypes.ExtendedDType):
+      name: str = 'foo'
+      _rules: type = FooTyRules
+      type: type = foo
+
+    # Can we make one?
+    def f(x):
+      return jax.lax.convert_element_type(x, FooTy())
+    if jit:
+      f = jax.jit(f)
+    x = f(jnp.arange(3, dtype='float32'))  # don't crash
+    self.assertIsInstance(x.dtype, FooTy)
+
+    # Can we consume one?
+    def g(x):
+      self.assertIsInstance(x.dtype, FooTy)
+      return x
+    if jit:
+      g = jax.jit(g)
+    y = g(x)
+    self.assertIsInstance(y.dtype, FooTy)
 
 
 class TestPromotionTables(jtu.JaxTestCase):

@@ -15,15 +15,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import importlib.util
+from collections.abc import Callable, Sequence
 import functools
+import logging
 import string
 import sys
-from typing import Any, Callable, Union
+from typing import Any, Union
 import weakref
 
 import numpy as np
 
+import jax
 import jax.numpy as jnp
 from jax import lax
 
@@ -44,19 +47,7 @@ from jax._src.lib.mlir.dialects import hlo
 from jax._src.sharding import Sharding
 from jax._src.sharding_impls import NamedSharding, parse_flatten_op_sharding
 
-# pytype: disable=import-error
-try:
-  import rich
-  import rich.align
-  import rich.box
-  import rich.console
-  import rich.padding
-  import rich.style
-  import rich.table
-  RICH_ENABLED = True
-except:
-  RICH_ENABLED = False
-# pytype: enable=import-error
+logger = logging.getLogger(__name__)
 
 class DebugEffect(effects.Effect):
   __str__ = lambda self: "Debug"
@@ -86,7 +77,22 @@ map, unsafe_map = util.safe_map, map
 def debug_callback_impl(*args, callback: Callable[..., Any],
                         effect: DebugEffect):
   del effect
-  return callback(*args)
+  try:
+    cpu_device, *_ = jax.local_devices(backend="cpu")
+  except RuntimeError as e:
+    raise RuntimeError(
+        "jax.debug.callback failed to find a local CPU device to place the"
+        " inputs on. Make sure \"cpu\" is listed in --jax_platforms or the"
+        " JAX_PLATFORMS environment variable."
+    ) from e
+  args = jax.device_put(args, cpu_device)
+  with jax.default_device(cpu_device):
+    try:
+      callback(*args)
+    except BaseException:
+      logger.exception("jax.debug.callback failed")
+      raise
+  return ()
 
 @debug_callback_p.def_effectful_abstract_eval
 def debug_callback_abstract_eval(*flat_avals, callback: Callable[..., Any],
@@ -149,18 +155,19 @@ def debug_callback_lowering(ctx, *args, effect, callback, **params):
     sharding = None
 
   def _callback(*flat_args):
-    return tuple(
-        debug_callback_p.impl(
-            *flat_args, effect=effect, callback=callback, **params))
+    debug_callback_p.impl(
+        *flat_args, effect=effect, callback=callback, **params)
+    return ()
   if effects.ordered_effects.contains(effect):
-    token = ctx.tokens_in.get(effect)[0]
+    [token] = ctx.tokens_in.get(effect)
     result, token, _ = mlir.emit_python_callback(
-        ctx, _callback, token, list(args), ctx.avals_in, ctx.avals_out, True)
+        ctx, _callback, token, list(args), ctx.avals_in, ctx.avals_out,
+        has_side_effect=True)
     ctx.set_tokens_out(mlir.TokenSet({effect: (token,)}))
   else:
-    result, token, _ = mlir.emit_python_callback(
-        ctx, _callback, None, list(args), ctx.avals_in, ctx.avals_out, True,
-        sharding=sharding)
+    result, _, _ = mlir.emit_python_callback(
+        ctx, _callback, None, list(args), ctx.avals_in, ctx.avals_out,
+        has_side_effect=True, sharding=sharding)
   return result
 mlir.register_lowering(debug_callback_p, debug_callback_lowering,
                        platform="cpu")
@@ -200,7 +207,7 @@ def _debug_callback_partial_eval_custom(saveable, unks_in, inst_in, eqn):
 pe.partial_eval_jaxpr_custom_rules[debug_callback_p] = (
     _debug_callback_partial_eval_custom)
 
-def debug_callback(callback: Callable[..., Any], *args: Any,
+def debug_callback(callback: Callable[..., None], *args: Any,
                    ordered: bool = False, **kwargs: Any) -> None:
   """Calls a stageable Python callback.
 
@@ -219,7 +226,7 @@ def debug_callback(callback: Callable[..., Any], *args: Any,
   of the computation are duplicated or dropped.
 
   Args:
-    callback: A Python callable. Its return value will be ignored.
+    callback: A Python callable returning None.
     *args: The positional arguments to the callback.
     ordered: A keyword only argument used to indicate whether or not the
       staged out computation will enforce ordering of this callback w.r.t.
@@ -244,7 +251,7 @@ def debug_callback(callback: Callable[..., Any], *args: Any,
   def _flat_callback(*flat_args):
     args, kwargs = tree_util.tree_unflatten(in_tree, flat_args)
     callback(*args, **kwargs)
-    return []
+    return ()
   debug_callback_p.bind(*flat_args, callback=_flat_callback, effect=effect)
 
 class _DebugPrintFormatChecker(string.Formatter):
@@ -384,7 +391,7 @@ def _inspect_sharding_lowering_rule(ctx: mlir.LoweringRuleContext, value, *,
                    has_side_effect=ir.BoolAttr.get(True),
                    api_version=mlir.i32_attr(1),
                    called_computations=ir.ArrayAttr.get([]),
-                   backend_config=ir.StringAttr.get(key),
+                   backend_config=ir.StringAttr.get(key),  # type: ignore[arg-type]
                    operand_layouts=None,
                    result_layouts=None)
   return []
@@ -440,8 +447,19 @@ def visualize_sharding(shape: Sequence[int], sharding: Sharding, *,
                        min_width: int = 9, max_width: int = 80,
                        color_map: ColorMap | None = None):
   """Visualizes a ``Sharding`` using ``rich``."""
-  if not RICH_ENABLED:
+  if not importlib.util.find_spec("rich"):
     raise ValueError("`visualize_sharding` requires `rich` to be installed.")
+
+  # These imports are local so that they don't affect JAX import times.
+  # pytype: disable=import-error
+  import rich.align
+  import rich.console
+  import rich.box
+  import rich.padding
+  import rich.style
+  import rich.table
+  # pytype: enable=import-error
+
   if len(shape) > 2 or len(shape) < 1:
     raise ValueError(
         "`visualize_sharding` only works for shapes with 1 and 2 dimensions.")
@@ -493,11 +511,11 @@ def visualize_sharding(shape: Sequence[int], sharding: Sharding, *,
       heights[chunk_idxs] = None
       widths[chunk_idxs]  = horiz_size / shape[0]
     slices.setdefault(chunk_idxs, set()).add(dev.id)
-  num_rows = max([a[0] for a in slices.keys()]) + 1
+  num_rows = max(a[0] for a in slices.keys()) + 1
   if len(list(slices.keys())[0]) == 1:
     num_cols = 1
   else:
-    num_cols = max([a[1] for a in slices.keys()]) + 1
+    num_cols = max(a[1] for a in slices.keys()) + 1
 
   color_iter = make_color_iter(color_map, num_rows, num_cols)
   table = rich.table.Table(show_header=False, show_lines=not use_color,

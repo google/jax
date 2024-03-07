@@ -10,9 +10,6 @@ Classes
 
 .. autoclass:: Sharding
    :members:
-.. autoclass:: XLACompatibleSharding
-   :members:
-   :show-inheritance:
 .. autoclass:: SingleDeviceSharding
    :members:
    :show-inheritance:

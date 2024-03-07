@@ -1,6 +1,8 @@
 (building-from-source)=
 # Building from source
 
+<!--* freshness: { reviewed: '2024-05-15' } *-->
+
 First, obtain the JAX source code:
 
 ```
@@ -44,13 +46,9 @@ To build `jaxlib` from source, you must also install some prerequisites:
 
   See below for Windows build instructions.
 
-- Python packages: `numpy`, `wheel`, `build`.
-
-You can install the necessary Python dependencies using `pip`:
-
-```
-pip install numpy wheel build
-```
+- there is no need to install Python dependencies locally, as your system
+  Python will be ignored during the build; please check
+  [Managing hermetic Python](#managing-hermetic-python) for details.
 
 To build `jaxlib` for CPU or TPU, you can run:
 
@@ -58,6 +56,20 @@ To build `jaxlib` for CPU or TPU, you can run:
 python build/build.py
 pip install dist/*.whl  # installs jaxlib (includes XLA)
 ```
+
+To build a wheel for a version of Python different from your current system
+installation pass `--python_version` flag to the build command:
+
+```
+python build/build.py --python_version=3.12
+```
+
+The rest of this document assumes that you are building for Python version
+matching your current system installation. If you need to build for a different
+version, simply append `--python_version=<py version>` flag every time you call
+`python build/build.py`. Note, the Bazel build will always use a hermetic Python
+installation regardless of whether the `--python_version` parameter is passed or
+not.
 
 There are two ways to build `jaxlib` with CUDA support: (1) use
 `python build/build.py --enable_cuda` to generate a jaxlib wheel with cuda
@@ -69,8 +81,11 @@ and jax-cuda-pjrt). You can set `gpu_plugin_cuda_version` to 11 or 12.
 See `python build/build.py --help` for configuration options, including ways to
 specify the paths to CUDA and CUDNN, which you must have installed. Here
 `python` should be the name of your Python 3 interpreter; on some systems, you
-may need to use `python3` instead. By default, the wheel is written to the
-`dist/` subdirectory of the current directory.
+may need to use `python3` instead. Despite calling the script with `python`,
+Bazel will always use its own hermetic Python interpreter and dependencies, only
+the `build/build.py` script itself will be processed by your system Python
+interpreter. By default, the wheel is written to the `dist/` subdirectory of the
+current directory.
 
 ### Building jaxlib from source with a modified XLA repository.
 
@@ -172,6 +187,200 @@ python build/build.py --enable_rocm --rocm_path=/opt/rocm-5.7.0 \
   --bazel_options=--override_repository=xla=/path/to/xla-rocm
 ```
 
+## Managing hermetic Python
+
+To make sure that JAX's build is reproducible, behaves uniformly across
+supported platforms (Linux, Windows, MacOS) and is properly isolated from
+specifics of a local system, we rely on hermetic Python (see
+[rules_python](https://github.com/bazelbuild/rules_python)) for all build
+and test commands executed via Bazel. This means that your system Python
+installation will be ignored during the build and Python interpreter itself
+as well as all the Python dependencies will be managed by bazel directly.
+
+### Specifying Python version
+
+When you run `build/build.py` tool, the version of hermetic Python is set
+automatically to match the version of the Python you used to
+run `build/build.py` script. To choose a specific version explicitly you may
+pass `--python_version` argument to the tool:
+
+```
+python build/build.py --python_version=3.12
+```
+
+Under the hood, the hermetic Python version is controlled
+by `HERMETIC_PYTHON_VERSION` environment variable, which is set automatically
+when you run `build/build.py`. In case you run bazel directly you may need to
+set the variable explicitly in one of the following ways:
+
+```
+# Either add an entry to your `.bazelrc` file
+build --repo_env=HERMETIC_PYTHON_VERSION=3.12
+
+# OR pass it directly to your specific build command
+bazel build <target> --repo_env=HERMETIC_PYTHON_VERSION=3.12
+
+# OR set the environment variable globally in your shell:
+export HERMETIC_PYTHON_VERSION=3.12
+```
+
+You may run builds and tests against different versions of Python sequentially
+on the same machine by simply switching the value of `--python_version` between
+the runs. All the python-agnostic parts of the build cache from the previous
+build will be preserved and reused for the subsequent builds.
+
+### Specifying Python dependencies
+
+During bazel build all JAX's Python dependencies are pinned to their specific
+versions. This is necessary to ensure reproducibility of the build.
+The pinned versions of the full transitive closure of JAX's dependencies
+together with their corresponding hashes are specified in
+`build/requirements_lock_<python version>.txt` files (
+e.g. `build/requirements_lock_3_12.txt` for `Python 3.12`).
+
+To update the lock files, make sure `build/requirements.in` contains the desired 
+direct dependencies list and then execute the following command (which will call 
+[pip-compile](https://pypi.org/project/pip-tools/) under the hood):
+
+```
+python build/build.py --requirements_update --python_version=3.12
+```
+
+Alternatively, if you need more control, you may run the bazel command
+directly (the two commands are equivalent):
+
+```
+bazel run //build:requirements.update --repo_env=HERMETIC_PYTHON_VERSION=3.12
+```
+
+where `3.12` is the `Python` version you wish to update.
+
+Note, since it is still `pip` and `pip-compile` tools used under the hood, so
+most of the command line arguments and features supported by those tools will be
+acknowledged by the Bazel requirements updater command as well. For example, if
+you wish the updater to consider pre-release versions simply pass `--pre`
+argument to the bazel command:
+
+```
+bazel run //build:requirements.update --repo_env=HERMETIC_PYTHON_VERSION=3.12 -- --pre
+```
+
+### Specifying dependencies on local wheels
+
+If you need to depend on a local .whl file, for example on your newly built
+jaxlib wheel, you may add a path to the wheel in `build/requirements.in` and
+re-run the requirements updater command for a selected version of Python. For
+example:
+
+```
+echo -e "\n$(realpath jaxlib-0.4.27.dev20240416-cp312-cp312-manylinux2014_x86_64.whl)" >> build/requirements.in
+python build/build.py --requirements_update --python_version=3.12
+```
+
+### Specifying dependencies on nightly wheels
+
+To build and test against the very latest, potentially unstable, set of Python
+dependencies we provide a special version of the dependency updater command as
+follows:
+
+```
+python build/build.py --requirements_nightly_update --python_version=3.12
+```
+
+Or, if you run `bazel` directly (the two commands are equivalent):
+
+```
+bazel run //build:requirements_nightly.update --repo_env=HERMETIC_PYTHON_VERSION=3.12
+```
+
+The difference between this and the regular updater is that by default it would
+accept pre-release, dev and nightly packages, it will also
+search https://pypi.anaconda.org/scientific-python-nightly-wheels/simple as an
+extra index url and will not put hashes in the resultant requirements lock file.
+
+### Building with pre-release Python version
+
+We support all of the current versions of Python out of the box, but if you need
+to build and test against a different version (for example the latest unstable
+version which hasn't been released officially yet) please follow the
+instructions below.
+
+1) Make sure you have installed necessary linux packages needed to build Python
+   interpreter itself and key packages (like `numpy` or `scipy`) from source. On
+   a typical Debian system you may need to install the following packages:
+
+```
+sudo apt-get update
+sudo apt-get build-dep python3 -y
+sudo apt-get install pkg-config zlib1g-dev libssl-dev -y
+# to  build scipy
+sudo apt-get install libopenblas-dev -y
+```
+
+2) Check your `WORKSPACE` file and make sure it
+   has `custom_python_interpreter()` entry there, pointing to the version of
+   Python you want to build.
+
+3) Run `bazel build @python_dev//:python_dev` to build Python interpreter. By default it will
+   be built with GCC compiler. If you wish to build with clang, you need to set
+   corresponding env variables to do so (
+   e.g. `--repo_env=CC=/usr/lib/llvm-17/bin/clang --repo_env=CXX=/usr/lib/llvm-17/bin/clang++`).
+
+4) Check the output of the previous command. At the very end of it you will find
+   a code snippet for `python_register_toolchains()` entry with your newly built
+   Python in it. Copy that code snippet in your `WORKSPACE` file either right
+   after  `python_init_toolchains()` entry (to add the new version of Python) or
+   instead of it (to replace an existing version, like replacing 3.12 with
+   custom built variant of 3.12). The code snippet is generated to match your
+   actual setup, so it should work as is, but you can customize it if you choose
+   so (for example to change location of Python's `.tgz` file so it could be
+   downloaded remotely instead of being on local machine).
+
+5) Make sure there is an entry for your Python's version in `requirements`
+   parameter for `python_init_repositories()` in your WORKSPACE file. For
+   example for `Python 3.13` it should have something
+   like `"3.13": "//build:requirements_lock_3_13.txt"`.
+
+6) For unstable versions of Python, optionally (but highly recommended)
+   run `bazel build //build:all_py_deps --repo_env=HERMETIC_PYTHON_VERSION="3.13"`,
+   where `3.13` is the version of Python interpreter you built on step 3.
+   This will make `pip` pull and build from sources (for packages which don't
+   have binaries published yet, for
+   example `numpy`, `scipy`, `matplotlib`, `zstandard`) all of the JAX's python
+   dependencies. It is recommended to do this step first (i.e. independently of
+   actual JAX build) for all unstable versions of Python to avoid conflict
+   between building JAX itself and building of its Python dependencies. For
+   example, we normally build JAX with clang but building `matplotlib` from
+   sources with clang fails out of the box due to differences in LTO behavior (
+   Link Time Optimization, triggered by `-flto` flag) between GCC and clang, and
+   matplotlib assumes GCC by default.
+   If you build against a stable version of Python, or in general you do not
+   expect any of your Python dependencies to be built from sources (i.e. binary
+   distributions for the corresponding Python version already exist in the
+   repository) this step is not needed.
+
+7) Congrats, you've built and configured your custom Python for JAX project! You
+   may now execute your built/test commands as usual, just make
+   sure `HERMETIC_PYTHON_VERSION` environment variable is set and points to your
+   new version.
+
+8) Note, if you were building a pre-release version of Python, updating of
+   `requirements_lock_<python_version>.txt` files with your newly built Python
+   is likely to fail, because package repositories will not have matching
+   binary packages. When there are no binary packages available `pip-compile`
+   proceeds with building them from sources, which is likely to fail because it
+   is more restrictive than doing the same thing during `pip` installation.
+   The recommended way to update requirements lock file for unstable versions of
+   Python is to update requirements for the latest stable version (e.g. `3.12`)
+   without hashes (therefore special `//build:requirements_dev.update` target)
+   and then copy the results to the unstable Python's lock file (e.g. `3.13`):
+```
+bazel run //build:requirements_dev.update --repo_env=HERMETIC_PYTHON_VERSION="3.12"
+cp build/requirements_lock_3_12.txt build/requirements_lock_3_13.txt
+bazel build //build:all_py_deps --repo_env=HERMETIC_PYTHON_VERSION="3.13"
+# You may need to edit manually the resultant lock file, depending on how ready
+# your dependencies are for the new version of Python.
+```
 
 ## Installing `jax`
 
@@ -190,8 +399,6 @@ sets up symbolic links from site-packages into the repository.
 
 ## Running the tests
 
-First, install the dependencies by running `pip install -r build/test-requirements.txt`.
-
 There are two supported mechanisms for running the JAX tests, either using Bazel
 or using pytest.
 
@@ -206,16 +413,33 @@ python build/build.py --configure_only
 You may pass additional options to `build.py` to configure the build; see the
 `jaxlib` build documentation for details.
 
-By default the Bazel build runs the JAX tests using `jaxlib` built form source.
+By default the Bazel build runs the JAX tests using `jaxlib` built from source.
 To run JAX tests, run:
 
 ```
 bazel test //tests:cpu_tests //tests:backend_independent_tests
 ```
 
-`//tests:gpu_tests` and `//tests:tpu_tests` are also available, if you have the necessary hardware.
+`//tests:gpu_tests` and `//tests:tpu_tests` are also available, if you have the
+necessary hardware.
 
-To use a preinstalled `jaxlib` instead of building `jaxlib` from source, run
+To use a preinstalled `jaxlib` instead of building it you first need to
+make it available in the hermetic Python. To install a specific version of
+`jaxlib` within hermetic Python run (using `jaxlib >= 0.4.26` as an example):
+
+```
+echo -e "\njaxlib >= 0.4.26" >> build/requirements.in
+python build/build.py --requirements_update
+```
+
+Alternatively, to install `jaxlib` from a local wheel (assuming Python 3.12):
+
+```
+echo -e "\n$(realpath jaxlib-0.4.26-cp312-cp312-manylinux2014_x86_64.whl)" >> build/requirements.in
+python build/build.py --requirements_update --python_version=3.12
+```
+
+Once you have `jaxlib` installed hermetically, run:
 
 ```
 bazel test --//jax:build_jaxlib=false //tests:cpu_tests //tests:backend_independent_tests
@@ -225,13 +449,16 @@ A number of test behaviors can be controlled using environment variables (see
 below). Environment variables may be passed to JAX tests using the
 `--test_env=FLAG=value` flag to Bazel.
 
-Some of JAX tests are for multiple accelerators (i.e. GPUs, TPUs). When JAX is already installed, you can run GPUs tests like this:
+Some of JAX tests are for multiple accelerators (i.e. GPUs, TPUs). When JAX is
+already installed, you can run GPUs tests like this:
 
 ```
 bazel test //tests:gpu_tests --local_test_jobs=4 --test_tag_filters=multiaccelerator --//jax:build_jaxlib=false --test_env=XLA_PYTHON_CLIENT_ALLOCATOR=platform
 ```
 
-You can speed up single accelerator tests by running them in parallel on multiple accelerators. This also triggers multiple concurrent tests per accelerator. For GPUs, you can do it like this:
+You can speed up single accelerator tests by running them in parallel on
+multiple accelerators. This also triggers multiple concurrent tests per
+accelerator. For GPUs, you can do it like this:
 
 ```
 NB_GPUS=2
@@ -241,10 +468,9 @@ MULTI_GPU="--run_under $PWD/build/parallel_accelerator_execute.sh --test_env=JAX
 bazel test //tests:gpu_tests //tests:backend_independent_tests --test_env=XLA_PYTHON_CLIENT_PREALLOCATE=false --test_tag_filters=-multiaccelerator $MULTI_GPU
 ```
 
-Some test targets, like a `//tests:logpcg_tests` optionally use matplotlib, so you may need to `pip
-install matplotlib` to run tests via bazel.
-
 ### Using `pytest`
+First, install the dependencies by
+running `pip install -r build/test-requirements.txt`.
 
 To run all the JAX tests using `pytest`, we recommend using `pytest-xdist`,
 which can run tests in parallel. It is installed as a part of
@@ -418,7 +644,7 @@ notebooks; for example:
 
 ```
 pip install jupytext==1.16.0
-jupytext --sync docs/notebooks/quickstart.ipynb
+jupytext --sync docs/notebooks/thinking_in_jax.ipynb
 ```
 
 The jupytext version should match that specified in

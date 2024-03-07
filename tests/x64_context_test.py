@@ -24,12 +24,11 @@ import numpy as np
 import jax
 from jax import lax
 from jax import random
-from jax import config
 from jax.experimental import enable_x64, disable_x64
 import jax.numpy as jnp
 import jax._src.test_util as jtu
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class X64ContextTests(jtu.JaxTestCase):
@@ -49,12 +48,12 @@ class X64ContextTests(jtu.JaxTestCase):
   )
   def test_correctly_capture_default(self, jit, enable_or_disable):
     # The fact we defined a jitted function with a block with a different value
-    # of `config.enable_x64` has no impact on the output.
+    # of `jax.config.enable_x64` has no impact on the output.
     with enable_or_disable():
       func = jit(lambda: jnp.array(np.float64(0)))
       func()
 
-    expected_dtype = "float64" if config._read("jax_enable_x64") else "float32"
+    expected_dtype = "float64" if jax.config._read("jax_enable_x64") else "float32"
     self.assertEqual(func().dtype, expected_dtype)
 
     with enable_x64():
@@ -112,7 +111,7 @@ class X64ContextTests(jtu.JaxTestCase):
       self.assertEqual(x32.result(), jnp.int32)
 
   @jax.legacy_prng_key('allow')
-  @jax.enable_key_reuse_checks(False)
+  @jax.debug_key_reuse(False)
   @jtu.ignore_warning(category=UserWarning,
                       message="Explicitly requested dtype float64  is not available")
   def test_jit_cache(self):

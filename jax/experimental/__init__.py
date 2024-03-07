@@ -22,3 +22,6 @@ from jax.experimental.x64_context import (
 from jax._src.callback import (
   io_callback as io_callback
 )
+from jax._src.earray import (
+    EArray as EArray
+)

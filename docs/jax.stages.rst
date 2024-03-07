@@ -9,7 +9,7 @@ Classes
 .. currentmodule:: jax.stages
 
 .. autoclass:: Wrapped
-   :members: lower
+   :members: trace, lower
    :special-members: __call__
 
 .. autoclass:: Lowered

@@ -46,7 +46,7 @@ parser.add_argument(
     "--jaxlib_git_hash",
     default="",
     required=True,
-    help="Git hash. Empty if unknown. Optional.",
+    help="Git hash. Empty if unknown. Required.",
 )
 parser.add_argument(
     "--cpu", default=None, required=True, help="Target CPU architecture. Required."
@@ -57,11 +57,11 @@ parser.add_argument(
     help="Create an 'editable' jaxlib build instead of a wheel.",
 )
 parser.add_argument(
-    "--include_gpu_plugin_extension",
-    # args.include_gpu_plugin_extension is True when
-    # --include_gpu_plugin_extension is in the command
+    "--skip_gpu_kernels",
+    # args.skip_gpu_kernels is True when
+    # --skip_gpu_kernels is in the command
     action="store_true",
-    help="Whether to include gpu plugin extension.",
+    help="Whether to skip gpu kernels in jaxlib.",
 )
 args = parser.parse_args()
 
@@ -100,6 +100,8 @@ def patch_copy_mlir_import(src_file, dst_dir):
 
 _XLA_EXTENSION_STUBS = [
     "__init__.pyi",
+    "ifrt_programs.pyi",
+    "ifrt_proxy.pyi",
     "jax_jit.pyi",
     "ops.pyi",
     "outfeed_receiver.pyi",
@@ -167,7 +169,7 @@ plat-name={tag}
     )
 
 
-def prepare_wheel(sources_path: pathlib.Path, *, cpu, include_gpu_plugin_extension):
+def prepare_wheel(sources_path: pathlib.Path, *, cpu, skip_gpu_kernels):
   """Assembles a source tree for the wheel in `sources_path`."""
   copy_runfiles = functools.partial(build_utils.copy_file, runfiles=r)
 
@@ -193,7 +195,6 @@ def prepare_wheel(sources_path: pathlib.Path, *, cpu, include_gpu_plugin_extensi
           f"__main__/jaxlib/utils.{pyext}",
           "__main__/jaxlib/lapack.py",
           "__main__/jaxlib/hlo_helpers.py",
-          "__main__/jaxlib/ducc_fft.py",
           "__main__/jaxlib/gpu_prng.py",
           "__main__/jaxlib/gpu_linalg.py",
           "__main__/jaxlib/gpu_rnn.py",
@@ -203,7 +204,7 @@ def prepare_wheel(sources_path: pathlib.Path, *, cpu, include_gpu_plugin_extensi
           "__main__/jaxlib/gpu_sparse.py",
           "__main__/jaxlib/version.py",
           "__main__/jaxlib/xla_client.py",
-          f"__main__/jaxlib/xla_extension.{pyext}",
+          f"xla/xla/python/xla_extension.{pyext}",
       ],
   )
   # This file is required by PEP-561. It marks jaxlib as package containing
@@ -216,15 +217,10 @@ def prepare_wheel(sources_path: pathlib.Path, *, cpu, include_gpu_plugin_extensi
       dst_dir=jaxlib_dir / "cpu",
       src_files=[
           f"__main__/jaxlib/cpu/_lapack.{pyext}",
-          f"__main__/jaxlib/cpu/_ducc_fft.{pyext}",
       ],
   )
 
-  if exists(f"__main__/jaxlib/cuda/_solver.{pyext}") and not include_gpu_plugin_extension:
-    copy_runfiles(
-        dst_dir=jaxlib_dir / "cuda" / "nvvm" / "libdevice",
-        src_files=["local_config_cuda/cuda/cuda/nvvm/libdevice/libdevice.10.bc"],
-    )
+  if exists(f"__main__/jaxlib/cuda/_solver.{pyext}") and not skip_gpu_kernels:
     copy_runfiles(
         dst_dir=jaxlib_dir / "cuda",
         src_files=[
@@ -238,7 +234,7 @@ def prepare_wheel(sources_path: pathlib.Path, *, cpu, include_gpu_plugin_extensi
             f"__main__/jaxlib/cuda/_versions.{pyext}",
         ],
     )
-  if exists(f"__main__/jaxlib/rocm/_solver.{pyext}"):
+  if exists(f"__main__/jaxlib/rocm/_solver.{pyext}") and not skip_gpu_kernels:
     copy_runfiles(
         dst_dir=jaxlib_dir / "rocm",
         src_files=[
@@ -268,7 +264,9 @@ def prepare_wheel(sources_path: pathlib.Path, *, cpu, include_gpu_plugin_extensi
       dst_dir=jaxlib_dir / "mlir",
       src_files=[
           "__main__/jaxlib/mlir/ir.py",
+          "__main__/jaxlib/mlir/ir.pyi",
           "__main__/jaxlib/mlir/passmanager.py",
+          "__main__/jaxlib/mlir/passmanager.pyi",
       ],
   )
   copy_runfiles(
@@ -289,6 +287,14 @@ def prepare_wheel(sources_path: pathlib.Path, *, cpu, include_gpu_plugin_extensi
           "__main__/jaxlib/mlir/dialects/_stablehlo_ops_gen.py",
           "__main__/jaxlib/mlir/dialects/_vector_enum_gen.py",
           "__main__/jaxlib/mlir/dialects/_vector_ops_gen.py",
+          "__main__/jaxlib/mlir/dialects/_gpu_enum_gen.py",
+          "__main__/jaxlib/mlir/dialects/_gpu_ops_gen.py",
+          "__main__/jaxlib/mlir/dialects/_nvgpu_enum_gen.py",
+          "__main__/jaxlib/mlir/dialects/_nvgpu_ops_gen.py",
+          "__main__/jaxlib/mlir/dialects/_nvvm_enum_gen.py",
+          "__main__/jaxlib/mlir/dialects/_nvvm_ops_gen.py",
+          "__main__/jaxlib/mlir/dialects/_llvm_enum_gen.py",
+          "__main__/jaxlib/mlir/dialects/_llvm_ops_gen.py",
           "__main__/jaxlib/mlir/dialects/arith.py",
           "__main__/jaxlib/mlir/dialects/builtin.py",
           "__main__/jaxlib/mlir/dialects/chlo.py",
@@ -300,6 +306,9 @@ def prepare_wheel(sources_path: pathlib.Path, *, cpu, include_gpu_plugin_extensi
           "__main__/jaxlib/mlir/dialects/sparse_tensor.py",
           "__main__/jaxlib/mlir/dialects/stablehlo.py",
           "__main__/jaxlib/mlir/dialects/vector.py",
+          "__main__/jaxlib/mlir/dialects/nvgpu.py",
+          "__main__/jaxlib/mlir/dialects/nvvm.py",
+          "__main__/jaxlib/mlir/dialects/llvm.py",
       ],
   )
   copy_runfiles(
@@ -308,6 +317,19 @@ def prepare_wheel(sources_path: pathlib.Path, *, cpu, include_gpu_plugin_extensi
           "__main__/jaxlib/mlir/extras/meta.py",
       ],
   )
+  copy_runfiles(
+      dst_dir=jaxlib_dir / "mlir" / "dialects" / "gpu",
+      src_files=[
+          "__main__/jaxlib/mlir/dialects/gpu/__init__.py",
+      ],
+  )
+  copy_runfiles(
+      dst_dir=jaxlib_dir / "mlir" / "dialects" / "gpu" / "passes",
+      src_files=[
+          "__main__/jaxlib/mlir/dialects/gpu/passes/__init__.py",
+      ],
+  )
+
 
   if build_utils.is_windows():
     capi_so = "__main__/jaxlib/mlir/_mlir_libs/jaxlib_mlir_capi.dll"
@@ -329,6 +351,10 @@ def prepare_wheel(sources_path: pathlib.Path, *, cpu, include_gpu_plugin_extensi
           f"__main__/jaxlib/mlir/_mlir_libs/_tpu_ext.{pyext}",
           f"__main__/jaxlib/mlir/_mlir_libs/_stablehlo.{pyext}",
           f"__main__/jaxlib/mlir/_mlir_libs/register_jax_dialects.{pyext}",
+          f"__main__/jaxlib/mlir/_mlir_libs/_mlirDialectsGPU.{pyext}",
+          f"__main__/jaxlib/mlir/_mlir_libs/_mlirDialectsLLVM.{pyext}",
+          f"__main__/jaxlib/mlir/_mlir_libs/_mlirDialectsNVGPU.{pyext}",
+          f"__main__/jaxlib/mlir/_mlir_libs/_mlirGPUPasses.{pyext}",
       ]
       + (
           []
@@ -355,6 +381,14 @@ def prepare_wheel(sources_path: pathlib.Path, *, cpu, include_gpu_plugin_extensi
       "__main__/jaxlib/triton/_triton_ops_gen.py", dst_dir=triton_dir
   )
 
+  copy_runfiles(
+    dst_dir=jaxlib_dir / "include" / "xla" / "ffi" / "api",
+    src_files=[
+        "xla/xla/ffi/api/c_api.h",
+        "xla/xla/ffi/api/api.h",
+        "xla/xla/ffi/api/ffi.h",
+    ],
+  )
 
 tmpdir = None
 sources_path = args.sources_path
@@ -367,7 +401,7 @@ try:
   prepare_wheel(
       pathlib.Path(sources_path),
       cpu=args.cpu,
-      include_gpu_plugin_extension=args.include_gpu_plugin_extension,
+      skip_gpu_kernels=args.skip_gpu_kernels,
   )
   package_name = "jaxlib"
   if args.editable:

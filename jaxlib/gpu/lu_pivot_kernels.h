@@ -16,29 +16,34 @@ limitations under the License.
 #ifndef JAXLIB_GPU_LU_PIVOT_KERNELS_H_
 #define JAXLIB_GPU_LU_PIVOT_KERNELS_H_
 
-#include <cstddef>
 #include <cstdint>
-#include <string>
 
 #include "jaxlib/gpu/vendor.h"
-#include "xla/service/custom_call_status.h"
+#include "xla/ffi/api/ffi.h"
 
 namespace jax {
 namespace JAX_GPU_NAMESPACE {
 
-struct LuPivotsToPermutationDescriptor {
-  std::int64_t batch_size;
-  std::int32_t pivot_size;
-  std::int32_t permutation_size;
-};
+namespace ffi = xla::ffi;
 
-void LaunchLuPivotsToPermutationKernel(
-    gpuStream_t stream, void** buffers,
-    LuPivotsToPermutationDescriptor descriptor);
+void LaunchLuPivotsToPermutationKernel(gpuStream_t stream,
+                                       std::int64_t batch_size,
+                                       std::int32_t pivot_size,
+                                       std::int32_t permutation_size,
+                                       const std::int32_t* pivots,
+                                       std::int32_t* permutation);
 
-void LuPivotsToPermutation(gpuStream_t stream, void** buffers,
-                           const char* opaque, size_t opaque_len,
-                           XlaCustomCallStatus* status);
+ffi::Error LuPivotsToPermutationImpl(
+    gpuStream_t stream, std::int32_t permutation_size,
+    ffi::Buffer<ffi::DataType::S32> pivots,
+    ffi::Result<ffi::Buffer<ffi::DataType::S32>> permutation);
+
+XLA_FFI_DEFINE_HANDLER(LuPivotsToPermutation, LuPivotsToPermutationImpl,
+                       ffi::Ffi::Bind()
+                           .Ctx<ffi::PlatformStream<gpuStream_t>>()
+                           .Attr<std::int32_t>("permutation_size")
+                           .Arg<ffi::Buffer<ffi::DataType::S32>>()
+                           .Ret<ffi::Buffer<ffi::DataType::S32>>());
 
 }  // namespace JAX_GPU_NAMESPACE
 }  // namespace jax

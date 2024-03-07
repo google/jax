@@ -1,5 +1,7 @@
 # JAX debugging flags  
 
+<!--* freshness: { reviewed: '2024-04-11' } *-->
+
 JAX offers flags and context managers that enable catching errors more easily.
   
 ## `jax_debug_nans` configuration option and context manager
@@ -12,14 +14,14 @@ JAX offers flags and context managers that enable catching errors more easily.
 
 If you want to trace where NaNs are occurring in your functions or gradients, you can turn on the NaN-checker by:
 * setting the `JAX_DEBUG_NANS=True` environment variable;
-* adding `from jax import config` and `config.update("jax_debug_nans", True)` near the top of your main file;
-* adding from `jax.config import config` and `config.parse_flags_with_absl()` to your main file, then set the option using a command-line flag like `--jax_debug_nans=True`;
+* adding `jax.config.update("jax_debug_nans", True)` near the top of your main file;
+* adding `jax.config.parse_flags_with_absl()` to your main file, then set the option using a command-line flag like `--jax_debug_nans=True`;
 
 ### Example(s)
 
 ```python
-from jax import config
-config.update("jax_debug_nans", True)
+import jax
+jax.config.update("jax_debug_nans", True)
 
 def f(x, y):
   return x / y
@@ -47,14 +49,14 @@ jax.jit(f)(0., 0.)  # ==> raises FloatingPointError exception!
 
 You can disable JIT-compilation by:
 * setting the `JAX_DISABLE_JIT=True` environment variable;
-* adding `from jax import config` and `config.update("jax_disable_jit", True)` near the top of your main file;
-* adding from `jax.config import config` and `config.parse_flags_with_absl()` to your main file, then set the option using a command-line flag like `--jax_disable_jit=True`;
+* adding `jax.config.update("jax_disable_jit", True)` near the top of your main file;
+* adding `jax.config.parse_flags_with_absl()` to your main file, then set the option using a command-line flag like `--jax_disable_jit=True`;
 
 ### Examples
 
 ```python
-from jax import config
-config.update("jax_disable_jit", True)
+import jax
+jax.config.update("jax_disable_jit", True)
 
 def f(x):
   y = jnp.log(x)

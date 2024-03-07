@@ -21,4 +21,6 @@ jax.lib.xla_client
 .. currentmodule:: jaxlib.xla_client
 
 .. autosummary::
-   :toctree: _autosummary
+  :toctree: _autosummary
+
+  register_custom_call_target

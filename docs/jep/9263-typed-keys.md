@@ -21,6 +21,7 @@ Array([0, 0], dtype=uint32)
 (2,)
 >>> key.dtype
 dtype('uint32')
+
 ```
 Starting now, new-style RNG keys can be created with
 {func}`jax.random.key`:
@@ -33,6 +34,7 @@ Array((), dtype=key<fry>) overlaying:
 ()
 >>> key.dtype
 key<fry>
+
 ```
 This (scalar-shaped) array behaves the same as any other JAX array, except
 that its element type is a key (and associated metadata). We can make
@@ -48,6 +50,7 @@ Array((4,), dtype=key<fry>) overlaying:
  [0 3]]
 >>> key_arr.shape
 (4,)
+
 ```
 Aside from switching to a new constructor, most PRNG-related code should
 continue to work as expected. You can continue to use keys in
@@ -62,14 +65,17 @@ data = jax.random.uniform(key, shape=(5,))
 However, not all numerical operations work on key arrays. They now
 intentionally raise errors:
 ```python
->>> key = key + 1
-ValueError: dtype=key<fry> is not a valid dtype for JAX type promotion.
+>>> key = key + 1  # doctest: +SKIP
+Traceback (most recent call last):
+TypeError: add does not accept dtypes key<fry>, int32.
+
 ```
 If for some reason you need to recover the underlying buffer
 (the old-style key), you can do so with {func}`jax.random.key_data`:
 ```python
 >>> jax.random.key_data(key)
 Array([0, 0], dtype=uint32)
+
 ```
 For old-style keys, {func}`~jax.random.key_data` is an identity operation.
 
@@ -108,6 +114,7 @@ True
 >>> raw_key = jax.random.PRNGKey(0)
 >>> jax.dtypes.issubdtype(raw_key.dtype, jax.dtypes.prng_key)
 False
+
 ```
 
 ### Type annotations for PRNG Keys
@@ -173,6 +180,7 @@ Array((), dtype=key<rbg>) overlaying:
 [0 0 0 0]
 >>> jax.random.uniform(key, shape=(3,))
 Array([0.39904642, 0.8805201 , 0.73571277], dtype=float32)
+
 ```
 
 ### Safe PRNG key use
@@ -237,15 +245,15 @@ time boils down to this:
 :class: red-background
 # Incorrect
 keys = random.split(random.PRNGKey(0))
-data = jax.vmap(random.uniform, axis=1)(keys)
+data = jax.vmap(random.uniform, in_axes=1)(keys)
 ```
 ```{code-block} python
 :class: green-background
 # Correct
 keys = random.split(random.PRNGKey(0))
-data = jax.vmap(random.uniform, axis=0)(keys)
+data = jax.vmap(random.uniform, in_axes=0)(keys)
 ```
-The bug here is subtle. By mapping over `axis=1`, this code makes new keys by
+The bug here is subtle. By mapping over `in_axes=1`, this code makes new keys by
 combining a single element from each key buffer in the batch. The resulting
 keys are different from one another, but are effectively "derived" in a
 non-standard way. Again, the PRNG is not designed or tested to produce
@@ -322,6 +330,7 @@ which has the following property:
 ```python
 >>> jax.dtypes.issubdtype(jax.dtypes.prng_key, jax.dtypes.extended)
 True
+
 ```
 PRNG key arrays then have a dtype with the following properties:
 ```python
@@ -330,6 +339,7 @@ PRNG key arrays then have a dtype with the following properties:
 True
 >>> jax.dtypes.issubdtype(key.dtype, jax.dtypes.prng_key)
 True
+
 ```
 And in addition to `key.dtype._rules` as outlined for extended dtypes in
 general, PRNG dtypes define `key.dtype._impl`, which contains the metadata

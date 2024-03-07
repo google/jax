@@ -16,6 +16,8 @@ language_info:
 
 # Pytrees
 
+<!--* freshness: { reviewed: '2024-03-13' } *-->
+
 ## What is a pytree?
 
 In JAX, we use the term *pytree* to refer to a tree-like structure built out of
@@ -280,7 +282,7 @@ class RegisteredSpecial2(Special):
 show_example(RegisteredSpecial2(1., 2.))
 ```
 
-When defining an unflattening functions, in general `children` should contain all the
+When defining unflattening functions, in general `children` should contain all the
 dynamic elements of the data structure (arrays, dynamic scalars, and pytrees), while
 `aux_data` should contain all the static elements that will be rolled into the `treedef`
 structure. JAX sometimes needs to compare `treedef` for equality, or compute its hash

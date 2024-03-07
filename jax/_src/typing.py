@@ -29,10 +29,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol, Union
 import numpy as np
+import enum
 
 from jax._src.basearray import (
     Array as Array,
     ArrayLike as ArrayLike,
+    StaticScalar as StaticScalar,
 )
 
 DType = np.dtype
@@ -77,3 +79,15 @@ class DuckTypedArray(Protocol):
 # JAX array (i.e. not including future non-standard array types like KeyArray and BInt).
 # It's different than np.typing.ArrayLike in that it doesn't accept arbitrary sequences,
 # nor does it accept string data.
+
+# We use a class for deprecated args to avoid using Any/object types which can
+# introduce complications and mistakes in static analysis
+class DeprecatedArg:
+  def __repr__(self):
+    return "Deprecated"
+
+# Mirror of dlpack.h enum
+class DLDeviceType(enum.IntEnum):
+  kDLCPU = 1
+  kDLCUDA = 2
+  kDLROCM = 10

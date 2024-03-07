@@ -115,6 +115,14 @@ class Array(abc.ABC):
 
 Array.__module__ = "jax"
 
+# StaticScalar is the Union of all scalar types that can be converted to
+# JAX arrays, and are possible to mark as static arguments.
+StaticScalar = Union[
+  np.bool_, np.number,  # NumPy scalar types
+  bool, int, float, complex,  # Python scalar types
+]
+StaticScalar.__doc__ = "Type annotation for JAX-compatible static scalars."
+
 
 # ArrayLike is a Union of all objects that can be implicitly converted to a
 # standard JAX array (i.e. not including future non-standard array types like
@@ -123,7 +131,6 @@ Array.__module__ = "jax"
 ArrayLike = Union[
   Array,  # JAX array type
   np.ndarray,  # NumPy array type
-  np.bool_, np.number,  # NumPy scalar types
-  bool, int, float, complex,  # Python scalar types
+  StaticScalar,  # valid scalars
 ]
 ArrayLike.__doc__ = "Type annotation for JAX array-like objects."

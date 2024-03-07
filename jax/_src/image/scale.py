@@ -14,10 +14,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 import enum
-from typing import Callable
 
 import numpy as np
 

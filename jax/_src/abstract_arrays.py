@@ -70,4 +70,4 @@ def _make_concrete_python_scalar(t, x):
 for t in dtypes.python_scalar_dtypes:
   core.pytype_aval_mappings[t] = partial(_make_concrete_python_scalar, t)
 
-core.literalable_types.update(dtypes.python_scalar_dtypes.keys())  # type: ignore
+core.literalable_types.update(dtypes.python_scalar_dtypes.keys())

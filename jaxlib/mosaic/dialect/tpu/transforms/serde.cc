@@ -27,11 +27,13 @@ limitations under the License.
 #include "mlir/IR/Visitors.h"
 #include "mlir/Pass/Pass.h"  // IWYU pragma: keep
 #include "mlir/Support/LLVM.h"
+#include "mlir/include/mlir/IR/OpDefinition.h"
 #include "mlir/include/mlir/IR/OperationSupport.h"
+#include "mlir/include/mlir/Support/LogicalResult.h"
+#include "jaxlib/mosaic/dialect/tpu/tpu_dialect.h"
 
 namespace mlir::tpu {
 
-#define GEN_PASS_DECL_MOSAICSERDEPASS
 #define GEN_PASS_DEF_MOSAICSERDEPASS
 #include "jaxlib/mosaic/dialect/tpu/tpu_passes.h.inc"
 
@@ -39,7 +41,7 @@ namespace {
 
 constexpr std::string_view kMangledDialect = "stable_mosaic.";
 constexpr StringRef kVersionAttrName = "stable_mosaic.version";
-constexpr int kVersion = 1;
+constexpr int kVersion = 2;
 
 StringRef mangle(StringRef name, std::string* storage) {
   storage->clear();
@@ -57,6 +59,55 @@ std::optional<StringRef> demangle(StringRef name) {
   return name.drop_front(kMangledDialect.size());
 }
 
+using rule_type = std::function<LogicalResult(Operation*, int)>;
+
+LogicalResult enqueue_dma_rule(Operation* op, int version) {
+  // Added AttrSizedOperandSegments and core_id in version 2.
+  if (version < 2) {
+    if (op->getNumOperands() == 3) {  // Local DMA.
+      op->setAttr(
+          OpTrait::AttrSizedOperandSegments<
+              EnqueueDMAOp>::getOperandSegmentSizeAttr(),
+          mlir::DenseI32ArrayAttr::get(op->getContext(), {1, 0, 1, 1, 0, 0}));
+    } else if (op->getNumOperands() == 5) {  // Remote DMA.
+      op->setAttr(
+          OpTrait::AttrSizedOperandSegments<
+              EnqueueDMAOp>::getOperandSegmentSizeAttr(),
+          mlir::DenseI32ArrayAttr::get(op->getContext(), {1, 1, 1, 1, 1, 0}));
+    } else {
+      return op->emitError("Unexpected operand count in tpu.enqueue_dma: ")
+             << op->getNumOperands();
+    }
+  }
+  return success();
+}
+
+LogicalResult semaphore_signal_rule(Operation* op, int version) {
+  // Added AttrSizedOperandSegments and core_id in version 2.
+  if (version < 2) {
+    if (op->getNumOperands() == 2) {  // Local signal.
+      op->setAttr(OpTrait::AttrSizedOperandSegments<
+                      EnqueueDMAOp>::getOperandSegmentSizeAttr(),
+                  mlir::DenseI32ArrayAttr::get(op->getContext(), {1, 1, 0, 0}));
+    } else if (op->getNumOperands() == 3) {  // Remote signal.
+      op->setAttr(OpTrait::AttrSizedOperandSegments<
+                      EnqueueDMAOp>::getOperandSegmentSizeAttr(),
+                  mlir::DenseI32ArrayAttr::get(op->getContext(), {1, 1, 1, 0}));
+    } else {
+      return op->emitError("Unexpected operand count in tpu.semaphore_signal");
+    }
+  }
+  return success();
+}
+
+const llvm::StringMap<rule_type>& upgrade_rules() {
+  static auto rules = new llvm::StringMap<rule_type>{
+      {EnqueueDMAOp::getOperationName(), enqueue_dma_rule},
+      {SemaphoreSignalOp::getOperationName(), semaphore_signal_rule},
+  };
+  return *rules;
+}
+
 struct MosaicSerdePass : public impl::MosaicSerdePassBase<MosaicSerdePass> {
   using Base::Base;
 
@@ -68,6 +119,7 @@ struct MosaicSerdePass : public impl::MosaicSerdePassBase<MosaicSerdePass> {
       signalPassFailure();
       return;
     }
+    int version = kVersion;
     if (serialize) {
       module->setAttr(
           kVersionAttrName,
@@ -81,16 +133,17 @@ struct MosaicSerdePass : public impl::MosaicSerdePassBase<MosaicSerdePass> {
         signalPassFailure();
         return;
       }
-      if (version_attr.getValue() != kVersion) {
+      if (version_attr.getInt() > kVersion) {
         module->emitError("Unsupported Mosaic version: ")
-            << version_attr.getValue().getSExtValue();
+            << version_attr.getInt();
         signalPassFailure();
         return;
       }
+      version = version_attr.getInt();
       module->removeAttr(kVersionAttrName);
     }
     std::string name_storage;
-    auto result = module.walk([this, &name_storage](Operation* op) {
+    auto result = module.walk([this, &name_storage, version](Operation* op) {
       if (isa<ModuleOp>(op)) {  // Don't mangle the ModuleOp itself.
         return WalkResult::advance();
       }
@@ -110,6 +163,13 @@ struct MosaicSerdePass : public impl::MosaicSerdePassBase<MosaicSerdePass> {
         } else {
           op->emitError("Operation not in a serialized form");
           return WalkResult::interrupt();
+        }
+        // Upgrade the op to the current version, if needed.
+        if (const auto rule = upgrade_rules().find(new_name->getStringRef());
+            rule != upgrade_rules().end()) {
+          if (rule->second(op, version).failed()) {
+            return WalkResult::interrupt();
+          }
         }
       }
       auto new_op = Operation::create(

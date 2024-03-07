@@ -26,21 +26,22 @@ from absl.testing import parameterized
 import numpy as np
 
 import jax
-from jax import config
 from jax._src import core
 from jax._src import distributed
-from jax._src import maps
 from jax._src import test_util as jtu
 from jax._src import util
 from jax.experimental import pjit
 import jax.numpy as jnp
+
+# Used to test for mpi4py installation and skip tests if not installed
+import importlib.util
 
 try:
   import portpicker
 except ImportError:
   portpicker = None
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 @unittest.skipIf(not portpicker, "Test requires portpicker")
 class DistributedTest(jtu.JaxTestCase):
@@ -220,11 +221,52 @@ class MultiProcessGpuTest(jtu.JaxTestCase):
       finally:
         proc.kill()
 
+  def test_gpu_mpi4py_distributed_initialize(self):
+    if not jtu.test_device_matches(['gpu']):
+      raise unittest.SkipTest('Tests only for GPU.')
+    if shutil.which('mpirun') is None:
+      raise unittest.SkipTest('Tests only for MPI (mpirun not found).')
+    if importlib.util.find_spec("mpi4py") is None:
+      raise unittest.SkipTest('Test of mpi4py initialize only possible with mpi4py installed.')
+
+    num_gpus = 4
+    num_gpus_per_task = 1
+
+    with contextlib.ExitStack() as exit_stack:
+      args = [
+          'mpirun',
+          '--oversubscribe',
+          '--allow-run-as-root',
+          '-n',
+          str(num_gpus),
+          sys.executable,
+          '-c',
+          ('import jax, os; '
+          'jax.distributed.initialize(spec_detection_method="mpi4py"); '
+          'print(f\'{jax.local_device_count()},{jax.device_count()}\' if jax.process_index() == 0 else \'\', end="")'
+          )
+      ]
+      env = os.environ.copy()
+      # In case the job was launched via Slurm,
+      # prevent OpenMPI from detecting Slurm environment
+      env.pop('SLURM_JOBID', None)
+      proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, universal_newlines=True)
+      proc = exit_stack.enter_context(proc)
+
+      try:
+        out, _ = proc.communicate()
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(out, f'{num_gpus_per_task},{num_gpus}')
+      finally:
+        proc.kill()
+
 
 @unittest.skipIf(
     os.environ.get("SLURM_JOB_NUM_NODES", None) != "2",
     "Slurm environment with at least two nodes needed!")
 @jtu.pytest_mark_if_available('SlurmMultiNodeGpuTest')
+@jtu.with_config(experimental_xmap_spmd_lowering=True)
 class SlurmMultiNodeGpuTest(jtu.JaxTestCase):
 
   def sorted_devices(self):
@@ -256,16 +298,6 @@ class SlurmMultiNodeGpuTest(jtu.JaxTestCase):
     assert [d.id for d in device_mesh.flat
            ] == [0, 2, 4, 6, 1, 3, 5, 7, 8, 10, 12, 14, 9, 11, 13, 15]
     return jax.sharding.Mesh(device_mesh, ("x", "y"))
-
-  def setUp(self):
-    super().setUp()
-    self.xmap_spmd_lowering_enabled = maps.SPMD_LOWERING.value
-    jax.config.update("experimental_xmap_spmd_lowering", True)
-
-  def tearDown(self):
-    jax.config.update("experimental_xmap_spmd_lowering",
-                      self.xmap_spmd_lowering_enabled)
-    super().tearDown()
 
   def test_gpu_multi_node_initialize_and_psum(self):
 

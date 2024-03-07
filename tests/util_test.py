@@ -16,13 +16,13 @@ import operator
 
 from absl.testing import absltest
 
+import jax
 from jax._src import linear_util as lu
 from jax._src import test_util as jtu
 from jax._src import util
 
-from jax import config
 from jax._src.util import weakref_lru_cache
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 try:
   from jax._src.lib import utils as jaxlib_utils

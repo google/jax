@@ -17,13 +17,13 @@ import numpy as np
 import scipy
 import scipy.optimize
 
+import jax
 from jax import numpy as jnp
 from jax._src import test_util as jtu
 from jax import jit
-from jax import config
 import jax.scipy.optimize
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 def rosenbrock(np):

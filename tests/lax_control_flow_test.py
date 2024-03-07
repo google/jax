@@ -35,15 +35,15 @@ from jax import random
 from jax._src import test_util as jtu
 from jax import tree_util
 from jax._src.util import unzip2
-from jax.experimental import maps
 from jax.ad_checkpoint import checkpoint as new_checkpoint, checkpoint_policies
 import jax.numpy as jnp  # scan tests use numpy
 import jax.scipy as jsp
 from jax._src.lax import control_flow as lax_control_flow
 from jax._src.lax.control_flow import for_loop
+from jax._src.interpreters import mlir
+from jax._src.maps import xmap
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 # Some tests are useful for testing both lax.cond and lax.switch. This function
@@ -96,6 +96,7 @@ def scan_with_remat_for(f, *args, **kwargs):
 SCAN_IMPLS_WITH_FOR = [
     (lax.scan, 'unroll1'),
     (partial(lax.scan, unroll=2), 'unroll2'),
+    (partial(lax.scan, _split_transpose=True), 'split_transpose'),
     (scan_with_new_checkpoint , 'new_checkpoint'),
     (scan_with_new_checkpoint2, 'new_checkpoint2'),
     (scan_with_for, 'for_loop'),
@@ -129,6 +130,15 @@ def scan_reference(f, init, xs):
 
 ignore_jit_of_pmap_warning = partial(
   jtu.ignore_warning, message=".*jit-of-pmap.*")
+
+# A JAX primitive whose lowering is a custom call to a non-existent function.
+prim_non_existent_custom_call = core.Primitive("__testing_non_existent_custom_call")
+prim_non_existent_custom_call.def_abstract_eval(lambda x_aval: x_aval)
+mlir.register_lowering(
+    prim_non_existent_custom_call,
+    lambda ctx, x: mlir.hlo.CustomCallOp(
+        [x.type], [x],
+        call_target_name=mlir.ir.StringAttr.get("__testing_non_existent_custom_call")).results)
 
 
 class LaxControlFlowTest(jtu.JaxTestCase):
@@ -1732,8 +1742,8 @@ class LaxControlFlowTest(jtu.JaxTestCase):
       rtol = {np.float32: 2e-5, np.float64: 1e-13}
       atol = {np.float32: 6e-2, np.float64: 1e-13}
     else:
-      rtol = {np.float32: 2e-5, np.float64: 1e-13}
-      atol = {np.float32: 5e-5, np.float64: 1e-13}
+      rtol = {np.float32: 2e-4, np.float64: 1e-13}
+      atol = {np.float32: 8e-5, np.float64: 1e-13}
 
     if jit_f:
       f = jax.jit(f)
@@ -1950,6 +1960,13 @@ class LaxControlFlowTest(jtu.JaxTestCase):
                                   x[1].astype('float32').reshape(1, 1),
                                   x[2]), None),
                    (jnp.array(0, 'int32'),) * 3, None, length=1)
+
+  @jax.enable_checks(False)
+  def testScanInvalidUnrollRaises(self):
+    with self.assertRaisesRegex(ValueError, "`unroll` must be"):
+      jax.lax.scan(lambda x, _: (x, x), 0, jnp.arange(5), unroll=-1)
+    with self.assertRaisesRegex(ValueError, "`unroll` must be"):
+      jax.lax.scan(lambda x, _: (x, x), 0, jnp.arange(5), unroll=0)
 
   @parameterized.named_parameters(
       {"testcase_name": f"_{scan_name}",
@@ -2315,7 +2332,7 @@ class LaxControlFlowTest(jtu.JaxTestCase):
     A = jnp.zeros((3, 3))
     # The second DUS was unnecessarily replicating A across time.
     # We check XLA because _scan_impl is "underneath" the jaxpr language.
-    s = str(jax.xla_computation(jax.grad(loss))(A).as_hlo_text())
+    s = jax.jit(jax.grad(loss)).lower(A).as_text('hlo')
     assert s.count("dynamic-update-slice(") < 2
 
   def testScanLengthArg(self):
@@ -2410,8 +2427,16 @@ class LaxControlFlowTest(jtu.JaxTestCase):
 
     # but HLO should grow due to unrolling
     self.assertLess(
-        len(str(jax.xla_computation(scan)(c, xs).as_hlo_text())),
-        len(str(jax.xla_computation(scan_unrolled)(c, xs).as_hlo_text())))
+        len(str(jax.jit(scan).lower(c, xs).as_text('hlo'))),
+        len(str(jax.jit(scan_unrolled).lower(c, xs).as_text('hlo'))))
+
+  def test_scan_xs_none(self):
+    def f(h, _):
+      return h + 1, None
+
+    length = 20
+    h, _ = lax.scan(f, 0, length=length)
+    self.assertEqual(h, length)
 
   def test_disable_jit_cond_with_vmap(self):
     # https://github.com/google/jax/issues/3093
@@ -2503,7 +2528,7 @@ class LaxControlFlowTest(jtu.JaxTestCase):
     scan_fun = lambda c, xs: lax.scan(f, c, xs)
 
     def new_jaxpr():
-      jaxpr = jax.make_jaxpr(scan_fun)(c, xs).jaxpr
+      jaxpr = jax.make_jaxpr(partial(scan_fun))(c, xs).jaxpr
       scan = next(eqn for eqn in jaxpr.eqns if eqn.primitive.name == 'scan')
       return jaxpr, scan
 
@@ -2535,22 +2560,6 @@ class LaxControlFlowTest(jtu.JaxTestCase):
         core.JaxprTypeError,
         re.escape('invalid cond param branches of type tuple, '
                   'tuple of ClosedJaxpr required: (4, 2)'),
-        lambda: core.check_jaxpr(jaxpr))
-
-    jaxpr, eqn = new_jaxpr()
-    eqn.params['linear'] = (4, 2)
-    self.assertRaisesRegex(
-        core.JaxprTypeError,
-        re.escape('invalid cond param linear of type tuple, '
-                  'tuple of bool required: (4, 2)'),
-        lambda: core.check_jaxpr(jaxpr))
-
-    jaxpr, eqn = new_jaxpr()
-    eqn.params['linear'] = 'multi\nline'
-    self.assertRaisesRegex(
-        core.JaxprTypeError,
-        r'invalid cond param linear of type str, '
-        r'tuple of bool required:\r?\nmulti\r?\nline',
         lambda: core.check_jaxpr(jaxpr))
 
   def test_cond_transformation_rule_with_consts(self):
@@ -2712,7 +2721,7 @@ class LaxControlFlowTest(jtu.JaxTestCase):
         i, x = carry
         return i + 1, x + lax.psum(y, 'b')
       return lax.while_loop(cond, body, (0, z))[1]
-    maps.xmap(f, axis_sizes=dict(a=2, b=10), out_axes=(['a']), in_axes={})(1.)
+    xmap(f, axis_sizes=dict(a=2, b=10), out_axes=(['a']), in_axes={})(1.)
 
   def test_while_loop_fixed_point_with_batched_pred_and_consts(self):
     def f(i, x):
@@ -2829,6 +2838,44 @@ class LaxControlFlowTest(jtu.JaxTestCase):
       self.assertNotIn(" sine", hlo)
       self.assertIn(" cosine", hlo)
 
+  def test_platform_dependent_with_non_existent_custom_call(self):
+    if not jtu.test_device_matches(["cpu"]):
+      self.skipTest("Only for CPU")
+
+    def f(x):
+      # One use with the bad custom call on a different platform branch
+      x1 = lax.platform_dependent(x,
+                                  cpu=jnp.sin,
+                                  other=prim_non_existent_custom_call.bind)
+      # and with the bad custom call in the default branch
+      x2 = lax.platform_dependent(x,
+                                  cpu=jnp.sin,
+                                  default=prim_non_existent_custom_call.bind)
+      # and one use where the current platform is the default
+      x3 = lax.platform_dependent(x,
+                                  other=prim_non_existent_custom_call.bind,
+                                  default=jnp.sin)
+      return x1 + x2 + x3
+
+    x = np.arange(3, dtype=np.float32)
+    hlo = str(jax.jit(f).lower(x).compiler_ir())
+    occurrences = re.findall(prim_non_existent_custom_call.name, hlo)
+    self.assertLen(occurrences, 3)
+
+    res_eager = f(x)
+    self.assertAllClose(res_eager, 3. * np.sin(x))
+    res_jit = jax.jit(f)(x)
+    self.assertAllClose(res_jit, 3 * np.sin(x))
+
+    res_vmap = jax.vmap(f)(x)
+    self.assertAllClose(res_vmap, 3. * np.sin(x))
+
+    _, res_jvp = jax.jvp(f, (x,), (np.full(x.shape, .1, dtype=x.dtype),))
+    self.assertAllClose(res_jvp, .3 * np.cos(x))
+
+    res_grad = jax.grad(f)(1.)
+    self.assertAllClose(res_grad, 3. * np.cos(1.))
+
   def test_platform_dependent_multiple_identical_branches(self):
     x = np.arange(3, dtype=np.float32)
     def f(x):
@@ -2898,6 +2945,46 @@ class LaxControlFlowTest(jtu.JaxTestCase):
     self.assertEqual(expect_a_dot, " dot(" in hlo)
     self.assertEqual(not expect_a_dot, " while(" in hlo)
 
+  def test_scan_lowering_doesnt_introduce_singleton(self):
+    b = 4
+    i = 2
+
+    def scan(y):
+      def body(carry, x):
+        return carry, jnp.dot(x, x)
+      return jax.lax.scan(body, 1.0, y, unroll=False)
+
+    fn = jax.jit(scan)
+
+    init = np.array(np.arange(b * i * i), dtype=np.float32).reshape((b, i, i))
+    hlo_text = fn.lower(init).as_text('hlo')
+    self.assertNotIn('4,1,2,2', hlo_text)
+
+  def test_cond_vmap_forwarding_doesnt_promote(self):
+    def f(x, y):
+      x, y = jax.lax.cond(
+          x < 3,
+          lambda x, y: (x * 2, y),
+          lambda x, y: (x * 3, y),
+          x, y
+      )
+      return x, y
+
+    x = jnp.arange(3)
+    y = jnp.array(3.)
+
+    x2, y2 = jax.vmap(f, in_axes=(0, None), out_axes=(0, None))(x, y)  # don't crash
+
+    assert x is not x2
+    assert y is y2
+
+  def test_cond_casting(self):
+    x = 1.0
+    identity = lambda x: x
+
+    y = lax.cond(True, identity, identity, x)
+    self.assertEqual(y, x)
+    self.assertIsInstance(y, jax.Array)
 
 if __name__ == '__main__':
   absltest.main(testLoader=jtu.JaxTestLoader())

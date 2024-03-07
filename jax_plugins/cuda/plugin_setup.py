@@ -49,13 +49,33 @@ setup(
     author="JAX team",
     author_email="jax-dev@google.com",
     packages=[package_name],
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     install_requires=[f"jax-cuda{cuda_version}-pjrt=={__version__}"],
+    extras_require={
+      'with_cuda': [
+          "nvidia-cublas-cu12>=12.1.3.1",
+          "nvidia-cuda-cupti-cu12>=12.1.105",
+          "nvidia-cuda-nvcc-cu12>=12.1.105",
+          "nvidia-cuda-runtime-cu12>=12.1.105",
+          "nvidia-cudnn-cu12>=9.0,<10.0",
+          "nvidia-cufft-cu12>=11.0.2.54",
+          "nvidia-cusolver-cu12>=11.4.5.107",
+          "nvidia-cusparse-cu12>=12.1.0.106",
+          "nvidia-nccl-cu12>=2.18.1",
+          # nvjitlink is not a direct dependency of JAX, but it is a transitive
+          # dependency via, for example, cuSOLVER. NVIDIA's cuSOLVER packages
+          # do not have a version constraint on their dependencies, so the
+          # package doesn't get upgraded even though not doing that can cause
+          # problems (https://github.com/google/jax/issues/18027#issuecomment-1756305196)
+          # Until NVIDIA add version constraints, add a version constraint
+          # here.
+          "nvidia-nvjitlink-cu12>=12.1.105",
+      ],
+    },
     url="https://github.com/google/jax",
     license="Apache-2.0",
     classifiers=[
         "Development Status :: 3 - Alpha",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",

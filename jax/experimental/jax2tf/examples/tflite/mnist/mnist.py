@@ -21,8 +21,8 @@ from jax.experimental.jax2tf.examples import mnist_lib
 
 import numpy as np
 
-import tensorflow as tf  # type: ignore[import]
-import tensorflow_datasets as tfds  # type: ignore[import]
+import tensorflow as tf
+import tensorflow_datasets as tfds  # type: ignore[import-not-found]
 
 _TFLITE_FILE_PATH = flags.DEFINE_string(
     'tflite_file_path',

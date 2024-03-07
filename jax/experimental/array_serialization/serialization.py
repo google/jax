@@ -17,22 +17,22 @@ from __future__ import annotations
 
 import abc
 import asyncio
-from collections.abc import Awaitable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
 import itertools
 import logging
 import os
 import re
-import sys
 import threading
 import time
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 import jax
 from jax._src import array
 from jax._src import distributed
 from jax._src import sharding
 from jax._src import sharding_impls
+from jax._src.layout import Layout, DeviceLocalLayout as DLL
 from jax._src import typing
 from jax._src import util
 from jax._src.lib import xla_extension as xe
@@ -62,9 +62,6 @@ _BARRIER_TIMED_OUT_MSG = (
     "Suggestions for possible fixes:\n"
     "* Check the logs to see if one or more processes failed.\n"
     "* Make sure the training and checkpointing endpoints are close geographically.\n"
-    "* Try setting these environment variables: "
-    "`TENSORSTORE_CURL_LOW_SPEED_TIME_SECONDS=60` "
-    "`TENSORSTORE_CURL_LOW_SPEED_LIMIT_BYTES=256` which will force a http retry\n"
     "* Try increasing the timeout you pass to GlobalAsyncCheckpointManager.")
 
 logger = logging.getLogger(__name__)
@@ -72,12 +69,12 @@ logger = logging.getLogger(__name__)
 
 async def create_async_array_from_callback(
     global_shape: array.Shape,
-    inp_sharding: sharding_impls.XLACompatibleSharding,
+    inp_sharding: jax.sharding.Sharding,
     data_callback: Callable[[array.Index, jax.Device], Awaitable[jax.Array]],
 ):
   device_to_index_map = inp_sharding.devices_indices_map(global_shape)
   addressable_da = inp_sharding._addressable_device_assignment
-  future_arrays = [data_callback(device_to_index_map[d], d)  # type: ignore
+  future_arrays = [data_callback(device_to_index_map[d], d)
                    for d in addressable_da]
   dbs = await asyncio.gather(*future_arrays)
   return array.make_array_from_single_device_arrays(
@@ -85,19 +82,11 @@ async def create_async_array_from_callback(
 
 
 def _get_metadata(arr):
-  if arr.dtype == jnp.bfloat16:
-    # Tensorstore uses 'bfloat16', not '<V2'.
-    dtype = 'bfloat16'
-  else:
-    dtype = np.dtype(arr.dtype).str
   local_shape = arr.addressable_data(0).shape
   return {
-      'compressor': {
-          'id': 'zstd'
-      },
+      'compressor': {'id': 'zstd'},
       'shape': arr.shape,
       'chunks': np.array(np.maximum(1, local_shape)),
-      'dtype': dtype,
   }
 
 
@@ -140,7 +129,7 @@ def get_tensorstore_spec(ckpt_path: str, ocdbt: bool = False):
   return spec
 
 
-def is_remote_storage(tspec: Union[dict[str, Any], str]) -> bool:
+def is_remote_storage(tspec: dict[str, Any] | str) -> bool:
   """Detect if user is using cloud storages.
 
   This can detect common defines and unable to detect some corner cases such as
@@ -180,7 +169,7 @@ class _LimitInFlightBytes:
     self._cv = asyncio.Condition(lock=asyncio.Lock())
 
   async def wait_for_bytes(self, requested_bytes):
-    if requested_bytes >= self._max_bytes:
+    if requested_bytes > self._max_bytes:
       raise ValueError('Requested more bytes than we reserved space for: '
                        f'{requested_bytes} > {self._max_bytes}')
     async with self._cv:
@@ -200,9 +189,24 @@ async def async_serialize(
     tensorstore_spec,
     commit_future=None,
     context=TS_CONTEXT,
-    primary_host: Optional[int] = 0,
+    primary_host: int | None = 0,
     replica_id: int = 0,
 ):
+  """Serialize an array using TensorStore.
+
+  Args:
+    arr_inp: The array to serialize.
+    tensorstore_spec: The tensorstore spec to use.
+    commit_future: A list of futures that will be appended to. The futures can
+      be awaited asynchronously. If None, the futures will be awaited
+      synchronously by this method.
+    context: ts.Context instance.
+    primary_host: Primary host, which indicates the host that will be treated as
+      the "leader". If None, all hosts are treated as the primary. DO NOT USE
+      unless you are sure you know what you are doing.
+    replica_id: Allows overriding the shard replica id that will be saved.
+      DO NOT USE unless you are sure you know what you are doing.
+  """
   if (isinstance(arr_inp, array.ArrayImpl) and jax.process_count() > 1 and
       arr_inp.is_fully_addressable):
     raise ValueError(
@@ -211,16 +215,14 @@ async def async_serialize(
         f'between processes. Serialization have failed for the array with '
         f'the path "{tensorstore_spec["kvstore"]["path"]}".')
 
-  if primary_host is None and is_remote_storage(tensorstore_spec):
-    raise ValueError(
-        'When primary_host is set to None and remote storage is used,'
-        ' serialization is not allowed, as this may lead to a race condition'
-        ' between processes.'
-    )
   # 'metadata' may not be present at the top level (for example, if we are using
   # a 'cast' driver).
   if not _spec_has_metadata(tensorstore_spec):
     tensorstore_spec['metadata'] = _get_metadata(arr_inp)
+
+  # Set dtype if it's not in spec
+  if 'dtype' not in tensorstore_spec:
+    tensorstore_spec['dtype'] = jnp.dtype(arr_inp.dtype).name
 
   # If primary_host is None, all hosts will checkpoint. This is used
   # for checkpointing to local filesystem.
@@ -238,11 +240,12 @@ async def async_serialize(
     else:
       await open_future
 
-  # `ts.open` runs twice for process 0 because for the first time, we just get
-  # the future to be awaited upon in the background thread. The second one runs
-  # with `assume_metadata=True` which does no I/O operation and returns the
-  # tensorstore object.
-  # For every process other than `0`, we open with `assume_metadata=True`.
+  # `ts.open` runs twice for process `primary_host` because for the first time,
+  # we just get the future to be awaited upon in the background thread. The
+  # second one runs with `assume_metadata=True` which does no I/O operation and
+  # returns the tensorstore object.
+  # For every process other than `primary_host`, we open with
+  # `assume_metadata=True`.
   t = await ts.open(
       ts.Spec(tensorstore_spec),
       open=True,
@@ -260,10 +263,7 @@ async def async_serialize(
       else:
         await write_future.commit
 
-  if isinstance(arr_inp, array.ArrayImpl):
-    local_shards = arr_inp.addressable_shards
-  else:
-    local_shards = arr_inp.addressable_shards
+  local_shards = arr_inp.addressable_shards
   future_write_state = jax.tree_util.tree_map(_write_array, local_shards)
   return await asyncio.gather(*future_write_state)
 
@@ -309,7 +309,7 @@ def estimate_read_memory_footprint(t: ts.TensorStore,
 
 
 async def async_deserialize(
-    in_sharding: sharding_impls.XLACompatibleSharding,
+    user_in_sharding: jax.sharding.Sharding | Layout,
     tensorstore_spec: ts.Spec | dict[str, Any],
     global_shape: Sequence[int] | None = None,
     dtype=None,
@@ -317,6 +317,14 @@ async def async_deserialize(
     context=TS_CONTEXT,
     assume_metadata: bool = False,
 ):
+  in_sharding = (user_in_sharding.sharding
+                 if isinstance(user_in_sharding, Layout) else user_in_sharding)
+  if not isinstance(in_sharding, jax.sharding.Sharding):
+    raise ValueError(
+        'sharding passed to deserialization should be specified, concrete and'
+        f' an instance of `jax.sharding.Sharding`. Got {in_sharding}')
+  dll = (user_in_sharding.device_local_layout
+         if isinstance(user_in_sharding, Layout) else None)
   t = await ts.open(
       tensorstore_spec,
       open=True,
@@ -343,7 +351,14 @@ async def async_deserialize(
       # Cast while reloading on process to avoid 2 copies on device if the
       # casting is done on device.
       out = out.astype(dtype)
-    result = jax.device_put(out, device)
+    # Convert to jnp array so that layouts are initialized properly for
+    # sub-byte dtypes.
+    # TODO(yashkatariya): This is a band-aid fix. Figure out a better way to
+    # make this work.
+    if out.dtype == jnp.int4:
+      out = jnp.asarray(out)  # type: ignore
+    result = jax.device_put(
+        out, Layout(dll, jax.sharding.SingleDeviceSharding(device)))
     if byte_limiter is not None:
       # NB: `out` actually might not be ready for garbage collection by the
       # time we call release_bytes . Thus peak memory usage still might grow
@@ -361,7 +376,7 @@ async def async_deserialize(
   return await create_async_array_from_callback(tuple(shape), in_sharding, cb)
 
 
-def run_deserialization(shardings: Sequence[sharding.Sharding],
+def run_deserialization(shardings: Sequence[sharding.Sharding | Layout],
                         tensorstore_specs: Sequence[dict[str, Any]],
                         global_shapes: Sequence[array.Shape] | None = None,
                         dtypes: Sequence[typing.DTypeLike] | None = None,
@@ -396,7 +411,7 @@ class GlobalAsyncCheckpointManagerBase(util.StrictABC):
   is finished, checkpoint for step 2 will need to be blocked. Maintaining a
   class allows to maintain that state.
 
-  Example:
+  Examples:
 
   Below is a simplified training loop:
 
@@ -599,7 +614,7 @@ class GlobalAsyncCheckpointManager(AsyncManager, GlobalAsyncCheckpointManagerBas
     tspecs = jax.tree.map(get_tensorstore_spec, paths)
     self.serialize(arrays, tspecs, on_commit_callback=on_commit_callback)
 
-  def deserialize(self, shardings: Sequence[sharding.Sharding],
+  def deserialize(self, shardings: Sequence[sharding.Sharding | Layout],
                   tensorstore_specs: Sequence[dict[str, Any]],
                   global_shapes: Sequence[array.Shape] | None = None,
                   dtypes: Sequence[typing.DTypeLike] | None = None,

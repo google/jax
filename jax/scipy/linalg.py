@@ -26,6 +26,7 @@ from jax._src.scipy.linalg import (
   expm as expm,
   expm_frechet as expm_frechet,
   hessenberg as hessenberg,
+  hilbert as hilbert,
   inv as inv,
   lu as lu,
   lu_factor as lu_factor,

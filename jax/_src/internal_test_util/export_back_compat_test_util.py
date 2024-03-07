@@ -17,7 +17,9 @@ Since we have to guarantee 6 months of backward compatibility for the
 JAX serialized format, we need to guarantee that custom calls continue to
 work as before. We test this here.
 
-The tests in this file refer to the test data in ./back_compat_testdata.
+The tests in this file refer to the test data in
+jax/_src/internal_test_util/export_back_compat_test_data.
+
 There is one test for each version of a custom call target, e.g.,
 `test_ducc_fft` tests the FFT custom calls on CPU.
 Only custom call targets tested here should be listed in
@@ -32,11 +34,12 @@ test here to remove it after 6 months.
 
 Write the JAX function `func` that exercises the custom call `foo_call` you
 want, then pick some inputs, and then add this to the new test to get started.
+Add the following code to your test file, e.g., `export_back_compat_test.py`.
 
   import dataclasses
   from jax._src.internal_test_util import export_back_compat_test_util as bctu
 
-  class BackCompatTest(bctu.CompatTestBase)
+  class CompatTest(bctu.CompatTestBase)
     ...
 
     def test_foo_call(self):
@@ -48,13 +51,13 @@ want, then pick some inputs, and then add this to the new test to get started.
 
 The test will fail, but will save to a file the test data you will need. The
 file name will be printed in the logs. Create a new
-file ./back_compat_testdata/foo_call.py and paste the test data that
-you will see printed in the logs.
+file jax/_src/internal_test_util/export_back_compat_test_data/foo_call.py
+and paste the test data that you will see printed in the logs.
 
-Name the literal `data_YYYYY_MM_DD` to include the date of serializaton
+Name the literal `data_YYYYY_MM_DD` to include the date of serialization
 (for readability only). Then add to this file:
 
-  from jax.experimental.jax2tf.tests.back_compat_testdata import foo_call
+  from jax._src.internal_test_util.export_back_compat_test_data import foo_call
 
 then update `test_custom_call_coverage`, and then update your `test_foo_call`:
 
@@ -67,13 +70,13 @@ then update `test_custom_call_coverage`, and then update your `test_foo_call`:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 import dataclasses
 import datetime
 import os
 import re
 import sys
-from typing import Any, Callable
+from typing import Any
 
 from absl import logging
 
@@ -83,7 +86,7 @@ from numpy import array, float32
 
 import jax
 from jax import tree_util
-from jax.experimental import export
+from jax import export
 
 from jax.experimental import pjit
 
@@ -300,7 +303,7 @@ data_{datetime.date.today().strftime('%Y_%m_%d')} = dict(
 
     module_str = str(exported.mlir_module())
     serialized = exported.mlir_module_serialized
-    module_version = exported.mlir_module_serialization_version
+    module_version = exported.calling_convention_version
     nr_devices = exported.nr_devices
     return serialized, module_str, module_version, nr_devices
 
@@ -327,19 +330,19 @@ data_{datetime.date.today().strftime('%Y_%m_%d')} = dict(
         in_avals=tuple(in_avals),
         out_tree=out_tree,
         out_avals=tuple(out_avals),
-        in_shardings=(None,) * len(in_avals),
-        out_shardings=(None,) * len(out_avals),
-        lowering_platforms=(data.platform,),
+        in_shardings_hlo=(None,) * len(in_avals),
+        out_shardings_hlo=(None,) * len(out_avals),
+        platforms=(data.platform,),
         ordered_effects=(),
         unordered_effects=(),
         disabled_safety_checks=(),
         mlir_module_serialized=data.mlir_module_serialized,
-        mlir_module_serialization_version=data.xla_call_module_version,
+        calling_convention_version=data.xla_call_module_version,
         nr_devices=data.nr_devices,
         module_kept_var_idx=tuple(range(len(in_avals))),
-        uses_shape_polymorphism=any(not core.is_constant_shape(a.shape)
+        uses_global_constants=any(not core.is_constant_shape(a.shape)
                                     for a in in_avals),
       _get_vjp=_get_vjp)
 
       # We use pjit in case there are shardings in the exported module.
-    return pjit.pjit(export.call_exported(exported))(*data.inputs)
+    return pjit.pjit(exported.call)(*data.inputs)

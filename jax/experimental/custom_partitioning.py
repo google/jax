@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 import inspect
 from typing import Optional
 import weakref
@@ -32,8 +33,8 @@ from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.sharding_impls import _op_sharding_to_pos_sharding
 from jax._src import custom_api_util
+from jax._src import xla_bridge as xb
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 from jax._src.api_util import flatten_fun_nokwargs, argnums_partial
 
 
@@ -132,10 +133,8 @@ def _custom_partitioning_propagate_user_sharding(user_sharding, shape,
 
 
 def _to_hlo_sharding(sharding, num_dimensions):
-  if not isinstance(sharding, jax.sharding.XLACompatibleSharding):
-    raise ValueError(
-        "Custom Partitioning rules must return XLACompatibleShardings."
-    )
+  if not isinstance(sharding, jax.sharding.Sharding):
+    raise ValueError("Custom Partitioning rules must return Sharding.")
   return sharding._to_xla_hlo_sharding(num_dimensions)
 
 
@@ -181,18 +180,15 @@ def _custom_partitioning_partition(arg_shapes, arg_shardings, result_shape,
         % (repr(closed_jaxpr.out_avals), repr(tiled_results))
     )
   axis_context = sharding_impls.SPMDAxisContext(mesh)
-  module = mlir.build_mlir_module_helper(
-      closed_jaxpr,
-      name="tmp_xla_computation",
-      platforms=module_context.platforms,
-      backend_or_name=module_context.backend_or_name,
-      axis_context=axis_context.extend_manual(frozenset(mesh.axis_names)),
-  )
+  with core.extend_axis_env_nd(mesh.shape.items()):
+    module = mlir.build_mlir_module_helper(
+        closed_jaxpr,
+        name="tmp_xla_computation",
+        platforms=module_context.platforms,
+        backend_or_name=module_context.backend_or_name,
+        axis_context=axis_context.extend_manual(frozenset(mesh.axis_names)),
+    )
   result_sharding = _pack_result_sharding(result_shape, result_shardings)
-  if xla_extension_version < 232:
-    built = xc._xla.mlir.mlir_module_to_xla_computation(
-        mlir.module_to_string(module), use_tuple_args=False, return_tuple=False)
-    return built, arg_shardings, result_sharding
   return mlir.module_to_bytecode(module), arg_shardings, result_sharding
 
 
@@ -303,7 +299,7 @@ class custom_partitioning:
   Positional arguments can be specified as static using static_argnums. JAX uses
   :code:`inspect.signature(fun)` to resolve these positional arguments.
 
-  Example:
+  Examples:
 
     As an example, assume we want to enhance the existing ``jax.numpy.fft.fft``. This function computes
     the discrete Fourier transform of an N-dimensional input along the last dimension, and is batched
@@ -518,8 +514,6 @@ def _custom_partitioning_lowering_rule(ctx: mlir.LoweringRuleContext, *values,
       partition, to_mesh_pspec_sharding, in_tree, out_tree,
       infer_sharding_from_operands, ctx.module_context, mesh, static_args)
   key = str(id(sharding_callback_info))
-  # TODO(parkers): Remove bytes registration when xla_extension_version > 211
-  _sharding_callbacks[key] = sharding_callback_info
   _sharding_callbacks[bytes(key, 'utf8')] = sharding_callback_info
   # We need to make sure `sharding_callback_info` is still alive when the SPMD
   # partitioner runs so we keep it alive by attaching it to the executable.
@@ -541,8 +535,18 @@ def _custom_partitioning_lowering_rule(ctx: mlir.LoweringRuleContext, *values,
 mlir.register_lowering(custom_partitioning_p,
                        _custom_partitioning_lowering_rule)
 
-xc.register_custom_call_partitioner(  # pytype: disable=module-attr
+xc.register_custom_call_partitioner(
     _CUSTOM_PARTITIONING_CALL_NAME,
     _custom_partitioning_propagate_user_sharding,
     _custom_partitioning_partition,
-    _custom_partitioning_infer_sharding_from_operands, True)
+    _custom_partitioning_infer_sharding_from_operands, True)  # type: ignore
+xb.register_plugin_callbacks(
+    partial(
+        xc.register_custom_call_partitioner,
+        name=_CUSTOM_PARTITIONING_CALL_NAME,
+        prop_user_sharding=_custom_partitioning_propagate_user_sharding,
+        partition=_custom_partitioning_partition,
+        infer_sharding_from_operands=_custom_partitioning_infer_sharding_from_operands,
+        can_side_effecting_have_replicated_sharding=True,
+    )
+)

@@ -68,7 +68,6 @@ from jax._src.core import (
   call_bind_with_continuation as call_bind_with_continuation,
   call_impl as call_impl,
   call_p as call_p,
-  canonicalize_shape as _deprecated_canonicalize_shape,
   check_eqn as check_eqn,
   check_jaxpr as check_jaxpr,
   check_type as check_type,
@@ -80,8 +79,6 @@ from jax._src.core import (
   cur_sublevel as cur_sublevel,
   custom_typechecks as custom_typechecks,
   dedup_referents as dedup_referents,
-  definitely_equal as _deprecated_definitely_equal,
-  dimension_as_value as _deprecated_dimension_as_value,
   do_subst_axis_names_jaxpr as do_subst_axis_names_jaxpr,
   ensure_compile_time_eval as ensure_compile_time_eval,
   escaped_tracer_error as escaped_tracer_error,
@@ -118,18 +115,6 @@ from jax._src.core import (
   no_effects as no_effects,
   non_negative_dim as _deprecated_non_negative_dim,
   outfeed_primitives as outfeed_primitives,
-  pp_aval as pp_aval,
-  pp_eqn as pp_eqn,
-  pp_eqn_rules as pp_eqn_rules,
-  pp_eqns as pp_eqns,
-  pp_jaxpr as pp_jaxpr,
-  pp_jaxpr_eqn_range as pp_jaxpr_eqn_range,
-  pp_jaxpr_skeleton as pp_jaxpr_skeleton,
-  pp_jaxprs as pp_jaxprs,
-  pp_kv_pair as pp_kv_pair,
-  pp_kv_pairs as pp_kv_pairs,
-  pp_var as pp_var,
-  pp_vars as pp_vars,
   primal_dtype_to_tangent_dtype as primal_dtype_to_tangent_dtype,
   primitive_uses_outfeed as primitive_uses_outfeed,
   process_env_traces_call as process_env_traces_call,
@@ -148,7 +133,6 @@ from jax._src.core import (
   subst_axis_names_var as subst_axis_names_var,
   substitute_vars_in_output_ty as substitute_vars_in_output_ty,
   thread_local_state as thread_local_state,
-  token as token,
   trace_state_clean as trace_state_clean,
   traverse_jaxpr_params as traverse_jaxpr_params,
   typecheck as typecheck,
@@ -163,27 +147,40 @@ from jax._src.core import (
 
 from jax._src import core as _src_core
 _deprecations = {
-    # Added Oct 11, 2023:
+    # Added 2024-06-12
+    "pp_aval": ("jax.core.pp_aval is deprecated.", _src_core.pp_aval),
+    "pp_eqn": ("jax.core.pp_eqn is deprecated.", _src_core.pp_eqn),
+    "pp_eqn_rules": ("jax.core.pp_eqn_rules is deprecated.", _src_core.pp_eqn_rules),
+    "pp_eqns": ("jax.core.pp_eqns is deprecated.", _src_core.pp_eqns),
+    "pp_jaxpr": ("jax.core.pp_jaxpr is deprecated.", _src_core.pp_jaxpr),
+    "pp_jaxpr_eqn_range": ("jax.core.pp_jaxpr_eqn_range is deprecated.", _src_core.pp_jaxpr_eqn_range),
+    "pp_jaxpr_skeleton": ("jax.core.pp_jaxpr_skeleton is deprecated.", _src_core.pp_jaxpr_skeleton),
+    "pp_jaxprs": ("jax.core.pp_jaxprs is deprecated.", _src_core.pp_jaxprs),
+    "pp_kv_pair": ("jax.core.pp_kv_pair is deprecated.", _src_core.pp_kv_pair),
+    "pp_kv_pairs": ("jax.core.pp_kv_pairs is deprecated.", _src_core.pp_kv_pairs),
+    "pp_var": ("jax.core.pp_var is deprecated.", _src_core.pp_var),
+    "pp_vars": ("jax.core.pp_vars is deprecated.", _src_core.pp_vars),
+    # Finalized 2024-05-13; remove after 2024-08-13
     "DimSize": (
         "jax.core.DimSize is deprecated. Use DimSize = int | Any.",
-        _src_core.DimSize,
+        None,
     ),
     "Shape": (
         "jax.core.Shape is deprecated. Use Shape = Sequence[int | Any].",
-        _src_core.Shape,
+        None,
     ),
-    # Added Dec 15, 2023
+    # Finalized 2024-06-24; remove after 2024-09-24
     "canonicalize_shape": (
-      "jax.core.canonicalize_shape is deprecated.", _deprecated_canonicalize_shape,
+      "jax.core.canonicalize_shape is deprecated.", None,
     ),
     "dimension_as_value": (
-      "jax.core.dimension_as_value is deprecated. Use jnp.array.", _deprecated_dimension_as_value,
+      "jax.core.dimension_as_value is deprecated. Use jnp.array.", None,
     ),
     "definitely_equal": (
-      "jax.core.definitely_equal is deprecated. Use ==.", _deprecated_definitely_equal,
+      "jax.core.definitely_equal is deprecated. Use ==.", None,
     ),
     "symbolic_equal_dim": (
-      "jax.core.symbolic_equal_dim is deprecated. Use ==.", _deprecated_definitely_equal,
+      "jax.core.symbolic_equal_dim is deprecated. Use ==.", None,
     ),
     # Added Jan 8, 2024
     "non_negative_dim": (
@@ -193,13 +190,19 @@ _deprecations = {
 
 import typing
 if typing.TYPE_CHECKING:
-  DimSize = _src_core.DimSize
-  Shape = _src_core.Shape
-  canonicalize_shape = _deprecated_canonicalize_shape
-  dimension_as_value = _deprecated_dimension_as_value
-  definitely_equal = _deprecated_definitely_equal
   non_negative_dim = _deprecated_non_negative_dim
-  symbolic_equal_dim = _deprecated_definitely_equal
+  pp_aval = _src_core.pp_aval
+  pp_eqn = _src_core.pp_eqn
+  pp_eqn_rules = _src_core.pp_eqn_rules
+  pp_eqns = _src_core.pp_eqns
+  pp_jaxpr = _src_core.pp_jaxpr
+  pp_jaxpr_eqn_range = _src_core.pp_jaxpr_eqn_range
+  pp_jaxpr_skeleton = _src_core.pp_jaxpr_skeleton
+  pp_jaxprs = _src_core.pp_jaxprs
+  pp_kv_pair = _src_core.pp_kv_pair
+  pp_kv_pairs = _src_core.pp_kv_pairs
+  pp_var = _src_core.pp_var
+  pp_vars = _src_core.pp_vars
 else:
   from jax._src.deprecations import deprecation_getattr as _deprecation_getattr
   __getattr__ = _deprecation_getattr(__name__, _deprecations)

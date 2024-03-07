@@ -24,10 +24,12 @@ limitations under the License.
 
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MemAlloc.h"
+#include "llvm/Support/raw_ostream.h"
 #include "mlir-c/IR.h"
 #include "mlir-c/Support.h"
 #include "mlir/CAPI/IR.h"
 #include "mlir/CAPI/Registration.h"
+#include "mlir/CAPI/Utils.h"
 #include "mlir/CAPI/Wrap.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Attributes.h"
@@ -293,6 +295,12 @@ bool mlirTpuVectorLayoutEquivalentTo(MlirTpuVectorLayout layout,
   return unwrap(layout)->equivalentTo(*unwrap(other),
                                       mlirTpuI64ArrayRefToLlvmArrayRef(shape),
                                       unwrap(target_shape));
+}
+
+void mlirTpuVectorLayoutPrint(
+    MlirTpuVectorLayout layout, MlirStringCallback callback, void *userData) {
+  mlir::detail::CallbackOstream stream(callback, userData);
+  unwrap(layout)->print<llvm::raw_ostream>(stream);
 }
 
 void mlirTpuVregDataBoundsDestroy(MlirTpuVregDataBounds data_bounds) {

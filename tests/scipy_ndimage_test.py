@@ -21,13 +21,13 @@ import numpy as np
 from absl.testing import absltest
 import scipy.ndimage as osp_ndimage
 
+import jax
 from jax import grad
 from jax._src import test_util as jtu
 from jax import dtypes
 from jax.scipy import ndimage as lsp_ndimage
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 float_dtypes = jtu.dtypes.floating
@@ -111,10 +111,6 @@ class NdimageTest(jtu.JaxTestCase):
       lsp_ndimage.map_coordinates(x, c, order=1, mode='grid-wrap')
     with self.assertRaisesRegex(ValueError, 'sequence of length'):
       lsp_ndimage.map_coordinates(x, [c, c], order=1)
-
-  def testMapCoordinateDocstring(self):
-    self.assertIn("Only nearest neighbor",
-                  lsp_ndimage.map_coordinates.__doc__)
 
   @jtu.sample_product(
     dtype=float_dtypes + int_dtypes,

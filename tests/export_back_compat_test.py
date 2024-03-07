@@ -19,6 +19,7 @@ update these tests.
 import dataclasses
 from functools import partial
 import itertools
+import logging
 import math
 
 from absl.testing import absltest, parameterized
@@ -27,10 +28,10 @@ import numpy as np
 
 import jax
 from jax import lax
-from jax.experimental.export import _export
+from jax._src.export import _export
+
 from jax._src.internal_test_util import export_back_compat_test_util as bctu
 
-from jax._src.internal_test_util.export_back_compat_test_data import cpu_ducc_fft
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_cholesky_lapack_potrf
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_eig_lapack_geev
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_eigh_cusolver_syev
@@ -50,6 +51,7 @@ from jax._src.internal_test_util.export_back_compat_test_data import tpu_Shardin
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_stablehlo_dynamic_reduce_window
 from jax._src.internal_test_util.export_back_compat_test_data import stablehlo_dynamic_rng_bit_generator
 from jax._src.internal_test_util.export_back_compat_test_data import stablehlo_dynamic_top_k
+from jax._src.internal_test_util.export_back_compat_test_data import stablehlo_dynamic_approx_top_k
 
 from jax.experimental import pjit
 from jax.experimental.shard_map import shard_map
@@ -60,13 +62,20 @@ from jax.sharding import PartitionSpec as P
 
 from jax._src import config
 from jax._src import test_util as jtu
-from jax._src.lib import version as jaxlib_version
+from jax._src.lib import cuda_versions
+from jax._src.lib import xla_extension_version
 
 config.parse_flags_with_absl()
 
+def _is_required_cusolver_version_satisfied(required_version):
+  if cuda_versions is None:
+    return False
+  return cuda_versions.cusolver_get_version() >= required_version
 
-@jtu.with_config(jax_legacy_prng_key='allow',
-                 jax_enable_key_reuse_checks=False)
+@jtu.with_config(jax_legacy_prng_key="allow",
+                 jax_debug_key_reuse=False,
+                 jax_include_full_tracebacks_in_locations=False,
+                 jax_threefry_gpu_kernel_lowering=True)
 class CompatTest(bctu.CompatTestBase):
   def test_dummy(self):
     # Tests the testing mechanism. Let this test run on all platforms
@@ -101,7 +110,6 @@ class CompatTest(bctu.CompatTestBase):
     # Add here all the testdatas that should cover the targets guaranteed
     # stable
     covering_testdatas = [
-        cpu_ducc_fft.data_2023_03_17, cpu_ducc_fft.data_2023_06_14,
         cpu_cholesky_lapack_potrf.data_2023_06_19,
         cpu_eig_lapack_geev.data_2023_06_19,
         cpu_eigh_lapack_syev.data_2023_03_17,
@@ -119,6 +127,7 @@ class CompatTest(bctu.CompatTestBase):
         stablehlo_dynamic_rng_bit_generator.data_2023_06_17,
         stablehlo_dynamic_top_k.data_2023_07_16,
         stablehlo_dynamic_top_k.data_2023_08_11,  # with shape_assertion
+        stablehlo_dynamic_approx_top_k.data_2024_05_30,
     ]
     # Some of the above are nested structures.
     covering_testdatas = itertools.chain(
@@ -131,34 +140,14 @@ class CompatTest(bctu.CompatTestBase):
     covered_targets = covered_targets.union({
       "tf.call_tf_function",  # tested in jax2tf/tests/back_compat_tf_test.py
       "tpu_custom_call",  # tested separately
+      "__gpu$xla.gpu.triton",  # tested in pallas/export_back_compat_pallas_test.py
+      "cu_threefry2x32_ffi",  # TODO(b/338022728) add the actual backwards compatibility test
     })
     not_covered = targets_to_cover.difference(covered_targets)
     self.assertEmpty(not_covered,
                      msg=("The following custom call targets are declared "
                           "stable but are not covered by any tests: "
                           f"{not_covered}"))
-
-  def test_ducc_fft(self):
-    def func(x):
-      return lax.fft(x, fft_type="fft", fft_lengths=(4,))
-
-    # An old lowering, with ducc_fft. We keep it for 6 months.
-    data = self.load_testdata(cpu_ducc_fft.data_2023_03_17)
-    if jaxlib_version <= (0, 4, 20):
-      expect_current_custom_calls = ["dynamic_ducc_fft"]
-    else:
-      # We have changed the lowering for fft since we saved this data.
-      # FFT no longer lowers to a custom call.
-      expect_current_custom_calls = []
-
-    self.run_one_test(func, data,
-                      expect_current_custom_calls=expect_current_custom_calls)
-
-    # A newer lowering, with dynamic_ducc_fft.
-    data = self.load_testdata(cpu_ducc_fft.data_2023_06_14)
-    # FFT no longer lowers to a custom call.
-    self.run_one_test(func, data,
-                      expect_current_custom_calls=expect_current_custom_calls)
 
   def cholesky_input(self, shape, dtype):
     a = jtu.rand_default(self.rng())(shape, dtype)
@@ -303,6 +292,11 @@ class CompatTest(bctu.CompatTestBase):
   def test_cuda_eigh_cusolver_syev(self, dtype_name="f32", variant="syevj"):
     if not config.enable_x64.value and dtype_name == "f64":
       self.skipTest("Test disabled for x32 mode")
+    if (jtu.test_device_matches(["cuda"]) and
+        _is_required_cusolver_version_satisfied(11600)):
+      # The underlying problem is that this test assumes the workspace size can be
+      # queried from an older version of cuSOLVER and then be used in a newer one.
+      self.skipTest("Newer cuSOLVER expects a larger workspace than was serialized")
     # For lax.linalg.eigh
     dtype = dict(f32=np.float32, f64=np.float64)[dtype_name]
     size = dict(syevj=8, syevd=36)[variant]
@@ -586,6 +580,8 @@ class CompatTest(bctu.CompatTestBase):
     self.run_one_test(func, data)
 
   def test_cuda_threefry2x32(self):
+    logging.info("test_cuda_threefry2x32: xla_extension_version: %s",
+                 xla_extension_version)
     def func(x):
       return jax.random.uniform(x, (2, 4), dtype=np.float32)
 
@@ -595,7 +591,7 @@ class CompatTest(bctu.CompatTestBase):
   def test_sharding(self):
     # Tests "Sharding", "SPMDShardToFullShape", "SPMDFullToShardShape" on TPU
     if not jtu.test_device_matches(["tpu"]) or len(jax.devices()) < 2:
-     self.skipTest("Test runs only on TPU with at least 2 devices")
+      self.skipTest("Test runs only on TPU with at least 2 devices")
 
     # Must use exactly 2 devices for expected outputs from ppermute
     devices = jax.devices()[:2]
@@ -719,6 +715,44 @@ class CompatTest(bctu.CompatTestBase):
     self.run_one_test(func, data_2,
                       polymorphic_shapes=("_, b",),
                       check_results=check_top_k_results)
+
+  def test_dynamic_approx_top_k(self):
+    # stablehlo.dynamic_approx_top_k is used temporarily for a approx_top_k
+    # with dynamism
+    # This is the input that was used to generate the test_data
+    _ = np.arange(24, dtype=np.float32)
+
+    def func(a):  # a: f32[b + 4]
+      return lax.approx_max_k(a, k=a.shape[0] - 4)
+
+    data = self.load_testdata(stablehlo_dynamic_approx_top_k.data_2024_05_30)
+
+    def check_top_k_results(res_run, res_expected, *, rtol, atol):
+      a = data.inputs[0]
+      # The order of the results may be different, but should be the same ones
+      values_expected, _ = res_expected
+      values_run, indices_run = res_run
+      # Check that indices are correct
+      self.assertAllClose(
+          values_run,
+          a[indices_run],
+          atol=atol,
+          rtol=rtol,
+      )
+      self.assertAllClose(
+          np.sort(values_run), np.sort(values_expected), atol=atol, rtol=rtol
+      )
+
+    self.run_one_test(
+        func,
+        data,
+        polymorphic_shapes=("b + 4,",),
+        check_results=check_top_k_results,
+        expect_current_custom_calls=[
+            "stablehlo.dynamic_approx_top_k",
+            "shape_assertion",
+        ],
+    )
 
 
 if __name__ == "__main__":

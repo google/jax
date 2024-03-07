@@ -13,11 +13,11 @@
 # limitations under the License.
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from functools import partial, reduce
 import math
 import operator as op
-from typing import Any, Callable, NamedTuple
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -33,10 +33,9 @@ from jax._src import core
 from jax._src import dispatch
 from jax._src import dtypes
 from jax._src import pretty_printer as pp
-from jax._src import sharding_specs
+from jax._src import source_info_util
 from jax._src import tree_util as tree_util_internal
 from jax._src import typing
-from jax._src import op_shardings
 from jax._src.api import jit, vmap
 from jax._src.dtypes import float0
 from jax._src.interpreters import ad
@@ -46,15 +45,15 @@ from jax._src.interpreters import pxla
 from jax._src.interpreters import xla
 from jax._src.lax import lax as lax_internal
 from jax._src.lax import utils as lax_utils
-from jax._src.lib.mlir import ir
 from jax._src.lib import gpu_prng
 from jax._src.lib import xla_client as xc
+from jax._src.lib import version as jaxlib_version
+from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
 from jax._src.numpy.array_methods import (
     _array_operators, _set_array_base_attributes, _IndexUpdateHelper)
-from jax._src.partition_spec import PartitionSpec
 from jax._src.sharding_impls import (
-    NamedSharding, PmapSharding, GSPMDSharding, XLACompatibleSharding)
+    NamedSharding, PmapSharding, physical_sharding, logical_sharding)
 from jax._src.typing import Array
 from jax._src.util import safe_map, safe_zip
 
@@ -66,7 +65,7 @@ Shard = Any  # TODO(jakevdp): fix circular imports and import Shard
 Shape = tuple[int, ...]
 
 UINT_DTYPES = {
-    8: jnp.uint8, 16: jnp.uint16, 32: jnp.uint32, 64: jnp.uint64}  # type: ignore[has-type]
+    8: jnp.uint8, 16: jnp.uint16, 32: jnp.uint32, 64: jnp.uint64}
 
 # -- PRNG implementation interface
 
@@ -154,6 +153,7 @@ class PRNGKeyArray(jax.Array):
   _impl: PRNGImpl
   _base_array: typing.Array
   _consumed: bool | np.ndarray  # Used in jax.experimental.key_reuse.
+  _source_info: None | source_info_util.SourceInfo = None
 
   def __init__(self, impl, key_data: Any):
     assert not isinstance(key_data, core.Tracer)
@@ -195,7 +195,7 @@ class PRNGKeyArray(jax.Array):
 
   _device = property(op.attrgetter('_base_array._device'))
   _committed = property(op.attrgetter('_base_array._committed'))
-  device = property(op.attrgetter('_base_array.device'))  # type: ignore[assignment]
+  device = property(op.attrgetter('_base_array.device'))
   devices = property(op.attrgetter('_base_array.devices'))  # type: ignore[assignment]
   is_fully_addressable = property(op.attrgetter('_base_array.is_fully_addressable'))  # type: ignore[assignment]
   is_fully_replicated = property(op.attrgetter('_base_array.is_fully_replicated'))  # type: ignore[assignment]
@@ -233,8 +233,7 @@ class PRNGKeyArray(jax.Array):
 
   @property
   def sharding(self):
-    phys_sharding = self._base_array.sharding
-    return KeyTyRules.logical_sharding(self.aval, phys_sharding)
+    return logical_sharding(self.aval, self._base_array.sharding)
 
   def _is_scalar(self):
     base_ndim = len(self._impl.key_shape)
@@ -322,44 +321,6 @@ def base_arr_shape_to_keys_shape(impl, base_arr_shape):
   base_ndim = len(impl.key_shape)
   return base_arr_shape[:-base_ndim]
 
-def make_key_array_phys_sharding(aval, sharding):
-  if dispatch.is_single_device_sharding(sharding):
-    return sharding
-  elif isinstance(sharding, PmapSharding):
-    key_shape = aval.dtype._impl.key_shape
-    trailing_sharding = [sharding_specs.NoSharding()] * len(key_shape)
-    phys_sharding_spec = sharding_specs.ShardingSpec(
-        sharding=(*sharding.sharding_spec.sharding, *trailing_sharding),
-        mesh_mapping=sharding.sharding_spec.mesh_mapping)
-    return PmapSharding(devices=sharding.devices,
-                        sharding_spec=phys_sharding_spec)
-  elif isinstance(sharding, NamedSharding):
-    key_shape = aval.dtype._impl.key_shape
-    trailing_spec = [None] * len(key_shape)
-    return NamedSharding(
-        sharding.mesh,
-        PartitionSpec(*sharding.spec, *trailing_spec))
-  else:
-    hlos = sharding._to_xla_hlo_sharding(aval.ndim)
-    return GSPMDSharding(
-        sharding._device_assignment,
-        KeyTyRules.physical_hlo_sharding(aval, hlos))
-
-
-def get_logical_gspmd_sharding(aval, phys_sharding):
-  key_shape = aval.dtype._impl.key_shape
-  phys_hlo_sharding = phys_sharding._to_xla_hlo_sharding(
-      aval.ndim + len(key_shape))
-  partitions, num_replicas = op_shardings.get_num_ways_dim_sharded(
-      phys_hlo_sharding)
-  suffix = [] if num_replicas == 1 else [num_replicas]
-  # Create logical sharding by cutting off the replicated trailing dims.
-  logical_op_sharding = phys_hlo_sharding.to_proto().clone()
-  tad = partitions[:-len(key_shape)] + suffix
-  logical_op_sharding.tile_assignment_dimensions = tad
-  return GSPMDSharding(phys_sharding._device_assignment,
-                       xc.HloSharding.from_proto(logical_op_sharding))
-
 
 class KeyTyRules:
 
@@ -383,43 +344,6 @@ class KeyTyRules:
     return val._base_array
 
   @staticmethod
-  def physical_hlo_sharding(aval, hlo_sharding: xc.HloSharding) -> xc.HloSharding:
-    key_shape = aval.dtype._impl.key_shape
-    new_op_sharding = hlo_sharding.to_proto().clone()  # type: ignore
-    partitions, num_replicas = op_shardings.get_num_ways_dim_sharded(
-        hlo_sharding)
-    suffix = [] if num_replicas == 1 else [num_replicas]
-    tad = partitions + [1] * len(key_shape) + suffix
-    new_op_sharding.tile_assignment_dimensions = tad
-    return xc.HloSharding.from_proto(new_op_sharding)
-
-  @staticmethod
-  def physical_sharding(
-      aval, sharding: XLACompatibleSharding) -> XLACompatibleSharding:
-    return make_key_array_phys_sharding(aval, sharding)
-
-  @staticmethod
-  def logical_sharding(aval, phys_sharding) -> XLACompatibleSharding:
-    # The trailing dims should always be replicated.
-    aval.dtype._rules.check_replicated_trailing_dims(phys_sharding, aval)
-
-    if dispatch.is_single_device_sharding(phys_sharding):
-      return phys_sharding
-    elif isinstance(phys_sharding, PmapSharding):
-      key_shape = aval.dtype._impl.key_shape
-      logical_sharding_spec = sharding_specs.ShardingSpec(
-          sharding=phys_sharding.sharding_spec.sharding[:-len(key_shape)],
-          mesh_mapping=phys_sharding.sharding_spec.mesh_mapping)
-      return PmapSharding(devices=phys_sharding.devices,
-                          sharding_spec=logical_sharding_spec)
-    elif isinstance(phys_sharding, NamedSharding):
-      logical_gs = get_logical_gspmd_sharding(aval, phys_sharding)
-      return pxla._gspmd_to_named_sharding_via_mesh(
-          logical_gs, phys_sharding.mesh)
-    else:
-      return get_logical_gspmd_sharding(aval, phys_sharding)
-
-  @staticmethod
   def result_handler(sticky_device, aval):
     def handler(_, buf):
       buf.aval = core.ShapedArray(buf.shape, buf.dtype)
@@ -434,7 +358,7 @@ class KeyTyRules:
 
     # set up a grounded sharding (with a grounded sharding spec)
     if isinstance(sharding, (PmapSharding, NamedSharding)):
-      phys_sharding = make_key_array_phys_sharding(aval, sharding)
+      phys_sharding = physical_sharding(aval, sharding)
     else:
       assert False, f'impossible sharding {sharding} in local sharded result handler'
 
@@ -456,7 +380,7 @@ class KeyTyRules:
     phys_aval = core.physical_aval(aval)
     phys_handler_maker = pxla.global_result_handlers[core.ShapedArray]
 
-    phys_sharding = make_key_array_phys_sharding(aval, out_sharding)
+    phys_sharding = physical_sharding(aval, out_sharding)
     phys_handler = phys_handler_maker(phys_aval, phys_sharding, committed)
     def handler(bufs):
       return PRNGKeyArray(aval.dtype._impl, phys_handler(bufs))
@@ -468,7 +392,7 @@ class KeyTyRules:
     phys_handler_maker = pxla.global_result_handlers[core.ShapedArray]
     phys_arrays = [random_unwrap(arr) for arr in arrays]
 
-    phys_sharding = make_key_array_phys_sharding(aval, sharding)
+    phys_sharding = physical_sharding(aval, sharding)
     phys_handler = phys_handler_maker(phys_aval, phys_sharding, committed)
     phys_result = phys_handler(phys_arrays)
     return PRNGKeyArray(aval.dtype._impl, phys_result)
@@ -477,8 +401,9 @@ class KeyTyRules:
   def device_put_sharded(vals, aval, sharding, devices):
     physical_aval = core.physical_aval(aval)
     physical_buffers = tree_util.tree_map(random_unwrap, vals)
-    physical_sharding = make_key_array_phys_sharding(aval, sharding)
-    physical_result = pxla.batched_device_put(physical_aval, physical_sharding, physical_buffers, list(devices))
+    phys_sharding = physical_sharding(aval, sharding)
+    physical_result = pxla.batched_device_put(physical_aval, phys_sharding,
+                                              physical_buffers, list(devices))
     return random_wrap(physical_result, impl=aval.dtype._impl)
 
   @staticmethod
@@ -486,36 +411,10 @@ class KeyTyRules:
     physical_aval = core.physical_aval(aval)
     assert len(xla.aval_to_xla_shapes(physical_aval)) == 1
     physical_buf = random_unwrap(val)
-    physical_sharding = make_key_array_phys_sharding(aval, sharding)
-    physical_result = pxla.batched_device_put(physical_aval, physical_sharding, [physical_buf] * len(devices), devices)
+    phys_sharding = physical_sharding(aval, sharding)
+    physical_result = pxla.batched_device_put(
+        physical_aval, phys_sharding, [physical_buf] * len(devices), devices)
     return random_wrap(physical_result, impl=aval.dtype._impl)
-
-  @staticmethod
-  def check_replicated_trailing_dims(sharding: XLACompatibleSharding, aval):
-    if isinstance(sharding, PmapSharding):
-      return
-    phys_aval = core.physical_aval(aval)
-    hlo_s = sharding._to_xla_hlo_sharding(phys_aval.ndim)
-    partitions, _ = op_shardings.get_num_ways_dim_sharded(hlo_s)
-    num_trailing_dims = phys_aval.ndim - aval.ndim
-    if not all(i == 1 for i in partitions[-num_trailing_dims:]):
-      raise AssertionError(
-          "The trailing dims of extended dtypes should be replicated. Got"
-          f" sharding: {sharding}, partitions: {partitions}, "
-          f"num_trailing_dims: {num_trailing_dims}")
-
-  @staticmethod
-  def replicate_trailing_dims(ctx, val: ir.Value, aval) -> ir.Value:
-    # Set the sharding of extended dtypes to be UNCONSTRAINED
-    # (i.e. XLA will choose) on aval.shape.
-    # For the trailing dims i.e. the dimension of key_shape on the base_array,
-    # the sharding is set to be REPLICATED always.
-    # For example: if the key.shape is (8, 2) and key_data(key).shape is (8, 2, 2),
-    # then the sharding will be P(P.UNCONSTRAINED, P.UNCONSTRAINED, None).
-    # The below custom call achieves the sharding like above example.
-    return mlir.wrap_with_sharding_op(
-        ctx, val, aval, xc.HloSharding.replicate().to_proto(),
-        unspecified_dims=set(range(aval.ndim)))
 
   @staticmethod
   def tangent_dtype(_):
@@ -569,10 +468,11 @@ xla.pytype_aval_mappings[PRNGKeyArray] = lambda x: x.aval
 xla.canonicalize_dtype_handlers[PRNGKeyArray] = lambda x: x
 
 
-def key_array_shard_arg_handler(x: PRNGKeyArray, sharding):
-  arr = x._base_array
-  phys_sharding = make_key_array_phys_sharding(x.aval, sharding)
-  return pxla.shard_arg_handlers[type(arr)](arr, phys_sharding)
+def key_array_shard_arg_handler(xs: Sequence[PRNGKeyArray], shardings):
+  arrs = [x._base_array for x in xs]
+  phys_shardings = [physical_sharding(x.aval, sharding)
+                    for x, sharding in zip(xs, shardings)]
+  return pxla.shard_args(phys_shardings, arrs)
 
 
 pxla.shard_arg_handlers[PRNGKeyArray] = key_array_shard_arg_handler
@@ -1003,7 +903,29 @@ def _threefry2x32_lowering(key1, key2, x1, x2, use_rolled_loops=True):
   return tuple(x)
 
 
-def _threefry2x32_gpu_lowering(lowering_func, ctx, k1, k2, x1, x2):
+_threefry2x32_lowering_rule = mlir.lower_fun(
+    partial(_threefry2x32_lowering, use_rolled_loops=False),
+    multiple_results=True)
+
+_threefry2x32_cpu_lowering_rule = mlir.lower_fun(
+    partial(_threefry2x32_lowering, use_rolled_loops=True),
+    multiple_results=True)
+
+
+def _threefry2x32_gpu_lowering_rule(lowering_func, ctx, k1, k2, x1, x2):
+  if not config.threefry_gpu_kernel_lowering.value:  # back to default lowering
+    return _threefry2x32_lowering_rule(ctx, k1, k2, x1, x2)
+
+  # TODO(b/338022728): when we export, use the old custom call target for now.
+  # Make forward_compatibility_mode False after 3 weeks.
+  # TODO(b/350111820): figure out why we cannot use the new cu_threefry2x32_ffi
+  # in Kokoro tests. For now, use the old cu_threefry2x32.
+  # lowering_parameters = ctx.module_context.lowering_parameters
+  # forward_compatibility_mode = (
+  #     lowering_parameters.for_export and
+  #     not lowering_parameters.export_ignore_forward_compatibility)
+  forward_compatibility_mode = True
+
   aval_out, aval_out_2 = ctx.avals_out
   assert aval_out == aval_out_2
   k1_aval, k2_aval, x1_aval, x2_aval = ctx.avals_in
@@ -1026,29 +948,34 @@ def _threefry2x32_gpu_lowering(lowering_func, ctx, k1, k2, x1, x2):
     length = int(out_len)  # will be passed statically
     output_shape = None
 
-  return lowering_func(
-          (_broadcast(k1, k1_aval), _broadcast(k2, k2_aval)),
-          (_broadcast(x1, x1_aval), _broadcast(x2, x2_aval)), length,
-          output_shape)
+  if jaxlib_version >= (0, 4, 31):
+    return lowering_func(
+        (_broadcast(k1, k1_aval), _broadcast(k2, k2_aval)),
+        (_broadcast(x1, x1_aval), _broadcast(x2, x2_aval)), length,
+        output_shape,
+        forward_compatibility_mode)
+  else:
+    return lowering_func(
+            (_broadcast(k1, k1_aval), _broadcast(k2, k2_aval)),
+            (_broadcast(x1, x1_aval), _broadcast(x2, x2_aval)), length,
+            output_shape)
 
 threefry2x32_p = core.Primitive("threefry2x32")
 threefry2x32_p.multiple_results = True
 threefry2x32_p.def_impl(partial(dispatch.apply_primitive, threefry2x32_p))
 threefry2x32_p.def_abstract_eval(_threefry2x32_abstract_eval)
 batching.defbroadcasting(threefry2x32_p)
-mlir.register_lowering(threefry2x32_p, mlir.lower_fun(
-    partial(_threefry2x32_lowering, use_rolled_loops=False),
-    multiple_results=True))
-mlir.register_lowering(threefry2x32_p, mlir.lower_fun(
-    partial(_threefry2x32_lowering, use_rolled_loops=True),
-    multiple_results=True), platform='cpu')
+mlir.register_lowering(
+    threefry2x32_p, _threefry2x32_lowering_rule)
+mlir.register_lowering(
+    threefry2x32_p, _threefry2x32_cpu_lowering_rule, platform='cpu')
 mlir.register_lowering(
     threefry2x32_p,
-    partial(_threefry2x32_gpu_lowering, gpu_prng.cuda_threefry2x32),
+    partial(_threefry2x32_gpu_lowering_rule, gpu_prng.cuda_threefry2x32),
     platform='cuda')
 mlir.register_lowering(
     threefry2x32_p,
-    partial(_threefry2x32_gpu_lowering, gpu_prng.rocm_threefry2x32),
+    partial(_threefry2x32_gpu_lowering_rule, gpu_prng.rocm_threefry2x32),
     platform='rocm')
 
 
@@ -1116,8 +1043,8 @@ def bcast_iotas_to_reshaped_iota(
     mul: Callable[[core.DimSize, ir.Value], ir.Value],
     shape: core.Shape,
     iotas: Sequence[ir.Value]) -> ir.Value:
-  strides: core.Shape = (*(np.cumprod(shape[1:][::-1])[::-1]), 1)  # type: ignore
-  return reduce(add, [mul(s, i) for i, s in zip(iotas, strides)])  # type: ignore
+  strides: core.Shape = (*(np.cumprod(shape[1:][::-1])[::-1]), 1)
+  return reduce(add, [mul(s, i) for i, s in zip(iotas, strides)])
 
 def iota_2x32_shape_lowering(ctx, *, shape):
   aval_out, _ = ctx.avals_out
@@ -1130,11 +1057,11 @@ def iota_2x32_shape_lowering(ctx, *, shape):
     if core.is_constant_dim(x):
       x_const = mlir.ir_constant(np.array(x, np.dtype('uint64')))
     else:
-      x_const, = mlir.eval_dynamic_shape(ctx, (x,))
+      x_shape, = mlir.eval_dynamic_shape(ctx, (x,))
       x_const = hlo.convert(
           ir.RankedTensorType.get(
-              (),
-              mlir.dtype_to_ir_type(np.dtype('uint64'))), x_const)
+              [],
+              mlir.dtype_to_ir_type(np.dtype('uint64'))), x_shape)
     x_bcast = mlir.broadcast_in_dim(ctx, x_const, aval_u64,
                                     broadcast_dimensions=[])
     return mlir.hlo.multiply(x_bcast, y)
@@ -1194,9 +1121,9 @@ def threefry_split(key: typing.Array, shape: Shape) -> typing.Array:
 @partial(jit, static_argnums=(1,))
 def _threefry_split(key, shape) -> typing.Array:
   if config.threefry_partitionable.value:
-    return _threefry_split_foldlike(key, shape)  # type: ignore
+    return _threefry_split_foldlike(key, shape)
   else:
-    return _threefry_split_original(key, shape)  # type: ignore
+    return _threefry_split_original(key, shape)
 
 @partial(jit, static_argnums=(1,), inline=True)
 def _threefry_split_original(key, shape) -> typing.Array:
@@ -1377,26 +1304,3 @@ unsafe_rbg_prng_impl = PRNGImpl(
     tag='urbg')
 
 register_prng(unsafe_rbg_prng_impl)
-
-
-# Primitives related to key reuse
-reuse_key_p = core.Primitive("reuse_key")
-reuse_key_p.def_impl(lambda x: x)
-reuse_key_p.def_abstract_eval(lambda x: x)
-batching.defvectorized(reuse_key_p)
-mlir.register_lowering(reuse_key_p, lambda _, k: [k])
-
-def reuse_key(key):
-  """Explicitly mark a key as unconsumed.
-
-  Outside the context of key reuse checking (see :mod:`jax.experimental.key_reuse`)
-  this function operates as an identity.
-
-  Example:
-
-    >>> import jax
-    >>> key = jax.random.key(0)
-    >>> data = jax.random.uniform(key)
-    >>> same_data = jax.random.uniform(reuse_key(key))
-  """
-  return reuse_key_p.bind(key)

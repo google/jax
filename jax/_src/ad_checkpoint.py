@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import functools
 from functools import partial
 import logging
-from typing import Any, Callable
+from typing import Any
 import types
 
 import numpy as np
@@ -40,6 +40,7 @@ from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.lax import lax as lax_internal
 from jax._src.lax import convolution as lax_convolution
+from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
 from jax._src.traceback_util import api_boundary
 from jax._src.tree_util import tree_flatten, tree_unflatten, tree_structure, keystr
@@ -465,11 +466,14 @@ def _saved_residuals(jaxpr, arg_info) -> list[tuple[core.AbstractValue, str]]:
         src = 'from the argument at flattened index {i}'
       results.append((v.aval, src))
 
+  named_vars = {v: e for e in jaxpr.eqns if e.primitive is name_p
+                for v in e.invars}
+
   for eqn in jaxpr.eqns:
     src = source_info_util.summarize(eqn.source_info)
     for v in eqn.outvars:
       if v in res_vars:
-        if eqn.primitive is name_p:
+        if eqn.primitive is name_p or v in named_vars and (eqn := named_vars[v]):
           results.append((v.aval, f"named '{eqn.params['name']}' from {src}"))
         elif str(eqn.primitive) == 'xla_call':
           results.append((v.aval,
@@ -655,7 +659,7 @@ def _transpose_jaxpr(jaxpr, in_lin, out_zeros):
 
   transposed_jaxpr_, _, consts, () = pe.trace_to_jaxpr_dynamic(transposed, in_avals)
   transposed_jaxpr = core.ClosedJaxpr(transposed_jaxpr_, consts)
-  return transposed_jaxpr, cell.in_cts_zero  # type: ignore
+  return transposed_jaxpr, cell.in_cts_zero  # pytype: disable=attribute-error
 
 def remat_vmap(spmd_axis_name, axis_size, axis_name, main_type, args, dims, *,
                jaxpr, **params):
@@ -684,7 +688,7 @@ def remat_dce(used_outputs: list[bool], eqn: core.JaxprEqn
     new_eqn = pe.new_jaxpr_eqn(
         [v for v, used in zip(eqn.invars, used_inputs) if used],
         [v for v, used in zip(eqn.outvars, used_outputs) if used],
-        eqn.primitive, new_params, new_jaxpr.effects, eqn.source_info)
+        eqn.primitive, new_params, new_jaxpr.effects, eqn.source_info, eqn.ctx)
     return used_inputs, new_eqn
 pe.dce_rules[remat_p] = remat_dce
 
@@ -692,9 +696,9 @@ def _has_effects(effects) -> bool:
   return bool({e for e in effects if not isinstance(e, core.NamedAxisEffect)})
 
 
-def remat_lowering(*args, jaxpr: core.Jaxpr, prevent_cse: bool,
-                   differentiated: bool, is_gpu_platform: bool = False,
-                   **_):
+def remat_expansion(*args, jaxpr: core.Jaxpr, prevent_cse: bool,
+                    differentiated: bool, is_gpu_platform: bool = False,
+                    **_):
   assert not jaxpr.constvars
 
   if differentiated and prevent_cse:
@@ -763,13 +767,33 @@ def _remat_translation_using_cond(*args, jaxpr: core.Jaxpr):
   unif = lax_internal.rng_uniform(np.float32(0), np.float32(1), shape=())
   return lax_control_flow.cond(unif < np.float32(2), remat_comp, dummy_comp, *args)
 
-mlir.register_lowering(
-    remat_p, mlir.lower_fun(remat_lowering, multiple_results=True))
-mlir.register_lowering(
-    remat_p,
-    mlir.lower_fun(partial(remat_lowering, is_gpu_platform=True),
-                   multiple_results=True),
-    platform="gpu")
+def _remat_lowering(ctx, *args, jaxpr: core.Jaxpr, prevent_cse: bool,
+                   differentiated: bool, policy, is_gpu_platform=False):
+  jaxpr_args: Sequence[Sequence[ir.Value]]
+  if differentiated and prevent_cse:
+    # If we're using the loop or cond lowerings, use the slower lower_fun
+    # based path.
+    if not config.remat_opt_barrier.value:
+      return mlir.lower_fun(remat_expansion, multiple_results=True)(
+          ctx, *args, jaxpr=jaxpr, prevent_cse=prevent_cse,
+          differentiated=differentiated, policy=policy,
+          is_gpu_platform=is_gpu_platform)
+
+    arg_types = map(mlir.aval_to_ir_types, ctx.avals_in)
+    flat_args = mlir.flatten_lowering_ir_args(args)
+    barrier_op = hlo.OptimizationBarrierOp(flat_args)
+    jaxpr_args = util.unflatten(barrier_op.results, map(len, arg_types))
+  else:
+    jaxpr_args = map(mlir.wrap_singleton_ir_values, args)
+  outs, tokens_out = mlir.jaxpr_subcomp(
+      ctx.module_context, jaxpr, ctx.name_stack.extend('checkpoint'),
+      ctx.tokens_in, (), *jaxpr_args, dim_var_values=ctx.dim_var_values)
+  ctx.set_tokens_out(tokens_out)
+  return outs
+
+mlir.register_lowering(remat_p, _remat_lowering)
+mlir.register_lowering(remat_p, partial(_remat_lowering, is_gpu_platform=True),
+                       platform="gpu")
 
 def _optimization_barrier_abstract_eval(*args):
   return args

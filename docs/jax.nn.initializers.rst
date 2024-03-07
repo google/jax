@@ -14,8 +14,8 @@ consistent with definitions used in Keras and Sonnet.
 
 An initializer is a function that takes three arguments:
 ``(key, shape, dtype)`` and returns an array with dimensions ``shape`` and
-data type ``dtype``. Argument ``key`` is a :class:`jax.random.PRNGKey` random
-key used when generating random numbers to initialize the array.
+data type ``dtype``. Argument ``key`` is a PRNG key (e.g. from
+:func:`jax.random.key`), used to generate random numbers to initialize the array.
 
 .. autosummary::
   :toctree: _autosummary

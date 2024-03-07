@@ -23,7 +23,6 @@ from jax._src.interpreters.pxla import (
   global_avals_to_results_handler as global_avals_to_results_handler,
   global_result_handlers as global_result_handlers,
   parallel_callable as parallel_callable,
-  shard_arg as shard_arg,
   shard_args as shard_args,
   xla_pmap_p as xla_pmap_p,
 )

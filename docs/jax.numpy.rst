@@ -138,6 +138,7 @@ namespace; they are listed below.
     csingle
     cumprod
     cumsum
+    cumulative_sum
     deg2rad
     degrees
     delete
@@ -391,6 +392,7 @@ namespace; they are listed below.
     tensordot
     tile
     trace
+    trapezoid
     transpose
     tri
     tril
@@ -416,6 +418,7 @@ namespace; they are listed below.
     unique_values
     unpackbits
     unravel_index
+    unstack
     unsignedinteger
     unwrap
     vander
@@ -492,6 +495,7 @@ jax.numpy.linalg
   tensordot
   tensorinv
   tensorsolve
+  trace
   vector_norm
   vecdot
 

@@ -70,7 +70,7 @@ from jax.interpreters import mlir
 from jax._src.interpreters import xla
 
 import numpy as np
-import tensorflow as tf  # type: ignore[import]
+import tensorflow as tf
 
 config.parse_flags_with_absl()
 
@@ -179,8 +179,13 @@ class JaxPrimitiveTest(tf_test_util.JaxToTfTestCase):
       # TODO: Remove once tensorflow is 2.10.0 everywhere.
       if p.name == "optimization_barrier":
         continue
-      if p.name == "debug_callback":
+      if p.name == "debug_callback" or p.name == "debug_print":
         # TODO(sharadmv,necula): enable debug callbacks in TF
+        continue
+      if p.name in ("max_contiguous", "multiple_of"):
+        # Pallas-specific primitives are not supported.
+        continue
+      if p.name == "pallas_call":
         continue
       if p.name in tf_not_yet_impl:
         self.assertNotIn(

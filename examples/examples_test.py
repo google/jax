@@ -22,20 +22,22 @@ from absl.testing import parameterized
 
 import numpy as np
 
-from jax import lax
+import jax
 from jax import random
 import jax.numpy as jnp
+from jax._src import test_util as jtu
+
+del jtu  # Needed for flags
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from examples import kernel_lsq
 sys.path.pop()
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 def _CheckShapeAgreement(test_case, init_fun, apply_fun, input_shape):
-  jax_rng = random.PRNGKey(0)
+  jax_rng = random.key(0)
   result_shape, params = init_fun(jax_rng, input_shape)
   result = apply_fun(params, test_case.rng.normal(size=input_shape).astype("float32"))
   test_case.assertEqual(result.shape, result_shape)
@@ -52,12 +54,13 @@ class ExamplesTest(parameterized.TestCase):
     kernel = lambda x, y: jnp.dot(x, y)
     np.testing.assert_allclose(kernel_lsq.gram(kernel, xs), jnp.dot(xs, xs.T), atol=1E-5)
 
+  @jax.default_matmul_precision("float32")
   def testKernelRegressionTrainAndPredict(self):
     n, d = 100, 20
     truth = self.rng.normal(size=d)
     xs = self.rng.normal(size=(n, d))
     ys = jnp.dot(xs, truth)
-    kernel = lambda x, y: jnp.dot(x, y, precision=lax.Precision.HIGH)
+    kernel = lambda x, y: jnp.dot(x, y)
     predict = kernel_lsq.train(kernel, xs, ys)
     np.testing.assert_allclose(predict(xs), ys, atol=1e-3, rtol=1e-3)
 

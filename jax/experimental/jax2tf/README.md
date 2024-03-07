@@ -1004,6 +1004,7 @@ We list here a history of the serialization version numbers:
     Supported by XlaCallModule since October 27th, 2023,
     available in JAX since October 20th, 2023 (JAX 0.4.20),
     and the default since February 1st, 2024 (JAX 0.4.24).
+    This is the only supported version as of 27th of March, 2024.
 
 ## Known issues
 

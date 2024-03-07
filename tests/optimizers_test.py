@@ -26,8 +26,7 @@ from jax import jit, grad, jacfwd, jacrev
 from jax import lax
 from jax.example_libraries import optimizers
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class OptimizerTests(jtu.JaxTestCase):

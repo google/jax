@@ -15,14 +15,15 @@
 from __future__ import annotations
 
 import collections
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import functools
 from functools import partial
 import inspect
 import itertools
 import operator
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
+import jax
 from jax.tree_util import tree_flatten, tree_unflatten
 from jax._src import ad_util
 from jax._src import config
@@ -69,7 +70,7 @@ _no_operand_sentinel = object()
 @api_boundary
 def switch(index, branches: Sequence[Callable], *operands,
            operand=_no_operand_sentinel):
-  """Apply exactly one of ``branches`` given by ``index``.
+  """Apply exactly one of the ``branches`` given by ``index``.
 
   If ``index`` is out of bounds, it is clamped to within bounds.
 
@@ -153,14 +154,12 @@ def switch(index, branches: Sequence[Callable], *operands,
     # of those effects (even if they don't have an explicit data dependence).
     index = core.raise_as_much_as_possible(index)
 
-  linear = (False,) * (len(consts) + len(ops))
-  out = cond_p.bind(
-      index, *consts, *ops, branches=tuple(jaxprs), linear=linear)
+  out = cond_p.bind(index, *consts, *ops, branches=tuple(jaxprs))
   return tree_unflatten(out_trees[0], out)
 
 
 def _cond(pred, true_fun: Callable, false_fun: Callable, *operands,
-          operand=_no_operand_sentinel, linear=None):
+          operand=_no_operand_sentinel):
   """Conditionally apply ``true_fun`` or ``false_fun``.
 
   Wraps XLA's `Conditional
@@ -234,12 +233,6 @@ def _cond(pred, true_fun: Callable, false_fun: Callable, *operands,
       return false_fun(*operands)
 
   ops, ops_tree = tree_flatten(operands)
-  if linear is None:
-    linear_ops = [False] * len(ops)
-  else:
-    linear_ops, ops_tree2 = tree_flatten(linear)
-    if ops_tree != ops_tree2:
-      raise TypeError('linear tree and operand tree mismatch')
   ops_avals = tuple(map(_abstractify, ops))
 
   jaxprs, consts, out_trees = _initial_style_jaxprs_with_common_consts(
@@ -247,6 +240,7 @@ def _cond(pred, true_fun: Callable, false_fun: Callable, *operands,
   if any(isinstance(op_aval, AbstractRef) for op_aval in ops_avals):
     raise ValueError("Cannot pass `Ref`s into `cond`.")
   true_jaxpr, false_jaxpr = jaxprs
+
   out_tree, false_out_tree = out_trees
   if any(isinstance(out_aval, AbstractRef) for out_aval in
          true_jaxpr.out_avals + false_jaxpr.out_avals):
@@ -255,6 +249,14 @@ def _cond(pred, true_fun: Callable, false_fun: Callable, *operands,
   _check_tree_and_avals("true_fun and false_fun output",
                         out_tree, true_jaxpr.out_avals,
                         false_out_tree, false_jaxpr.out_avals)
+  # prune passhtrough outputs
+  true_fwds = pe._jaxpr_forwarding(true_jaxpr.jaxpr)
+  false_fwds = pe._jaxpr_forwarding(false_jaxpr.jaxpr)
+  in_fwd = [i if i == j else None for i, j in zip(true_fwds, false_fwds)]
+  keep = [f is None for f in in_fwd]
+  true_jaxpr = pe.prune_closed_jaxpr_outputs(true_jaxpr, keep)
+  false_jaxpr = pe.prune_closed_jaxpr_outputs(false_jaxpr, keep)
+
   joined_effects = core.join_effects(true_jaxpr.effects, false_jaxpr.effects)
   disallowed_effects = effects.control_flow_allowed_effects.filter_not_in(joined_effects)
   if disallowed_effects:
@@ -269,10 +271,19 @@ def _cond(pred, true_fun: Callable, false_fun: Callable, *operands,
   false_jaxpr = replace_jaxpr_effects(false_jaxpr, joined_effects)
   true_jaxpr = replace_jaxpr_effects(true_jaxpr, joined_effects)
 
-  linear = [False] * len(consts) + linear_ops
-  out = cond_p.bind(
-      index, *consts, *ops,
-      branches=(false_jaxpr, true_jaxpr), linear=tuple(linear))
+  out = cond_p.bind(index, *consts, *ops, branches=(false_jaxpr, true_jaxpr))
+  num_consts = len(consts)
+  out_ = iter(out)
+
+  def _cast_to_array(x):
+    _copy = isinstance(x, np.bool_)
+    return jax.numpy.asarray(x, copy=_copy)
+
+  out = [
+    next(out_) if fwd is None else _cast_to_array(ops[fwd - num_consts])
+    for fwd in in_fwd
+  ]
+  assert next(out_, None) is None
   return tree_unflatten(out_tree, out)
 
 @api_boundary
@@ -347,7 +358,7 @@ def _bcast_select_n(pred, *cases):
   return lax.select_n(pred, *cases)
 
 def _cond_batching_rule(spmd_axis_name, axis_size, axis_name, main_type, args,
-                        dims, branches, linear):
+                        dims, branches):
   index, *ops = args
   index_dim, *op_dims = dims
   # TODO(sharadmv): clean this up by adding a specific blocklist
@@ -405,11 +416,10 @@ def _cond_batching_rule(spmd_axis_name, axis_size, axis_name, main_type, args,
         for jaxpr in branches)
 
     out_dims = [0 if b else batching.not_mapped for b in out_bat]
-    out = cond_p.bind(
-        index, *ops, branches=branches_batched, linear=linear)
+    out = cond_p.bind(index, *ops, branches=branches_batched)
     return out, out_dims
 
-def _cond_jvp(primals, tangents, branches, linear):
+def _cond_jvp(primals, tangents, branches):
   nonzeros = [type(t) is not ad_util.Zero for t in tangents]
 
   index_nz, *ops_nz = nonzeros
@@ -426,17 +436,14 @@ def _cond_jvp(primals, tangents, branches, linear):
   _, *ops_dot = tangents
   ops_dot = _prune_zeros(ops_dot)
 
-  ops_lin = tuple(linear)
-  linear_jvp = ops_lin + (True,) * len(ops_dot)
-  out = cond_p.bind(
-      index, *ops, *ops_dot, branches=branches_jvp, linear=linear_jvp)
+  out = cond_p.bind(index, *ops, *ops_dot, branches=branches_jvp)
   out_primals, out_tangents = split_list(out, [len(out_nz)])
   out_tangents_iter = iter(out_tangents)
   out_tangents = [next(out_tangents_iter) if nz else ad_util.Zero.from_value(p)
                   for p, nz in zip(out_primals, out_nz)]
   return out_primals, out_tangents
 
-def _cond_partial_eval(trace, *tracers, branches, linear):
+def _cond_partial_eval(trace, *tracers, branches):
   in_unknowns = [t.pval[0] is not None for t in tracers]
   index_uk, *ops_uk = in_unknowns
   if any(isinstance(eff, RefEffect) for branch in branches for eff in
@@ -447,7 +454,7 @@ def _cond_partial_eval(trace, *tracers, branches, linear):
   if index_uk:
     # When the branch index is unknown, we stage out the whole cond.
     # TODO(mattjj): remove this path when old remat is removed
-    params = dict(branches=branches, linear=linear)
+    params = dict(branches=branches)
     return trace.default_process_primitive(cond_p, tracers, params)
 
   branches_out_uks = []
@@ -477,9 +484,7 @@ def _cond_partial_eval(trace, *tracers, branches, linear):
              for j in branches_known[1:])
 
   in_consts = [t.pval.get_known() for t in tracers if t.pval.is_known()]
-  linear_known = [l for l, uk in zip(linear, ops_uk) if not uk]
-  out_consts_res = cond_p.bind(*in_consts, branches=branches_known,
-                               linear=tuple(linear_known))
+  out_consts_res = cond_p.bind(*in_consts, branches=branches_known)
   out_consts, res = split_list(out_consts_res, [len(out_consts_res) - num_res])
 
   index_tracer = trace.instantiate_const(tracers[0])
@@ -488,9 +493,7 @@ def _cond_partial_eval(trace, *tracers, branches, linear):
   res_tracers = map(trace.new_instantiated_const, res)
   out_tracers = [pe.JaxprTracer(trace, pe.PartialVal.unknown(aval), None)
                  for aval in branches_unknown[0].out_avals]
-  linear_unknown = ([False] * num_res +
-                    [l for l, uk in zip(linear, in_unknowns[1:]) if uk])
-  params = dict(branches=branches_unknown, linear=tuple(linear_unknown))
+  params = dict(branches=branches_unknown)
   name_stack = source_info_util.current_name_stack()[len(trace.name_stack):]
   source = source_info_util.current().replace(name_stack=name_stack)
   eqn = pe.new_eqn_recipe(
@@ -559,8 +562,7 @@ def _cond_partial_eval_custom(saveable, unks_in, inst_in, eqn):
   # Build the known eqn.
   ins_known, _ = partition_list(unks_in, eqn.invars)  # includes index invar
   out_binders_known, _ = partition_list(unks_out, eqn.outvars)
-  linear_known = [l for l, uk in zip(eqn.params['linear'], ops_uk) if not uk]
-  params_known = dict(branches=branches_known, linear=tuple(linear_known))
+  params_known = dict(branches=branches_known)
   effects_known = _join_cond_effects(branches_known)
   eqn_known = pe.new_jaxpr_eqn(
       ins_known, [*out_binders_known, *res_binders], cond_p, params_known,
@@ -568,8 +570,7 @@ def _cond_partial_eval_custom(saveable, unks_in, inst_in, eqn):
 
   # Build the staged eqn.
   _, out_binders_staged = partition_list(inst_out, eqn.outvars)
-  linear_staged = [False] * len(res_binders) + list(eqn.params['linear'])
-  params_staged = dict(branches=branches_staged, linear=tuple(linear_staged))
+  params_staged = dict(branches=branches_staged)
   effects_staged = _join_cond_effects(branches_staged)
   eqn_staged = pe.new_jaxpr_eqn(
       [eqn.invars[0], *res_binders, *eqn.invars[1:]], out_binders_staged,
@@ -678,9 +679,7 @@ def _cond_dce_rule(used_outputs: list[bool], eqn: core.JaxprEqn,
                   for closed_jaxpr, jaxpr in zip(closed_branches, dce_branches_)]
 
   # Finally, update parameters and form the new eqn.
-  dce_linear = [l for l, used in zip(eqn.params['linear'], used_inputs) if used]
-  new_params = dict(eqn.params, branches=tuple(dce_branches),
-                    linear=tuple(dce_linear))
+  new_params = dict(eqn.params, branches=tuple(dce_branches))
   new_effects = core.join_effects(*(b.effects for b in dce_branches))
   new_effects = _join_cond_effects(dce_branches_)
   new_eqn = pe.new_jaxpr_eqn(
@@ -710,9 +709,9 @@ def _transpose_cond_jaxpr(jaxpr, num_res):
 
   return _make_closed_jaxpr(transposed, res_avals + jaxpr.out_avals)
 
-def _cond_transpose(cts, *args, branches, linear):
-  del linear  # could use for error checking, but see #14026
+def _cond_transpose(cts, *args, branches):
   index, *ops = args
+  assert type(index) is not ad.UndefinedPrimal
   linear = [type(x) is ad.UndefinedPrimal for x in ops]
   in_avals = map(raise_to_shaped, branches[0].in_avals)
   num_res = len(ops) - sum(linear)
@@ -730,10 +729,8 @@ def _cond_transpose(cts, *args, branches, linear):
 
   res = ops[:num_res]
   cts = map(ad.instantiate_zeros, cts)
-  linear_trans = (False,) * num_res + (True,) * len(cts)
 
-  out = cond_p.bind(
-      index, *res, *cts, branches=branches_trans, linear=linear_trans)
+  out = cond_p.bind(index, *res, *cts, branches=branches_trans)
   assert all(map(core.typecheck, lin_in_avals, out))
 
   out_iter = iter(out)
@@ -747,7 +744,7 @@ def _cond_axis_substitution(params, subst, traverse):
   branches = tuple(core.subst_axis_names_jaxpr(jaxpr, subst) for jaxpr in params['branches'])
   return dict(params, branches=branches)
 
-def _cond_typecheck(bind_time, *in_atoms, branches, linear):
+def _cond_typecheck(bind_time, *in_atoms, branches):
   if not bind_time:
     _, *in_atoms = in_atoms
   avals = [x.aval for x in in_atoms]
@@ -755,14 +752,9 @@ def _cond_typecheck(bind_time, *in_atoms, branches, linear):
   tc(branches, 'branches', 'tuple of ClosedJaxpr',
      type(branches) is tuple and
      all(type(x) is core.ClosedJaxpr for x in branches))
-  tc(linear, 'linear', 'tuple of bool',
-     type(linear) is tuple and all(type(x) is bool for x in linear))
 
   if len(branches) == 0:
     raise core.JaxprTypeError('cond requires at least one branch function')
-  if len(linear) + 1 != len(avals):
-    raise core.JaxprTypeError(f'cond given {len(linear)} linear flags for '
-                              f'{len(avals) - 1} non-predicate operands')
 
   jaxpr0 = branches[0]
   jaxpr0_in_avals_str = _avals_short(jaxpr0.in_avals)
@@ -806,14 +798,14 @@ def _cond_typecheck(bind_time, *in_atoms, branches, linear):
       f'called with operands of type {_avals_short(op_avals)}')
   return jaxpr0.out_avals, joined_effects
 
-def cond_bind(*args, branches, linear):
+def cond_bind(*args, branches):
   if config.enable_checks.value:
     avals = map(core.get_aval, args)
     in_atoms = [core.Var('', a) for a in avals]  # dummies
-    _cond_typecheck(True, *in_atoms, branches=branches, linear=linear)
+    _cond_typecheck(True, *in_atoms, branches=branches)
     for jaxpr in branches:
       core.check_jaxpr(jaxpr.jaxpr)
-  return core.AxisPrimitive.bind(cond_p, *args, branches=branches, linear=linear)
+  return core.AxisPrimitive.bind(cond_p, *args, branches=branches)
 
 cond_p = core.AxisPrimitive('cond')
 cond_p.multiple_results = True
@@ -831,8 +823,7 @@ core.axis_substitution_rules[cond_p] = _cond_axis_substitution
 pe.partial_eval_jaxpr_custom_rules[cond_p] = _cond_partial_eval_custom
 pe.dce_rules[cond_p] = _cond_dce_rule
 
-def _cond_lowering(ctx, index, *args, branches, linear):
-  del linear  # Unused.
+def _cond_lowering(ctx, index, *args, branches):
   joined_effects = core.join_effects(*(branch.effects for branch in branches))
   ordered_effects = list(effects.ordered_effects.filter_in(joined_effects))
   num_tokens = len(ordered_effects)
@@ -868,11 +859,11 @@ def _cond_lowering(ctx, index, *args, branches, linear):
 mlir.register_lowering(cond_p, _cond_lowering)
 
 @register_discharge_rule(cond_p)
-def _cond_state_discharge_rule(in_avals, out_avals, *args, branches, linear):
+def _cond_state_discharge_rule(in_avals, out_avals, *args, branches):
   discharged_branches = tuple(
       core.ClosedJaxpr(discharge_state(branch.jaxpr, ())[0], ())
       for branch in branches)
-  out_vals = cond_p.bind(*args, branches=discharged_branches, linear=linear)
+  out_vals = cond_p.bind(*args, branches=discharged_branches)
   out_vals, out_ref_vals = util.split_list(
       out_vals, [len(out_avals)])
   ref_val_iter = iter(out_ref_vals)
@@ -953,7 +944,19 @@ def platform_dependent(*args: Any,
   # Use a switch, to get the proper transformation rules for free. Since
   # platform index has no dependence on the input data, it won't be vectorized
   # under vmap.
-  return switch(platform_index, branches, *args)
+  # If the switch and the platform_index_p above are in the same compilation
+  # unit then constant-folding will remove the unnecessary branches. However,
+  # if we run in eager mode the switch below cannot be constant-folded and
+  # the compilation may fail if some of the branches contain custom calls not
+  # recognized on the compilation platform. Detect eager mode and keep only the
+  # needed branch.
+  try:
+    platform_index_concrete = core.concrete_or_error(operator.index, platform_index)
+  except core.ConcretizationTypeError:
+    return switch(platform_index, branches, *args)
+  else:
+    assert 0 <= platform_index_concrete < len(branches)
+    return branches[platform_index_concrete](*args)
 
 # A primitive to compute the index of a platform into a list of platforms.
 # Args:
@@ -975,7 +978,9 @@ def _platform_index_lowering(ctx: mlir.LoweringRuleContext,
                              *,
                              platforms: Sequence[Sequence[str]],
                              has_default: bool):
-  def lower_constant(ctx: mlir.LoweringRuleContext, *, i: int) -> mlir.ir.Value:
+  def lower_constant(
+      ctx: mlir.LoweringRuleContext, *, i: int
+  ) -> Sequence[ir.Value]:
     return mlir.ir_constants(np.int32(i))
   platform_rules: dict[str, mlir.LoweringRule] = {}
   for i, ps in enumerate(platforms):

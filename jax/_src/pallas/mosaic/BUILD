@@ -14,31 +14,13 @@
 
 # Package for Mosaic-specific Pallas extensions
 
-load(
-    "//jaxlib:jax.bzl",
-    "py_deps",
-    "py_library_providing_imports_info",
-)
 load("@rules_python//python:defs.bzl", "py_library")
+load("//jaxlib:jax.bzl", "py_deps")
 
 package(
     default_applicable_licenses = [],
     default_visibility = [
         "//:__subpackages__",
-    ],
-)
-
-py_library_providing_imports_info(
-    name = "mosaic",
-    srcs = ["__init__.py"],
-    lib_rule = py_library,
-    deps = [
-        ":core",
-        ":kernel_regeneration_util",
-        ":lowering",
-        ":pallas_call_registration",
-        ":pipeline",
-        ":primitives",
     ],
 )
 
@@ -96,14 +78,6 @@ py_library(
 )
 
 py_library(
-    name = "kernel_regeneration_util",
-    srcs = ["kernel_regeneration_util.py"],
-    deps = [
-        "//third_party/py/mlir:ir",
-    ],
-)
-
-py_library(
     name = "pipeline",
     srcs = ["pipeline.py"],
     deps = [
@@ -113,5 +87,15 @@ py_library(
         "//jax:api_util",
         "//jax:util",
         "//jax/_src/pallas",
-    ],
+    ] + py_deps("numpy"),
+)
+
+py_library(
+    name = "random",
+    srcs = ["random.py"],
+    deps = [
+        ":primitives",
+        "//jax",
+        "//jax:typing",
+    ] + py_deps("numpy"),
 )

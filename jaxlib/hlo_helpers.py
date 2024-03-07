@@ -16,9 +16,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
-from typing import Callable, Union
+from typing import Union
 
 import jaxlib.mlir.ir as ir
 import jaxlib.mlir.dialects.stablehlo as hlo
@@ -110,16 +110,7 @@ def hlo_s32(x: int):
 def ensure_hlo_s32(x: DimensionSize):
   return hlo_s32(x) if isinstance(x, int) else x
 
-def dense_int_array(xs) -> ir.DenseIntElementsAttr | ir.DenseI64ArrayAttr:
-  # TODO: b/321794305 - remove this check when jaxlib is on StableHLO API v5 or higher
-  if hlo.get_api_version() < 5:
-    return ir.DenseIntElementsAttr.get(np.asarray(xs, np.int64))
-  return ir.DenseI64ArrayAttr.get(np.asarray(xs, np.int64))
-
-# TODO: b/321794305 - delete this when jaxlib is on StableHLO API v6 or higher
-def dense_int_array_v6(xs) -> ir.DenseIntElementsAttr | ir.DenseI64ArrayAttr:
-  if hlo.get_api_version() < 6:
-    return ir.DenseIntElementsAttr.get(np.asarray(xs, np.int64))
+def dense_int_array(xs) -> ir.DenseI64ArrayAttr:
   return ir.DenseI64ArrayAttr.get(np.asarray(xs, np.int64))
 
 def hlo_min(x: DimensionSize, y: DimensionSize) -> DimensionSize:

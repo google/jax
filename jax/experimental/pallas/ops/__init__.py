@@ -12,13 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-from jax.experimental.pallas.ops import attention
-from jax.experimental.pallas.ops import layer_norm
-from jax.experimental.pallas.ops import rms_norm
-from jax.experimental.pallas.ops import softmax
-
-
 # All files within ops should be treated as user code.
 import os
 import jax._src.source_info_util

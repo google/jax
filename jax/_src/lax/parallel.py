@@ -79,7 +79,7 @@ def psum(x, axis_name, *, axis_index_groups=None):
     >>> print(y)
     [0.         0.16666667 0.33333334 0.5       ]
 
-    Suppose we want to perform ``psum`` among two groups, one with ``device0`` and ``device1``, the other with `device2` and `device3`,
+    Suppose we want to perform ``psum`` among two groups, one with ``device0`` and ``device1``, the other with ``device2`` and ``device3``,
 
     >>> y = jax.pmap(lambda x: jax.lax.psum(x, 'i', axis_index_groups=[[0, 1], [2, 3]]), axis_name='i')(x)
     >>> print(y)
@@ -246,6 +246,36 @@ def _canonicalize_axis_index_groups(axis_index_groups):
   if axis_index_groups is None:
     return
   return tuple(map(tuple, axis_index_groups))
+
+
+def pbroadcast(x, axis_name, source):
+  """Perform a collective broadcast and replicate from ``source``.
+
+  This is equivalent to
+  ```
+  def pbroadcast(x, axis_name, source):
+    masked = jnp.where(axis_index(axis_name) == source, x, zeros_like(x))
+    return psum(masked, axis_name)
+  ```
+  but implemented in a hardware optimized way.
+
+  If ``x`` is a pytree then the result is equivalent to mapping this function to
+  each leaf in the tree.
+
+  This function is an analog of the CollectiveBroadcast HLO.
+
+  Args:
+    x: array(s) with a mapped axis named ``axis_name``.
+    axis_name: hashable Python object used to name a pmapped axis (see the
+      :func:`jax.pmap` documentation for more details).
+    source: int, representing which index into ``axis_name`` that should be copied.
+
+  Returns:
+    Array(s) with ``x`` being copied from the ``source`` index slice of ``axis_name``.
+  """
+  return tree_util.tree_map(
+      partial(pbroadcast_p.bind, axis_name=axis_name, source=source), x)
+
 
 def ppermute(x, axis_name, perm):
   """Perform a collective permutation according to the permutation ``perm``.
@@ -483,9 +513,9 @@ def xeinsum(spec: str, *operands):
   xs = list(operands)
   for idx, (in_subs, in_named) in enumerate(safe_zip(all_in_subs, all_in_named)):
     # if a subscript axis appears only in one input and not the output, reduce!
-    other_named = set().union(  # type: ignore
+    other_named = set().union(
         *[named for i, named in enumerate(all_in_named) if i != idx])
-    other_subs = set().union(  # type: ignore
+    other_subs = set().union(
         *[subs for i, subs in enumerate(all_in_subs) if i != idx])
 
     subs_reduce = list(set(in_subs) - {*out_subs, *other_subs})
@@ -697,7 +727,7 @@ def _replica_groups(axis_env, axis_name, axis_index_groups):
   return replica_groups
 
 def _replica_groups_hlo(replica_groups: Sequence[Sequence[int]]
-                        ) -> ir.DenseIntElementsAttr:
+                        ) -> ir.DenseElementsAttr:
   # Uneven replica groups are padded with -1.
   groups = np.array(list(itertools.zip_longest(*replica_groups, fillvalue=-1)),
                     dtype=np.int64).T
@@ -832,7 +862,7 @@ def psum_bind(*args, axes, axis_index_groups):
       assert not pos_axes
       size = len(axis_index_groups[0])
     else:
-      size = math.prod([core.axis_frame(name).size for name in named_axes])  # type: ignore
+      size = math.prod([core.axis_frame(name).size for name in named_axes])
     return tuple(lax._const(x, size) * pos_reduce(x) for x in args)
   return core.AxisPrimitive.bind(
       psum_p, *args, axes=axes, axis_index_groups=axis_index_groups)
@@ -926,6 +956,43 @@ mlir.register_lowering(ppermute_p, _ppermute_lowering)
 batching.primitive_batchers[ppermute_p] = partial(_collective_batcher, ppermute_p)
 batching.axis_primitive_batchers[ppermute_p] = _ppermute_batcher
 core.axis_substitution_rules[ppermute_p] = partial(_subst_all_names_in_param, 'axis_name')
+
+def _pbroadcast_transpose_rule(t, x, source, axis_name):
+  is_source = axis_index(axis_name) == source
+  tsum = psum(t, axis_name)
+  return [lax_numpy.where(is_source, tsum, lax_numpy.zeros_like(t))]
+
+def _pbroadcast_batcher(axis_size, frame_name, _, vals_in, dims_in, axis_name, source):
+  (v,), (d,) = vals_in, dims_in
+  if not isinstance(axis_name, (tuple, list)):
+    axis_name = (axis_name,)
+  remaining_axes = tuple(axis for axis in axis_name if axis != frame_name)
+  if remaining_axes:
+    raise NotImplementedError("pbroadcast batcher only supports a single axis")
+  assert axis_name[0] == frame_name, "pbroadcast batcher called with a wrong axis!"
+  assert source >= 0 and source < axis_size, "collective broadcast doesn't fit in the axis size!"
+  if axis_size == 1 and remaining_axes:
+    return pbroadcast_p.bind(v, source=source, axis_name=remaining_axes), d
+  if d is batching.not_mapped:
+    return v, d
+  return lax_numpy.take(v, [source] * axis_size, d), d
+
+def _pbroadcast_lowering(ctx, x, *, axis_name, source):
+  replica_groups = _replica_groups(ctx.module_context.axis_env, axis_name, None)
+  def source_to_front(group):
+    return [group[source]] + list(group[:source]) + list(group[source + 1:])
+  replica_groups = [source_to_front(group) for group in replica_groups]
+  channel = ctx.module_context.new_channel()
+  return hlo.CollectiveBroadcastOp(
+      x, replica_groups=_replica_groups_hlo(replica_groups)).results
+
+pbroadcast_p = core.AxisPrimitive('pbroadcast')
+pbroadcast_p.def_abstract_eval(lambda x, **params: raise_to_shaped(x))
+ad.deflinear2(pbroadcast_p, _pbroadcast_transpose_rule)
+mlir.register_lowering(pbroadcast_p, _pbroadcast_lowering)
+batching.primitive_batchers[pbroadcast_p] = partial(_collective_batcher, pbroadcast_p)
+batching.axis_primitive_batchers[pbroadcast_p] = _pbroadcast_batcher
+core.axis_substitution_rules[pbroadcast_p] = partial(_subst_all_names_in_param, 'axis_name')
 
 
 def _moveaxis(src, dst, x):
@@ -1204,7 +1271,7 @@ def _all_gather_lowering(ctx, x, *, all_gather_dimension, axis_name,
     broadcast_dimensions = [i for i in range(len(new_shape)) if i != all_gather_dimension]
     x = hlo.broadcast_in_dim(
         mlir.aval_to_ir_type(x_aval.update(shape=new_shape)), x,
-        mlir.dense_int_array_v6(broadcast_dimensions))
+        mlir.dense_int_array(broadcast_dimensions))
   replica_groups = _replica_groups(ctx.module_context.axis_env, axis_name,
                                     axis_index_groups)
   if is_spmd:
@@ -1473,10 +1540,10 @@ def psum_scatter(x, axis_name, *, scatter_dimension=0, axis_index_groups=None,
       When ``False`` (the default value), the size of dimension in
       ``scatter_dimension`` must match the size of axis ``axis_name`` (or the
       group size if ``axis_index_groups`` is given). After scattering the
-      all-reduce result along ``scatter_dimension``, the output is sequeezed by
+      all-reduce result along ``scatter_dimension``, the output is squeezed by
       removing ``scatter_dimension``, so the result has lower rank than the
       input. When ``True``, the size of dimension in ``scatter_dimension`` must
-      be dividible by the size of axis ``axis_name`` (or the group size if
+      be divisible by the size of axis ``axis_name`` (or the group size if
       ``axis_index_groups`` is given), and the ``scatter_dimension`` axis is
       preserved (so the result has the same rank as the input).
 

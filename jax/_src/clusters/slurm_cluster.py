@@ -25,12 +25,15 @@ _LOCAL_PROCESS_ID = 'SLURM_LOCALID'
 _NUM_NODES = 'SLURM_STEP_NUM_NODES'
 
 class SlurmCluster(clusters.ClusterEnv):
+
+  name: str = "slurm"
+
   @classmethod
   def is_env_present(cls) -> bool:
     return _JOBID_PARAM in os.environ
 
   @classmethod
-  def get_coordinator_address(cls) -> str:
+  def get_coordinator_address(cls, timeout_secs: int | None) -> str:
     # Pick port in ephemeral range [(65535 - 2^12 + 1), 65535]
     port = int(os.environ[_JOBID_PARAM]) % 2**12 + (65535 - 2**12 + 1)
 

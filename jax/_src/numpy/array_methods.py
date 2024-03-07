@@ -31,11 +31,13 @@ from typing import Any
 import numpy as np
 import jax
 from jax import lax
+from jax.sharding import Sharding
 from jax._src import core
 from jax._src import dtypes
 from jax._src.api_util import _ensure_index_tuple
 from jax._src.array import ArrayImpl
 from jax._src.lax import lax as lax_internal
+from jax._src.lib import xla_client as xc
 from jax._src.numpy import lax_numpy
 from jax._src.numpy import reductions
 from jax._src.numpy import ufuncs
@@ -55,7 +57,7 @@ zip, unsafe_zip = safe_zip, zip
 # functions, which can themselves handle instances from any of these classes.
 
 
-def _astype(arr: ArrayLike, dtype: DTypeLike) -> Array:
+def _astype(arr: ArrayLike, dtype: DTypeLike, copy: bool = False, device: xc.Device | Sharding | None = None) -> Array:
   """Copy the array and cast to a specified dtype.
 
   This is implemented via :func:`jax.lax.convert_element_type`, which may
@@ -63,7 +65,7 @@ def _astype(arr: ArrayLike, dtype: DTypeLike) -> Array:
   some cases. In particular, the details of float-to-int and int-to-float
   casts are implementation dependent.
   """
-  return lax_numpy.astype(arr, dtype)
+  return lax_numpy.astype(arr, dtype, copy=copy, device=device)
 
 
 def _nbytes(arr: ArrayLike) -> int:
@@ -84,12 +86,11 @@ def _itemsize(arr: ArrayLike) -> int:
 
 
 def _clip(number: ArrayLike,
-          min: ArrayLike | None = None, max: ArrayLike | None = None,
-          out: None = None) -> Array:
+          min: ArrayLike | None = None, max: ArrayLike | None = None) -> Array:
   """Return an array whose values are limited to a specified range.
 
   Refer to :func:`jax.numpy.clip` for full documentation."""
-  return lax_numpy.clip(number, a_min=min, a_max=max, out=out)
+  return lax_numpy.clip(number, min=min, max=max)
 
 
 def _transpose(a: Array, *args: Any) -> Array:
@@ -303,11 +304,13 @@ def __array_module__(self, types):
 
 
 def _compress_method(a: ArrayLike, condition: ArrayLike,
-                     axis: int | None = None, out: None = None) -> Array:
+                     axis: int | None = None, *, out: None = None,
+                     size: int | None = None, fill_value: ArrayLike = 0) -> Array:
   """Return selected slices of this array along given axis.
 
   Refer to :func:`jax.numpy.compress` for full documentation."""
-  return lax_numpy.jaxcompress(condition, a, axis, out)
+  return lax_numpy.compress(condition, a, axis=axis, out=out,
+                            size=size, fill_value=fill_value)
 
 
 @core.stash_axis_env()

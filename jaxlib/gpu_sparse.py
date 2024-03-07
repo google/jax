@@ -27,7 +27,7 @@ from jaxlib import xla_client
 
 from .hlo_helpers import custom_call, mk_result_types_and_shapes
 
-for cuda_module_name in [".cuda", "jax_cuda12_plugin", "jax_cuda11_plugin"]:
+for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
   try:
     _cusparse = importlib.import_module(
         f"{cuda_module_name}._sparse", package="jaxlib"
@@ -41,11 +41,17 @@ if _cusparse:
   for _name, _value in _cusparse.registrations().items():
     xla_client.register_custom_call_target(_name, _value, platform="CUDA")
 
-try:
-  from .rocm import _sparse as _hipsparse  # pytype: disable=import-error
-except ImportError:
-  _hipsparse = None
-else:
+for rocm_module_name in [".rocm", "jax_rocm60_plugin"]:
+  try:
+    _hipsparse = importlib.import_module(
+        f"{rocm_module_name}._sparse", package="jaxlib"
+    )
+  except ImportError:
+    _hipsparse = None
+  else:
+    break
+
+if _hipsparse:
   for _name, _value in _hipsparse.registrations().items():
     xla_client.register_custom_call_target(_name, _value, platform="ROCM")
 

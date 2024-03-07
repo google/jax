@@ -1,0 +1,24 @@
+#
+# test deps
+#
+-r test-requirements.txt
+
+# matplotlib 3.9.0 pins NumPy 1.23, which is incompatible with the requirement
+# below.
+matplotlib~=3.8.4; python_version<="3.10"
+matplotlib; python_version>="3.11"
+
+#
+# build deps
+#
+numpy~=2.0.0
+
+#
+# runtime deps
+#
+scipy~=1.13.1
+
+ml_dtypes>=0.4.0
+opt_einsum
+zstandard
+etils[epath]

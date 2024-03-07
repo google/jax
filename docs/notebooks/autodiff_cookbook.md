@@ -5,7 +5,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.0
+    jupytext_version: 1.16.1
 kernelspec:
   display_name: Python 3
   language: python
@@ -15,6 +15,8 @@ kernelspec:
 +++ {"id": "Ic1reB4s6vu1"}
 
 # The Autodiff Cookbook
+
+<!--* freshness: { reviewed: '2024-04-08' } *-->
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/autodiff_cookbook.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/google/jax/blob/main/docs/notebooks/autodiff_cookbook.ipynb)
 
@@ -29,7 +31,7 @@ import jax.numpy as jnp
 from jax import grad, jit, vmap
 from jax import random
 
-key = random.PRNGKey(0)
+key = random.key(0)
 ```
 
 +++ {"id": "YxnjtAGN6vu2"}
@@ -614,7 +616,7 @@ def vmap_mjp(f, x, M):
     outs, = vmap(vjp_fun)(M)
     return outs
 
-key = random.PRNGKey(0)
+key = random.key(0)
 num_covecs = 128
 U = random.normal(key, (num_covecs,) + y.shape)
 
@@ -770,7 +772,7 @@ Here's a check:
 :id: BGZV__zupIMS
 
 def check(seed):
-  key = random.PRNGKey(seed)
+  key = random.key(seed)
 
   # random coeffs for u and v
   key, subkey = random.split(key)
@@ -833,7 +835,7 @@ Here's a check of the VJP rules:
 :id: 4J7edvIBttcU
 
 def check(seed):
-  key = random.PRNGKey(seed)
+  key = random.key(seed)
 
   # random coeffs for u and v
   key, subkey = random.split(key)

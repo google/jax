@@ -1,7 +1,8 @@
 JAX: High-Performance Array Computing
 =====================================
 
-JAX is Autograd_ and XLA_, brought together for high-performance numerical computing.
+JAX is a Python library for accelerator-oriented array computation and program transformation,
+designed for high-performance numerical computing and large-scale machine learning.
 
 If you're looking to train neural networks, use Flax_ and start with its documentation.
 Some associated tools are Optax_ and Orbax_.
@@ -60,8 +61,7 @@ For an end-to-end transformer library built on JAX, see MaxText_.
    :caption: Getting Started
 
    installation
-   notebooks/quickstart
-   notebooks/thinking_in_jax
+   quickstart
    notebooks/Common_Gotchas_in_JAX
    faq
 
@@ -69,7 +69,7 @@ For an end-to-end transformer library built on JAX, see MaxText_.
    :hidden:
    :maxdepth: 1
 
-   jax-101/index
+   tutorials
 
 
 .. toctree::
@@ -93,8 +93,6 @@ For an end-to-end transformer library built on JAX, see MaxText_.
    glossary
 
 
-.. _Autograd: https://github.com/hips/autograd
-.. _XLA: https://openxla.org/xla
 .. _Flax: https://flax.readthedocs.io/
 .. _Orbax: https://orbax.readthedocs.io/
 .. _Optax: https://optax.readthedocs.io/

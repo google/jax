@@ -26,12 +26,11 @@ currently saved file with the saved one.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import contextlib
 import dataclasses
 import os
 import re
-from typing import Callable, Optional
 import zlib
 
 from absl import app
@@ -39,12 +38,11 @@ from absl import logging
 
 import numpy.random as npr
 
-import jax
-from jax import config   # Must import before TF
+import jax # Must import before TF
 from jax.experimental import jax2tf  # Defines needed flags
 from jax._src import test_util  # Defines needed flags
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 # Import after parsing flags
 from jax.experimental.jax2tf.tests import primitive_harness

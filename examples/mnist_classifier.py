@@ -50,7 +50,7 @@ init_random_params, predict = stax.serial(
     Dense(10), LogSoftmax)
 
 if __name__ == "__main__":
-  rng = random.PRNGKey(0)
+  rng = random.key(0)
 
   step_size = 0.001
   num_epochs = 10

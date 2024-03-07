@@ -1,5 +1,7 @@
 # Runtime value debugging in JAX
 
+<!--* freshness: { reviewed: '2024-04-11' } *-->
+
 Do you have exploding gradients? Are NaNs making you gnash your teeth? Just want to poke around the intermediate values in your computation? Check out the following JAX debugging tools! This page has TL;DR summaries and you can click the "Read more" links at the bottom to learn more.
 
 Table of contents:
@@ -82,8 +84,8 @@ Click [here](checkify_guide) to learn more!
 **TL;DR** Enable the `jax_debug_nans` flag to automatically detect when NaNs are produced in `jax.jit`-compiled code (but not in `jax.pmap` or `jax.pjit`-compiled code) and enable the `jax_disable_jit` flag to disable JIT-compilation, enabling use of traditional Python debugging tools like `print` and `pdb`.
 
 ```python
-from jax import config
-config.update("jax_debug_nans", True)
+import jax
+jax.config.update("jax_debug_nans", True)
 
 def f(x, y):
   return x / y

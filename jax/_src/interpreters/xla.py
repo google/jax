@@ -17,12 +17,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import dataclasses
 import functools
 from functools import partial
 import itertools as it
-from typing import Any, Callable, Protocol, Union
+from typing import Any, Protocol, Union
 
 import numpy as np
 
@@ -92,7 +92,7 @@ def sharding_to_proto(sharding: SpatialSharding):
   proto = xc.OpSharding()
   if isinstance(sharding, tuple) and not isinstance(sharding[0], int):
     assert all(s is None or isinstance(s, tuple) for s in sharding)
-    return tuple_sharding_proto(list(map(sharding_to_proto, sharding)))  # type: ignore
+    return tuple_sharding_proto(list(map(sharding_to_proto, sharding)))
 
   if sharding is None:
     proto.type = xc.OpSharding.Type.REPLICATED
@@ -108,8 +108,6 @@ def tuple_sharding_proto(elems):
   proto.type = xc.OpSharding.Type.TUPLE
   proto.tuple_shardings = elems
   return proto
-
-
 
 
 ### handlers
@@ -132,6 +130,10 @@ _xla_shape_handlers[core.AbstractToken] = lambda _: (xc.Shape.token_shape(),)
 
 # IR constants
 
+class InvalidInputException(Exception):
+  pass
+
+
 # TODO(mattjj): try to remove this canonicalize_dtype stuff
 def canonicalize_dtype(x):
   typ = type(x)
@@ -142,8 +144,8 @@ def canonicalize_dtype(x):
     if handler: return handler(x)
   if hasattr(x, '__jax_array__'):
     return canonicalize_dtype(x.__jax_array__())
-  raise TypeError(f"Argument '{x}' of type {type(x)} is not a valid "
-                  "JAX type.")
+  raise InvalidInputException(
+      f"Argument '{x}' of type {type(x)} is not a valid JAX type.")
 
 def _canonicalize_masked_array_dtype(x):
   raise ValueError("numpy masked arrays are not supported as direct inputs to JAX functions. "

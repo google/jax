@@ -27,3 +27,17 @@ div.red-background pre {
 div.green-background pre {
   background-color: rgba(204, 244, 204, var(--block-bg-opacity));
 }
+
+/* Python code block comments */
+html[data-theme="light"] .highlight span.c1 {
+  color: #fa8d59;
+}
+
+/* Python code traceback and exception */
+html[data-theme="light"] .highlight span.gt {
+  color: #ff0000;
+}
+
+html[data-theme="light"] .highlight span.gr {
+  color: #ff0000;
+}

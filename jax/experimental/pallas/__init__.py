@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Module for pallas, a JAX extension for custom kernels."""
+"""Module for Pallas, a JAX extension for custom kernels.
+
+See the Pallas documentation at https://jax.readthedocs.io/en/latest/pallas.html.
+"""
 
 from jax._src import pallas
 from jax._src.pallas.core import BlockSpec
@@ -29,6 +32,7 @@ from jax._src.pallas.primitives import atomic_min
 from jax._src.pallas.primitives import atomic_or
 from jax._src.pallas.primitives import atomic_xchg
 from jax._src.pallas.primitives import atomic_xor
+from jax._src.pallas.primitives import debug_print
 from jax._src.pallas.primitives import dot
 from jax._src.pallas.primitives import load
 from jax._src.pallas.primitives import max_contiguous
@@ -41,17 +45,7 @@ from jax._src.pallas.utils import cdiv
 from jax._src.pallas.utils import next_power_of_2
 from jax._src.pallas.utils import strides_from_shape
 from jax._src.pallas.utils import when
-from jax._src.state.primitives import broadcast_to
 from jax._src.state.indexing import ds
-from jax._src.state.indexing  import dslice
+from jax._src.state.indexing import dslice
 from jax._src.state.indexing import Slice
-
-try:
-  from jax.experimental.pallas import gpu # pytype: disable=import-error
-except (ImportError, ModuleNotFoundError):
-  pass
-
-try:
-  from jax.experimental.pallas import tpu # pytype: disable=import-error
-except (ImportError, ModuleNotFoundError):
-  pass
+from jax._src.state.primitives import broadcast_to

@@ -21,20 +21,32 @@ limitations under the License.
 #include <string>
 
 #include "jaxlib/gpu/vendor.h"
+#include "xla/ffi/api/c_api.h"
 #include "xla/service/custom_call_status.h"
 
 namespace jax {
 namespace JAX_GPU_NAMESPACE {
 
+// TODO(b/338022728): remove after 6 months
 struct ThreeFry2x32Descriptor {
   std::int64_t n;  // If -1 then the length is passed as a 5th operand
 };
 
+// TODO(b/338022728): remove after 6 months
 void LaunchThreeFry2x32Kernel(gpuStream_t stream, void** buffers,
                               ThreeFry2x32Descriptor descriptor);
 
+// TODO(b/338022728): remove after 6 months
 void ThreeFry2x32(gpuStream_t stream, void** buffers, const char* opaque,
                   size_t opaque_len, XlaCustomCallStatus* status);
+
+XLA_FFI_Error* ThreeFry2x32Ffi(XLA_FFI_CallFrame* call_frame);
+
+void LaunchThreeFry2x32KernelFfi(gpuStream_t stream,
+                                 std::int64_t n,
+                                 std::uint32_t *keys0, std::uint32_t *keys1,
+                                 std::uint32_t *data0, std::uint32_t *data1,
+                                 std::uint32_t *out0, std::uint32_t *out1);
 
 }  // namespace JAX_GPU_NAMESPACE
 }  // namespace jax

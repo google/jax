@@ -5,7 +5,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.0
+    jupytext_version: 1.16.1
 kernelspec:
   display_name: Python 3
   language: python
@@ -15,6 +15,8 @@ kernelspec:
 +++ {"id": "M-hPMKlwXjMr"}
 
 # Writing custom Jaxpr interpreters in JAX
+
+<!--* freshness: { reviewed: '2024-04-08' } *-->
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/Writing_custom_interpreters_in_Jax.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/google/jax/blob/main/docs/notebooks/Writing_custom_interpreters_in_Jax.ipynb)
 
@@ -48,7 +50,7 @@ JAX provides a NumPy-like API for numerical computing which can be used as is, b
 ```{code-cell} ipython3
 :id: HmlMcICOcSXR
 
-x = random.normal(random.PRNGKey(0), (5000, 5000))
+x = random.normal(random.key(0), (5000, 5000))
 def f(w, b, x):
   return jnp.tanh(jnp.dot(x, w) + b)
 fast_f = jit(f)

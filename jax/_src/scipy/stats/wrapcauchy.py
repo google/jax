@@ -13,16 +13,36 @@
 # limitations under the License.
 
 
-import scipy.stats as osp_stats
 from jax import lax
 import jax.numpy as jnp
 from jax._src.lax.lax import _const as _lax_const
-from jax._src.numpy.util import implements, promote_args_inexact
+from jax._src.numpy.util import promote_args_inexact
 from jax._src.typing import Array, ArrayLike
 
 
-@implements(osp_stats.wrapcauchy.logpdf, update_doc=False)
 def logpdf(x: ArrayLike, c: ArrayLike) -> Array:
+  r"""Wrapped Cauchy log probability distribution function.
+
+  JAX implementation of :obj:`scipy.stats.wrapcauchy` ``logpdf``.
+
+  The wrapped Cauchy probability distribution function is given by
+
+  .. math::
+
+     f(x, c) = \frac{1-c^2}{2\pi(1+c^2-2c\cos x)}
+
+  for :math:`0<c<1`, and where normalization is on the domain :math:`0\le x\le 2\pi`.
+
+  Args:
+    x: arraylike, value at which to evaluate the PDF
+    c: arraylike, distribution shape parameter
+
+  Returns:
+    array of logpdf values.
+
+  See Also:
+    :func:`jax.scipy.stats.wrapcauchy.pdf`
+  """
   x, c = promote_args_inexact('wrapcauchy.logpdf', x, c)
   return jnp.where(
     lax.gt(c, _lax_const(c, 0)) & lax.lt(c, _lax_const(c, 1)),
@@ -34,6 +54,28 @@ def logpdf(x: ArrayLike, c: ArrayLike) -> Array:
     jnp.nan,
   )
 
-@implements(osp_stats.wrapcauchy.pdf, update_doc=False)
+
 def pdf(x: ArrayLike, c: ArrayLike) -> Array:
+  r"""Wrapped Cauchy probability distribution function.
+
+  JAX implementation of :obj:`scipy.stats.wrapcauchy` ``pdf``.
+
+  The wrapped Cauchy probability distribution function is given by
+
+  .. math::
+
+     f(x, c) = \frac{1-c^2}{2\pi(1+c^2-2c\cos x)}
+
+  for :math:`0<c<1`, and where normalization is on the domain :math:`0\le x\le 2\pi`.
+
+  Args:
+    x: arraylike, value at which to evaluate the PDF
+    c: arraylike, distribution shape parameter
+
+  Returns:
+    array of pdf values.
+
+  See Also:
+    :func:`jax.scipy.stats.wrapcauchy.logpdf`
+  """
   return lax.exp(logpdf(x, c))

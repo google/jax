@@ -5,7 +5,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.0
+    jupytext_version: 1.16.1
 kernelspec:
   display_name: Python 3
   language: python
@@ -15,6 +15,8 @@ kernelspec:
 +++ {"id": "6umP1IKf4Dg6"}
 
 # Autobatching for Bayesian Inference
+
+<!--* freshness: { reviewed: '2024-04-08' } *-->
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/vmapped_log_probs.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/google/jax/blob/main/docs/notebooks/vmapped_log_probs.ipynb)
 
@@ -210,7 +212,7 @@ def normal_sample(key, shape):
 
 normal_sample = jax.jit(normal_sample, static_argnums=(1,))
 
-key = random.PRNGKey(10003)
+key = random.key(10003)
 
 beta_loc = jnp.zeros(num_features, jnp.float32)
 beta_log_scale = jnp.zeros(num_features, jnp.float32)

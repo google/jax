@@ -49,7 +49,7 @@ def _split_root_args(args, const_lengths):
 
 @api_boundary
 def custom_root(f, initial_guess, solve, tangent_solve, has_aux=False):
-  """Differentiably solve for a roots of a function.
+  """Differentiably solve for the roots of a function.
 
   This is a low-level routine, mostly intended for internal use in JAX.
   Gradients of custom_root() are defined with respect to closed-over variables

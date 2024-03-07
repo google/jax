@@ -12,9 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from jax.experimental.array_api._fft_functions import (
+from jax.numpy.fft import (
   fft as fft,
-  fftfreq as fftfreq,
   fftn as fftn,
   fftshift as fftshift,
   hfft as hfft,
@@ -25,6 +24,10 @@ from jax.experimental.array_api._fft_functions import (
   irfft as irfft,
   irfftn as irfftn,
   rfft as rfft,
-  rfftfreq as rfftfreq,
   rfftn as rfftn,
+)
+
+from jax.experimental.array_api._fft_functions import (
+  fftfreq as fftfreq,
+  rfftfreq as rfftfreq,
 )

@@ -27,6 +27,7 @@ Subpackages
    jax.tree
    jax.tree_util
    jax.typing
+   jax.export
    jax.extend
    jax.example_libraries
    jax.experimental
@@ -113,6 +114,7 @@ jax.Array (:code:`jax.Array`)
     Array
     make_array_from_callback
     make_array_from_single_device_arrays
+    make_array_from_process_local_data
 
 Vectorization (:code:`vmap`)
 ----------------------------

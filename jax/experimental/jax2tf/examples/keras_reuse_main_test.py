@@ -16,13 +16,13 @@ import os
 from absl import flags
 from absl.testing import absltest
 from absl.testing import parameterized
+import jax
 from jax._src import test_util as jtu
-from jax import config
 
 from jax.experimental.jax2tf.examples import keras_reuse_main
 from jax.experimental.jax2tf.tests import tf_test_util
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 FLAGS = flags.FLAGS
 
 

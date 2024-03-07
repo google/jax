@@ -139,11 +139,11 @@ class RectangularVregBounds : public VRegDataBounds {
 // . . . . .    . . . . .
 // . . a b c    d e . . .
 // . . f g h    i j . . .
-// . . . . .    . . . . .
+// . . k l m    n o . . .
 //
 //   vreg 3      vreg 4
-// . . k l m    n o . . .
 // . . p q r    s t . . .
+// . . . . .    . . . . .
 // . . . . .    . . . . .
 // . . . . .    . . . . .
 //
@@ -207,6 +207,15 @@ class RectangularVregBounds : public VRegDataBounds {
 //     one specified as an attribute.
 //   implicit_dim: If specified, the value has an implicit dim inserted in
 //     either minormost or second minormost position.
+//
+// Note: There is a special case when VectorLayout is used for an mlir::Value
+// of i1 type. In this case, we use it to represent a vmask, which has a smaller
+// bitwidth than a vreg. For these types, the packing() is accurate but the
+// bitwidth() is a lie, and the i1 value is replicated for every bit.
+// For example, if the vmask is 8 x 128 x 4 bits and packing() == 2, each 4-bit
+// register contains two logical bool values which are represented as either b11
+// or b00. Its usage is currently limited to MLIR arith.cmp and arith.select ops
+// but we might want to split out a separate class if it gets used more widely.
 class VectorLayout {
  public:
   enum class ImplicitDim {
@@ -236,8 +245,17 @@ class VectorLayout {
   const std::array<int64_t, 2> &tiling() const { return tiling_; }
   ImplicitDim implicit_dim() const { return implicit_dim_; }
   int packing() const { return 32 / bitwidth_; }
+  int num_implicit_dims() const {
+    switch (implicit_dim_) {
+      case ImplicitDim::kNone:
+        return 0;
+      case ImplicitDim::kMinor:
+      case ImplicitDim::kSecondMinor:
+        return 1;
+    }
+  }
   // The number of minormost dimensions tiled by this layout.
-  int layout_rank() const { return 1 + (implicit_dim_ == ImplicitDim::kNone); }
+  int layout_rank() const { return 2 - num_implicit_dims(); }
 
   bool operator==(const VectorLayout &other) const;
   bool operator!=(const VectorLayout &other) const {
@@ -268,9 +286,56 @@ class VectorLayout {
     return {tiling_[0], tilesPerVreg(target_shape) * tiling_[1]};
   }
 
+  template <typename T>
+  void insertImplicit(SmallVector<T> &vec, T value) const {
+    CHECK_GE(vec.size(), layout_rank());
+    switch (implicit_dim_) {
+      case ImplicitDim::kNone:
+        break;
+      case ImplicitDim::kMinor:
+      case ImplicitDim::kSecondMinor:
+        vec.insert(vec.end() - (static_cast<int64_t>(implicit_dim_) - 1),
+                   value);
+        break;
+    }
+  }
+
+  template <typename T>
+  void eraseImplicit(SmallVector<T> &vec) const {
+    CHECK_GE(vec.size(), 2);
+    switch (implicit_dim_) {
+      case ImplicitDim::kNone:
+        break;
+      case ImplicitDim::kMinor:
+      case ImplicitDim::kSecondMinor:
+        vec.erase(vec.end() - static_cast<int64_t>(implicit_dim_));
+        break;
+    }
+  }
+
+  // Returns the value of the tiled (2 minormost) dimensions of the given array
+  // with implicit dims inserted.
+  //
+  // Roughly equivalent to the following (but avoids vector allocation):
+  //
+  //   SmallVector<int64_t> vec = arr;
+  //   insertImplicit(arr, implicit_value);
+  //   return {*(vec.end() - 2), *(vec.end() - 1)};
+  std::array<int64_t, 2> getImplicitTiledDims(
+      const ArrayRef<int64_t> arr, const int64_t implicit_value) const {
+    CHECK_GE(arr.size(), layout_rank());
+    switch (implicit_dim_) {
+      case ImplicitDim::kNone:
+        return {*(arr.end() - 2), *(arr.end() - 1)};
+      case ImplicitDim::kMinor:
+        return {*(arr.end() - 1), implicit_value};
+      case ImplicitDim::kSecondMinor:
+        return {implicit_value, *(arr.end() - 1)};
+    }
+  }
+
   SmallVector<int64_t> implicitShape(ArrayRef<int64_t> shape) const;
 
- private:
   SmallVector<int64_t> tileArrayImplicitShape(
       ArrayRef<int64_t> shape, std::array<int64_t, 2> target_shape) const;
 

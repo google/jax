@@ -5,7 +5,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.0
+    jupytext_version: 1.16.1
 kernelspec:
   display_name: Python 3
   language: python
@@ -15,6 +15,8 @@ kernelspec:
 +++ {"id": "hjM_sV_AepYf"}
 
 # 🔪 JAX - The Sharp Bits 🔪
+
+<!--* freshness: { reviewed: '2024-06-03' } *-->
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/Common_Gotchas_in_JAX.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/google/jax/blob/main/docs/notebooks/Common_Gotchas_in_JAX.ipynb)
 
@@ -407,7 +409,7 @@ print(np.random.random())
 
 +++ {"id": "ORMVVGZJgSVi"}
 
-Underneath the hood, numpy uses the [Mersenne Twister](https://en.wikipedia.org/wiki/Mersenne_Twister) PRNG to power its pseudorandom functions.  The PRNG has a period of $2^{19937}-1$ and at any point can be described by __624 32bit unsigned ints__ and a __position__ indicating how much of this  "entropy" has been used up.
+Underneath the hood, numpy uses the [Mersenne Twister](https://en.wikipedia.org/wiki/Mersenne_Twister) PRNG to power its pseudorandom functions.  The PRNG has a period of $2^{19937}-1$ and at any point can be described by __624 32-bit unsigned ints__ and a __position__ indicating how much of this  "entropy" has been used up.
 
 ```{code-cell} ipython3
 :id: 7Pyp2ajzfPO2
@@ -463,14 +465,14 @@ The Mersenne Twister PRNG is also known to have a [number](https://cs.stackexcha
 
 JAX instead implements an _explicit_ PRNG where entropy production and consumption are handled by explicitly passing and iterating PRNG state.  JAX uses a modern [Threefry counter-based PRNG](https://github.com/google/jax/blob/main/docs/jep/263-prng.md) that's __splittable__.  That is, its design allows us to __fork__ the PRNG state into new PRNGs for use with parallel stochastic generation.
 
-The random state is described by two unsigned-int32s that we call a __key__:
+The random state is described by a special array element that we call a __key__:
 
 ```{code-cell} ipython3
 :id: yPHE7KTWgAWs
 :outputId: ae8af0ee-f19e-474e-81b6-45e894eb2fc3
 
 from jax import random
-key = random.PRNGKey(0)
+key = random.key(0)
 key
 ```
 
@@ -938,9 +940,9 @@ If you want to trace where NaNs are occurring in your functions or gradients, yo
 
 * setting the `JAX_DEBUG_NANS=True` environment variable;
 
-* adding `from jax import config` and `config.update("jax_debug_nans", True)` near the top of your main file;
+* adding `jax.config.update("jax_debug_nans", True)` near the top of your main file;
 
-* adding `from jax import config` and `config.parse_flags_with_absl()` to your main file, then set the option using a command-line flag like `--jax_debug_nans=True`;
+* adding `jax.config.parse_flags_with_absl()` to your main file, then set the option using a command-line flag like `--jax_debug_nans=True`;
 
 This will cause computations to error-out immediately on production of a NaN. Switching this option on adds a nan check to every floating point type value produced by XLA. That means values are pulled back to the host and checked as ndarrays for every primitive operation not under an `@jit`. For code under an `@jit`, the output of every `@jit` function is checked and if a nan is present it will re-run the function in de-optimized op-by-op mode, effectively removing one level of `@jit` at a time.
 
@@ -1071,7 +1073,7 @@ At the moment, JAX by default enforces single-precision numbers to mitigate the 
 :id: CNNGtzM3NDkO
 :outputId: b422bb23-a784-44dc-f8c9-57f3b6c861b8
 
-x = random.uniform(random.PRNGKey(0), (1000,), dtype=jnp.float64)
+x = random.uniform(random.key(0), (1000,), dtype=jnp.float64)
 x.dtype
 ```
 
@@ -1081,30 +1083,30 @@ To use double-precision numbers, you need to set the `jax_enable_x64` configurat
 
 There are a few ways to do this:
 
-1. You can enable 64bit mode by setting the environment variable `JAX_ENABLE_X64=True`.
+1. You can enable 64-bit mode by setting the environment variable `JAX_ENABLE_X64=True`.
 
 2. You can manually set the `jax_enable_x64` configuration flag at startup:
 
    ```python
    # again, this only works on startup!
-   from jax import config
-   config.update("jax_enable_x64", True)
+   import jax
+   jax.config.update("jax_enable_x64", True)
    ```
 
 3. You can parse command-line flags with `absl.app.run(main)`
 
    ```python
-   from jax import config
-   config.config_with_absl()
+   import jax
+   jax.config.config_with_absl()
    ```
 
 4. If you want JAX to run absl parsing for you, i.e. you don't want to do `absl.app.run(main)`, you can instead use
 
    ```python
-   from jax import config
+   import jax
    if __name__ == '__main__':
-     # calls config.config_with_absl() *and* runs absl parsing
-     config.parse_flags_with_absl()
+     # calls jax.config.config_with_absl() *and* runs absl parsing
+     jax.config.parse_flags_with_absl()
    ```
 
 Note that #2-#4 work for _any_ of JAX's configuration options.
@@ -1117,7 +1119,7 @@ We can then confirm that `x64` mode is enabled:
 
 import jax.numpy as jnp
 from jax import random
-x = random.uniform(random.PRNGKey(0), (1000,), dtype=jnp.float64)
+x = random.uniform(random.key(0), (1000,), dtype=jnp.float64)
 x.dtype # --> dtype('float64')
 ```
 
@@ -1143,6 +1145,7 @@ Many such cases are discussed in detail in the sections above; here we list seve
 
   >>> jnp.arange(254.0, 258.0).astype('uint8')
   Array([254, 255, 255, 255], dtype=uint8)
+
   ```
   This sort of mismatch would typically arise when casting extreme values from floating to integer types or vice versa.
 

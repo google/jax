@@ -65,7 +65,8 @@ Noteworthy properties and restrictions
 ``BlockSpec``\s and grid iteration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-``BlockSpec``\s generally behave as expected in Pallas --- every invocation of
+``BlockSpec``\s (see :ref:`pallas_blockspec`) generally behave as expected
+in Pallas --- every invocation of
 the kernel body gets access to slices of the inputs and is meant to initialize a slice
 of the output.
 
@@ -147,8 +148,10 @@ grid axes over cores. This is an opt-in procedure. To allow that,
 ..
   pallas_call(
       ...,
-      mosaic_params=dict(
-        dimension_semantics=["parallel", "parallel", "arbitrary"]
+      compiler_params=dict(
+          mosaic=dict(
+              dimension_semantics=["parallel", "parallel", "arbitrary"]
+          )
       ),
     )
 
@@ -266,7 +269,7 @@ Elementwise operations
 ^^^^^^^^^^^^^^^^^^^^^^
 
 Many elementwise operations are supported. It is worth noting that the hardware
-generally only supports elementwise compute using 32-bit types. When loading
+generally only supports elementwise computation using 32-bit types. When loading
 operands that use lower-precision types, they should generally be upcast to a
 32-bit type before applying elementwise ops.
 
@@ -297,7 +300,7 @@ expensive (🔴).
 
 Many JAX functions are implemented in terms of other JAX primitives, so this
 list might not be comprehensive. For example, ``jax.nn.relu`` is implemented
-in terms of comparisons and ``jnp.where`` and will work in Pallas kernels too.
+in terms of comparisons and ``jnp.where`` will work in Pallas kernels too.
 
 Array constructors
 ^^^^^^^^^^^^^^^^^^
@@ -344,5 +347,5 @@ However, loop primitives get fully unrolled during the compilation at the
 moment, so try to keep the loop trip count reasonably small.
 
 Overusing control flow can lead to significant regressions in low-level code
-generation, and it is recommended to try to squeeze as many computationaly
+generation, and it is recommended to try to squeeze as many computationally
 expensive operations into a single basic block as possible.

@@ -20,6 +20,7 @@ from functools import partial
 import operator
 import numpy as np
 from typing import Any
+import warnings
 
 import jax
 import jax.numpy as jnp
@@ -33,6 +34,12 @@ from jax._src.core import AxisName
 from jax._src.numpy import util as numpy_util
 from jax._src.typing import Array, ArrayLike
 from jax._src.ops.special import logsumexp as _logsumexp
+
+
+class Unspecified:
+  def __repr__(self):
+    return "_UNSPECIFIED"
+_UNSPECIFIED = Unspecified()
 
 
 # activations
@@ -62,7 +69,7 @@ def relu(x: ArrayLike) -> Array:
   Returns:
     An array.
 
-  Example:
+  Examples:
     >>> jax.nn.relu(jax.numpy.array([-2., -1., -0.5, 0, 0.5, 1., 2.]))
     Array([0. , 0. , 0. , 0. , 0.5, 1. , 2. ], dtype=float32)
 
@@ -111,6 +118,32 @@ def softplus(x: ArrayLike) -> Array:
   return jnp.logaddexp(x, 0)
 
 @jax.jit
+def sparse_plus(x: ArrayLike) -> Array:
+  r"""Sparse plus function.
+
+  Computes the function:
+
+  .. math::
+
+    \mathrm{sparse\_plus}(x) = \begin{cases}
+      0, & x \leq -1\\
+      \frac{1}{4}(x+1)^2, & -1 < x < 1 \\
+      x, & 1 \leq x
+    \end{cases}
+
+  This is the twin function of the softplus activation ensuring a zero output
+  for inputs less than -1 and a linear output for inputs greater than 1,
+  while remaining smooth, convex, monotonic by an adequate definition between
+  -1 and 1.
+
+  Args:
+    x: input (float)
+  """
+  numpy_util.check_arraylike("sparse_plus", x)
+  x = jnp.asarray(x)
+  return jnp.where(x <= -1.0, 0.0, jnp.where(x >= 1.0, x, (x + 1.0)**2/4))
+
+@jax.jit
 def soft_sign(x: ArrayLike) -> Array:
   r"""Soft-sign activation function.
 
@@ -148,8 +181,40 @@ def sigmoid(x: ArrayLike) -> Array:
   return lax.logistic(x)
 
 @jax.jit
+def sparse_sigmoid(x: ArrayLike) -> Array:
+  r"""Sparse sigmoid activation function.
+
+  Computes the function:
+
+  .. math::
+
+    \mathrm{sparse\_sigmoid}(x) = \begin{cases}
+      0, & x \leq -1\\
+      \frac{1}{2}(x+1), & -1 < x < 1 \\
+      1, & 1 \leq x
+    \end{cases}
+
+  This is the twin function of the ``sigmoid`` activation ensuring a zero output
+  for inputs less than -1, a 1 output for inputs greater than 1, and a linear
+  output for inputs between -1 and 1. It is the derivative of ``sparse_plus``.
+
+  For more information, see `Learning with Fenchel-Young Losses (section 6.2)
+  <https://arxiv.org/abs/1901.02324>`_.
+
+  Args:
+    x : input array
+
+  Returns:
+    An array.
+
+  See also:
+    :func:`sigmoid`
+  """
+  return 0.5 * jnp.clip(x + 1.0, 0.0, 2.0)
+
+@jax.jit
 def silu(x: ArrayLike) -> Array:
-  r"""SiLU (a.k.a. swish) activation function.
+  r"""SiLU (aka swish) activation function.
 
   Computes the element-wise function:
 
@@ -172,6 +237,29 @@ def silu(x: ArrayLike) -> Array:
   return x_arr * sigmoid(x_arr)
 
 swish = silu
+
+@jax.jit
+def mish(x: ArrayLike) -> Array:
+  r"""Mish activation function.
+
+  Computes the element-wise function:
+
+  .. math::
+    \mathrm{mish}(x) = x \cdot \mathrm{tanh}(\mathrm{softplus}(x))
+
+  For more information, see
+  `Mish: A Self Regularized Non-Monotonic Activation Function
+  <https://arxiv.org/abs/1908.08681>`_.
+
+  Args:
+    x : input array
+
+  Returns:
+    An array.
+  """
+  numpy_util.check_arraylike("mish", x)
+  x_arr = jnp.asarray(x)
+  return x_arr * jnp.tanh(softplus(x_arr))
 
 @jax.jit
 def log_sigmoid(x: ArrayLike) -> Array:
@@ -288,7 +376,7 @@ def celu(x: ArrayLike, alpha: ArrayLike = 1.0) -> Array:
 
   For more information, see
   `Continuously Differentiable Exponential Linear Units
-  <https://arxiv.org/pdf/1704.07483.pdf>`_.
+  <https://arxiv.org/abs/1704.07483>`_.
 
   Args:
     x : input array
@@ -316,7 +404,7 @@ def selu(x: ArrayLike) -> Array:
 
   For more information, see
   `Self-Normalizing Neural Networks
-  <https://papers.nips.cc/paper/6698-self-normalizing-neural-networks.pdf>`_.
+  <https://arxiv.org/abs/1706.02515>`_.
 
   Args:
     x : input array
@@ -405,7 +493,7 @@ logsumexp = _logsumexp
 def log_softmax(x: ArrayLike,
                 axis: int | tuple[int, ...] | None = -1,
                 where: ArrayLike | None = None,
-                initial: ArrayLike | None = None) -> Array:
+                initial: ArrayLike | None | Unspecified = _UNSPECIFIED) -> Array:
   r"""Log-Softmax function.
 
   Computes the logarithm of the :code:`softmax` function, which rescales
@@ -420,19 +508,26 @@ def log_softmax(x: ArrayLike,
     axis: the axis or axes along which the :code:`log_softmax` should be
       computed. Either an integer or a tuple of integers.
     where: Elements to include in the :code:`log_softmax`.
-    initial: The minimum value used to shift the input array. Must be present
-      when :code:`where` is not None.
 
   Returns:
     An array.
 
+  Note:
+    If any input values are ``+inf``, the result will be all ``NaN``: this reflects the
+    fact that ``inf / inf`` is not well-defined in the context of floating-point math.
+
   See also:
     :func:`softmax`
   """
+  if initial is not _UNSPECIFIED:
+    # Added 2024-4-10
+    warnings.warn("The initial argument to log_softmax is deprecated, and no longer has any effect.",
+                  DeprecationWarning, stacklevel=2)
+  del initial
   numpy_util.check_arraylike("log_softmax", x)
   x_arr = jnp.asarray(x)
-  x_max = jnp.max(x_arr, axis, where=where, initial=initial, keepdims=True)
-  x_safe = x_arr if where is None else jnp.where(where, x_arr, initial)
+  x_max = jnp.max(x_arr, axis, where=where, initial=-jnp.inf, keepdims=True)
+  x_safe = x_arr if where is None else jnp.where(where, x_arr, -jnp.inf)
   shifted = x_safe - lax.stop_gradient(x_max)
   shifted_logsumexp = jnp.log(
       jnp.sum(jnp.exp(shifted), axis, where=where, keepdims=True))
@@ -447,7 +542,7 @@ def log_softmax(x: ArrayLike,
 def softmax(x: ArrayLike,
             axis: int | tuple[int, ...] | None = -1,
             where: ArrayLike | None = None,
-            initial: ArrayLike | None = None) -> Array:
+            initial: ArrayLike | None | Unspecified = _UNSPECIFIED) -> Array:
   r"""Softmax function.
 
   Computes the function which rescales elements to the range :math:`[0, 1]`
@@ -462,22 +557,29 @@ def softmax(x: ArrayLike,
       softmax output summed across these dimensions should sum to :math:`1`.
       Either an integer or a tuple of integers.
     where: Elements to include in the :code:`softmax`.
-    initial: The minimum value used to shift the input array. Must be present
-      when :code:`where` is not None.
 
   Returns:
     An array.
 
+  Note:
+    If any input values are ``+inf``, the result will be all ``NaN``: this reflects the
+    fact that ``inf / inf`` is not well-defined in the context of floating-point math.
+
   See also:
     :func:`log_softmax`
   """
+  if initial is not _UNSPECIFIED:
+    # Added 2024-4-10
+    warnings.warn("The initial argument to softmax is deprecated, and no longer has any effect.",
+                  DeprecationWarning, stacklevel=2)
+  del initial
   if config.softmax_custom_jvp.value:
     # mypy is confused by the `functools.partial` application in the definition
     # of `_softmax` and incorrectly concludes that `_softmax` returns
     # `ReturnValue` -- the unsubstituted type parameter of `custom_jvp`.
-    return _softmax(x, axis, where, initial)  # type: ignore[return-value]
+    return _softmax(x, axis, where)
   else:
-    return _softmax_deprecated(x, axis, where, initial)
+    return _softmax_deprecated(x, axis, where)
 
 # TODO(mattjj): replace softmax with _softmax when deprecation flag is removed
 @partial(jax.custom_jvp, nondiff_argnums=(1,))
@@ -485,7 +587,7 @@ def _softmax(
     x: ArrayLike,
     axis: int | tuple[int, ...] | None = -1,
     where: ArrayLike | None = None,
-    initial: ArrayLike | None = None) -> Array:
+    initial: ArrayLike | None = -jnp.inf) -> Array:
   x_max = jnp.max(x, axis, where=where, initial=initial, keepdims=True)
   x_safe = x if where is None else jnp.where(where, x, initial)
   unnormalized = jnp.exp(x_safe - x_max)
@@ -504,7 +606,7 @@ def _softmax_deprecated(
     x: ArrayLike,
     axis: int | tuple[int, ...] | None = -1,
     where: ArrayLike | None = None,
-    initial: ArrayLike | None = None) -> Array:
+    initial: ArrayLike | None = -jnp.inf) -> Array:
   x_max = jnp.max(x, axis, where=where, initial=initial, keepdims=True)
   x_safe = x if where is None else jnp.where(where, x, initial)
   unnormalized = jnp.exp(x_safe - lax.stop_gradient(x_max))

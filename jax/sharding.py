@@ -17,7 +17,7 @@
 
 from jax._src.sharding import Sharding as Sharding
 from jax._src.sharding_impls import (
-    XLACompatibleSharding as XLACompatibleSharding,
+    XLACompatibleSharding as _deprecated_XLACompatibleSharding,
     NamedSharding as NamedSharding,
     SingleDeviceSharding as SingleDeviceSharding,
     PmapSharding as PmapSharding,
@@ -28,3 +28,23 @@ from jax._src.partition_spec import (
     PartitionSpec as PartitionSpec,
 )
 from jax._src.interpreters.pxla import Mesh as Mesh
+
+_deprecations = {
+    # Added Jun 4, 2024.
+    "XLACompatibleSharding": (
+        (
+            "jax.sharding.XLACompatibleSharding is deprecated. Use"
+            " jax.sharding.Sharding instead."
+        ),
+        _deprecated_XLACompatibleSharding,
+    )
+}
+
+import typing
+if typing.TYPE_CHECKING:
+  XLACompatibleSharding = _deprecated_XLACompatibleSharding
+else:
+  from jax._src.deprecations import deprecation_getattr as _deprecation_getattr
+  __getattr__ = _deprecation_getattr(__name__, _deprecations)
+  del _deprecation_getattr
+del typing

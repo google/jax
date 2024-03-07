@@ -23,6 +23,7 @@ from jax._src.util import (
   safe_zip as safe_zip,
   split_dict as split_dict,
   split_list as split_list,
+  split_list_checked as split_list_checked,
   split_merge as split_merge,
   subvals as subvals,
   toposort as toposort,

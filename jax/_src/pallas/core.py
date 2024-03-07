@@ -15,14 +15,16 @@
 """Module for pallas-core functionality."""
 from __future__ import annotations
 
-import copy
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
 import contextlib
+import copy
 import dataclasses
 import functools
-from typing import Any, Callable, Union
-from collections.abc import Iterator
+import threading
+from typing import Any, Union
+import warnings
 
+import jax
 from jax._src import api_util
 from jax._src import core as jax_core
 from jax._src import linear_util as lu
@@ -33,12 +35,16 @@ from jax._src.interpreters import partial_eval as pe
 from jax._src.state import discharge as state_discharge
 import jax.numpy as jnp
 
-# TODO(sharadmv): enable type checking
-# mypy: ignore-errors
+
+class DynamicGridDim:
+  pass
+dynamic_grid_dim = DynamicGridDim()
+
 
 partial = functools.partial
-Grid = tuple[Union[int, None], ...]  # None indicates that the bound is dynamic.
-StaticGrid = tuple[int, ...]  # None indicates that the bound is dynamic.
+Grid = tuple[Union[int, jax_core.Array], ...]
+StaticGrid = tuple[int, ...]
+GridMappingGrid = tuple[Union[int, DynamicGridDim], ...]
 split_list = util.split_list
 
 map, unsafe_map = util.safe_map, map
@@ -86,25 +92,60 @@ def _ref_raise_to_shaped(ref_aval: AbstractMemoryRef, weak_type):
 jax_core.raise_to_shaped_mappings[AbstractMemoryRef] = _ref_raise_to_shaped
 
 
-@dataclasses.dataclass
-class GridEnv:
-  axis_index: Any
-  axis_size: int
+@dataclasses.dataclass(frozen=True)
+class PallasGridContext:
+  grid: GridMappingGrid
+  mapped_dims: tuple[int, ...]
 
-_grid_env_stack: list[tuple[GridEnv, ...]] = []
+  def size(self, axis: int) -> int | DynamicGridDim:
+    valid_grid = tuple(
+        s for i, s in enumerate(self.grid) if i not in self.mapped_dims
+    )
+    try:
+      size = valid_grid[axis]
+    except IndexError as e:
+      raise ValueError(
+          f"Axis {axis} is out of bounds for grid {self.grid}"
+      ) from e
+    return size
+
+
+@dataclasses.dataclass
+class PallasTracingEnv(threading.local):
+  grid_context: PallasGridContext | None = None
+_pallas_tracing_env = PallasTracingEnv()
+
+
+def axis_frame() -> PallasGridContext:
+  # This is like jax_core.axis_frame, except there should only ever be one
+  # active PallasGridAxisName for a particular main_trace because we cannot
+  # nest pallas_calls.
+  env = _pallas_tracing_env
+  assert env.grid_context is not None
+  return env.grid_context
+
+
+@dataclasses.dataclass(frozen=True)
+class GridAxis:
+  index: jax.Array
+  size: int
+
+# Stores the kernel execution position and the size along grid axes.
+GridEnv = Sequence[GridAxis]
+
+_grid_env_stack: list[GridEnv] = []
 
 
 @contextlib.contextmanager
-def grid_env(env: tuple[tuple[Any, int], ...]) -> Iterator[None]:
-  _grid_env_stack.append(tuple(GridEnv(axis_index, axis_size)
-                               for axis_index, axis_size in env))
+def grid_env(env: GridEnv) -> Iterator[None]:
+  _grid_env_stack.append(env)
   try:
     yield
   finally:
     _grid_env_stack.pop()
 
 
-def current_grid_env() -> tuple[GridEnv, ...] | None:
+def current_grid_env() -> GridEnv | None:
   if not _grid_env_stack:
     return None
   return _grid_env_stack[-1]
@@ -129,20 +170,39 @@ blocked = Blocked()
 IndexingMode = Union[Blocked, Unblocked]
 
 
-@dataclasses.dataclass(init=False, unsafe_hash=True)
+@dataclasses.dataclass(unsafe_hash=True)
 class BlockSpec:
-  index_map: Callable[..., Any] | None
-  block_shape: tuple[int | None, ...] | None
-  memory_space: Any
-  indexing_mode: IndexingMode
+  """Specifies how an array should be sliced for each iteration of a kernel.
 
-  def __init__(self, index_map: Callable[..., Any] | None = None,
-               block_shape: tuple[int | None, ...] | None = None,
-               memory_space: Any = None, indexing_mode: IndexingMode = blocked):
-    self.index_map = index_map
-    if block_shape is not None and not isinstance(block_shape, tuple):
-      block_shape = tuple(block_shape)
+  See :ref:`pallas_blockspec` for more details.
+  """
+  block_shape: tuple[int | None, ...] | None = None
+  index_map: Callable[..., Any] | None = None
+  memory_space: Any | None = dataclasses.field(kw_only=True, default=None)
+  indexing_mode: IndexingMode = dataclasses.field(kw_only=True, default=blocked)
+
+  def __init__(
+      self,
+      block_shape: Any | None = None,
+      index_map: Any | None = None,
+      *,
+      memory_space: Any | None = None,
+      indexing_mode: IndexingMode = blocked,
+  ) -> None:
+    if callable(block_shape):
+      # TODO(slebedev): Remove this code path and update the signature of
+      # __init__ after October 1, 2024.
+      warnings.warn(
+          "BlockSpec now expects ``block_shape`` to be passed before"
+          " ``index_map``. Update your code by swapping the order of these"
+          " arguments. For example, ``pl.BlockSpace(lambda i: i, (42,))``"
+          " should be written as ``pl.BlockSpec((42,), lambda i: i)``.",
+          DeprecationWarning,
+      )
+      index_map, block_shape = block_shape, index_map
+
     self.block_shape = block_shape
+    self.index_map = index_map
     self.memory_space = memory_space
     self.indexing_mode = indexing_mode
 
@@ -153,6 +213,10 @@ class BlockSpec:
     if not isinstance(out, tuple):
       out = (out,)
     return out
+
+
+# A PyTree of BlockSpec | NoBlockSpec.
+BlockSpecTree = Any
 
 
 @dataclasses.dataclass(frozen=True)
@@ -182,25 +246,43 @@ class BlockMapping:
   replace = dataclasses.replace
 
 
+@contextlib.contextmanager
+def tracing_grid_env(grid: GridMappingGrid, mapped_dims: tuple[int, ...]):
+  assert all(i is dynamic_grid_dim or isinstance(i, int) for i in grid)
+  old_grid_context = _pallas_tracing_env.grid_context
+  try:
+    _pallas_tracing_env.grid_context = PallasGridContext(grid, mapped_dims)
+    yield
+  finally:
+    _pallas_tracing_env.grid_context = old_grid_context
+
+
 @dataclasses.dataclass(frozen=True)
 class GridMapping:
-  grid: Grid
+  grid: GridMappingGrid
   block_mappings: tuple[BlockMapping | None, ...]
-  mapped_dims: tuple[int, ...]
-  num_index_operands: int
-  num_scratch_operands: int
+  mapped_dims: tuple[int, ...] = ()
+  num_index_operands: int = 0
+  num_scratch_operands: int = 0
+  # Number of constants hoisted to operands by ``_hoist_consts_to_refs``.
+  num_constant_operands: int = 0
 
   replace = dataclasses.replace
 
   @property
   def num_dynamic_grid_bounds(self):
-    return sum(b is None for b in self.grid)
+    return sum(b is dynamic_grid_dim for b in self.grid)
 
   @property
   def static_grid(self) -> StaticGrid:
     if self.num_dynamic_grid_bounds:
       raise ValueError("Expected a grid with fully static bounds")
-    return self.grid  # typing: ignore
+    return self.grid  # type: ignore
+
+  @contextlib.contextmanager
+  def trace_env(self):
+    with tracing_grid_env(self.grid, self.mapped_dims):
+      yield
 
 
 def _preprocess_grid(grid: Grid | int | None) -> Grid:
@@ -212,9 +294,13 @@ def _preprocess_grid(grid: Grid | int | None) -> Grid:
 
 
 def _convert_block_spec_to_block_mapping(
-    in_avals: list[jax_core.ShapedArray], block_spec: BlockSpec | None,
-    aval: jax_core.ShapedArray, in_tree: Any,
-    ) -> BlockSpec | None:
+    in_avals: Sequence[jax_core.ShapedArray],
+    block_spec: BlockSpec,
+    aval: jax_core.ShapedArray,
+    in_tree: Any,
+    grid: GridMappingGrid,
+    mapped_dims: tuple[int, ...],
+) -> BlockMapping | None:
   if block_spec is no_block_spec:
     return None
   if block_spec.index_map is None:
@@ -226,10 +312,12 @@ def _convert_block_spec_to_block_mapping(
   block_shape = tuple(
       mapped if s is None else s for s in block_shape)
   flat_fun, _ = api_util.flatten_fun(lu.wrap_init(compute_index), in_tree)
-  jaxpr, _, consts, () = pe.trace_to_jaxpr_dynamic(flat_fun, in_avals)
+  with tracing_grid_env(grid, mapped_dims):
+    jaxpr, _, consts, () = pe.trace_to_jaxpr_dynamic(flat_fun, in_avals)
   return BlockMapping(
       block_shape, jax_core.ClosedJaxpr(jaxpr, consts), block_spec.indexing_mode
   )
+
 
 def _tile_ref(ref: state.AbstractRef, block_shape: tuple[int, ...] | None
              ) -> state.AbstractRef:
@@ -237,6 +325,15 @@ def _tile_ref(ref: state.AbstractRef, block_shape: tuple[int, ...] | None
     return ref
   shape = tuple(s for s in block_shape if s is not None)
   return ref.update(inner_aval=ref.inner_aval.update(shape=shape))
+
+
+def _check_static_ref_shape(ref: state.AbstractRef) -> state.AbstractRef:
+  shape = ref.shape
+  if not jax_core.is_constant_shape(shape):
+    # TODO(necula): thread the tree labels so that we can localize the error
+    raise ValueError("shape polymorphism for Pallas does not support "
+                     f"dynamically-shaped blocks. Found block_shape: {shape}")
+  return ref
 
 
 def _get_ref_avals(grid, in_avals, in_specs, out_avals, out_specs):
@@ -256,13 +353,13 @@ def _get_ref_avals(grid, in_avals, in_specs, out_avals, out_specs):
     in_specs = [None] * len(in_avals)
     out_specs = [None] * len(out_avals)
   tiled_in_ref_avals = [
-      aval if in_spec is no_block_spec
-      else _tile_ref(aval, in_spec.block_shape)
+      _check_static_ref_shape(aval if in_spec is no_block_spec
+                              else _tile_ref(aval, in_spec.block_shape))
       for aval, in_spec in zip(in_ref_avals, in_specs)
   ]
   tiled_out_ref_avals = [
-      aval if out_spec is no_block_spec
-      else _tile_ref(aval, out_spec.block_shape)
+      _check_static_ref_shape(aval if out_spec is no_block_spec
+                              else _tile_ref(aval, out_spec.block_shape))
       for aval, out_spec in zip(out_ref_avals, out_specs)
   ]
   return in_specs, tiled_in_ref_avals, out_specs, tiled_out_ref_avals
@@ -270,6 +367,7 @@ def _get_ref_avals(grid, in_avals, in_specs, out_avals, out_specs):
 class NoBlockSpec:
   pass
 no_block_spec = NoBlockSpec()
+
 
 @dataclasses.dataclass(init=False, unsafe_hash=True)
 class GridSpec:
@@ -282,12 +380,8 @@ class GridSpec:
   def __init__(
       self,
       grid: Grid | None = None,
-      in_specs: BlockSpec
-      | Sequence[BlockSpec | NoBlockSpec]
-      | NoBlockSpec = no_block_spec,
-      out_specs: BlockSpec
-      | Sequence[BlockSpec | NoBlockSpec]
-      | NoBlockSpec = no_block_spec,
+      in_specs: BlockSpecTree = no_block_spec,
+      out_specs: BlockSpecTree = no_block_spec,
   ):
     # Be more lenient for in/out_specs
     if isinstance(in_specs, list):
@@ -331,6 +425,10 @@ class GridSpec:
   def get_grid_mapping(
       self, in_avals, in_tree, out_avals, out_tree
   ) -> tuple[tuple[jax_core.AbstractValue, ...], GridMapping]:
+    assert all(i is None or isinstance(i, int) for i in self.grid)
+    grid_mapping_grid = tuple(
+        dynamic_grid_dim if d is None else d for d in self.grid
+    )
     flat_in_specs, flat_out_specs = self._get_in_out_specs(
         in_avals, in_tree, out_avals, out_tree)
     in_specs, in_ref_avals, out_specs, out_ref_avals = _get_ref_avals(
@@ -340,25 +438,45 @@ class GridSpec:
     # Create args, kwargs pytree def
     grid_tree = tree_util.tree_structure((tuple(grid_avals), {}))
     in_block_mappings = map(
-        partial(_convert_block_spec_to_block_mapping, grid_avals,
-                in_tree=grid_tree), in_specs, in_ref_avals)
+        partial(
+            _convert_block_spec_to_block_mapping,
+            grid_avals,
+            in_tree=grid_tree,
+            grid=grid_mapping_grid,
+            mapped_dims=(),
+        ),
+        in_specs,
+        in_ref_avals,
+    )
     out_block_mappings = map(
-        partial(_convert_block_spec_to_block_mapping, grid_avals,
-                in_tree=grid_tree), out_specs, out_ref_avals)
+        partial(
+            _convert_block_spec_to_block_mapping,
+            grid_avals,
+            in_tree=grid_tree,
+            grid=grid_mapping_grid,
+            mapped_dims=(),
+        ),
+        out_specs,
+        out_ref_avals,
+    )
     grid_mapping = GridMapping(
-        self.grid, (*in_block_mappings, *out_block_mappings), (),
-        num_index_operands=0, num_scratch_operands=0)
+        grid_mapping_grid, (*in_block_mappings, *out_block_mappings)  # type: ignore
+    )
     jaxpr_in_avals = tree_util.tree_unflatten(in_tree, in_ref_avals)
     jaxpr_out_avals = tree_util.tree_unflatten(out_tree, out_ref_avals)
     if not isinstance(jaxpr_out_avals, (tuple, list)):
       jaxpr_out_avals = (jaxpr_out_avals,)
     return (*jaxpr_in_avals, *jaxpr_out_avals), grid_mapping
 
-  def unzip_dynamic_grid_bounds(self) -> tuple[GridSpec, tuple[Any, ...]]:
-    static_grid = tuple(d if isinstance(d, int) else None for d in self.grid)
+  def unzip_dynamic_grid_bounds(
+      self,
+  ) -> tuple[GridSpec, tuple[Any, ...]]:
+    static_grid = tuple(
+        d if isinstance(d, int) else None for d in self.grid
+    )
     dynamic_bounds = tuple(d for d in self.grid if not isinstance(d, int))
     # We can't use dataclasses.replace, because our fields are incompatible
     # with __init__'s signature.
     static_self = copy.copy(self)
-    static_self.grid = static_grid
+    static_self.grid = static_grid  # type: ignore
     return static_self, dynamic_bounds

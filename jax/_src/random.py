@@ -30,6 +30,7 @@ from jax.numpy.linalg import cholesky, svd, eigh
 
 from jax._src import config
 from jax._src import core
+from jax._src import dispatch
 from jax._src import dtypes
 from jax._src import prng
 from jax._src import xla_bridge
@@ -69,11 +70,8 @@ def _isnan(x: ArrayLike) -> Array:
   return lax.ne(x, x)
 
 
-# TODO(jakevdp) Finalize batched input deprecation by setting error_on_batched=True.
-# FutureWarning Added 2024-01-17
 def _check_prng_key(name: str, key: KeyArrayLike, *,
-                    allow_batched: bool = False,
-                    error_on_batched: bool = False) -> tuple[KeyArray, bool]:
+                    allow_batched: bool = False) -> tuple[KeyArray, bool]:
   if isinstance(key, Array) and dtypes.issubdtype(key.dtype, dtypes.prng_key):
     wrapped_key = key
     wrapped = False
@@ -101,13 +99,8 @@ def _check_prng_key(name: str, key: KeyArrayLike, *,
     raise TypeError(f'unexpected PRNG key type {type(key)}')
 
   if (not allow_batched) and wrapped_key.ndim:
-    msg = (f"{name} accepts a single key, but was given a key array of "
-           f"shape {np.shape(key)} != (). Use jax.vmap for batching.")
-    if error_on_batched:
-      raise ValueError(msg)
-    else:
-      warnings.warn(msg + " In a future JAX version, this will be an error.",
-                    FutureWarning, stacklevel=3)
+    raise ValueError(f"{name} accepts a single key, but was given a key array of"
+                     f" shape {np.shape(key)} != (). Use jax.vmap for batching.")
 
   return wrapped_key, wrapped
 
@@ -244,14 +237,14 @@ def fold_in(key: KeyArrayLike, data: IntegerArray) -> KeyArray:
   """Folds in data to a PRNG key to form a new PRNG key.
 
   Args:
-    key: a PRNG key (from ``PRNGKey``, ``split``, ``fold_in``).
-    data: a 32bit integer representing data to be folded in to the key.
+    key: a PRNG key (from ``key``, ``split``, ``fold_in``).
+    data: a 32-bit integer representing data to be folded into the key.
 
   Returns:
     A new PRNG key that is a deterministic function of the inputs and is
     statistically safe for producing a stream of new pseudo-random values.
   """
-  key, wrapped = _check_prng_key("fold_in", key, error_on_batched=True)
+  key, wrapped = _check_prng_key("fold_in", key)
   if np.ndim(data):
     raise TypeError("fold_in accepts a scalar, but was given an array of"
                     f"shape {np.shape(data)} != (). Use jax.vmap for batching.")
@@ -274,14 +267,14 @@ def split(key: KeyArrayLike, num: int | tuple[int, ...] = 2) -> KeyArray:
   """Splits a PRNG key into `num` new keys by adding a leading axis.
 
   Args:
-    key: a PRNG key (from ``PRNGKey``, ``split``, ``fold_in``).
+    key: a PRNG key (from ``key``, ``split``, ``fold_in``).
     num: optional, a positive integer (or tuple of integers) indicating
       the number (or shape) of keys to produce. Defaults to 2.
 
   Returns:
     An array-like object of `num` new PRNG keys.
   """
-  typed_key, wrapped = _check_prng_key("split", key, error_on_batched=True)
+  typed_key, wrapped = _check_prng_key("split", key)
   return _return_prng_keys(wrapped, _split(typed_key, num))
 
 
@@ -394,7 +387,7 @@ def uniform(key: KeyArrayLike,
                      f"got {dtype}")
   dtype = dtypes.canonicalize_dtype(dtype)
   shape = core.as_named_shape(shape)
-  return _uniform(key, shape, dtype, minval, maxval)  # type: ignore
+  return _uniform(key, shape, dtype, minval, maxval)
 
 @partial(jit, static_argnums=(1, 2))
 def _uniform(key, shape, dtype, minval, maxval) -> Array:
@@ -410,8 +403,10 @@ def _uniform(key, shape, dtype, minval, maxval) -> Array:
   finfo = jnp.finfo(dtype)
   nbits, nmant = finfo.bits, finfo.nmant
 
-  if nbits not in (16, 32, 64):
-    raise TypeError(f"uniform only accepts 16-, 32-, or 64-bit dtypes, got {dtype}.")
+  if nbits not in (8, 16, 32, 64):
+    raise TypeError(
+        f"uniform only accepts 8-, 16-, 32-, or 64-bit dtypesgot {dtype}."
+    )
 
   rng_bits = nbits
   if nmant < 8:
@@ -539,7 +534,7 @@ def shuffle(key: KeyArrayLike, x: ArrayLike, axis: int = 0) -> Array:
          "Use jax.random.permutation with independent=True.")
   warnings.warn(msg, FutureWarning)
   key, _ = _check_prng_key("shuffle", key)
-  return _shuffle(key, x, axis)  # type: ignore
+  return _shuffle(key, x, axis)
 
 
 def permutation(key: KeyArrayLike,
@@ -623,7 +618,7 @@ def choice(key: KeyArrayLike,
       e.g., ``(m, n)``, then ``m * n`` samples are drawn.  Default is (),
       in which case a single value is returned.
     replace : boolean.  Whether the sample is with or without replacement.
-      default is True.
+      Default is True.
     p : 1-D array-like, The probabilities associated with each entry in a.
       If not given the sample assumes a uniform distribution over all
       entries in a.
@@ -707,7 +702,7 @@ def normal(key: KeyArrayLike,
                      f"got {dtype}")
   dtype = dtypes.canonicalize_dtype(dtype)
   shape = core.as_named_shape(shape)
-  return _normal(key, shape, dtype)  # type: ignore
+  return _normal(key, shape, dtype)
 
 @partial(jit, static_argnums=(1, 2))
 def _normal(key, shape, dtype) -> Array:
@@ -720,14 +715,14 @@ def _normal(key, shape, dtype) -> Array:
     _im = _normal_real(key_im, shape, real_dtype).astype(dtype)
     return (_re + 1j * _im) / sqrt2
   else:
-    return _normal_real(key, shape, dtype) # type: ignore
+    return _normal_real(key, shape, dtype)
 
 @partial(jit, static_argnums=(1, 2))
 def _normal_real(key, shape, dtype) -> Array:
   _check_shape("normal", shape)
   lo = np.nextafter(np.array(-1., dtype), np.array(0., dtype), dtype=dtype)
   hi = np.array(1., dtype)
-  u = uniform(key, shape, dtype, lo, hi)  # type: ignore[arg-type]
+  u = uniform(key, shape, dtype, lo, hi)
   return lax.mul(np.array(np.sqrt(2), dtype), lax.erf_inv(u))
 
 
@@ -779,7 +774,7 @@ def multivariate_normal(key: KeyArrayLike,
                      f"dtype, got {dtype}")
   if shape is not None:
     shape = core.canonicalize_shape(shape)
-  return _multivariate_normal(key, mean, cov, shape, dtype, method)  # type: ignore
+  return _multivariate_normal(key, mean, cov, shape, dtype, method)
 
 @partial(jit, static_argnums=(3, 4, 5))
 def _multivariate_normal(key, mean, cov, shape, dtype, method) -> Array:
@@ -854,7 +849,7 @@ def truncated_normal(key: KeyArrayLike,
   dtype = dtypes.canonicalize_dtype(dtype)
   if shape is not None:
     shape = core.as_named_shape(shape)
-  return _truncated_normal(key, lower, upper, shape, dtype)  # type: ignore
+  return _truncated_normal(key, lower, upper, shape, dtype)
 
 @partial(jit, static_argnums=(3, 4))
 def _truncated_normal(key, lower, upper, shape, dtype) -> Array:
@@ -912,7 +907,7 @@ def bernoulli(key: KeyArrayLike,
     msg = "bernoulli probability `p` must have a floating dtype, got {}."
     raise TypeError(msg.format(dtype))
   p = lax.convert_element_type(p, dtype)
-  return _bernoulli(key, p, shape)  # type: ignore
+  return _bernoulli(key, p, shape)
 
 @partial(jit, static_argnums=(2,))
 def _bernoulli(key, p, shape) -> Array:
@@ -1034,7 +1029,7 @@ def dirichlet(key: KeyArrayLike,
   The values are distributed according to the probability density function:
 
   .. math::
-     f(\{x_i\}; \{\alpha_i\}) = \propto \prod_{i=1}^k x_i^{\alpha_i - 1}
+     f(\{x_i\}; \{\alpha_i\}) \propto \prod_{i=1}^k x_i^{\alpha_i - 1}
 
   Where :math:`k` is the dimension, and :math:`\{x_i\}` satisfies
 
@@ -1233,7 +1228,7 @@ def _gamma_impl(key, a, *, log_space, use_vmap=False):
   keys = keys.flatten()
   alphas = a.flatten()
 
-  if use_vmap:
+  if use_vmap and _key_impl(key) is prng.threefry_prng_impl:
     samples = vmap(partial(_gamma_one, log_space=log_space))(keys, alphas)
   else:
     samples = lax.map(
@@ -1759,7 +1754,7 @@ def chisquare(key: KeyArrayLike,
   The values are distributed according to the probability density function:
 
   .. math::
-     f(x; \nu) \propto x^{k/2 - 1}e^{-x/2}
+     f(x; \nu) \propto x^{\nu/2 - 1}e^{-x/2}
 
   on the domain :math:`0 < x < \infty`, where :math:`\nu > 0` represents the
   degrees of freedom, given by the parameter ``df``.
@@ -1812,7 +1807,7 @@ def f(key: KeyArrayLike,
   The values are distributed according to the probability density function:
 
   .. math::
-     f(x; \nu) \propto x^{\nu_1/2 - 1}\left(1 + \frac{\nu_1}{\nu_2}x\right)^{
+     f(x; \nu_1, \nu_2) \propto x^{\nu_1/2 - 1}\left(1 + \frac{\nu_1}{\nu_2}x\right)^{
       -(\nu_1 + \nu_2) / 2}
 
   on the domain :math:`0 < x < \infty`. Here :math:`\nu_1` is the degrees of
@@ -1867,7 +1862,7 @@ def _f(key, dfnum, dfden, shape, dtype) -> Array:
 
 
 def rademacher(key: KeyArrayLike,
-               shape: Shape,
+               shape: Shape = (),
                dtype: DTypeLikeInt = int) -> Array:
   r"""Sample from a Rademacher distribution.
 
@@ -1876,11 +1871,11 @@ def rademacher(key: KeyArrayLike,
   .. math::
      f(k) = \frac{1}{2}(\delta(k - 1) + \delta(k + 1))
 
-  on the domain :math:`k \in \{-1, 1}`, where `\delta(x)` is the dirac delta function.
+  on the domain :math:`k \in \{-1, 1\}`, where :math:`\delta(x)` is the dirac delta function.
 
   Args:
     key: a PRNG key.
-    shape: The shape of the returned samples.
+    shape: The shape of the returned samples. Default ().
     dtype: The type used for samples.
 
   Returns:
@@ -2144,7 +2139,7 @@ def rayleigh(key: KeyArrayLike,
   .. math::
      f(x;\sigma) \propto xe^{-x^2/(2\sigma^2)}
 
-  on the domain :math:`-\infty < x < \infty`, and where `\sigma > 0` is the scale
+  on the domain :math:`-\infty < x < \infty`, and where :math:`\sigma > 0` is the scale
   parameter of the distribution.
 
   Args:
@@ -2361,7 +2356,6 @@ def _triangular(key, left, mode, right, shape, dtype) -> Array:
   return tri
 
 
-
 def lognormal(key: KeyArrayLike,
               sigma: RealArray = np.float32(1),
               shape: Shape | None = None,
@@ -2395,7 +2389,7 @@ def lognormal(key: KeyArrayLike,
   dtype = dtypes.canonicalize_dtype(dtype)
   if shape is not None:
     shape = core.canonicalize_shape(shape)
-  return _lognormal(key, sigma, shape, dtype)  # type: ignore
+  return _lognormal(key, sigma, shape, dtype)
 
 @partial(jit, static_argnums=(2, 3), inline=True)
 def _lognormal(key, sigma, shape, dtype) -> Array:
@@ -2611,3 +2605,28 @@ def binomial(
   if shape is not None:
     shape = core.canonicalize_shape(shape)
   return _binomial(key, n, p, shape, dtype)
+
+
+# Functions related to key reuse checking
+random_clone_p = core.Primitive("random_clone")
+dispatch.simple_impl(random_clone_p)
+random_clone_p.def_abstract_eval(lambda x: x)
+batching.defvectorized(random_clone_p)
+mlir.register_lowering(random_clone_p, lambda _, k: [k])
+
+def clone(key):
+  """Clone a key for reuse
+
+  Outside the context of key reuse checking (see :mod:`jax.experimental.key_reuse`)
+  this function operates as an identity.
+
+  Examples:
+
+    >>> import jax
+    >>> key = jax.random.key(0)
+    >>> data = jax.random.uniform(key)
+    >>> cloned_key = jax.random.clone(key)
+    >>> same_data = jax.random.uniform(cloned_key)
+    >>> assert data == same_data
+  """
+  return random_clone_p.bind(key)

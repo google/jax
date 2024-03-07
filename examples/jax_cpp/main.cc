@@ -27,10 +27,10 @@ limitations under the License.
 //
 // To load and run the HloModule,
 //
-// $ bazel build examples/jax_cpp:main --experimental_repo_remote_exec --check_visibility=false
-// $ bazel-bin/examples/jax_cpp/main
-// 2021-01-12 15:35:28.316880: I examples/jax_cpp/main.cc:65] result = (
-// f32[2,2] {
+// $ bazel build examples/jax_cpp:main --experimental_repo_remote_exec \
+//    --check_visibility=false
+// $ bazel-bin/examples/jax_cpp/main 2021-01-12
+// 15:35:28.316880: I examples/jax_cpp/main.cc:65] result = ( f32[2,2] {
 //   { 1.5, 1.5 },
 //   { 3.5, 3.5 }
 // }
@@ -40,12 +40,11 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "third_party/absl/status/statusor.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
+#include "xla/pjrt/cpu/cpu_client.h"
 #include "xla/pjrt/pjrt_client.h"
-#include "xla/pjrt/tfrt_cpu_pjrt_client.h"
-#include "xla/status.h"
-#include "xla/statusor.h"
 #include "xla/tools/hlo_module_loader.h"
 #include "tsl/platform/init_main.h"
 #include "tsl/platform/logging.h"

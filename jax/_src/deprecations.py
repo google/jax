@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dataclasses import dataclass
 from types import ModuleType
 import warnings
 
@@ -47,7 +48,7 @@ def deprecation_getattr(module, deprecations):
   def getattr(name):
     if name in deprecations:
       message, fn = deprecations[name]
-      if fn is None:
+      if fn is None:  # Is the deprecation accelerated?
         raise AttributeError(message)
       warnings.warn(message, DeprecationWarning, stacklevel=2)
       return fn
@@ -56,27 +57,56 @@ def deprecation_getattr(module, deprecations):
   return getattr
 
 
-def accelerate_module_deprecation(module: ModuleType, name: str) -> None:
-  """Accelerate the deprecation of a module-level attribute"""
+def accelerate_getattr_deprecation(module: ModuleType, name: str) -> None:
+  """Accelerate the deprecation of a module-level attribute.
+
+  Raises an AttributeError instead of a DeprecationWarning upon attribute access.
+  Used in Google-internal code to implement faster deprecation.
+  """
   message, _ = module._deprecations[name]
   module._deprecations[name] = (message, None)
 
+# The following mechanism is a separate one, for registering and
+# accelerating deprecations that are not imports (for example, deprecations
+# of a function argument).
+# Maps a globally unique string ID to a DeprecationState, which tracks whether
+# the deprecation is accelerated.
+# The intent is that non-accelerated deprecations will warn, and accelerated
+# deprecations will error.
 
-_registered_deprecations: dict[tuple[str, str], bool] = {}
+@dataclass
+class DeprecationState:
+  accelerated: bool = False
 
-
-def register(module: str, key: str) -> None:
-  _registered_deprecations[module, key] = False
-
-
-def unregister(module: str, key: str) -> None:
-  _registered_deprecations.pop((module, key))
-
-
-def accelerate(module: str, key: str) -> None:
-  assert (module, key) in _registered_deprecations
-  _registered_deprecations[module, key] = True
+_registered_deprecations: dict[str, DeprecationState] = {}
 
 
-def is_accelerated(module: str, key: str) -> bool:
-  return _registered_deprecations[module, key]
+def register(deprecation_id: str) -> None:
+  _registered_deprecations[deprecation_id] = DeprecationState()
+
+
+def unregister(deprecation_id: str) -> None:
+  if deprecation_id not in _registered_deprecations:
+    raise ValueError(f"{deprecation_id=!r} not registered.")
+  _registered_deprecations.pop(deprecation_id)
+
+
+def accelerate(deprecation_id: str) -> None:
+  if deprecation_id not in _registered_deprecations:
+    raise ValueError(f"{deprecation_id=!r} not registered.")
+  _registered_deprecations[deprecation_id].accelerated = True
+
+
+def is_accelerated(deprecation_id: str) -> bool:
+  if deprecation_id not in _registered_deprecations:
+    raise ValueError(f"{deprecation_id=!r} not registered.")
+  return _registered_deprecations[deprecation_id].accelerated
+
+
+def warn(deprecation_id: str, message: str, stacklevel: int) -> None:
+  """Warns about a deprecation, or errors if the deprecation is accelerated."""
+  if is_accelerated(deprecation_id):
+    raise ValueError(message)
+  else:
+    warnings.warn(message, category=DeprecationWarning,
+                  stacklevel=stacklevel + 1)

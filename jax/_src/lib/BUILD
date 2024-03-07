@@ -31,6 +31,7 @@ py_library_providing_imports_info(
         "__init__.py",
         "mlir/__init__.py",
         "mlir/dialects/__init__.py",
+        "mosaic_gpu.py",
         "triton.py",
     ],
     lib_rule = pytype_strict_library,

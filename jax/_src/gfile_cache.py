@@ -17,6 +17,10 @@ import os
 from jax._src import path as pathlib
 from jax._src.compilation_cache_interface import CacheInterface
 
+
+# TODO (ayx): This class will be ultimately removed after `lru_cache.py` is
+# finished. It exists because the current `lru_cache.py` does not support
+# `gs://`.
 class GFileCache(CacheInterface):
 
   def __init__(self, path: str):

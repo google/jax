@@ -33,7 +33,6 @@ from jax import numpy as jnp
 from jax import random
 from jax._src import config
 from jax._src import core
-from jax._src import deprecations
 from jax._src import dtypes
 from jax._src import test_util as jtu
 from jax import vmap
@@ -46,6 +45,9 @@ config.parse_flags_with_absl()
 
 
 PRNG_IMPLS = list(prng_internal.prngs.items())
+# Remove Pallas keys from this test, which do not run in XLA.
+PRNG_IMPLS = [
+    (name, impl) for (name, impl) in PRNG_IMPLS if "pallas" not in name]
 
 
 class OnX64(enum.Enum):
@@ -386,6 +388,22 @@ class PrngTest(jtu.JaxTestCase):
         random.key_data(random.fold_in(make_key(seed), 4)),
         np.array([2285895361,  433833334], dtype='uint32'))
 
+  @jtu.run_on_devices("gpu")
+  def test_threefry_gpu_kernel_lowering(self):
+    f = lambda key: jax.random.uniform(key, (1,))
+    with jax._src.config.threefry_gpu_kernel_lowering(False):
+      hlo_text = jax.jit(f).lower(jax.random.key(17)).as_text()
+      if jtu.is_device_rocm():
+        self.assertNotIn("hip_threefry2x32", hlo_text)
+      else:
+        self.assertNotIn("cu_threefry2x32", hlo_text)
+    with jax._src.config.threefry_gpu_kernel_lowering(True):
+      hlo_text = jax.jit(f).lower(jax.random.key(17)).as_text()
+      if jtu.is_device_rocm():
+        self.assertIn("hip_threefry2x32", hlo_text)
+      else:
+        self.assertIn("cu_threefry2x32", hlo_text)
+
   @parameterized.parameters([{'make_key': ctor} for ctor in KEY_CTORS])
   def test_random_seed_offset(self, make_key):
     k1 = make_key(17)
@@ -588,6 +606,14 @@ class KeyArrayTest(jtu.JaxTestCase):
     key = random.key(42)
     self.assertIsInstance(key, prng_internal.PRNGKeyArray)
 
+  def test_random_clone(self):
+    # Here we test value semantics and compatibility with jit/vmap
+    # key reuse semantics are tested in key_reuse_test.py
+    keys = jax.random.split(jax.random.key(0), 5)
+    self.assertKeysEqual(keys, jax.random.clone(keys))
+    self.assertKeysEqual(keys, jax.jit(jax.random.clone)(keys))
+    self.assertKeysEqual(keys, jax.vmap(jax.random.clone)(keys))
+
   def test_issubdtype(self):
     key = random.key(42)
 
@@ -669,7 +695,7 @@ class KeyArrayTest(jtu.JaxTestCase):
     self.assertKeysEqual(key, jax.jit(lambda k: k.copy())(key))
 
   # TODO(jakevdp) remove this decorator when reuse checks move to C++
-  @jax.enable_key_reuse_checks(False)
+  @jax.debug_key_reuse(False)
   def test_cpp_dispatch_normal(self):
     # Ensure we stay on the C++ dispatch path when calling a jitted
     # function with a key array as an argument.
@@ -686,7 +712,7 @@ class KeyArrayTest(jtu.JaxTestCase):
     self.assertEqual(count[0], 1)
 
   # TODO(jakevdp) remove this decorator when reuse checks move to C++
-  @jax.enable_key_reuse_checks(False)
+  @jax.debug_key_reuse(False)
   def test_cpp_dispatch_split(self):
     # Ensure we stay on the C++ dispatch path when calling a jitted
     # function with a key arrays as inputs and as outputs.
@@ -1011,12 +1037,11 @@ class KeyArrayTest(jtu.JaxTestCase):
 
     self.assertEqual(key.is_fully_addressable, key._base_array.is_fully_addressable)
     self.assertEqual(key.is_fully_replicated, key._base_array.is_fully_replicated)
-    if not deprecations.is_accelerated('jax._src.array', 'device-method'):
-      with jtu.ignore_warning(category=DeprecationWarning, message="arr.device"):
-        self.assertEqual(key.device(), key._base_array.device())
     self.assertEqual(key.devices(), key._base_array.devices())
-    self.assertEqual(key.on_device_size_in_bytes, key._base_array.on_device_size_in_bytes)
-    self.assertEqual(key.unsafe_buffer_pointer, key._base_array.unsafe_buffer_pointer)
+    self.assertEqual(key.on_device_size_in_bytes(),
+                     key._base_array.on_device_size_in_bytes())
+    self.assertEqual(key.unsafe_buffer_pointer(),
+                     key._base_array.unsafe_buffer_pointer())
     self.assertArraysEqual(key.addressable_data(0)._base_array,
                            key._base_array.addressable_data(0))
     self.assertLen(key.addressable_shards, len(key._base_array.addressable_shards))
@@ -1205,9 +1230,9 @@ class JnpWithKeyArrayTest(jtu.JaxTestCase):
     key = random.key(123)
     keys = random.split(key, 4)
 
-    newshape = (2, 2)
-    key_func = partial(jnp.reshape, newshape=newshape)
-    arr_func = partial(jnp.reshape, newshape=(*newshape, *key._impl.key_shape))
+    shape = (2, 2)
+    key_func = partial(jnp.reshape, shape=shape)
+    arr_func = partial(jnp.reshape, shape=(*shape, *key._impl.key_shape))
 
     self.check_shape(key_func, keys)
     self.check_against_reference(key_func, arr_func, keys)
@@ -1267,7 +1292,7 @@ class JnpWithKeyArrayTest(jtu.JaxTestCase):
 
     self.check_shape(key_func, keys(), key())
     self.check_shape(arr_func, keys(), key())
-    with jax.enable_key_reuse_checks(False):
+    with jax.debug_key_reuse(False):
       self.check_against_reference(key_func, arr_func, keys(), key())
 
   def test_ravel(self):
@@ -1275,7 +1300,7 @@ class JnpWithKeyArrayTest(jtu.JaxTestCase):
     keys = random.split(key, 4).reshape(2, 2)
 
     key_func = jnp.ravel
-    arr_func = partial(jnp.reshape, newshape=(4, *key._impl.key_shape))
+    arr_func = partial(jnp.reshape, shape=(4, *key._impl.key_shape))
 
     self.check_shape(key_func, keys)
     self.check_against_reference(key_func, arr_func, keys)
@@ -1312,7 +1337,7 @@ class JnpWithKeyArrayTest(jtu.JaxTestCase):
     key_func = arr_func = lambda x: x[idx]
 
     self.check_shape(key_func, keys())
-    with jax.enable_key_reuse_checks(False):
+    with jax.debug_key_reuse(False):
       self.check_against_reference(key_func, arr_func, keys())
 
   @parameterized.parameters([
@@ -1326,10 +1351,10 @@ class JnpWithKeyArrayTest(jtu.JaxTestCase):
     key_func = arr_func = lambda key: key.at[idx].get()
 
     self.check_shape(key_func, keys())
-    with jax.enable_key_reuse_checks(False):
+    with jax.debug_key_reuse(False):
       self.check_against_reference(key_func, arr_func, keys())
 
-  @jax.enable_key_reuse_checks(False)
+  @jax.debug_key_reuse(False)
   def test_equality(self):
     key = random.key(123)
     key2 = random.key(456)

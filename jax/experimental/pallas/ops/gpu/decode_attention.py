@@ -82,7 +82,7 @@ def attn_forward_kernel(
     o_next = correction[:, None] * o_prev + o_curr
     return o_next, m_next, l_next
 
-  upper_bound = pl.cdiv(k_seq_len, block_k)  # type: ignore
+  upper_bound = pl.cdiv(k_seq_len, block_k)
   # o is left unscaled; it will be scaled in the final reduction step
   o, m_i, l_i = lax.fori_loop(0, upper_bound, body, (o, m_i, l_i))
 
@@ -144,29 +144,18 @@ def attn_unbatched(
       kernel,
       grid=grid_,
       in_specs=[
-          pl.BlockSpec(lambda i, j: (i, 0), (block_h, head_dim)),
-          pl.BlockSpec(lambda i, j: (j, 0, 0), (None, k_seq_len, head_dim)),
-          pl.BlockSpec(lambda i, j: (j, 0, 0), (None, k_seq_len, head_dim)),
+          pl.BlockSpec((block_h, head_dim), lambda i, j: (i, 0)),
+          pl.BlockSpec((None, k_seq_len, head_dim), lambda i, j: (j, 0, 0)),
+          pl.BlockSpec((None, k_seq_len, head_dim), lambda i, j: (j, 0, 0)),
       ],
       out_specs=[
-          pl.BlockSpec(lambda i, j: (j, i, 0), (None, block_h, head_dim)),  # o
-          pl.BlockSpec(
-              lambda i, j: (j, i),
-              (
-                  None,
-                  block_h,
-              ),
-          ),  # l
-          pl.BlockSpec(
-              lambda i, j: (j, i),
-              (
-                  None,
-                  block_h,
-              ),
-          ),  # m
+          pl.BlockSpec((None, block_h, head_dim), lambda i, j: (j, i, 0)),  # o
+          pl.BlockSpec((None, block_h), lambda i, j: (j, i)),  # l
+          pl.BlockSpec((None, block_h), lambda i, j: (j, i)),  # m
       ],
-      num_warps=num_warps_,
-      num_stages=num_stages,
+      compiler_params=dict(
+          triton=dict(num_warps=num_warps_, num_stages=num_stages)
+      ),
       out_shape=[
           jax.ShapeDtypeStruct(shape=(k_splits, *q.shape), dtype=q.dtype),  # o
           jax.ShapeDtypeStruct(

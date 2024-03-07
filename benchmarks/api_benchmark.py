@@ -33,9 +33,7 @@ from jax.experimental import multihost_utils
 import jax.numpy as jnp
 import numpy as np
 
-from jax import config
-
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 partial = functools.partial
@@ -679,11 +677,31 @@ def host_local_array_to_global_array(state):
     multihost_utils.host_local_array_to_global_array(
         (input_data, input_data), global_mesh, (in_pspec, in_pspec))
 
+
 @google_benchmark.register
-def device_put(state):
-  x = np.array(1, np.int32)
+@google_benchmark.option.arg_names(['num_args'])
+@google_benchmark.option.args([1])
+@google_benchmark.option.args([10])
+@google_benchmark.option.args([100])
+@google_benchmark.option.args([1000])
+def device_put_from_numpy_array(state):
+  x = [np.array(1, np.int32)] * state.range(0)
   while state:
-    _ = jax.device_put(x).block_until_ready()
+    _ = jax.block_until_ready(jax.device_put(x))
+
+
+@google_benchmark.register
+@google_benchmark.option.arg_names(['num_args'])
+@google_benchmark.option.args([1])
+@google_benchmark.option.args([10])
+@google_benchmark.option.args([100])
+@google_benchmark.option.args([1000])
+def device_put_from_jax_array(state):
+  x = [np.array(1, np.int32)] * state.range(0)
+  x = jax.block_until_ready(jax.device_put(x, device=jax.devices()[0]))
+  d = jax.devices()[1]
+  while state:
+    _ = jax.block_until_ready(jax.device_put(x, device=d))
 
 
 @google_benchmark.register
@@ -856,6 +874,21 @@ def bench_make_array_from_callback_fully_replicated_sharding(state):
   while state:
     jax.make_array_from_callback(shape, s, np_arr.__getitem__)
 
+
+@google_benchmark.register
+@google_benchmark.option.unit(google_benchmark.kMillisecond)
+def bench_make_array_from_callback_sharded(state):
+  global_mesh = create_mesh((4, 2), ('x', 'y'), state)
+  input_shape = (8, 2)
+  input_data = np.arange(math.prod(input_shape)).reshape(input_shape)
+
+  def callback(index):
+    return input_data[index]
+
+  s = jax.NamedSharding(global_mesh, jax.sharding.PartitionSpec('x', 'y'))
+  while state:
+    jax.make_array_from_callback((8, 2), s, callback)
+
 @google_benchmark.register
 @google_benchmark.option.unit(google_benchmark.kMillisecond)
 def benchmark_lorentz63_cache_hits(state):
@@ -886,6 +919,24 @@ def benchmark_lorentz63_cache_hits(state):
   x = jnp.ones((8, 3))
   while state:
     jax.make_jaxpr(lambda x: training_step(x, 100, unroll=True))(x)
+
+
+@google_benchmark.register
+def jit_add_chain(state):
+  SIZE = 100
+
+  @jax.jit
+  def g(x, y):
+    return lax.add(x, y)
+
+  x = jax.random.normal(jax.random.PRNGKey(0), (2, 2))
+  while state:
+    @jax.jit
+    def f(x):
+      for i in range(SIZE):
+        x = g(x, x)
+      return x
+    f(x).block_until_ready()
 
 
 if __name__ == "__main__":

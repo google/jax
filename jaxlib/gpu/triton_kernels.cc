@@ -19,6 +19,7 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -30,7 +31,11 @@
 #include "jaxlib/gpu/triton_utils.h"
 #include "jaxlib/gpu/vendor.h"
 #include "xla/service/custom_call_status.h"
-#include "xla/stream_executor/gpu/asm_compiler.h"
+#include "tsl/platform/env.h"
+
+#ifdef JAX_GPU_CUDA
+#include "xla/stream_executor/cuda/cuda_asm_compiler.h"
+#endif
 
 #define GPU_RETURN_IF_ERROR(expr) JAX_RETURN_IF_ERROR(JAX_AS_STATUS(expr))
 
@@ -553,7 +558,7 @@ jax_triton::TritonAutotunedKernelCall AutotunedKernelCall::ToProto() const {
   // GPU_RETURN_IF_ERROR(gpuCtxPushCurrent(context));
   // absl::Cleanup ctx_restorer = [] { gpuCtxPopCurrent(nullptr); };
 
-  // Autotuning is not supported if the the stream is in graph capture mode.
+  // Autotuning is not supported if the stream is in graph capture mode.
   gpustreamCaptureStatus_t capture_status;
   GPU_RETURN_IF_ERROR(gpuStreamIsCapturing(stream, &capture_status));
   if (capture_status == GPU_STREAM_CAPTURE_STATUS_ACTIVE) {
@@ -583,7 +588,13 @@ jax_triton::TritonAutotunedKernelCall AutotunedKernelCall::ToProto() const {
   // First run a single iteration of each to config to determine how many
   // iterations to run for benchmarking.
   float best = std::numeric_limits<float>::infinity();
+  JAX_ASSIGN_OR_RETURN(gpuDevice_t device, GetStreamDevice(stream));
+  absl::flat_hash_set<Config*> configs_to_skip;
   for (Config& config : kernel_call.configs_) {
+    if (!config.kernel_call.CanLaunchOnDevice(device)) {
+      configs_to_skip.insert(&config);
+      continue;
+    }
     JAX_ASSIGN_OR_RETURN(float t,
                          Benchmark(stream, config.kernel_call, buffers, 1));
     LOG(INFO) << config.description << ", ran 1 iter in " << t << " ms";
@@ -601,9 +612,8 @@ jax_triton::TritonAutotunedKernelCall AutotunedKernelCall::ToProto() const {
   }
 
   best = std::numeric_limits<float>::infinity();
-  JAX_ASSIGN_OR_RETURN(gpuDevice_t device, GetStreamDevice(stream));
   for (Config& config : kernel_call.configs_) {
-    if (!config.kernel_call.CanLaunchOnDevice(device)) {
+    if (configs_to_skip.contains(&config)) {
       LOG(WARNING) << "Unable to launch autotune config on device: "
                    << config.description;
       continue;

@@ -1,0 +1,173 @@
+name: CI - with Numpy/Scipy nightly wheels (nightly)
+# This configures a github action that runs the JAX test suite against nightly development builds
+# of numpy and scipy, in order to catch issues with new package versions prior to their release.
+# Unlike our other CI, this is one that we expect to fail frequently, and so we don't run it against
+# every commit and PR in the repository. Rather, we run it on a schedule, and failures lead to an
+# issue being created or updated.
+# Portions of this adapted from https://github.com/pydata/xarray/blob/main/.github/workflows/upstream-dev-ci.yaml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  schedule:
+    - cron: "0 12 * * *" # Daily at 12:00 UTC
+  workflow_dispatch: # allows triggering the workflow run manually
+  pull_request:  # Automatically trigger on pull requests affecting this file
+    branches:
+      - main
+    paths:
+      - '**workflows/upstream-nightly.yml'
+
+jobs:
+  upstream-dev:
+    runs-on: ubuntu-20.04-16core
+    permissions:
+      contents: read
+      checks: write  # for upload-artifact
+    defaults:
+      run:
+        shell: bash -l {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    outputs:
+      artifacts_availability: ${{ steps.status.outputs.ARTIFACTS_AVAILABLE }}
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # ratchet:actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # ratchet:actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install JAX test requirements
+        run: |
+          pip install -r build/test-requirements.txt
+          pip install pytest-reportlog
+      - name: Install numpy & scipy development versions
+        run: |
+          pip install \
+            -i https://pypi.anaconda.org/scientific-python-nightly-wheels/simple \
+            --no-deps \
+            --pre \
+            --upgrade \
+            numpy \
+            scipy
+          python -c "import numpy; print(f'{numpy.__version__=}')"
+          python -c "import scipy; print(f'{scipy.__version__=}')"
+      - name: Install JAX
+        run: |
+          pip install .[ci]
+      - name: Run tests
+        if: success()
+        id: status
+        env:
+          JAX_NUM_GENERATED_CASES: 1
+          JAX_ENABLE_X64: true
+          JAX_ENABLE_CHECKS: true
+          JAX_SKIP_SLOW_TESTS: true
+          PY_COLORS: 1
+        run: |
+          echo "JAX_NUM_GENERATED_CASES=$JAX_NUM_GENERATED_CASES"
+          echo "JAX_ENABLE_X64=$JAX_ENABLE_X64"
+          echo "JAX_ENABLE_CHECKS=$JAX_ENABLE_CHECKS"
+          echo "JAX_SKIP_SLOW_TESTS=$JAX_SKIP_SLOW_TESTS"
+          pytest -n auto --tb=short -rf --maxfail=20 \
+              --report-log output-${{ matrix.python-version }}-log.jsonl \
+              tests \
+              || (
+                echo 'ARTIFACTS_AVAILABLE=true' >> $GITHUB_OUTPUT && false
+              )
+      - name: Upload artifacts
+        if: |
+          failure()
+          && steps.status.outcome == 'failure'
+          && github.event_name == 'schedule'
+          && github.repository == 'google/jax'
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # ratchet: actions/upload-artifact@v4
+        with:
+          name: output-${{ matrix.python-version }}-log.jsonl
+          path: output-${{ matrix.python-version }}-log.jsonl
+          retention-days: 5
+
+  report:
+    name: report
+    needs: upstream-dev
+    permissions:
+      contents: read
+      issues: write
+    if: |
+      failure()
+      && github.event_name == 'schedule'
+      && needs.upstream-dev.outputs.artifacts_availability == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # ratchet:actions/checkout@v4
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # ratchet:actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - uses: actions/download-artifact@65a9edc5881444af0b9093a5e628f2fe47ea3b2e # ratchet:actions/download-artifact@v4
+        with:
+          path: /tmp/workspace/logs
+      - name: install requirements
+        run: |
+          python -m pip install pytest
+      - name: Move all log files into a single directory
+        run: |
+          rsync -a /tmp/workspace/logs/output-*/ ./logs
+          ls -R ./logs
+          cat logs/*.jsonl > pytest-logs.txt
+          python .github/workflows/parse_logs.py pytest-logs.txt --outfile=parsed-logs.txt
+      - name: Report failures
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # ratchet:actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const parsed_logs = fs.readFileSync('parsed-logs.txt', 'utf8');
+            const title = "⚠️ Nightly upstream-dev CI failed ⚠️"
+            const workflow_url = `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+            const issue_body = `[Workflow Run URL](${workflow_url})\n${parsed_logs}`
+            // Run GraphQL query against GitHub API to find the most recent open issue used for reporting failures
+            const query = `query($owner:String!, $name:String!, $creator:String!, $label:String!){
+              repository(owner: $owner, name: $name) {
+                issues(first: 1, states: OPEN, filterBy: {createdBy: $creator, labels: [$label]}, orderBy: {field: CREATED_AT, direction: DESC}) {
+                  edges {
+                    node {
+                      body
+                      id
+                      number
+                    }
+                  }
+                }
+              }
+            }`;
+            const variables = {
+                owner: context.repo.owner,
+                name: context.repo.repo,
+                label: 'CI',
+                creator: "github-actions[bot]"
+            }
+            const result = await github.graphql(query, variables)
+            // If no issue is open, create a new issue,
+            // else update the body of the existing issue.
+            if (result.repository.issues.edges.length === 0) {
+                github.rest.issues.create({
+                    owner: variables.owner,
+                    repo: variables.name,
+                    body: issue_body,
+                    title: title,
+                    labels: [variables.label]
+                })
+            } else {
+                github.rest.issues.update({
+                    owner: variables.owner,
+                    repo: variables.name,
+                    issue_number: result.repository.issues.edges[0].node.number,
+                    body: issue_body
+                })
+            }

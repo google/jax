@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
+from collections import Counter
 from functools import partial
 import math
-import os
 import platform
-import tempfile
-from collections import Counter
 import unittest
 from unittest import mock
 from unittest import SkipTest
@@ -34,10 +34,12 @@ from jax._src import compiler
 from jax._src import config
 from jax._src import distributed
 from jax._src import monitoring
+from jax._src import path as pathlib
 from jax._src import test_util as jtu
 from jax._src import xla_bridge
+from jax._src.compilation_cache_interface import CacheInterface
 from jax._src.lib import xla_client
-from jax.experimental.maps import xmap
+from jax._src.maps import xmap
 from jax.experimental.pjit import pjit
 from jax.sharding import PartitionSpec as P
 import numpy as np
@@ -61,270 +63,266 @@ def increment_event_count(event):
   _counts[event] += 1
 
 
+class InMemoryCache(CacheInterface):
+    """An in-memory cache for testing purposes."""
+
+    # not used, but required by `CacheInterface`
+    _path = pathlib.Path()
+
+    def __init__(self):
+        self._cache: dict[str, bytes] = {}
+
+    def get(self, key: str) -> bytes | None:
+        return self._cache.get(key)
+
+    def put(self, key: str, value: bytes) -> None:
+        self._cache[key] = value
+
+    def clear(self) -> None:
+        self._cache.clear()
+
+    def __len__(self) -> int:
+        return len(self._cache)
+
+
+def count_cache_items() -> int:
+  return 0 if cc._cache is None else len(cc._cache)
+
+
+def clear_cache() -> None:
+  if cc._cache is not None:
+    cc._cache.clear()
+
+
+class CompilationCacheTestCase(jtu.JaxTestCase):
+
+  def setUp(self):
+    super().setUp()
+    cc.reset_cache()
+    cc._cache = InMemoryCache()
+
+  def tearDown(self):
+    cc.reset_cache()
+    super().tearDown()
+
+
 @jtu.with_config(
     jax_enable_compilation_cache=True,
     jax_raise_persistent_cache_errors=True,
     jax_persistent_cache_min_compile_time_secs=0,
     jax_persistent_cache_min_entry_size_bytes=0,
 )
-class CompilationCacheTest(jtu.JaxTestCase):
-
+class CompilationCacheTest(CompilationCacheTestCase):
   def setUp(self):
     super().setUp()
-    # TODO(b/323256224): Add back support for CPU together with extra fields in
-    # a cache key with underlying hardware features.
-    supported_platforms = ["tpu", "gpu"]
+    supported_platforms = ["tpu", "gpu", "cpu"]
 
     if not jtu.test_device_matches(supported_platforms):
       raise SkipTest(
           "serialize executable only works on " + ",".join(supported_platforms)
       )
 
-    cc.reset_cache()
-
-  def tearDown(self):
-    cc.reset_cache()
-    super().tearDown()
-
   def test_get_no_executable(self):
-    with tempfile.TemporaryDirectory() as tmpdir:
-      cc.set_cache_dir(tmpdir)
-      computation = jax.jit(lambda x, y: x + y).lower(1, 1).compiler_ir()
-      devices = np.array([[jax.local_devices()[0]]])
-      compile_options = compiler.get_compile_options(
-          num_replicas=1, num_partitions=1
-      )
-      backend = xla_bridge.get_backend()
-      key = cc.get_cache_key(computation, devices, compile_options, backend)
-      executable, compile_time = cc.get_executable_and_time(
-          key, compile_options, backend)
-      self.assertIsNone(executable)
-      self.assertIsNone(compile_time)
+    computation = jax.jit(lambda x, y: x + y).lower(1, 1).compiler_ir()
+    devices = np.array([[jax.local_devices()[0]]])
+    compile_options = compiler.get_compile_options(
+        num_replicas=1, num_partitions=1
+    )
+    backend = xla_bridge.get_backend()
+    key = cc.get_cache_key(computation, devices, compile_options, backend)
+    executable, compile_time = cc.get_executable_and_time(
+        key, compile_options, backend)
+    self.assertIsNone(executable)
+    self.assertIsNone(compile_time)
 
   def test_diff_executables(self):
-    with tempfile.TemporaryDirectory() as tmpdir:
-      cc.set_cache_dir(tmpdir)
-      computation1 = str(jax.jit(lambda x, y: x + y).lower(1, 1).compiler_ir())
-      computation2 = str(jax.jit(lambda x, y: x * y).lower(2, 2).compiler_ir())
-      compile_options = compiler.get_compile_options(
-          num_replicas=1, num_partitions=1
-      )
-      backend = xla_bridge.get_backend()
-      executable1 = backend.compile(computation1, compile_options)
-      executable2 = backend.compile(computation2, compile_options)
-      cc.put_executable_and_time(
-          "key1", "computation1", executable1, backend, FAKE_COMPILE_TIME)
-      cc.put_executable_and_time(
-          "key2", "computation2", executable2, backend, FAKE_COMPILE_TIME)
-      self.assertNotEqual(
-          cc.get_executable_and_time("key1", compile_options, backend)[0],
-          cc.get_executable_and_time("key2", compile_options, backend)[0]
-      )
+    computation1 = str(jax.jit(lambda x, y: x + y).lower(1, 1).compiler_ir())
+    computation2 = str(jax.jit(lambda x, y: x * y).lower(2, 2).compiler_ir())
+    compile_options = compiler.get_compile_options(
+        num_replicas=1, num_partitions=1
+    )
+    backend = xla_bridge.get_backend()
+    executable1 = backend.compile(computation1, compile_options)
+    executable2 = backend.compile(computation2, compile_options)
+    cc.put_executable_and_time(
+        "key1", "computation1", executable1, backend, FAKE_COMPILE_TIME)
+    cc.put_executable_and_time(
+        "key2", "computation2", executable2, backend, FAKE_COMPILE_TIME)
+    self.assertNotEqual(
+        cc.get_executable_and_time("key1", compile_options, backend)[0],
+        cc.get_executable_and_time("key2", compile_options, backend)[0]
+    )
 
   def test_put_executable(self):
-    with tempfile.TemporaryDirectory() as tmpdir:
-      cc.set_cache_dir(tmpdir)
-      computation = (
-          jax.jit(lambda x, y: x + y)
-          .lower(np.int32(1), np.int32(1))
-          .compiler_ir()
-      )
-      devices = np.array([[jax.local_devices()[0]]])
-      compile_options = compiler.get_compile_options(
-          num_replicas=1, num_partitions=1
-      )
-      backend = xla_bridge.get_backend()
-      executable = backend.compile(str(computation), compile_options)
-      key = cc.get_cache_key(computation, devices, compile_options, backend)
-      cc.put_executable_and_time(
-          key, "alambda", executable, backend, FAKE_COMPILE_TIME)
-      executable_retrieved, compile_time_retrieved = cc.get_executable_and_time(
-          key, compile_options, backend)
-      inputs_to_executable = (
-          np.array(1, dtype=np.int32),
-          np.array(2, dtype=np.int32),
-      )
-      expected = xla_client.execute_with_python_values(
-          executable, inputs_to_executable, backend
-      )
-      actual = xla_client.execute_with_python_values(
-          executable_retrieved, inputs_to_executable, backend
-      )
-      self.assertEqual(expected, actual)
-      self.assertEqual(FAKE_COMPILE_TIME, compile_time_retrieved)
+    computation = (
+        jax.jit(lambda x, y: x + y)
+        .lower(np.int32(1), np.int32(1))
+        .compiler_ir()
+    )
+    devices = np.array([[jax.local_devices()[0]]])
+    compile_options = compiler.get_compile_options(
+        num_replicas=1, num_partitions=1
+    )
+    backend = xla_bridge.get_backend()
+    executable = backend.compile(str(computation), compile_options)
+    key = cc.get_cache_key(computation, devices, compile_options, backend)
+    cc.put_executable_and_time(
+        key, "alambda", executable, backend, FAKE_COMPILE_TIME)
+    executable_retrieved, compile_time_retrieved = cc.get_executable_and_time(
+        key, compile_options, backend)
+    inputs_to_executable = (
+        np.array(1, dtype=np.int32),
+        np.array(2, dtype=np.int32),
+    )
+    expected = xla_client.execute_with_python_values(
+        executable, inputs_to_executable, backend
+    )
+    actual = xla_client.execute_with_python_values(
+        executable_retrieved, inputs_to_executable, backend
+    )
+    self.assertEqual(expected, actual)
+    self.assertEqual(FAKE_COMPILE_TIME, compile_time_retrieved)
 
   def test_pmap(self):
-    with tempfile.TemporaryDirectory() as tmpdir:
-      cc.set_cache_dir(tmpdir)
-      f = pmap(lambda x: x - lax.psum(x, "i"), axis_name="i")
-      x = np.arange(jax.device_count(), dtype=np.int64)
-      f(x)
-      files_in_directory = len(os.listdir(tmpdir))
-      self.assertEqual(files_in_directory, 1)
-      x = np.arange(jax.device_count(), dtype=np.float32)
-      f(x)
-      files_in_directory = len(os.listdir(tmpdir))
-      self.assertEqual(files_in_directory, 2)
-      # TODO: create a test for calling pmap with the same input more than once
+    f = pmap(lambda x: x - lax.psum(x, "i"), axis_name="i")
+    x = np.arange(jax.device_count(), dtype=np.int64)
+    f(x)
+    self.assertEqual(count_cache_items(), 1)
+    x = np.arange(jax.device_count(), dtype=np.float32)
+    f(x)
+    self.assertEqual(count_cache_items(), 2)
+    # TODO: create a test for calling pmap with the same input more than once
 
   def test_jit(self):
-    with tempfile.TemporaryDirectory() as tmpdir:
-      cc.set_cache_dir(tmpdir)
-      f = jit(lambda x: x * x)
-      f(1)
-      files_in_directory = len(os.listdir(tmpdir))
-      self.assertEqual(files_in_directory, 1)
-      f(1.0)
-      files_in_directory = len(os.listdir(tmpdir))
-      self.assertEqual(files_in_directory, 2)
+    f = jit(lambda x: x * x)
+    f(1)
+    self.assertEqual(count_cache_items(), 1)
+    f(1.0)
+    self.assertEqual(count_cache_items(), 2)
 
   def test_xla_autofdo_profile_version(self):
     original_profile_version = config.jax_xla_profile_version.value
-    with (tempfile.TemporaryDirectory() as tmpdir,
-          config.jax_xla_profile_version(original_profile_version + 1)):
-      cc.set_cache_dir(tmpdir)
+    with config.jax_xla_profile_version(original_profile_version + 1):
       f = jit(lambda x: x * x)
       f(1)
-      files_in_cache_directory = os.listdir(tmpdir)
-      self.assertLen(files_in_cache_directory, 1)
+      self.assertEqual(count_cache_items(), 1)
       # Clear the cache directory, then update the profile version and execute
       # again. The in-memory caches should be invalidated and a new persistent
       # cache entry created.
-      os.unlink(os.path.join(tmpdir, files_in_cache_directory[0]))
+      clear_cache()
       with config.jax_xla_profile_version(original_profile_version + 2):
         f(1)
-        files_in_directory = len(os.listdir(tmpdir))
-        self.assertEqual(files_in_directory, 1)
+        self.assertEqual(count_cache_items(), 1)
 
   @jtu.with_mesh([("x", 2)])
   def test_pjit(self):
-    with tempfile.TemporaryDirectory() as tmpdir:
-      cc.set_cache_dir(tmpdir)
+    @partial(pjit, in_shardings=(P("x"), P("x")), out_shardings=None)
+    def f(x, y):
+      return x + y
 
-      @partial(pjit, in_shardings=(P("x"), P("x")), out_shardings=None)
-      def f(x, y):
-        return x + y
-
-      shape = (8, 8)
-      x = np.arange(math.prod(shape), dtype=np.int64).reshape(shape)
-      f(x, x + 1)
-      files_in_directory = len(os.listdir(tmpdir))
-      self.assertEqual(files_in_directory, 1)
-      x = np.arange(math.prod(shape), dtype=np.float32).reshape(shape)
-      f(x, x + 1)
-      files_in_directory = len(os.listdir(tmpdir))
-      self.assertEqual(files_in_directory, 2)
+    shape = (8, 8)
+    x = np.arange(math.prod(shape), dtype=np.int64).reshape(shape)
+    f(x, x + 1)
+    self.assertEqual(count_cache_items(), 1)
+    x = np.arange(math.prod(shape), dtype=np.float32).reshape(shape)
+    f(x, x + 1)
+    self.assertEqual(count_cache_items(), 2)
 
   @jtu.with_mesh([("x", 2)])
   def test_xmap(self):
-    with tempfile.TemporaryDirectory() as tmpdir:
-      cc.set_cache_dir(tmpdir)
+    def f(x):
+      return x * 2
 
-      def f(x):
-        return x * 2
-
-      devices = np.array(jax.local_devices()[:2])
-      if devices.size < 2:
-        raise SkipTest("Test requires 2 devices")
-      x = np.arange(8, dtype=np.int64).reshape((2, 2, 2))
-      xmap(
-          f, in_axes=["a", ...], out_axes=["a", ...], axis_resources={"a": "x"}
-      )(x)
-      files_in_directory = len(os.listdir(tmpdir))
-      self.assertEqual(files_in_directory, 1)
-      x = np.arange(8, dtype=np.float32).reshape((2, 2, 2))
-      xmap(
-          f, in_axes=["a", ...], out_axes=["a", ...], axis_resources={"a": "x"}
-      )(x)
-      files_in_directory = len(os.listdir(tmpdir))
-      self.assertEqual(files_in_directory, 2)
+    devices = np.array(jax.local_devices()[:2])
+    if devices.size < 2:
+      raise SkipTest("Test requires 2 devices")
+    x = np.arange(8, dtype=np.int64).reshape((2, 2, 2))
+    xmap(
+        f, in_axes=["a", ...], out_axes=["a", ...], axis_resources={"a": "x"}
+    )(x)
+    self.assertEqual(count_cache_items(), 1)
+    x = np.arange(8, dtype=np.float32).reshape((2, 2, 2))
+    xmap(
+        f, in_axes=["a", ...], out_axes=["a", ...], axis_resources={"a": "x"}
+    )(x)
+    self.assertEqual(count_cache_items(), 2)
 
   def test_cache_write_warning(self):
-    with tempfile.TemporaryDirectory() as tmpdir:
-      cc.set_cache_dir(tmpdir)
-      f = jit(lambda x: x * x)
+    f = jit(lambda x: x * x)
 
-      with (
-        config.raise_persistent_cache_errors(False),
-        mock.patch.object(cc._get_cache().__class__, "put") as mock_put,
-        warnings.catch_warnings(record=True) as w,
-      ):
-        mock_put.side_effect = RuntimeError("test error")
-        self.assertEqual(f(2), 4)
-        self.assertLen(w, 1)
-        self.assertIn(
-            (
-                "Error writing persistent compilation cache entry "
-                "for 'jit__lambda_': RuntimeError: test error"
-            ),
-            str(w[0].message),
-        )
+    backend = xla_bridge.get_backend()
+    with (
+      config.raise_persistent_cache_errors(False),
+      mock.patch.object(cc._get_cache(backend).__class__, "put") as mock_put,
+      warnings.catch_warnings(record=True) as w,
+    ):
+      mock_put.side_effect = RuntimeError("test error")
+      self.assertEqual(f(2).item(), 4)
+      if len(w) != 1:
+        print("Warnings:", [str(w_) for w_ in w], flush=True)
+      self.assertLen(w, 1)
+      self.assertIn(
+          (
+              "Error writing persistent compilation cache entry "
+              "for 'jit__lambda_': RuntimeError: test error"
+          ),
+          str(w[0].message),
+      )
 
   def test_cache_read_warning(self):
-    with tempfile.TemporaryDirectory() as tmpdir:
-      cc.set_cache_dir(tmpdir)
-      f = jit(lambda x: x * x)
+    f = jit(lambda x: x * x)
 
-      with (
-        config.raise_persistent_cache_errors(False),
-        mock.patch.object(cc._get_cache().__class__, "get") as mock_get,
-        warnings.catch_warnings(record=True) as w,
-      ):
-        mock_get.side_effect = RuntimeError("test error")
-        self.assertEqual(f(2), 4)
-        if len(w) > 1:
-          print("Warnings:", [str(w_) for w_ in w], flush=True)
-        self.assertLen(w, 1)
-        self.assertIn(
-            (
-                "Error reading persistent compilation cache entry "
-                "for 'jit__lambda_': RuntimeError: test error"
-            ),
-            str(w[0].message),
-        )
+    backend = xla_bridge.get_backend()
+    with (
+      config.raise_persistent_cache_errors(False),
+      mock.patch.object(cc._get_cache(backend).__class__, "get") as mock_get,
+      warnings.catch_warnings(record=True) as w,
+    ):
+      mock_get.side_effect = RuntimeError("test error")
+      # Calling assertEqual with the jitted f will generate two PJIT
+      # executables: Equal and the lambda function itself.
+      self.assertEqual(f(2).item(), 4)
+      if len(w) != 1:
+        print("Warnings:", [str(w_) for w_ in w], flush=True)
+      self.assertLen(w, 1)
+      self.assertIn(
+          (
+              "Error reading persistent compilation cache entry "
+              "for 'jit__lambda_': RuntimeError: test error"
+          ),
+          str(w[0].message),
+      )
 
   def test_min_entry_size(self):
     with (
-      tempfile.TemporaryDirectory() as tmpdir,
       config.persistent_cache_min_compile_time_secs(0),
       config.persistent_cache_min_entry_size_bytes(1048576),  # 1MiB
     ):
-      cc.set_cache_dir(tmpdir)
-
       jit(lambda x: x + 1)(1)
-      files_in_cache = len(os.listdir(tmpdir))
-      self.assertEqual(files_in_cache, 0)
+      self.assertEqual(count_cache_items(), 0)
 
   def test_min_compile_time(self):
     with (
-      tempfile.TemporaryDirectory() as tmpdir,
       config.persistent_cache_min_compile_time_secs(2),
       config.persistent_cache_min_entry_size_bytes(0),
     ):
-      cc.set_cache_dir(tmpdir)
-
       # Mock time to progress in small intervals so compilation time is small.
       with mock.patch("time.monotonic", side_effect=np.arange(0, 10, 0.1)):
         jit(lambda x: x + 1)(1)
-        files_in_cache = len(os.listdir(tmpdir))
-        self.assertEqual(files_in_cache, 0)
+        self.assertEqual(count_cache_items(), 0)
 
       # Mock time to progress in large intervals so compilation time is large.
       with mock.patch("time.monotonic", side_effect=np.arange(0, 100, 10)):
         jit(lambda x: x + 2)(1)
-        files_in_cache = len(os.listdir(tmpdir))
-        self.assertEqual(files_in_cache, 1)
+        self.assertEqual(count_cache_items(), 1)
 
   # This is perhaps related to mocking time.monotonic?
   @unittest.skipIf(platform.system() == "Windows", "Test fails on Windows")
   def test_cache_saving_metric(self):
     with (
-      tempfile.TemporaryDirectory() as tmpdir,
       config.persistent_cache_min_compile_time_secs(2),
       config.persistent_cache_min_entry_size_bytes(0),
     ):
-      cc.set_cache_dir(tmpdir)
-
       durations = Counter()  # Map metric name to time duration.
       def append_metric_duration(metric, duration):
         durations[metric] += duration
@@ -354,29 +352,24 @@ class CompilationCacheTest(jtu.JaxTestCase):
             durations["/jax/compilation_cache/compile_time_saved_sec"], 0)
 
   def test_task_using_cache_metric(self):
-    with tempfile.TemporaryDirectory() as tmpdir:
-      cc.set_cache_dir(tmpdir)
-      count_before_first_use = _counts[
-          "/jax/compilation_cache/tasks_using_cache"]
-      jit(lambda x: x + 1)(1)
-      count_after_first_use = _counts[
-          "/jax/compilation_cache/tasks_using_cache"]
-      self.assertEqual(count_after_first_use, count_before_first_use + 1)
+    count_before_first_use = _counts[
+        "/jax/compilation_cache/tasks_using_cache"]
+    jit(lambda x: x + 1)(1)
+    count_after_first_use = _counts[
+        "/jax/compilation_cache/tasks_using_cache"]
+    self.assertEqual(count_after_first_use, count_before_first_use + 1)
 
-      # Verify that the count is incremented only once per task.
-      jit(lambda x: x + 3)(3)
-      count_after_second_use = _counts[
-          "/jax/compilation_cache/tasks_using_cache"]
-      self.assertEqual(count_after_second_use, count_after_first_use)
+    # Verify that the count is incremented only once per task.
+    jit(lambda x: x + 3)(3)
+    count_after_second_use = _counts[
+        "/jax/compilation_cache/tasks_using_cache"]
+    self.assertEqual(count_after_second_use, count_after_first_use)
 
   def test_compile_requests_use_cache_metric(self):
     previous_counts = Counter(_counts)
-    with tempfile.TemporaryDirectory() as tmpdir:
-      cc.set_cache_dir(tmpdir)
-
-      jit(lambda x: x + 1)(1)
-      jit(lambda x: x + 2)(1)
-      jit(lambda x: x + 1)(1)
+    jit(lambda x: x + 1)(1)
+    jit(lambda x: x + 2)(1)
+    jit(lambda x: x + 1)(1)
 
     self.assertEqual(
         _counts["/jax/compilation_cache/compile_requests_use_cache"]
@@ -387,12 +380,9 @@ class CompilationCacheTest(jtu.JaxTestCase):
   def test_cache_misses_metric(self, min_entry_size):
     previous_counts = Counter(_counts)
     with (
-      tempfile.TemporaryDirectory() as tmpdir,
       config.persistent_cache_min_compile_time_secs(2),
       config.persistent_cache_min_entry_size_bytes(min_entry_size),
     ):
-      cc.set_cache_dir(tmpdir)
-
       # Mock time to create a long compilation time and make cache misses.
       with mock.patch("time.monotonic", side_effect=np.arange(0, 100, 10)):
         jit(lambda x: x + 1)(1)
@@ -412,12 +402,9 @@ class CompilationCacheTest(jtu.JaxTestCase):
   def test_cache_hits_metric(self):
     previous_counts = Counter(_counts)
     with (
-      tempfile.TemporaryDirectory() as tmpdir,
       config.persistent_cache_min_compile_time_secs(2),
       config.persistent_cache_min_entry_size_bytes(0),
     ):
-      cc.set_cache_dir(tmpdir)
-
       # Mock time to create a long compilation time, cache saved.
       with mock.patch("time.monotonic", side_effect=np.arange(0, 100, 10)):
         jit(lambda x: x + 1)(1)
@@ -431,20 +418,31 @@ class CompilationCacheTest(jtu.JaxTestCase):
   @parameterized.parameters(0, 1)
   def test_cache_write_with_process_restriction(self, process_id):
     with (
-      tempfile.TemporaryDirectory() as tmpdir,
       config.persistent_cache_min_compile_time_secs(0),
       config.persistent_cache_min_entry_size_bytes(0),
       mock.patch.object(distributed.global_state, "process_id", process_id),
     ):
-      cc.set_cache_dir(tmpdir)
-
       jit(lambda x: x + 1)(1)
 
-      files_in_directory = len(os.listdir(tmpdir))
+      files_in_directory = count_cache_items()
       if process_id == 0:
         self.assertEqual(files_in_directory, 1)
       elif process_id == 1:
         self.assertEqual(files_in_directory, 0)
+
+  def test_backend_serialization_deserialization(self):
+    backend = xla_bridge.get_backend()
+    executable = (
+        jax.jit(lambda x, y: x + y)
+        .lower(np.array(1.), np.array(1.))
+        .compile()
+        .runtime_executable()
+    )
+    serialized_executable = backend.serialize_executable(executable)
+    deserialized_executable = backend.deserialize_executable(
+        serialized_executable, None)
+    self.assertEqual(
+        executable.fingerprint, deserialized_executable.fingerprint)
 
 
 @jtu.with_config(
@@ -452,17 +450,7 @@ class CompilationCacheTest(jtu.JaxTestCase):
     jax_persistent_cache_min_compile_time_secs=0,
     jax_persistent_cache_min_entry_size_bytes=0,
 )
-class CompilationCacheDisabledTest(jtu.JaxTestCase):
-
-  def setUp(self):
-    super().setUp()
-
-    cc.reset_cache()
-
-  def tearDown(self):
-    cc.reset_cache()
-    super().tearDown()
-
+class CompilationCacheDisabledTest(CompilationCacheTestCase):
   # If the cache is disabled, there should be no files in the cache directory.
   # A call to set_cache_dir() does not affect this.
   def test_jit(self):
@@ -471,15 +459,10 @@ class CompilationCacheDisabledTest(jtu.JaxTestCase):
     # 2. Flag is enabled by JaxTestCase for some test configs
     #    (see test_util.py).
     # We need the flag disabled for this test, so disable it below.
-    with (
-        tempfile.TemporaryDirectory() as tmpdir,
-        config.enable_compilation_cache(False),
-    ):
-      cc.set_cache_dir(tmpdir)
+    with config.enable_compilation_cache(False):
       f = jit(lambda x: x * x)
       f(1)
-      files_in_directory = len(os.listdir(tmpdir))
-      self.assertEqual(files_in_directory, 0)
+      self.assertEqual(count_cache_items(), 0)
 
 
 if __name__ == "__main__":

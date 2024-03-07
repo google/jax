@@ -14,12 +14,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 import inspect
 import operator
-from functools import partial
-from typing import Any, Callable, Type
-import warnings
+from functools import partial, lru_cache
+from typing import Any
 
 import numpy as np
 
@@ -28,14 +27,14 @@ from jax._src import dtypes
 from jax._src.abstract_arrays import numpy_scalar_types
 from jax._src.core import ShapedArray
 from jax._src.tree_util import (
-    PyTreeDef, tree_flatten, tree_unflatten, tree_map, tree_structure,
+    PyTreeDef, tree_flatten, tree_unflatten, tree_map,
     treedef_children, generate_key_paths, keystr, broadcast_prefix,
     prefix_errors)
 from jax._src.tree_util import _replace_nones
 from jax._src import linear_util as lu
 from jax._src.linear_util import TracingDebugInfo
 from jax._src.util import (safe_map, WrapKwArgs, Hashable, HashableFunction,
-                           Unhashable)
+                           Unhashable, safe_zip)
 from jax._src import traceback_util
 traceback_util.register_exclusion(__file__)
 
@@ -151,7 +150,7 @@ _POSITIONAL_ARGUMENTS = (
   inspect.Parameter.POSITIONAL_OR_KEYWORD
 )
 
-def validate_argnums(sig: inspect.Signature, argnums: tuple[int, ...], argnums_name: str) -> None:
+def _validate_argnums(sig: inspect.Signature, argnums: tuple[int, ...], argnums_name: str) -> None:
   """
   Validate that the argnums are sensible for a given function.
 
@@ -168,24 +167,22 @@ def validate_argnums(sig: inspect.Signature, argnums: tuple[int, ...], argnums_n
       return
 
   if argnums and (-min(argnums) > n_pos_args or max(argnums) >= n_pos_args):
-    # raise ValueError(f"Jitted function has {argnums_name}={argnums}, "
-    #                  f"but only accepts {n_pos_args} positional arguments.")
-    # TODO: 2022-08-20 or later: replace with error
-    warnings.warn(f"Jitted function has {argnums_name}={argnums}, "
-                  f"but only accepts {n_pos_args} positional arguments. "
-                  "This warning will be replaced by an error after 2022-08-20 "
-                  "at the earliest.", SyntaxWarning)
+    raise ValueError(f"Jitted function has {argnums_name}={argnums}, "
+                     f"but only accepts {n_pos_args} positional arguments.")
 
 _INVALID_KEYWORD_ARGUMENTS = (
   inspect.Parameter.POSITIONAL_ONLY,
   inspect.Parameter.VAR_POSITIONAL
 )
 
+
 _KEYWORD_ARGUMENTS = (
   inspect.Parameter.POSITIONAL_OR_KEYWORD,
   inspect.Parameter.KEYWORD_ONLY,
 )
-def validate_argnames(sig: inspect.Signature, argnames: tuple[str, ...], argnames_name: str) -> None:
+def _validate_argnames(
+    sig: inspect.Signature, argnames: tuple[str, ...], argnames_name: str
+) -> None:
   """
   Validate that the argnames are sensible for a given function.
 
@@ -206,33 +203,19 @@ def validate_argnames(sig: inspect.Signature, argnames: tuple[str, ...], argname
     elif param.kind in _INVALID_KEYWORD_ARGUMENTS:
       invalid_kwargs.add(param_name)
 
-
   # Check whether any kwargs are invalid due to position only
-  invalid_argnames = invalid_kwargs & set(argnames)
-  if invalid_argnames:
-    # raise ValueError(f"Jitted function has invalid argnames {invalid_argnames} "
-    #                  f"in {argnames_name}. These are positional-only")
-    # TODO: 2022-08-20 or later: replace with error
-    warnings.warn(f"Jitted function has invalid argnames {invalid_argnames} "
-                  f"in {argnames_name}. These are positional-only. "
-                  "This warning will be replaced by an error after 2022-08-20 "
-                  "at the earliest.", SyntaxWarning)
+  if invalid_argnames := (invalid_kwargs & set(argnames)):
+    raise ValueError(f"Jitted function has invalid argnames {invalid_argnames} "
+                     f"in {argnames_name}. These are positional-only")
 
   # Takes any kwargs
   if var_kwargs:
     return
 
   # Check that all argnames exist on function
-  invalid_argnames = set(argnames) - valid_kwargs
-  if invalid_argnames:
-    # TODO: 2022-08-20 or later: replace with error
-    # raise ValueError(f"Jitted function has invalid argnames {invalid_argnames} "
-    #                  f"in {argnames_name}. Function does not take these args.")
-    warnings.warn(f"Jitted function has invalid argnames {invalid_argnames} "
-                  f"in {argnames_name}. Function does not take these args."
-                  "This warning will be replaced by an error after 2022-08-20 "
-                  "at the earliest.", SyntaxWarning)
-
+  if invalid_argnames := (set(argnames) - valid_kwargs):
+    raise ValueError(f"Jitted function has invalid argnames {invalid_argnames} "
+                     f"in {argnames_name}. Function does not take these args.")
 
 
 def argnums_partial(f, dyn_argnums, args, require_static_args_hashable=True):
@@ -290,7 +273,7 @@ def argnums_partial_except(f: lu.WrappedFun, static_argnums: tuple[int, ...],
           f"to unexpected cache-misses. Static argument (index {i}) of type "
           f"{type(static_arg)} for function {f.__name__} is non-hashable.")
     else:
-      fixed_args.append(_HashableWithStrictTypeEquality(static_arg))  # type: ignore
+      fixed_args.append(_HashableWithStrictTypeEquality(static_arg))
 
   return _argnums_partial(f, dyn_argnums, tuple(fixed_args)), dyn_args
 
@@ -324,7 +307,7 @@ def argnames_partial_except(f: lu.WrappedFun, static_argnames: tuple[str, ...],
             f"to unexpected cache-misses. Static argument (name {k}) of type "
             f"{type(arg)} for function {f.__name__} is non-hashable.")
       else:
-        fixed_kwargs[k] = Hashable(arg)  # type: ignore
+        fixed_kwargs[k] = Hashable(arg)
 
   return _argnames_partial(f, WrapKwArgs(fixed_kwargs)), dyn_kwargs
 
@@ -335,7 +318,9 @@ def _argnames_partial(fixed_kwargs: WrapKwArgs, *args, **dyn_kwargs):
   yield ans
 
 
-def donation_vector(donate_argnums, donate_argnames, args, kwargs) -> tuple[bool, ...]:
+@lru_cache(maxsize=4096)
+def donation_vector(donate_argnums, donate_argnames, in_tree,
+                    kws: bool = True) -> tuple[bool, ...]:
   """Returns a tuple with a boolean value for each leaf in args and kwargs.
 
   What if a user specifies donate_argnums but calls the function with kwargs
@@ -349,12 +334,17 @@ def donation_vector(donate_argnums, donate_argnames, args, kwargs) -> tuple[bool
   kwargs specified are donated.
   """
   res: list[bool] = []
-  for i, arg in enumerate(args):
+  if kws:
+    args_tree, kwargs_tree = treedef_children(in_tree)
+  else:
+    args_tree, kwargs_tree = in_tree, None
+  for i, arg in enumerate(args_tree.children()):
     donate = bool(i in donate_argnums)
-    res.extend((donate,) * tree_structure(arg).num_leaves)
-  for key, val in kwargs.items():
-    donate = key in donate_argnames
-    res.extend((donate,) * tree_structure(val).num_leaves)
+    res.extend((donate,) * arg.num_leaves)
+  if kwargs_tree is not None:
+    for key, val in safe_zip(kwargs_tree.node_data()[1], kwargs_tree.children()):  # type: ignore
+      donate = key in donate_argnames
+      res.extend((donate,) * val.num_leaves)
   return tuple(res)
 
 def rebase_donate_argnums(donate_argnums, static_argnums) -> tuple[int, ...]:
@@ -506,11 +496,23 @@ def infer_argnums_and_argnames(
 
 
 def resolve_argnums(
-    fun, donate_argnums, donate_argnames, static_argnums, static_argnames
+    fun: Callable,
+    signature: inspect.Signature | None,
+    donate_argnums: int | Sequence[int] | None,
+    donate_argnames: str | Iterable[str] | None,
+    static_argnums: int | Sequence[int] | None,
+    static_argnames: str | Iterable[str] | None,
 ) -> tuple[tuple[int, ...], tuple[str, ...], tuple[int, ...], tuple[str, ...]]:
-  try:
-    sig = inspect.signature(fun)
-  except ValueError as e:
+  """Validates and completes the argnum/argname specification for a jit.
+
+  * fills in any missing pieces (e.g., names given numbers, or vice versa),
+  * validates the argument names/numbers against the function signature,
+  * validates that donated and static arguments don't intersect.
+  * rebases the donated arguments so they index into the dynamic arguments,
+    (after static arguments have been removed), in the order that parameters
+    are passed into the compiled function.
+  """
+  if signature is None:
     # Some built-in functions don't support signature.
     # See: https://github.com/python/cpython/issues/73485
     # In this case no validation is done
@@ -522,7 +524,7 @@ def resolve_argnums(
         donate_argnums)
     if donate_argnames is not None:
       raise ValueError(f"Getting the signature of function {fun} failed. "
-                       "Pass donate_argnums instead of donate_argnames.") from e
+                       "Pass donate_argnums instead of donate_argnames.")
     assert donate_argnames is None
     donate_argnames = ()
   else:
@@ -530,23 +532,23 @@ def resolve_argnums(
     # If nums is None and names is not None, then nums are inferred from the
     # names and vice-versa.
     static_argnums, static_argnames = infer_argnums_and_argnames(
-        sig, static_argnums, static_argnames)
+        signature, static_argnums, static_argnames)
     donate_argnums, donate_argnames = infer_argnums_and_argnames(
-        sig, donate_argnums, donate_argnames)
+        signature, donate_argnums, donate_argnames)
 
     # Validation
-    validate_argnums(sig, static_argnums, "static_argnums")
-    validate_argnames(sig, static_argnames, "static_argnames")
-    validate_argnums(sig, donate_argnums, "donate_argnums")
-    validate_argnames(sig, donate_argnames, "donate_argnames")
+    _validate_argnums(signature, static_argnums, "static_argnums")
+    _validate_argnames(signature, static_argnames, "static_argnames")
+    _validate_argnums(signature, donate_argnums, "donate_argnums")
+    _validate_argnames(signature, donate_argnames, "donate_argnames")
 
   # Compensate for static argnums absorbing args
-  assert_no_intersection(static_argnames, donate_argnames)
+  _assert_no_intersection(static_argnames, donate_argnames)
   donate_argnums = rebase_donate_argnums(donate_argnums, static_argnums)
   return donate_argnums, donate_argnames, static_argnums, static_argnames
 
 
-def assert_no_intersection(static_argnames, donate_argnames):
+def _assert_no_intersection(static_argnames, donate_argnames):
   out = set(static_argnames).intersection(set(donate_argnames))
   if out:
     raise ValueError(
@@ -580,10 +582,9 @@ def _shaped_abstractify_slow(x):
 
 # TODO(mattjj,yashkatariya): replace xla.abstractify with this, same behavior
 def shaped_abstractify(x):
-  try:
-    return _shaped_abstractify_handlers[type(x)](x)
-  except KeyError:
-    return _shaped_abstractify_slow(x)
+  handler = _shaped_abstractify_handlers.get(type(x), None)
+  return handler(x) if handler is not None else _shaped_abstractify_slow(x)
+
 _shaped_abstractify_handlers: dict[Any, Callable[[Any], core.ShapedArray]] = {}
 
 
@@ -605,6 +606,13 @@ def _np_scalar_abstractify(x: np.generic) -> ShapedArray:
       dtypes.canonicalize_dtype(dtype, allow_extended_dtype=True))
 _shaped_abstractify_handlers.update((t, _np_scalar_abstractify)
                                     for t in numpy_scalar_types)
+
+def _python_scalar_abstractify(x: int | float | complex | bool) -> ShapedArray:
+  typ = type(x)
+  dtype = dtypes._scalar_type_to_dtype(typ, x)
+  return ShapedArray((), dtype, weak_type=typ in dtypes._weak_types)
+_shaped_abstractify_handlers.update((t, _python_scalar_abstractify)
+                                    for t in dtypes.python_scalar_dtypes)
 
 # This decorator exists to make it easier to monkey-patch APIs in JAX.
 # By default it does nothing, but it can be monkey-patched to do other things.
@@ -664,7 +672,7 @@ def result_paths(*args, **kwargs):
   yield ans, [keystr(path) for path, _ in generate_key_paths(ans)]
 
 def jaxpr_debug_info(jaxpr: core.Jaxpr, trace_debug: TracingDebugInfo | None,
-                     result_paths: tuple[str | None, ...] | None = None,
+                     result_paths: tuple[str, ...] | None = None,
                      ) -> core.Jaxpr:
   """Add debug info to jaxpr, given trace-time debug info and result paths."""
   if trace_debug is None:
@@ -705,6 +713,6 @@ class _HashableByObjectId:
   def __eq__(self, other):
     return self.val is other.val
 
-def register_class_with_attrs(t: Type) -> None:
+def register_class_with_attrs(t: type) -> None:
   _class_with_attrs.add(t)
-_class_with_attrs: set[Type] = set()
+_class_with_attrs: set[type] = set()

@@ -27,9 +27,9 @@ For example:
 >>> from jax import random
 >>> from jax.experimental.sparse import BCOO, sparsify
 
->>> mat = random.uniform(random.PRNGKey(1701), (5, 5))
+>>> mat = random.uniform(random.key(1701), (5, 5))
 >>> mat = mat.at[mat < 0.5].set(0)
->>> vec = random.uniform(random.PRNGKey(42), (5,))
+>>> vec = random.uniform(random.key(42), (5,))
 
 >>> def f(mat, vec):
 ...   return -(jnp.sin(mat) @ vec)
@@ -47,9 +47,9 @@ Array([-1.2655463 , -0.52060574, -0.14522289, -0.10817424,
        -0.15574613], dtype=float32)
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import functools
-from typing import Any, Callable, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -144,7 +144,7 @@ class SparsifyEnv:
     self._buffers = list(bufs)
 
   def _push(self, arr: Array) -> int:
-    self._buffers.append(jnp.asarray(arr))  # type: ignore
+    self._buffers.append(jnp.asarray(arr))
     return len(self._buffers) - 1
 
   def data(self, spvalue: SparsifyValue) -> Array:
@@ -772,7 +772,8 @@ sparse_rules_bcoo[lax.while_p] = _while_sparse
 
 
 def _pjit_sparse(spenv, *spvalues, jaxpr, in_shardings, out_shardings,
-                 resource_env, donated_invars, name, keep_unused, inline):
+                 in_layouts, out_layouts, resource_env, donated_invars, name,
+                 keep_unused, inline):
   if any(donated_invars):
     raise NotImplementedError("sparse xla_call with donated_invars")
 
@@ -790,12 +791,20 @@ def _pjit_sparse(spenv, *spvalues, jaxpr, in_shardings, out_shardings,
       sharding_impls.UNSPECIFIED
       for _ in range(len(sp_call_jaxpr.out_avals) - len(out_shardings))
   )
+  in_layouts = in_layouts + tuple(
+      None for _ in range(len(args_flat) - len(in_layouts))
+  )
+  out_layouts = out_layouts + tuple(
+      None for _ in range(len(sp_call_jaxpr.out_avals) - len(out_layouts))
+  )
 
   out_flat = pjit.pjit_p.bind(
       *args_flat,
       jaxpr=sp_call_jaxpr,
       in_shardings=in_shardings,
       out_shardings=out_shardings,
+      in_layouts=in_layouts,
+      out_layouts=out_layouts,
       resource_env=resource_env,
       donated_invars=donated_invars,
       name=name,
@@ -839,15 +848,14 @@ def _scan_sparse(spenv, *spvalues, jaxpr, num_consts, num_carry, **params):
 
 sparse_rules_bcoo[lax.scan_p] = _scan_sparse
 
-def _cond_sparse(spenv, pred, *operands, branches, linear, **params):
+def _cond_sparse(spenv, pred, *operands, branches, **params):
   sp_branches, treedefs = zip(*(_sparsify_jaxpr(spenv, jaxpr, *operands)
                                 for jaxpr in branches))
   _check_tree_and_avals("sparsified true_fun and false_fun output",
                         treedefs[0], sp_branches[0].out_avals,
                         treedefs[1], sp_branches[1].out_avals)
-  sp_linear = tuple(_duplicate_for_sparse_spvalues(operands, linear))
   args, _ = tree_flatten(spvalues_to_arrays(spenv, (pred, *operands)))
-  out_flat = lax.cond_p.bind(*args, branches=sp_branches, linear=sp_linear, **params)
+  out_flat = lax.cond_p.bind(*args, branches=sp_branches, **params)
   out = tree_unflatten(treedefs[0], out_flat)
   return arrays_to_spvalues(spenv, out)
 

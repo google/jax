@@ -34,8 +34,7 @@ from jax._src import test_util as jtu
 from jax.scipy import special as lsp_special
 from jax.scipy import cluster as lsp_cluster
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 scipy_version = jtu.parse_version(scipy.version.version)
 
@@ -191,6 +190,19 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
         self.assertEqual(result, 1.0)
 
   @jtu.sample_product(
+    shape=[(0,), (1,), (2,), (3,), (4,), (5,)],
+    dtype=float_dtypes,
+  )
+  def testLogSumExpWhere(self, shape, dtype):
+    rng = jtu.rand_default(self.rng())
+    x = rng(shape, dtype)
+    rng = jtu.rand_bool(self.rng())
+    mask = rng(shape, bool)
+    y_expected = osp_special.logsumexp(x[mask]) if mask.any() else -jnp.inf
+    y_actual = lsp_special.logsumexp(x, where=mask)
+    self.assertAllClose(y_expected, y_actual, check_dtypes=False)
+
+  @jtu.sample_product(
     shape=all_shapes,
     dtype=float_dtypes,
     d=[1, 2, 5],
@@ -327,8 +339,8 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
 
     def scipy_fun(z, m=l_max, n=l_max):
       # scipy only supports scalar inputs for z, so we must loop here.
-      vals, derivs = zip(*(osp_special.lpmn(m, n, zi) for zi in z))
-      return np.dstack(vals), np.dstack(derivs)
+      vals, derivs = zip(*(osp_special.lpmn(m, n, zi) for zi in z.astype('float64')))
+      return np.dstack(vals).astype(z.dtype), np.dstack(derivs).astype(z.dtype)
 
     self._CheckAgainstNumpy(scipy_fun, lax_fun, args_maker, rtol=1e-5,
                             atol=3e-3, check_dtypes=False)
@@ -348,7 +360,7 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
 
     def scipy_fun(z, m=l_max, n=l_max):
       # scipy only supports scalar inputs for z, so we must loop here.
-      vals, _ = zip(*(osp_special.lpmn(m, n, zi) for zi in z))
+      vals, _ = zip(*(osp_special.lpmn(m, n, zi) for zi in z.astype('float64')))
       a = np.dstack(vals)
 
       # apply the normalization
@@ -360,7 +372,7 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
           c1 = (4.0 * np.pi) * osp_special.factorial(l + m)
           c2 = np.sqrt(c0 / c1)
           a_normalized[m, l] = c2 * a[m, l]
-      return a_normalized
+      return a_normalized.astype(z.dtype)
 
     self._CheckAgainstNumpy(scipy_fun, lax_fun, args_maker,
                             rtol=1e-5, atol=1e-5, check_dtypes=False)

@@ -40,7 +40,6 @@ limitations under the License.
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
-#include "mlir/Support/MathExtras.h"
 #include "absl/log/check.h"
 #include "jaxlib/mosaic/dialect/tpu/tpu_dialect.h"
 #include "jaxlib/mosaic/dialect/tpu/util.h"
@@ -440,26 +439,10 @@ bool VectorLayout::hasNativeTiling(
 
 SmallVector<int64_t> VectorLayout::implicitShape(
     ArrayRef<int64_t> shape) const {
-  CHECK(!shape.empty());
-  switch (implicit_dim_) {
-    case ImplicitDim::kNone:
-      return SmallVector<int64_t>(shape);
-    case ImplicitDim::kMinor: {
-      SmallVector<int64_t> implicit_shape;
-      implicit_shape.reserve(shape.size() + 1);
-      implicit_shape.append(shape.begin(), shape.end());
-      implicit_shape.push_back(1);
-      return implicit_shape;
-    }
-    case ImplicitDim::kSecondMinor: {
-      SmallVector<int64_t> implicit_shape;
-      implicit_shape.reserve(shape.size() + 1);
-      implicit_shape.append(shape.begin(), std::prev(shape.end()));
-      implicit_shape.push_back(1);
-      implicit_shape.push_back(shape.back());
-      return implicit_shape;
-    }
-  }
+  SmallVector<int64_t> implicit_shape(shape);
+  implicit_shape.reserve(shape.size() + num_implicit_dims());
+  insertImplicit<int64_t>(implicit_shape, 1);
+  return implicit_shape;
 }
 
 SmallVector<int64_t> VectorLayout::tileArrayImplicitShape(
@@ -482,16 +465,7 @@ SmallVector<int64_t> VectorLayout::tileArrayShape(
   SmallVector<int64_t> tiles_shape =
       tileArrayImplicitShape(shape, target_shape);
   // Remove the implicit dimension --- it's always of size 1.
-  switch (implicit_dim_) {
-    case ImplicitDim::kNone:
-      break;
-    case ImplicitDim::kMinor:
-      tiles_shape.pop_back();
-      break;
-    case ImplicitDim::kSecondMinor:
-      tiles_shape.erase(tiles_shape.end() - 2);
-      break;
-  }
+  eraseImplicit(tiles_shape);
   return tiles_shape;
 }
 
@@ -502,29 +476,17 @@ std::unique_ptr<VRegDataBounds> VectorLayout::tileDataBounds(
   // TODO(apaszke): allow_replicated could have been generalized to specify
   // what action should be taken when a REPLICATED offset is encountered.
   // Right now it either disallows replication, or selects the whole dimension.
-  int64_t s, l;
-  switch (implicit_dim_) {
-    case ImplicitDim::kNone:
-      s = idxs[idxs.size() - 2];
-      l = idxs[idxs.size() - 1];
-      break;
-    case ImplicitDim::kMinor:
-      s = idxs[idxs.size() - 1];
-      l = 0;
-      break;
-    case ImplicitDim::kSecondMinor:
-      s = 0;
-      l = idxs[idxs.size() - 1];
-      break;
-  }
-
+  const std::array<int64_t, 2> tiled_idxs = getImplicitTiledDims(idxs, 0);
+  const int64_t s = tiled_idxs[0];
+  const int64_t l = tiled_idxs[1];
   const SmallVector<int64_t> tiles_implicit_shape =
       tileArrayImplicitShape(full_shape, target_shape);
-  const int64_t ns = tiles_implicit_shape[tiles_implicit_shape.size() - 2];
-  const int64_t nl = tiles_implicit_shape[tiles_implicit_shape.size() - 1];
-  const SmallVector<int64_t> implicit_shape = implicitShape(full_shape);
-  const int64_t is = implicit_shape[implicit_shape.size() - 2];
-  const int64_t il = implicit_shape[implicit_shape.size() - 1];
+  const int64_t ns = *(tiles_implicit_shape.end() - 2);
+  const int64_t nl = *(tiles_implicit_shape.end() - 1);
+  const std::array<int64_t, 2> shape_tiled_dims =
+      getImplicitTiledDims(full_shape, 1);
+  const int64_t is = shape_tiled_dims[0];
+  const int64_t il = shape_tiled_dims[1];
 
   if (!hasNaturalTopology(target_shape)) {
     if (!offsets_[0].has_value() || !offsets_[1].has_value()) {
@@ -608,30 +570,26 @@ bool VectorLayout::generalizes(
     }
   }
   if (implicit_dim_ != other.implicit_dim_) {
-    // Don't fail yet! implicit_dim might not matter for some shapes.
-    if (shape.data() == nullptr) {
-      return false;
-    }
-    // If the second-minor dimension is of size 1, then it does not matter
-    // whether we have a second minor implicit dim or not.
-    bool ok = false;
-    if (((implicit_dim_ == ImplicitDim::kSecondMinor &&
+    // Don't fail yet!
+    if (tiling_[0] == 1 && other.tiling_[0] == 1 &&
+        ((implicit_dim_ == ImplicitDim::kSecondMinor &&
           other.implicit_dim_ == ImplicitDim::kNone) ||
-         (other.implicit_dim_ == ImplicitDim::kSecondMinor &&
-          implicit_dim_ == ImplicitDim::kNone)) &&
-        shape[shape.size() - 2] == 1) {
-      ok =  true;
-    }
-    // If sufficiently many trailing dimensions are of size 1, then it does not
-    // matter if we use implicit dims to insert more.
-    int max_rank = std::max(layout_rank(), other.layout_rank());
-    CHECK_GE(max_rank, 1);
-    CHECK_LE(max_rank, 2);
-    if (*(shape.end() - 1) == 1 && (max_rank == 1 || *(shape.end() - 2) == 1)) {
-      ok = true;
-    }
-    if (!ok) {
-      return false;
+         (implicit_dim_ == ImplicitDim::kNone &&
+          other.implicit_dim_ == ImplicitDim::kSecondMinor))) {
+      // If the tiling is (1, n), we can always squeeze an implicit 2nd minor
+      // dimension without having to combine vregs.
+    } else {
+      if (shape.data() == nullptr) {
+        return false;
+      }
+      // Since we do not reorder axes, if the shapes resulting from inserting
+      // implicit dimensions are the same in the 2 minormost dimensions for both
+      // layouts, then the elements must be laid out the same way (before
+      // tiling).
+      if (getImplicitTiledDims(shape, 1) !=
+          other.getImplicitTiledDims(shape, 1)) {
+        return false;
+      }
     }
   }
   if (tiling_ != other.tiling_) {
@@ -640,11 +598,15 @@ bool VectorLayout::generalizes(
     if (shape.data() == nullptr) {
       return false;
     }
-    const SmallVector<int64_t> ishape = implicitShape(shape);
+
+    // We can assume the implicit shape is the same for both layouts. They are
+    // only allowed to be different when both tilings are equal to (1, n) (and
+    // each other), and we've checked that tilings are different above.
+    const std::array<int64_t, 2> ishape_tiled_dims =
+        getImplicitTiledDims(shape, 1);
     if (!(tiling_[1] == other.tiling_[1] && tiling_[1] == target_shape[1] &&
-          offsets_[1].value_or(0) + ishape[ishape.size() - 1] <=
-              target_shape[1] &&
-          offsets_[0].value_or(0) + ishape[ishape.size() - 2] <=
+          offsets_[1].value_or(0) + ishape_tiled_dims[1] <= target_shape[1] &&
+          offsets_[0].value_or(0) + ishape_tiled_dims[0] <=
               std::min(tiling_[0], other.tiling_[0]))) {
       return false;
     }
@@ -682,26 +644,8 @@ std::optional<VectorLayout> VectorLayout::join(const VectorLayout& l,
   if (l.bitwidth_ != r.bitwidth_ || l.tiling_ != r.tiling_) {
     return std::nullopt;
   }
-  if (l.implicit_dim_ != r.implicit_dim_) {
-    if (shape.size() < 2) {
-      return std::nullopt;
-    }
-    ImplicitDim dim;
-    if (l.implicit_dim_ == ImplicitDim::kNone) {
-      dim = r.implicit_dim_;
-    } else if (r.implicit_dim_ == ImplicitDim::kNone) {
-      dim = l.implicit_dim_;
-    } else {
-      return std::nullopt;
-    }
-    if (dim == ImplicitDim::kMinor && shape[shape.size() - 1] == 1) {
-      // OK, they are equivalent.
-    } else if (dim == ImplicitDim::kSecondMinor &&
-               shape[shape.size() - 2] == 1) {
-      // OK, they are equivalent.
-    } else {
-      return std::nullopt;
-    }
+  if (l.getImplicitTiledDims(shape, 1) != r.getImplicitTiledDims(shape, 1)) {
+    return std::nullopt;
   }
   LayoutOffsets offsets;
   for (int i = 0; i < 2; ++i) {

@@ -581,7 +581,7 @@ class UnexpectedTracerError(JAXTypeError):
     code by including information about each stage. Respectively:
 
       1. The name of the transformed function (``side_effecting``) and which
-         transform kicked of the trace  :func:`~jax.jit`).
+         transform kicked off the trace  :func:`~jax.jit`).
       2. A reconstructed stack trace of where the leaked Tracer was created,
          which includes where the transformed function was called.
          (``When the Tracer was created, the final 5 stack frames were...``).
@@ -589,7 +589,7 @@ class UnexpectedTracerError(JAXTypeError):
          the leaked Tracer.
       4. The leak location is not included in the error message because it is
          difficult to pin down! JAX can only tell you what the leaked value
-         looks like (what shape is has and where it was created) and what
+         looks like (what shape it has and where it was created) and what
          boundary it was leaked over (the name of the transformation and the
          name of the transformed function).
       5. The current error's stack trace points to where the value is used.
@@ -655,3 +655,29 @@ class UnexpectedTracerError(JAXTypeError):
 
   def __init__(self, msg: str):
     super().__init__(msg)
+
+
+@export
+class KeyReuseError(JAXTypeError):
+  """
+  This error occurs when a PRNG key is reused in an unsafe manner.
+  Key reuse is checked only when `jax_debug_key_reuse` is
+  set to `True`.
+
+  Here is a simple example of code that would lead to such an error::
+
+    >>> with jax.debug_key_reuse(True):  # doctest: +SKIP
+    ...   key = jax.random.key(0)
+    ...   value = jax.random.uniform(key)
+    ...   new_value = jax.random.uniform(key)
+    ...
+    ---------------------------------------------------------------------------
+    KeyReuseError                             Traceback (most recent call last)
+    ...
+    KeyReuseError: Previously-consumed key passed to jit-compiled function at index 0
+
+  This sort of key reuse is problematic because the JAX PRNG is stateless, and keys
+  must be manually split; For more information on this see `Sharp Bits: Random Numbers
+  <https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html#random-numbers>`_.
+  """
+  pass

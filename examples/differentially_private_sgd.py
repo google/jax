@@ -182,7 +182,7 @@ def main(_):
   num_train = train_images.shape[0]
   num_complete_batches, leftover = divmod(num_train, _BATCH_SIZE.value)
   num_batches = num_complete_batches + bool(leftover)
-  key = random.PRNGKey(_SEED.value)
+  key = random.key(_SEED.value)
 
   def data_stream():
     rng = npr.RandomState(_SEED.value)

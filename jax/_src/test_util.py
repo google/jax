@@ -11,72 +11,73 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# pyformat: disable
 from __future__ import annotations
 
-from collections.abc import Generator, Iterable, Sequence
-from contextlib import contextmanager, ExitStack
+import collections
+from collections.abc import Callable, Generator, Iterable, Sequence
+from contextlib import ExitStack, contextmanager
 import datetime
-import inspect
-import io
 import functools
 from functools import partial
+import inspect
 import math
-import re
 import os
+import re
+import sys
 import tempfile
 import textwrap
-from typing import Any, Callable
+from typing import Any
 import unittest
 import warnings
 import zlib
 
 from absl.testing import absltest
 from absl.testing import parameterized
-
-import numpy as np
-import numpy.random as npr
-
 import jax
 from jax import lax
-from jax.experimental.compilation_cache import compilation_cache
-from jax._src.interpreters import mlir
-from jax.tree_util import tree_map, tree_all, tree_flatten, tree_unflatten
 from jax._src import api
-from jax._src import pjit as pjit_lib
 from jax._src import config
 from jax._src import core
 from jax._src import dispatch
-from jax._src import linear_util as lu
 from jax._src import dtypes as _dtypes
+from jax._src import linear_util as lu
 from jax._src import monitoring
+from jax._src import pjit as pjit_lib
 from jax._src import stages
-from jax._src.lib import xla_client as xc
+from jax._src import xla_bridge
 from jax._src.cloud_tpu_init import running_in_cloud_tpu_vm
+from jax._src.interpreters import mlir
 from jax._src.interpreters import pxla
+from jax._src.lib import xla_client as xc
 from jax._src.numpy.util import promote_dtypes, promote_dtypes_inexact
-from jax._src.util import unzip2
 from jax._src.public_test_util import (  # noqa: F401
     _assert_numpy_allclose, _check_dtypes_match, _default_tolerance, _dtype, check_close, check_grads,
-    check_jvp, check_vjp, default_gradient_tolerance, default_tolerance, tolerance)
-from jax._src import xla_bridge
+    check_jvp, check_vjp, default_gradient_tolerance, default_tolerance, rand_like, tolerance)
+from jax._src.util import unzip2
+from jax.experimental.compilation_cache import compilation_cache
+from jax.tree_util import tree_all, tree_flatten, tree_map, tree_unflatten
+import numpy as np
+import numpy.random as npr
 
 
 # This submodule includes private test utilities that are not exported to
 # jax.test_util. Functionality appearing here is for internal use only, and
 # may be changed or removed at any time and without any deprecation cycle.
 
-_TEST_DUT = config.DEFINE_string(
+_TEST_DUT = config.string_flag(
     'jax_test_dut', '',
     help=
     'Describes the device under test in case special consideration is required.'
 )
 
-NUM_GENERATED_CASES = config.DEFINE_integer(
+NUM_GENERATED_CASES = config.int_flag(
   'jax_num_generated_cases',
   int(os.getenv('JAX_NUM_GENERATED_CASES', '10')),
   help='Number of generated cases to test')
 
-_MAX_CASES_SAMPLING_RETRIES = config.DEFINE_integer(
+_MAX_CASES_SAMPLING_RETRIES = config.int_flag(
   'max_cases_sampling_retries',
   int(os.getenv('JAX_MAX_CASES_SAMPLING_RETRIES', '100')),
   'Number of times a failed test sample should be retried. '
@@ -84,23 +85,23 @@ _MAX_CASES_SAMPLING_RETRIES = config.DEFINE_integer(
   'sampling process is terminated.'
 )
 
-_SKIP_SLOW_TESTS = config.DEFINE_bool(
+_SKIP_SLOW_TESTS = config.bool_flag(
     'jax_skip_slow_tests',
     config.bool_env('JAX_SKIP_SLOW_TESTS', False),
     help='Skip tests marked as slow (> 5 sec).'
 )
 
-_TEST_TARGETS = config.DEFINE_string(
+_TEST_TARGETS = config.string_flag(
   'test_targets', os.getenv('JAX_TEST_TARGETS', ''),
   'Regular expression specifying which tests to run, called via re.search on '
   'the test name. If empty or unspecified, run all tests.'
 )
-_EXCLUDE_TEST_TARGETS = config.DEFINE_string(
+_EXCLUDE_TEST_TARGETS = config.string_flag(
   'exclude_test_targets', os.getenv('JAX_EXCLUDE_TEST_TARGETS', ''),
   'Regular expression specifying which tests NOT to run, called via re.search '
   'on the test name. If empty or unspecified, run all tests.'
 )
-TEST_WITH_PERSISTENT_COMPILATION_CACHE = config.DEFINE_bool(
+TEST_WITH_PERSISTENT_COMPILATION_CACHE = config.bool_flag(
     'jax_test_with_persistent_compilation_cache',
     config.bool_env('JAX_TEST_WITH_PERSISTENT_COMPILATION_CACHE', False),
     help='If enabled, the persistent compilation cache will be enabled for all '
@@ -179,12 +180,39 @@ def check_eq(xs, ys, err_msg=''):
   tree_all(tree_map(assert_close, xs, ys))
 
 
+# TODO(yashkatariya): Make this context manager check for deprecation message
+# in OSS.
 @contextmanager
-def capture_stdout() -> Generator[Callable[[], str], None, None]:
-  with unittest.mock.patch('sys.stdout', new_callable=io.StringIO) as fp:
-    def _read() -> str:
-      return fp.getvalue()
-    yield _read
+def unaccelerate_getattr_deprecation(module, name):
+  message, prev_attr = module._deprecations[name]
+  module._deprecations[name] = (message, getattr(module, f"_deprecated_{name}"))
+  try:
+    yield
+  finally:
+    module._deprecations[name] = (message, prev_attr)
+
+@contextmanager
+def capture_stdout() -> Generator[Callable[[], str | None], None, None]:
+  """Context manager to capture all stdout output."""
+
+  # The encoding should also work on windows, the default doesn't necessarily.
+  with tempfile.NamedTemporaryFile(mode="w+", delete=True, encoding='utf-8') as f:
+    original_stdout = os.dup(sys.stdout.fileno())
+    os.dup2(f.fileno(), sys.stdout.fileno())
+
+    # if get_stdout returns not it means we are not done capturing
+    # stdout. it should only be used after the context has exited.
+    captured = None
+    get_stdout: Callable[[], str | None] = lambda: captured
+
+    try:
+      yield get_stdout
+    finally:
+      # Python also has its own buffers, make sure everything is flushed.
+      sys.stdout.flush()
+      f.seek(0)
+      captured = f.read()
+      os.dup2(original_stdout, sys.stdout.fileno())
 
 
 @contextmanager
@@ -228,18 +256,18 @@ def count_primitive_compiles():
 
 @contextmanager
 def count_device_put_fast_path_hit():
-  original_fn = xc.copy_array_to_devices_with_sharding
+  original_fn = xc.batched_copy_array_to_devices_with_sharding
   count = [0]
 
-  def copy_array_to_devices_with_sharding_and_count(*args, **kwargs):
+  def batched_copy_array_to_devices_with_sharding_and_count(*args, **kwargs):
     count[0] += 1
     return original_fn(*args, **kwargs)
 
-  xc.copy_array_to_devices_with_sharding = copy_array_to_devices_with_sharding_and_count
+  xc.batched_copy_array_to_devices_with_sharding = batched_copy_array_to_devices_with_sharding_and_count
   try:
     yield count
   finally:
-    xc.copy_array_to_devices_with_sharding = original_fn
+    xc.batched_copy_array_to_devices_with_sharding = original_fn
 
 
 @contextmanager
@@ -257,6 +285,20 @@ def count_pjit_cpp_cache_miss():
   finally:
     pjit_lib._pjit_lower = original_pjit_lower
 
+@contextmanager
+def count_cached_compilation_cache_miss():
+  original_cached_compilation = pxla._cached_compilation
+  count = [0]
+
+  def cached_compilation_and_count(*args, **kwargs):
+    count[0] += 1
+    return original_cached_compilation(*args, **kwargs)
+
+  pxla._cached_compilation = cached_compilation_and_count
+  try:
+    yield count
+  finally:
+    pxla._cached_compilation = original_cached_compilation
 
 @contextmanager
 def count_jit_tracing_cache_miss():
@@ -273,6 +315,21 @@ def count_jit_tracing_cache_miss():
     yield count
   finally:
     pjit_lib._create_pjit_jaxpr = original_create_pjit_jaxpr
+
+@contextmanager
+def count_jit_infer_params_cache_miss():
+  original_infer_params_impl = pjit_lib._infer_params_impl
+  count = collections.defaultdict(int)
+
+  def infer_params_impl_and_count(fun, *args, **kw):
+    count[fun] += 1
+    return original_infer_params_impl(fun, *args, **kw)
+
+  pjit_lib._infer_params_impl = infer_params_impl_and_count
+  try:
+    yield count
+  finally:
+    pjit_lib._infer_params_impl = original_infer_params_impl
 
 
 @contextmanager
@@ -346,9 +403,8 @@ def supported_dtypes():
   if device_under_test() == "tpu":
     types = {np.bool_, np.int8, np.int16, np.int32, np.uint8, np.uint16,
              np.uint32, _dtypes.bfloat16, np.float16, np.float32, np.complex64}
-  elif device_under_test() == "iree":
-    types = {np.bool_, np.int8, np.int16, np.int32, np.uint8, np.uint16,
-             np.uint32, np.float32}
+  elif device_under_test() == "METAL":
+    types = {np.int32, np.uint32, np.float32}
   else:
     types = {np.bool_, np.int8, np.int16, np.int32, np.int64,
              np.uint8, np.uint16, np.uint32, np.uint64,
@@ -359,7 +415,7 @@ def supported_dtypes():
   return types
 
 def is_device_rocm():
-  return xla_bridge.get_backend().platform_version.startswith('rocm')
+  return 'rocm' in xla_bridge.get_backend().platform_version
 
 def is_device_cuda():
   return 'cuda' in xla_bridge.get_backend().platform_version
@@ -417,12 +473,20 @@ def is_device_tpu(version: int | None = None, variant: str = "") -> bool:
     return "v5 lite" in device_kind
   return expected_version in device_kind
 
+def is_cuda_compute_capability_at_least(capability: str) -> bool:
+  if not is_device_cuda():
+    return False
+  d, *_ = jax.local_devices(backend="gpu")
+  return d.compute_capability >= capability
+
 def _get_device_tags():
   """returns a set of tags defined for the device under test"""
   if is_device_rocm():
     device_tags = {device_under_test(), "rocm"}
   elif is_device_cuda():
     device_tags = {device_under_test(), "cuda"}
+  elif device_under_test() == "METAL":
+    device_tags = {device_under_test(), "gpu"}
   else:
     device_tags = {device_under_test()}
   return device_tags
@@ -469,8 +533,13 @@ def device_supports_buffer_donation():
   )
 
 
+@contextmanager
 def set_host_platform_device_count(nr_devices: int):
-  """Returns a closure that undoes the operation."""
+  """Context manager to set host platform device count if not specified by user.
+
+  This should only be used by tests at the top level in setUpModule(); it will
+  not work correctly if applied to individual test cases.
+  """
   prev_xla_flags = os.getenv("XLA_FLAGS")
   flags_str = prev_xla_flags or ""
   # Don't override user-specified device count, or other XLA flags.
@@ -479,13 +548,14 @@ def set_host_platform_device_count(nr_devices: int):
                                f" --xla_force_host_platform_device_count={nr_devices}")
   # Clear any cached backends so new CPU backend will pick up the env var.
   xla_bridge.get_backend.cache_clear()
-  def undo():
+  try:
+    yield
+  finally:
     if prev_xla_flags is None:
       del os.environ["XLA_FLAGS"]
     else:
       os.environ["XLA_FLAGS"] = prev_xla_flags
     xla_bridge.get_backend.cache_clear()
-  return undo
 
 
 def skip_on_flag(flag_name, skip_value):
@@ -512,6 +582,18 @@ def pytest_mark_if_available(marker: str):
       return func_or_class
     return getattr(pytest.mark, marker)(func_or_class)
   return wrap
+
+
+def is_running_under_pytest():
+  return "pytest" in sys.modules
+
+
+def skip_under_pytest(reason: str):
+  """A decorator for test methods to skip the test when run under pytest."""
+  reason = "Running under pytest: " + reason
+  def skip(test_method):
+    return unittest.skipIf(is_running_under_pytest(), reason)(test_method)
+  return skip
 
 
 def format_test_name_suffix(opname, shapes, dtypes):
@@ -976,6 +1058,38 @@ def promote_like_jnp(fun, inexact=False):
     return fun(*args, **kw)
   return wrapper
 
+@contextmanager
+def global_config_context(**kwds):
+  original_config = {}
+  try:
+    for key, value in kwds.items():
+      original_config[key] = config._read(key)
+      config.update(key, value)
+    yield
+  finally:
+    for key, value in original_config.items():
+      config.update(key, value)
+
+
+class NotPresent:
+  def __repr__(self):
+    return "<not present>"
+
+
+@contextmanager
+def assert_global_configs_unchanged():
+  starting_config = jax.config.values.copy()
+  yield
+  ending_config = jax.config.values
+
+  if starting_config == ending_config:
+    return
+  differing = {k: (starting_config.get(k, NotPresent()), ending_config.get(k, NotPresent()))
+                for k in (starting_config.keys() | ending_config.keys())
+                if (k not in starting_config or k not in ending_config
+                    or starting_config[k] != ending_config[k])}
+  raise AssertionError(f"Test changed global config values. Differing values are: {differing}")
+
 
 class JaxTestCase(parameterized.TestCase):
   """Base class for JAX tests including numerical checks and boilerplate."""
@@ -996,26 +1110,20 @@ class JaxTestCase(parameterized.TestCase):
 
   def setUp(self):
     super().setUp()
-    self._original_config = {}
-    for key, value in self._default_config.items():
-      self._original_config[key] = config._read(key)
-      config.update(key, value)
+    self.enter_context(assert_global_configs_unchanged())
 
     # We use the adler32 hash for two reasons.
     # a) it is deterministic run to run, unlike hash() which is randomized.
     # b) it returns values in int32 range, which RandomState requires.
     self._rng = npr.RandomState(zlib.adler32(self._testMethodName.encode()))
 
-  def tearDown(self):
-    for key, value in self._original_config.items():
-      config.update(key, value)
-    super().tearDown()
-
   @classmethod
   def setUpClass(cls):
+    cls._compilation_cache_exit_stack = ExitStack()
+    stack = cls._compilation_cache_exit_stack
+    stack.enter_context(global_config_context(**cls._default_config))
+
     if TEST_WITH_PERSISTENT_COMPILATION_CACHE.value:
-      cls._compilation_cache_exit_stack = ExitStack()
-      stack = cls._compilation_cache_exit_stack
       stack.enter_context(config.enable_compilation_cache(True))
       stack.enter_context(config.raise_persistent_cache_errors(True))
       stack.enter_context(config.persistent_cache_min_compile_time_secs(0))
@@ -1027,8 +1135,7 @@ class JaxTestCase(parameterized.TestCase):
 
   @classmethod
   def tearDownClass(cls):
-    if TEST_WITH_PERSISTENT_COMPILATION_CACHE.value:
-      cls._compilation_cache_exit_stack.close()
+    cls._compilation_cache_exit_stack.close()
 
   def rng(self):
     return self._rng
@@ -1285,7 +1392,8 @@ class _LazyDtypes:
 
   @_cached_property
   def all_integer(self):
-    return self.supported([np.int8, np.int16, np.int32, np.int64])
+    return self.supported([
+        _dtypes.int4, np.int8, np.int16, np.int32, np.int64])
 
   @_cached_property
   def unsigned(self):
@@ -1293,7 +1401,8 @@ class _LazyDtypes:
 
   @_cached_property
   def all_unsigned(self):
-    return self.supported([np.uint8, np.uint16, np.uint32, np.uint64])
+    return self.supported([
+        _dtypes.uint4, np.uint8, np.uint16, np.uint32, np.uint64])
 
   @_cached_property
   def complex(self):
@@ -1408,7 +1517,7 @@ def register_event_duration_listener(callback):
 def set_env(**kwargs):
   """Context manager to temporarily set/unset one or more environment variables.
 
-  Example:
+  Examples:
 
     >>> import os
     >>> os.environ['my_var'] = 'original'
@@ -1463,11 +1572,11 @@ def complex_plane_sample(dtype, size_re=10, size_im=None):
      >>> print(complex_plane_sample(np.complex64, 0, 3))
      [[-inf          -infj   0.          -infj  inf          -infj]
       [-inf-3.4028235e+38j   0.-3.4028235e+38j  inf-3.4028235e+38j]
-      [-inf-2.0000052e+00j   0.-2.0000052e+00j  inf-2.0000052e+00j]
+      [-inf-2.0000000e+00j   0.-2.0000000e+00j  inf-2.0000000e+00j]
       [-inf-1.1754944e-38j   0.-1.1754944e-38j  inf-1.1754944e-38j]
       [-inf+0.0000000e+00j   0.+0.0000000e+00j  inf+0.0000000e+00j]
       [-inf+1.1754944e-38j   0.+1.1754944e-38j  inf+1.1754944e-38j]
-      [-inf+2.0000052e+00j   0.+2.0000052e+00j  inf+2.0000052e+00j]
+      [-inf+2.0000000e+00j   0.+2.0000000e+00j  inf+2.0000000e+00j]
       [-inf+3.4028235e+38j   0.+3.4028235e+38j  inf+3.4028235e+38j]
       [-inf          +infj   0.          +infj  inf          +infj]]
 
@@ -1477,16 +1586,18 @@ def complex_plane_sample(dtype, size_re=10, size_im=None):
   finfo = np.finfo(dtype)
 
   def make_axis_points(size):
-    logmin = np.log10(abs(finfo.min))
-    logtiny = np.log10(finfo.tiny)
-    logmax = np.log10(finfo.max)
+    prec_dps_ratio = 3.3219280948873626
+    logmin = logmax = finfo.maxexp / prec_dps_ratio
+    logtiny = finfo.minexp / prec_dps_ratio
     axis_points = np.zeros(3 + 2 * size, dtype=finfo.dtype)
 
     with warnings.catch_warnings():
       # Silence RuntimeWarning: overflow encountered in cast
       warnings.simplefilter("ignore")
-      axis_points[1:size + 1] = -np.logspace(logmin, logtiny, size, dtype=finfo.dtype)
-      axis_points[-size - 1:-1] = np.logspace(logtiny, logmax, size, dtype=finfo.dtype)
+      half_neg_line = -np.logspace(logmin, logtiny, size, dtype=finfo.dtype)
+      half_line = -half_neg_line[::-1]
+      axis_points[-size - 1:-1] = half_line
+      axis_points[1:size + 1] = half_neg_line
 
     if size > 1:
       axis_points[1] = finfo.min
@@ -1508,3 +1619,392 @@ def complex_plane_sample(dtype, size_re=10, size_im=None):
   imag_part = imag_part.reshape((3 + 2 * size_im, -1)).repeat(3 + 2 * size_re, 1)
 
   return real_part + imag_part
+
+
+class vectorize_with_mpmath(np.vectorize):
+  """Same as numpy.vectorize but using mpmath backend for function evaluation.
+  """
+
+  map_float_to_complex = dict(float16='complex32', float32='complex64', float64='complex128', float128='complex256', longdouble='clongdouble')
+  map_complex_to_float = {v: k for k, v in map_float_to_complex.items()}
+
+  float_prec = dict(
+    # float16=11,
+    float32=24,
+    float64=53,
+    # float128=113,
+    # longdouble=113
+  )
+
+  float_minexp = dict(
+    float16=-14,
+    float32=-126,
+    float64=-1022,
+    float128=-16382
+  )
+
+  float_maxexp = dict(
+    float16=16,
+    float32=128,
+    float64=1024,
+    float128=16384,
+  )
+
+  def __init__(self, *args, **kwargs):
+    mpmath = kwargs.pop('mpmath', None)
+    if mpmath is None:
+      raise ValueError('vectorize_with_mpmath: no mpmath argument specified')
+    self.extra_prec_multiplier = kwargs.pop('extra_prec_multiplier', 0)
+    self.extra_prec = kwargs.pop('extra_prec', 0)
+    self.mpmath = mpmath
+    self.contexts = dict()
+    self.contexts_inv = dict()
+    for fp_format, prec in self.float_prec.items():
+      ctx = self.mpmath.mp.clone()
+      ctx.prec = prec
+      self.contexts[fp_format] = ctx
+      self.contexts_inv[ctx] = fp_format
+
+    super().__init__(*args, **kwargs)
+
+  def get_context(self, x):
+    if isinstance(x, (np.ndarray, np.floating, np.complexfloating)):
+      fp_format = str(x.dtype)
+      fp_format = self.map_complex_to_float.get(fp_format, fp_format)
+      return self.contexts[fp_format]
+    raise NotImplementedError(f'get mpmath context from {type(x).__name__} instance')
+
+  def nptomp(self, x):
+    """Convert numpy array/scalar to an array/instance of mpmath number type.
+    """
+    if isinstance(x, np.ndarray):
+      return np.fromiter(map(self.nptomp, x.flatten()), dtype=object).reshape(x.shape)
+    elif isinstance(x, np.floating):
+      mpmath = self.mpmath
+      ctx = self.get_context(x)
+      prec, rounding = ctx._prec_rounding
+      if np.isposinf(x):
+        return ctx.make_mpf(mpmath.libmp.finf)
+      elif np.isneginf(x):
+        return ctx.make_mpf(mpmath.libmp.fninf)
+      elif np.isnan(x):
+        return ctx.make_mpf(mpmath.libmp.fnan)
+      elif np.isfinite(x):
+        mantissa, exponent = np.frexp(x)
+        man = int(np.ldexp(mantissa, prec))
+        exp = int(exponent - prec)
+        r = ctx.make_mpf(mpmath.libmp.from_man_exp(man, exp, prec, rounding))
+        assert ctx.isfinite(r), r._mpf_
+        return r
+    elif isinstance(x, np.complexfloating):
+      re, im = self.nptomp(x.real), self.nptomp(x.imag)
+      return re.context.make_mpc((re._mpf_, im._mpf_))
+    raise NotImplementedError(f'convert {type(x).__name__} instance to mpmath number type')
+
+  def mptonp(self, x):
+    """Convert mpmath instance to numpy array/scalar type.
+    """
+    if isinstance(x, np.ndarray) and x.dtype.kind == 'O':
+      x_flat = x.flatten()
+      item = x_flat[0]
+      ctx = item.context
+      fp_format = self.contexts_inv[ctx]
+      if isinstance(item, ctx.mpc):
+        dtype = getattr(np, self.map_float_to_complex[fp_format])
+      elif isinstance(item, ctx.mpf):
+        dtype = getattr(np, fp_format)
+      else:
+        dtype = None
+      if dtype is not None:
+        return np.fromiter(map(self.mptonp, x_flat), dtype=dtype).reshape(x.shape)
+    elif isinstance(x, self.mpmath.ctx_mp.mpnumeric):
+      ctx = x.context
+      if isinstance(x, ctx.mpc):
+        fp_format = self.contexts_inv[ctx]
+        dtype = getattr(np, self.map_float_to_complex[fp_format])
+        r = dtype().reshape(1).view(getattr(np, fp_format))
+        r[0] = self.mptonp(x.real)
+        r[1] = self.mptonp(x.imag)
+        return r.view(dtype)[0]
+      elif isinstance(x, ctx.mpf):
+        fp_format = self.contexts_inv[ctx]
+        dtype = getattr(np, fp_format)
+        if ctx.isfinite(x):
+          sign, man, exp, bc = self.mpmath.libmp.normalize(*x._mpf_, *ctx._prec_rounding)
+          assert bc >= 0, (sign, man, exp, bc, x._mpf_)
+          if exp + bc < self.float_minexp[fp_format]:
+            return -ctx.zero if sign else ctx.zero
+          if exp + bc > self.float_maxexp[fp_format]:
+            return ctx.ninf if sign else ctx.inf
+          man = dtype(-man if sign else man)
+          r = np.ldexp(man, exp)
+          assert np.isfinite(r), (x, r, x._mpf_, man)
+          return r
+        elif ctx.isnan(x):
+          return dtype(np.nan)
+        elif ctx.isinf(x):
+          return dtype(-np.inf if x._mpf_[0] else np.inf)
+    raise NotImplementedError(f'convert {type(x)} instance to numpy floating point type')
+
+  def __call__(self, *args, **kwargs):
+    mp_args = []
+    context = None
+    for a in args:
+      if isinstance(a, (np.ndarray, np.floating, np.complexfloating)):
+        mp_args.append(self.nptomp(a))
+        if context is None:
+          context = self.get_context(a)
+        else:
+          assert context is self.get_context(a)
+      else:
+        mp_args.append(a)
+
+    extra_prec = int(context.prec * self.extra_prec_multiplier) + self.extra_prec
+    with context.extraprec(extra_prec):
+      result = super().__call__(*mp_args, **kwargs)
+
+    if isinstance(result, tuple):
+      lst = []
+      for r in result:
+        if ((isinstance(r, np.ndarray) and r.dtype.kind == 'O')
+            or isinstance(r, self.mpmath.ctx_mp.mpnumeric)):
+          r = self.mptonp(r)
+        lst.append(r)
+      return tuple(lst)
+
+    if ((isinstance(result, np.ndarray) and result.dtype.kind == 'O')
+        or isinstance(result, self.mpmath.ctx_mp.mpnumeric)):
+      return self.mptonp(result)
+
+    return result
+
+
+class numpy_with_mpmath:
+  """Namespace of universal functions on numpy arrays that use mpmath
+  backend for evaluation and return numpy arrays as outputs.
+  """
+
+  _provides = [
+    'abs', 'absolute', 'sqrt', 'exp', 'expm1', 'exp2',
+    'log', 'log1p', 'log10', 'log2',
+    'sin', 'cos', 'tan', 'arcsin', 'arccos', 'arctan',
+    'sinh', 'cosh', 'tanh', 'arcsinh', 'arccosh', 'arctanh',
+    'square', 'positive', 'negative', 'conjugate', 'sign', 'sinc',
+    'normalize',
+  ]
+
+  _mp_names = dict(
+    abs='absmin', absolute='absmin',
+    log='ln',
+    arcsin='asin', arccos='acos', arctan='atan',
+    arcsinh='asinh', arccosh='acosh', arctanh='atanh',
+  )
+
+  def __init__(self, mpmath, extra_prec_multiplier=0, extra_prec=0):
+    self.mpmath = mpmath
+
+    for name in self._provides:
+      mp_name = self._mp_names.get(name, name)
+
+      if hasattr(self, name):
+        op = getattr(self, name)
+      else:
+
+        def op(x, mp_name=mp_name):
+          return getattr(x.context, mp_name)(x)
+
+      setattr(self, name, vectorize_with_mpmath(op, mpmath=mpmath, extra_prec_multiplier=extra_prec_multiplier, extra_prec=extra_prec))
+
+  # The following function methods operate on mpmath number instances.
+  # The corresponding function names must be listed in
+  # numpy_with_mpmath._provides list.
+
+  def square(self, x):
+    return x * x
+
+  def positive(self, x):
+    return x
+
+  def negative(self, x):
+    return -x
+
+  def sqrt(self, x):
+    ctx = x.context
+    if isinstance(x, ctx.mpc):
+      # Workaround mpmath 1.3 bug in sqrt(+-inf+-infj) evaluation (see mpmath/mpmath#776).
+      # TODO(pearu): remove this function when mpmath 1.4 or newer
+      # will be the required test dependency.
+      if ctx.isinf(x.imag):
+        return ctx.make_mpc((ctx.inf._mpf_, x.imag._mpf_))
+    return ctx.sqrt(x)
+
+  def expm1(self, x):
+    return x.context.expm1(x)
+
+  def log1p(self, x):
+    ctx = x.context
+    if isinstance(x, ctx.mpc):
+      # Workaround mpmath 1.3 bug in log(+-inf+-infj) evaluation (see mpmath/mpmath#774).
+      # TODO(pearu): remove this function when mpmath 1.4 or newer
+      # will be the required test dependency.
+      if ctx.isinf(x.real) and ctx.isinf(x.imag):
+        pi = ctx.pi
+        if x.real > 0 and x.imag > 0:
+          return ctx.make_mpc((x.real._mpf_, (pi / 4)._mpf_))
+        if x.real > 0 and x.imag < 0:
+          return ctx.make_mpc((x.real._mpf_, (-pi / 4)._mpf_))
+        if x.real < 0 and x.imag < 0:
+          return ctx.make_mpc(((-x.real)._mpf_, (-3 * pi / 4)._mpf_))
+        if x.real < 0 and x.imag > 0:
+          return ctx.make_mpc(((-x.real)._mpf_, (3 * pi / 4)._mpf_))
+    return ctx.log1p(x)
+
+  def tan(self, x):
+    ctx = x.context
+    if isinstance(x, ctx.mpc):
+      # Workaround mpmath 1.3 bug in tan(+-inf+-infj) evaluation (see mpmath/mpmath#781).
+      # TODO(pearu): remove this function when mpmath 1.4 or newer
+      # will be the required test dependency.
+      if ctx.isinf(x.imag) and (ctx.isinf(x.real) or ctx.isfinite(x.real)):
+        if x.imag > 0:
+          return ctx.make_mpc((ctx.zero._mpf_, ctx.one._mpf_))
+        return ctx.make_mpc((ctx.zero._mpf_, (-ctx.one)._mpf_))
+      if ctx.isinf(x.real) and ctx.isfinite(x.imag):
+        return ctx.make_mpc((ctx.nan._mpf_, ctx.nan._mpf_))
+    return ctx.tan(x)
+
+  def tanh(self, x):
+    ctx = x.context
+    if isinstance(x, ctx.mpc):
+      # Workaround mpmath 1.3 bug in tanh(+-inf+-infj) evaluation (see mpmath/mpmath#781).
+      # TODO(pearu): remove this function when mpmath 1.4 or newer
+      # will be the required test dependency.
+      if ctx.isinf(x.imag) and (ctx.isinf(x.real) or ctx.isfinite(x.real)):
+        if x.imag > 0:
+          return ctx.make_mpc((ctx.zero._mpf_, ctx.one._mpf_))
+        return ctx.make_mpc((ctx.zero._mpf_, (-ctx.one)._mpf_))
+      if ctx.isinf(x.real) and ctx.isfinite(x.imag):
+        return ctx.make_mpc((ctx.nan._mpf_, ctx.nan._mpf_))
+    return ctx.tanh(x)
+
+  def log2(self, x):
+    return x.context.ln(x) / x.context.ln2
+
+  def log10(self, x):
+    return x.context.ln(x) / x.context.ln10
+
+  def exp2(self, x):
+    return x.context.exp(x * x.context.ln2)
+
+  def arcsin(self, x):
+    ctx = x.context
+    if isinstance(x, ctx.mpc):
+      # Workaround mpmath 1.3 bug in asin(+-inf+-infj) evaluation (see
+      # mpmath/mpmath#793).
+      # TODO(pearu): remove the if-block below when mpmath 1.4 or
+      # newer will be the required test dependency.
+      pi = ctx.pi
+      inf = ctx.inf
+      zero = ctx.zero
+      if ctx.isinf(x.real):
+        sign_real = -1 if x.real < 0 else 1
+        real = sign_real * pi / (4 if ctx.isinf(x.imag) else 2)
+        imag = -inf if x.imag < 0 else inf
+        return ctx.make_mpc((real._mpf_, imag._mpf_))
+      elif ctx.isinf(x.imag):
+        return ctx.make_mpc((zero._mpf_, x.imag._mpf_))
+
+      # On branch cut, mpmath.mp.asin returns different value compared
+      # to mpmath.fp.asin and numpy.arcsin (see
+      # mpmath/mpmath#786). The following if-block ensures
+      # compatibiliy with numpy.arcsin.
+      if x.real > 1 and x.imag == 0:
+        return ctx.asin(x).conjugate()
+
+    return ctx.asin(x)
+
+  def arcsinh(self, x):
+    ctx = x.context
+
+    if isinstance(x, ctx.mpc):
+      # Workaround mpmath 1.3 bug in asinh(+-inf+-infj) evaluation
+      # (see mpmath/mpmath#749).
+      # TODO(pearu): remove the if-block below when mpmath 1.4 or
+      # newer will be the required test dependency.
+      pi = ctx.pi
+      inf = ctx.inf
+      zero = ctx.zero
+      if ctx.isinf(x.imag):
+        sign_imag = -1 if x.imag < 0 else 1
+        real = -inf if x.real < 0 else inf
+        imag = sign_imag * pi / (4 if ctx.isinf(x.real) else 2)
+        return ctx.make_mpc((real._mpf_, imag._mpf_))
+      elif ctx.isinf(x.real):
+        return ctx.make_mpc((x.real._mpf_, zero._mpf_))
+
+      # On branch cut, mpmath.mp.asinh returns different value
+      # compared to mpmath.fp.asinh and numpy.arcsinh (see
+      # mpmath/mpmath#786).  The following if-block ensures
+      # compatibiliy with numpy.arcsinh.
+      if x.real == 0 and x.imag < -1:
+        return (-ctx.asinh(x)).conjugate()
+    return ctx.asinh(x)
+
+  def normalize(self, exact, reference, value):
+    """Normalize reference and value using precision defined by the
+    difference of exact and reference.
+    """
+    def worker(ctx, s, e, r, v):
+      ss, sm, se, sbc = s._mpf_
+      es, em, ee, ebc = e._mpf_
+      rs, rm, re, rbc = r._mpf_
+      vs, vm, ve, vbc = v._mpf_
+
+      if not (ctx.isfinite(e) and ctx.isfinite(r) and ctx.isfinite(v)):
+        return r, v
+
+      me = min(se, ee, re, ve)
+
+      # transform mantissa parts to the same exponent base
+      sm_e = sm << (se - me)
+      em_e = em << (ee - me)
+      rm_e = rm << (re - me)
+      vm_e = vm << (ve - me)
+
+      # find matching higher and non-matching lower bits of e and r
+      sm_b = bin(sm_e)[2:] if sm_e else ''
+      em_b = bin(em_e)[2:] if em_e else ''
+      rm_b = bin(rm_e)[2:] if rm_e else ''
+      vm_b = bin(vm_e)[2:] if vm_e else ''
+
+      m = max(len(sm_b), len(em_b), len(rm_b), len(vm_b))
+      em_b = '0' * (m - len(em_b)) + em_b
+      rm_b = '0' * (m - len(rm_b)) + rm_b
+
+      c1 = 0
+      for b0, b1 in zip(em_b, rm_b):
+        if b0 != b1:
+          break
+        c1 += 1
+      c0 = m - c1
+
+      # truncate r and v mantissa
+      rm_m = rm_e >> c0
+      vm_m = vm_e >> c0
+
+      # normalized r and v
+      nr = ctx.make_mpf((rs, rm_m, -c1, len(bin(rm_m)) - 2)) if rm_m else (-ctx.zero if rs else ctx.zero)
+      nv = ctx.make_mpf((vs, vm_m, -c1, len(bin(vm_m)) - 2)) if vm_m else (-ctx.zero if vs else ctx.zero)
+
+      return nr, nv
+
+    ctx = exact.context
+    scale = abs(exact)
+    if isinstance(exact, ctx.mpc):
+      rr, rv = worker(ctx, scale, exact.real, reference.real, value.real)
+      ir, iv = worker(ctx, scale, exact.imag, reference.imag, value.imag)
+      return ctx.make_mpc((rr._mpf_, ir._mpf_)), ctx.make_mpc((rv._mpf_, iv._mpf_))
+    elif isinstance(exact, ctx.mpf):
+      return worker(ctx, scale, exact, reference, value)
+    else:
+      assert 0  # unreachable

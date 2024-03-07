@@ -16,19 +16,70 @@ limitations under the License.
 #ifndef JAXLIB_CPU_LAPACK_KERNELS_H_
 #define JAXLIB_CPU_LAPACK_KERNELS_H_
 
-#include <complex>
 #include <cstdint>
+#include <optional>
+#include <type_traits>
 
+#include "xla/ffi/api/ffi.h"
+#include "xla/ffi/api/c_api.h"
 #include "xla/service/custom_call_status.h"
 
-// Underlying function pointers (e.g., Trsm<double>::Fn) are initialized either
+// Underlying function pointers (i.e., KERNEL_CLASS::Fn) are initialized either
 // by the pybind wrapper that links them to an existing SciPy lapack instance,
 // or using the lapack_kernels_strong.cc static initialization to link them
 // directly to lapack for use in a pure C++ context.
 
 namespace jax {
 
-typedef int lapack_int;
+struct MatrixParams {
+  enum class Side : char { kLeft = 'L', kRight = 'R' };
+  enum class UpLo : char { kLower = 'L', kUpper = 'U' };
+  enum class Diag : char { kNonUnit = 'N', kUnit = 'U' };
+  enum class Transpose : char {
+    kNoTrans = 'N',
+    kTrans = 'T',
+    kConjTrans = 'C'
+  };
+};
+
+template <typename KernelType>
+void AssignKernelFn(void* func) {
+  KernelType::fn = reinterpret_cast<typename KernelType::FnType*>(func);
+}
+
+template <typename KernelType>
+void AssignKernelFn(typename KernelType::FnType* func) {
+  KernelType::fn = func;
+}
+
+}  // namespace jax
+
+#define DEFINE_CHAR_ENUM_ATTR_DECODING(ATTR)                             \
+  template <>                                                            \
+  struct xla::ffi::AttrDecoding<ATTR> {                                  \
+    using Type = ATTR;                                                   \
+    static std::optional<Type> Decode(XLA_FFI_AttrType type, void* attr, \
+                                      DiagnosticEngine& diagnostic);     \
+  }
+
+// XLA needs attributes to have deserialization method specified
+DEFINE_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::Side);
+DEFINE_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::UpLo);
+DEFINE_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::Transpose);
+DEFINE_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::Diag);
+
+#undef DEFINE_CHAR_ENUM_ATTR_DECODING
+
+namespace jax {
+
+using lapack_int = int;
+inline constexpr auto LapackIntDtype = ::xla::ffi::DataType::S32;
+static_assert(
+    std::is_same_v<::xla::ffi::NativeType<LapackIntDtype>, lapack_int>);
+
+//== Triangular System Solver ==//
+
+// lapack trsm
 
 template <typename T>
 struct Trsm {
@@ -40,6 +91,10 @@ struct Trsm {
   static void Kernel(void* out, void** data, XlaCustomCallStatus*);
 };
 
+//== LU Decomposition ==//
+
+// lapack getrf
+
 template <typename T>
 struct Getrf {
   using FnType = void(lapack_int* m, lapack_int* n, T* a, lapack_int* lda,
@@ -48,6 +103,25 @@ struct Getrf {
   static FnType* fn;
   static void Kernel(void* out, void** data, XlaCustomCallStatus*);
 };
+
+// FFI Kernel
+
+template <::xla::ffi::DataType dtype>
+struct LuDecomposition {
+  using ValueType = ::xla::ffi::NativeType<dtype>;
+  using FnType = void(lapack_int* m, lapack_int* n, ValueType* a,
+                      lapack_int* lda, lapack_int* ipiv, lapack_int* info);
+
+  inline static FnType* fn = nullptr;
+  static ::xla::ffi::Error Kernel(
+      ::xla::ffi::Buffer<dtype> x, ::xla::ffi::ResultBuffer<dtype> x_out,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> ipiv,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info);
+};
+
+//== QR Factorization ==//
+
+// lapack geqrf
 
 template <typename T>
 struct Geqrf {
@@ -60,6 +134,10 @@ struct Geqrf {
   static int64_t Workspace(lapack_int m, lapack_int n);
 };
 
+//== Orthogonal QR ==//
+
+// lapack orgqr
+
 template <typename T>
 struct Orgqr {
   using FnType = void(lapack_int* m, lapack_int* n, lapack_int* k, T* a,
@@ -70,6 +148,10 @@ struct Orgqr {
   static int64_t Workspace(lapack_int m, lapack_int n, lapack_int k);
 };
 
+//== Cholesky Factorization ==//
+
+// lapack potrf
+
 template <typename T>
 struct Potrf {
   using FnType = void(char* uplo, lapack_int* n, T* a, lapack_int* lda,
@@ -77,6 +159,24 @@ struct Potrf {
   static FnType* fn;
   static void Kernel(void* out, void** data, XlaCustomCallStatus*);
 };
+
+template <::xla::ffi::DataType dtype>
+struct CholeskyFactorization {
+  using ValueType = ::xla::ffi::NativeType<dtype>;
+  using FnType = void(char* uplo, lapack_int* n, ValueType* a, lapack_int* lda,
+                      lapack_int* info);
+
+  inline static FnType* fn = nullptr;
+
+  static ::xla::ffi::Error Kernel(
+      ::xla::ffi::Buffer<dtype> x, MatrixParams::UpLo uplo,
+      ::xla::ffi::ResultBuffer<dtype> x_out,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info);
+};
+
+//== Singular Value Decomposition (SVD) ==//
+
+// lapack gesdd
 
 lapack_int GesddIworkSize(int64_t m, int64_t n);
 
@@ -109,6 +209,10 @@ struct ComplexGesdd {
                            bool job_opt_full_matrices);
 };
 
+//== Eigenvalues and eigenvectors ==//
+
+// lapack syevd/heevd
+
 lapack_int SyevdWorkSize(int64_t n);
 lapack_int SyevdIworkSize(int64_t n);
 
@@ -135,6 +239,8 @@ struct ComplexHeevd {
   static void Kernel(void* out, void** data, XlaCustomCallStatus*);
 };
 
+// lapack geev
+
 template <typename T>
 struct RealGeev {
   using FnType = void(char* jobvl, char* jobvr, lapack_int* n, T* a,
@@ -154,6 +260,10 @@ struct ComplexGeev {
   static FnType* fn;
   static void Kernel(void* out, void** data, XlaCustomCallStatus*);
 };
+
+//== Schur Decomposition ==//
+
+// lapack gees
 
 template <typename T>
 struct RealGees {
@@ -176,7 +286,11 @@ struct ComplexGees {
   static void Kernel(void* out, void** data, XlaCustomCallStatus*);
 };
 
-// Gehrd: Reduces a non-symmetric square matrix to upper Hessenberg form.
+//== Hessenberg Decomposition                                       ==//
+//== Reduces a non-symmetric square matrix to upper Hessenberg form ==//
+
+// lapack gehrd
+
 template <typename T>
 struct Gehrd {
   using FnType = void(lapack_int* n, lapack_int* ilo, lapack_int* ihi, T* a,
@@ -199,14 +313,16 @@ struct real_type<std::complex<T>> {
   typedef T type;
 };
 
-// Sytrd/Hetrd: Reduces a symmetric (Hermitian) square matrix to tridiagonal
-// form.
+//== Tridiagonal Reduction                                           ==//
+//== Reduces a Symmetric/Hermitian square matrix to tridiagonal form ==//
+
+// lapack sytrd/hetrd
+
 template <typename T>
 struct Sytrd {
   using FnType = void(char* uplo, lapack_int* n, T* a, lapack_int* lda,
                       typename real_type<T>::type* d,
-                      typename real_type<T>::type* e,
-                      T* tau, T* work,
+                      typename real_type<T>::type* e, T* tau, T* work,
                       lapack_int* lwork, lapack_int* info);
 
   static FnType* fn;

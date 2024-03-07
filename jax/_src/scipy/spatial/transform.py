@@ -18,17 +18,46 @@ import functools
 import re
 import typing
 
-import scipy.spatial.transform
 
 import jax
 import jax.numpy as jnp
-from jax._src.numpy.util import implements
 
 
-@implements(scipy.spatial.transform.Rotation)
 class Rotation(typing.NamedTuple):
-  """Rotation in 3 dimensions."""
+  """Rotation in 3 dimensions.
 
+  JAX implementation of :class:`scipy.spatial.transform.Rotation`.
+
+  Examples:
+    Construct an object describing a 90 degree rotation about the z-axis:
+
+    >>> from jax.scipy.spatial.transform import Rotation
+    >>> r = Rotation.from_euler('z', 90, degrees=True)
+
+    Convert to a rotation vector:
+
+    >>> r.as_rotvec()
+    Array([0.       , 0.       , 1.5707964], dtype=float32)
+
+    Convert to rotation matrix:
+
+    >>> r.as_matrix()
+    Array([[ 0.        , -0.99999994,  0.        ],
+           [ 0.99999994,  0.        ,  0.        ],
+           [ 0.        ,  0.        ,  0.99999994]], dtype=float32)
+
+    Compose with another rotation:
+
+    >>> r2 = Rotation.from_euler('x', 90, degrees=True)
+    >>> r3 = r * r2
+    >>> r3.as_matrix()
+    Array([[0., 0., 1.],
+           [1., 0., 0.],
+           [0., 1., 0.]], dtype=float32)
+
+    See the scipy :class:`~scipy.spatial.transform.Rotation` documentation for
+    further examples of manipulating Rotation objects.
+  """
   quat: jax.Array
 
   @classmethod
@@ -86,7 +115,7 @@ class Rotation(typing.NamedTuple):
   def random(cls, random_key: jax.Array, num: int | None = None):
     """Generate uniformly distributed rotations."""
     # Need to implement scipy.stats.special_ortho_group for this to work...
-    raise NotImplementedError
+    raise NotImplementedError()
 
   def __getitem__(self, indexer):
     """Extract rotation(s) at given index(es) from object."""
@@ -169,9 +198,31 @@ class Rotation(typing.NamedTuple):
     return self.quat.ndim == 1
 
 
-@implements(scipy.spatial.transform.Slerp)
 class Slerp(typing.NamedTuple):
-  """Spherical Linear Interpolation of Rotations."""
+  """Spherical Linear Interpolation of Rotations.
+
+  JAX implementation of :class:`scipy.spatial.transform.Slerp`.
+
+  Examples:
+    Create a Slerp instance from a series of rotations:
+
+    >>> import math
+    >>> from jax.scipy.spatial.transform import Rotation, Slerp
+    >>> rots = jnp.array([[90, 0, 0],
+    ...                   [0, 45, 0],
+    ...                   [0, 0, -30]])
+    >>> key_rotations = Rotation.from_euler('zxy', rots, degrees=True)
+    >>> key_times = [0, 1, 2]
+    >>> slerp = Slerp.init(key_times, key_rotations)
+    >>> times = [0, 0.5, 1, 1.5, 2]
+    >>> interp_rots = slerp(times)
+    >>> interp_rots.as_euler('zxy')
+    Array([[ 1.5707963e+00,  0.0000000e+00,  0.0000000e+00],
+           [ 8.5309029e-01,  3.8711953e-01,  1.7768645e-01],
+           [-2.3841858e-07,  7.8539824e-01,  0.0000000e+00],
+           [-5.6668043e-02,  3.9213133e-01, -2.8347540e-01],
+           [ 0.0000000e+00,  0.0000000e+00, -5.2359891e-01]], dtype=float32)
+  """
 
   times: jnp.ndarray
   timedelta: jnp.ndarray

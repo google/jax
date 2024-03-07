@@ -12,21 +12,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License
 
-
-import scipy.stats as osp_stats
-
 from jax import lax
 import jax.numpy as jnp
 from jax._src.lax.lax import _const as _lax_const
-from jax._src.numpy.util import implements, promote_args_inexact
+from jax._src.numpy.util import promote_args_inexact
 from jax._src.scipy.special import betaln
 from jax._src.typing import Array, ArrayLike
 
 
-@implements(osp_stats.betabinom.logpmf, update_doc=False)
 def logpmf(k: ArrayLike, n: ArrayLike, a: ArrayLike, b: ArrayLike,
            loc: ArrayLike = 0) -> Array:
-  """JAX implementation of scipy.stats.betabinom.logpmf."""
+  r"""Beta-binomial log probability mass function.
+
+  JAX implementation of :obj:`scipy.stats.betabinom` ``logpmf``
+
+  The beta-binomial distribution's probability mass function is defined as
+
+  .. math::
+
+     f(k, n, a, b) = {n \choose k}\frac{B(k+a,n-k-b)}{B(a,b)}
+
+  where :math:`B(a, b)` is the :func:`~jax.scipy.special.beta` function. It is
+  defined for :math:`n\ge 0`, :math:`a>0`, :math:`b>0`, and non-negative integers `k`.
+
+  Args:
+    k: arraylike, value at which to evaluate the PMF
+    n: arraylike, distribution shape parameter
+    a: arraylike, distribution shape parameter
+    b: arraylike, distribution shape parameter
+    loc: arraylike, distribution offset parameter
+
+  Returns:
+    array of logpmf values
+
+  See Also:
+    :func:`jax.scipy.stats.betabinom.pmf`
+  """
   k, n, a, b, loc = promote_args_inexact("betabinom.logpmf", k, n, a, b, loc)
   y = lax.sub(lax.floor(k), loc)
   one = _lax_const(y, 1)
@@ -40,8 +61,32 @@ def logpmf(k: ArrayLike, n: ArrayLike, a: ArrayLike, b: ArrayLike,
   return jnp.where(n_a_b_cond, jnp.nan, log_probs)
 
 
-@implements(osp_stats.betabinom.pmf, update_doc=False)
 def pmf(k: ArrayLike, n: ArrayLike, a: ArrayLike, b: ArrayLike,
         loc: ArrayLike = 0) -> Array:
-  """JAX implementation of scipy.stats.betabinom.pmf."""
+  r"""Beta-binomial probability mass function.
+
+  JAX implementation of :obj:`scipy.stats.betabinom` ``pmf``.
+
+  The beta-binomial distribution's probability mass function is defined as
+
+  .. math::
+
+     f(k, n, a, b) = {n \choose k}\frac{B(k+a,n-k-b)}{B(a,b)}
+
+  where :math:`B(a, b)` is the :func:`~jax.scipy.special.beta` function. It is
+  defined for :math:`n\ge 0`, :math:`a>0`, :math:`b>0`, and non-negative integers `k`.
+
+  Args:
+    k: arraylike, value at which to evaluate the PMF
+    n: arraylike, distribution shape parameter
+    a: arraylike, distribution shape parameter
+    b: arraylike, distribution shape parameter
+    loc: arraylike, distribution offset parameter
+
+  Returns:
+    array of pmf values
+
+  See Also:
+    :func:`jax.scipy.stats.betabinom.logpmf`
+  """
   return lax.exp(logpmf(k, n, a, b, loc))

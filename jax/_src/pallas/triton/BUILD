@@ -17,10 +17,8 @@
 load(
     "//jaxlib:jax.bzl",
     "py_deps",
-    "py_library_providing_imports_info",
     "pytype_strict_library",
 )
-load("@rules_python//python:defs.bzl", "py_library")
 
 package(
     default_applicable_licenses = [],
@@ -29,24 +27,39 @@ package(
     ],
 )
 
-py_library_providing_imports_info(
-    name = "triton",
-    srcs = ["__init__.py"],
-    lib_rule = pytype_strict_library,
+pytype_strict_library(
+    name = "primitives",
+    srcs = ["primitives.py"],
     deps = [
         ":lowering",
-        ":pallas_call_registration",
+        "//jax",
+        "//jax:ad_util",
+        "//jax:api_util",
+        "//jax:core",
+        "//jax:mlir",
+        "//jax:partial_eval",
+        "//jax:source_info_util",
+        "//jax:util",
         "//jax/_src/lib",
-    ],
+        "//jax/_src/pallas",
+    ] + py_deps("numpy"),
 )
 
-# TODO(slebedev): Enable pytype for this target.
-py_library(
+pytype_strict_library(
     name = "lowering",
     srcs = ["lowering.py"],
     deps = [
         "//jax",
-    ],
+        "//jax:ad_util",
+        "//jax:api_util",
+        "//jax:core",
+        "//jax:mlir",
+        "//jax:partial_eval",
+        "//jax:source_info_util",
+        "//jax:util",
+        "//jax/_src/lib",
+        "//jax/_src/pallas",
+    ] + py_deps("numpy"),
 )
 
 pytype_strict_library(
@@ -60,5 +73,5 @@ pytype_strict_library(
         "//jax:util",
         "//jax/_src/lib",
         "//jax/_src/pallas",
-    ] + py_deps("jax_triton"),
+    ],
 )

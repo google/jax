@@ -5,7 +5,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.0
+    jupytext_version: 1.16.1
 kernelspec:
   display_name: Python 3
   language: python
@@ -311,7 +311,7 @@ for dtype in [np.int8, np.int16, np.int32, np.int64]:
 
 This behavior gives motivation to our `*` notation for scalar values: the `*` is reminiscent of a wildcard that can take on any desired value.
 
-The benefit of these semantics are that you can readily express sequences of operations with clean Python code, without having to explicitly cast scalars to the appropriate type. Imagine if rather than writing this:
+The benefit of these semantics is that you can readily express sequences of operations with clean Python code, without having to explicitly cast scalars to the appropriate type. Imagine if rather than writing this:
 ```python
 3 * (x + 1) ** 2
 ```
@@ -373,7 +373,7 @@ Broadly speaking, we want any additional connections to satisfy a few properties
 
 5. Wherever possible, binary promotion should avoid resulting in types that are wider than the inputs. This is to ensure that JAX's implicit promotions remain friendly to accelerator-based workflows, in which users often want to restrict types to 32-bit (or in some cases 16-bit) values.
 
-Each new connection on the lattice introduces some level of convenience to the user (a new set of types that can interact without explicit casting), but the convenience may becomes too costly if any of the above criteria are violated. Developing a full promotion lattice involves striking a balance between this convenience and this cost.
+Each new connection on the lattice introduces some level of convenience to the user (a new set of types that can interact without explicit casting), but the convenience may become too costly if any of the above criteria are violated. Developing a full promotion lattice involves striking a balance between this convenience and this cost.
 
 +++ {"id": "GSqwTTS8nYdn"}
 
@@ -457,7 +457,7 @@ Again, the connections added here are precisely the promotion semantics implemen
 
 ### How to handle `uint64`?
 
-The approached to mixed signed/unsigned integer promotion leaves out one type: `uint64`. Following the pattern above, the output of a mixed-integer operation involving `uint64` should result in `int128`, but this is not a standard available dtype.
+The approach to mixed signed/unsigned integer promotion leaves out one type: `uint64`. Following the pattern above, the output of a mixed-integer operation involving `uint64` should result in `int128`, but this is not a standard available dtype.
 
 Numpy's choice here is to promote to `float64`:
 
@@ -680,7 +680,7 @@ This is important because `f16` and `bf16` are not comparable because they utili
 However, these advantages comes with a few tradeoffs:
 
 - mixed float/integer promotion is very prone to precision loss: for example, `int64` (with a maximum value of $9.2 \times 10^{18}$) can be promoted to `float16` (with a maximum value of $6.5 \times 10^4$), meaning most representable values will become `inf`.
-- as mentioned above, `f*` can no longer be thought of as a "scalar type", but whether as a different flavor of float64. In JAX's parlance, this is referred to as a [*weak type*](https://jax.readthedocs.io/en/latest/type_promotion.html#weakly-typed-values-in-jax), in that it is represented as 64-bit, but only weakly holds to this bit width in promotion with other values.
+- as mentioned above, `f*` can no longer be thought of as a "scalar type", but as a different flavor of float64. In JAX's parlance, this is referred to as a [*weak type*](https://jax.readthedocs.io/en/latest/type_promotion.html#weakly-typed-values-in-jax), in that it is represented as 64-bit, but only weakly holds to this bit width in promotion with other values.
 
 Note that also, this approach still leaves the `uint64` promotion question unanswered, although it is perhaps reasonable to close the lattice by connecting `u64` to `f*`.
 

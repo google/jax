@@ -239,6 +239,35 @@ def dot_general(lhs, rhs, dimension_numbers):
                    dtype=dtype)
   return out.astype(dtypes.bfloat16) if lhs.dtype == dtypes.bfloat16 else out
 
+def ragged_dot(
+    lhs,
+    rhs,
+    group_sizes,
+):
+  """Reference ragged dot implementation."""
+  m, lk = lhs.shape
+  group_count, rk, n = rhs.shape
+  assert lk == rk
+  assert group_count == group_sizes.shape[0]
+  assert lhs.dtype == rhs.dtype
+
+  out = np.zeros((m, n), dtype=lhs.dtype)
+  result_iota = np.expand_dims(np.arange(out.shape[0]), list(range(1, out.ndim)))
+  start = 0
+  for i, size in enumerate(group_sizes):
+    out += np.where(
+        np.logical_and(start <= result_iota, result_iota < (start + size)),
+        np.einsum(
+          "nk,km->nm",
+          lhs,
+          rhs[i, :, :],
+          dtype=np.float32 if lhs.dtype == dtypes.bfloat16 else None,
+        ),
+        np.zeros(out.shape, dtype=out.dtype),
+    )
+    start += size
+  return out.astype(dtypes.bfloat16) if lhs.dtype == dtypes.bfloat16 else out
+
 def broadcast(operand, sizes):
   return np.broadcast_to(operand, sizes + np.shape(operand))
 

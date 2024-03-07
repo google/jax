@@ -11,9 +11,9 @@ jobs:
     strategy:
       fail-fast: false  # Don't stop all wheel builds if one has a test failure.
       matrix:
-        os: [win-2019-16core]
+        os: [windows-2019-32core]
         arch: [AMD64]
-        pyver: ['3.9', '3.10', '3.11', '3.12']
+        pyver: ['3.10', '3.11', '3.12']
     name: ${{ matrix.os }} ${{ matrix.pyver }} jaxlib wheel build
     runs-on: ${{ matrix.os }}
 
@@ -23,9 +23,12 @@ jobs:
         with:
           access_token: ${{ github.token }}
 
+      - name: Install LLVM/Clang
+        run: choco install llvm --version=18.1.4 --yes --no-progress --allow-downgrade
+
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # ratchet:actions/checkout@v4
 
-      - uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # ratchet:actions/setup-python@v5
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # ratchet:actions/setup-python@v5
         with:
           python-version: ${{ matrix.pyver }}
           cache: 'pip'
@@ -36,10 +39,14 @@ jobs:
           JAXLIB_RELEASE: true
         run: |
           python -m pip install -r build/test-requirements.txt
+          python -m pip install --upgrade numpy==2.0.0 scipy==1.13.1
           "C:\\msys64\\;C:\\msys64\\usr\\bin\\;" >> $env:GITHUB_PATH
-          python.exe build\build.py --bazel_options=--color=yes --verbose
+          python.exe build\build.py `
+            --bazel_options=--color=yes `
+            --bazel_options=--config=win_clang `
+            --verbose
 
-      - uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # ratchet: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # ratchet: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}-${{ matrix.pyver }}
           path: ${{ github.workspace }}\dist\*.whl

@@ -19,7 +19,6 @@ from unittest import SkipTest
 from absl.testing import absltest
 import jax
 from jax import lax, numpy as jnp
-from jax import config
 from jax.experimental import host_callback as hcb
 from jax._src import core
 from jax._src import xla_bridge
@@ -27,7 +26,7 @@ from jax._src.lib import xla_client
 import jax._src.test_util as jtu
 import numpy as np
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class InfeedTest(jtu.JaxTestCase):
@@ -78,7 +77,7 @@ class InfeedTest(jtu.JaxTestCase):
 
   @jax.numpy_rank_promotion("allow")  # Test explicitly exercises implicit rank promotion.
   def testInfeedThenOutfeed(self):
-    hcb.stop_outfeed_receiver()
+    hcb._deprecated_stop_outfeed_receiver()
 
     @jax.jit
     def f(x):
@@ -100,7 +99,7 @@ class InfeedTest(jtu.JaxTestCase):
     self.assertAllClose(out, y + np.float32(1))
 
   def testInfeedThenOutfeedInALoop(self):
-    hcb.stop_outfeed_receiver()
+    hcb._deprecated_stop_outfeed_receiver()
 
     def doubler(_, token):
       y, token = lax.infeed(

@@ -25,9 +25,7 @@ import jax
 import jax._src.test_util as jtu
 import jax.numpy as jnp
 
-from jax import config
-
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 def _host_to_device_funcs():
@@ -101,12 +99,16 @@ _COMMON_TEST_PARAMETERS = [
 ]
 
 
+# TransferGuardTest disables `--jax_enable_checks` because it
+# can prematurely fetch the value of device arrays and make
+# device-to-host tests to incur no transfers unexpectedly.
+@jtu.with_config(jax_enable_checks=False)
 class TransferGuardTest(jtu.JaxTestCase):
-  # `_default_config` is used by `jtu.JaxTestCase` to update the JAX config for
-  # every test case. TransferGuardTest disables `--jax_enable_checks` because it
-  # can prematurely fetch the value of device arrays and make device-to-host
-  # tests to incur no transfers unexpectedly.
-  _default_config = {"jax_enable_checks": False}
+  def setUp(self):
+    super().setUp()
+    # Nearly all test methods use the deprecated device argument to JIT.
+    self.enter_context(jtu.ignore_warning(category=DeprecationWarning,
+                                          message="backend and device argument"))
 
   @contextlib.contextmanager
   def assertAllows(self, func_name):

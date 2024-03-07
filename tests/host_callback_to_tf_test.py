@@ -18,15 +18,15 @@ through the outside computation, using tf.GradientTape on the host.
 
 This is separate from host_callback_test because it needs a TF dependency.
 """
-from typing import Callable
+from collections.abc import Callable
 import unittest
 
 from absl.testing import absltest
 from absl.testing import parameterized
 
 import jax
-from jax import config
 from jax import numpy as jnp
+from jax._src import config
 from jax._src import test_util as jtu
 from jax._src import xla_bridge
 from jax.experimental import host_callback as hcb
@@ -53,7 +53,8 @@ def call_tf_no_ad(tf_fun: Callable, arg, *, result_shape):
 
   return hcb.call(lambda arg: tf.nest.map_structure(tf_to_numpy,
                                                     tf_fun(arg)),
-                  arg, result_shape=result_shape)
+                  arg, result_shape=result_shape,
+                  callback_flavor=hcb.CallbackFlavor.DEBUG)
 
 
 def call_tf_simple_ad(tf_fun: Callable, arg, *, result_shape):
@@ -166,12 +167,17 @@ class CallToTFTest(jtu.JaxTestCase):
       raise unittest.SkipTest("host_callback not implemented in PJRT C API")
     super().setUp()
 
+  def supported_only_in_legacy_mode(self):
+    if not hcb._HOST_CALLBACK_LEGACY.value:
+      self.skipTest("Not supported when JAX_HOST_CALLBACK_LEGACY=False")
+
   @parameterized.named_parameters(
       dict(
           testcase_name=f"_{ad=}",
           ad=ad)
       for ad in CALL_TF_IMPLEMENTATIONS.keys())
   def test_impl(self, ad="simple"):
+    self.supported_only_in_legacy_mode()
     call_tf = CALL_TF_IMPLEMENTATIONS[ad]
 
     def f_jax(x):
@@ -192,21 +198,27 @@ class CallToTFTest(jtu.JaxTestCase):
       for ad in CALL_TF_IMPLEMENTATIONS.keys()
       if ad != "none")
   def test_grad(self, ad="simple"):
+    self.supported_only_in_legacy_mode()
     call_tf = CALL_TF_IMPLEMENTATIONS[ad]
 
     def f_jax(x):
       return 3. * jnp.sin(2. * x)
 
     def f_outside(x):
-      return 3. * call_tf(tf.math.sin, 2. * x, result_shape=x)
+      return 3. * call_tf(
+          lambda x: tf.cast(tf.math.sin(x), tf.float32), 2. * x,
+          result_shape=jax.ShapeDtypeStruct((), np.float32))
 
-    x = 4.
-    self.assertAllClose(f_jax(x), f_outside(x))
+    x = np.float32(4.)
+    self.assertAllClose(f_jax(x), f_outside(x),
+                        check_dtypes=False)
 
     grad_f = jax.grad(f_outside)(x)
-    self.assertAllClose(jax.grad(f_jax)(x), grad_f)
+    self.assertAllClose(jax.grad(f_jax)(x), grad_f,
+                        check_dtypes=False)
 
   def test_grad_pytree(self):
+    self.supported_only_in_legacy_mode()
     call_tf = call_tf_full_ad
 
     def f_jax(xy):
@@ -215,15 +227,19 @@ class CallToTFTest(jtu.JaxTestCase):
 
     def f_outside(xy):
       dict_ab = call_tf(
-          lambda xy: dict(a=2. * xy[0], b=xy[0] * xy[1]),
+          lambda xy: dict(a=tf.cast(2. * xy[0], np.float32),
+                          b=tf.cast(xy[0] * xy[1], np.float32)),
           xy,
-          result_shape=dict(a=xy[0], b=xy[1]))
+          result_shape=dict(a=jax.ShapeDtypeStruct((), np.float32),
+                            b=jax.ShapeDtypeStruct((), np.float32)))
       return 3. * dict_ab["a"] + 4. * dict_ab["b"]
 
     xy = (5., 6.)
-    self.assertAllClose(f_jax(xy), f_outside(xy))
+    self.assertAllClose(f_jax(xy), f_outside(xy),
+                        check_dtypes=False)
     res_jax = jax.grad(f_jax)(xy)
-    self.assertAllClose(res_jax, jax.grad(f_outside)(xy))
+    self.assertAllClose(res_jax, jax.grad(f_outside)(xy),
+                        check_dtypes=False)
 
   @parameterized.named_parameters(
       dict(
@@ -231,6 +247,7 @@ class CallToTFTest(jtu.JaxTestCase):
           degree=degree)
       for degree in [1, 2, 3, 4])
   def test_higher_order_grad(self, degree=4):
+    self.supported_only_in_legacy_mode()
     call_tf = call_tf_full_ad
 
     def f_jax(x):

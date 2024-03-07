@@ -15,9 +15,10 @@
 """Tests for splash_attention."""
 from __future__ import annotations
 
+from collections.abc import Callable
 import dataclasses
 import functools
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 import unittest
 
 from absl.testing import absltest
@@ -224,7 +225,13 @@ def sequence_length_strategy(draw: Draw) -> tuple[int, int]:
 def attention_strategy(draw: Draw) -> tuple[int, int, int, np.dtype]:
   q_seq_len, kv_seq_len = draw(sequence_length_strategy())
   head_dim = draw(hps.sampled_from([128, 256]))
-  dtype = draw(hps.sampled_from([np.dtype("float32"), np.dtype(jnp.bfloat16)]))
+  if q_seq_len >= 4096 and kv_seq_len >= 4096:
+    # Do not draw bfloat16 on longer sequence lengths, as this increases
+    # the risk of numerical precision errors causing false positives in
+    # tests.
+    dtype = np.dtype("float32")
+  else:
+    dtype = draw(hps.sampled_from([np.dtype("float32"), np.dtype(jnp.bfloat16)]))
   return q_seq_len, kv_seq_len, head_dim, dtype
 
 
@@ -301,12 +308,13 @@ def attn_logits_soft_cap_strategy() -> hps.SearchStrategy[float | None]:
 class AttentionTest(jtu.JaxTestCase):
 
   def setUp(self):
-    super().setUp()
     if not jtu.test_device_matches(["tpu"]):
       self.skipTest("Need TPU devices")
     # TODO(b/327487669): selectively re-enable tests that works on TPU v3.
     if not jtu.is_device_tpu_at_least(4):
       self.skipTest("Not supported on TPU generations <= 3")
+
+    super().setUp()
 
   def _assert_allclose(self, x, y, **kwargs):
     if x.dtype == np.dtype(jnp.bfloat16):
@@ -353,7 +361,7 @@ class SplashAttentionTest(AttentionTest):
 
     attn_logits_soft_cap = data.draw(attn_logits_soft_cap_strategy())
     masks = data.draw(mha_mask_strategy(q_seq_len, kv_seq_len, num_q_heads))
-    mask = mask_lib.MultiHeadMask(tuple((m.get_mask() for m in masks)))
+    mask = mask_lib.MultiHeadMask(tuple(m.get_mask() for m in masks))
     block_sizes = data.draw(block_sizes_strategy(q_seq_len, kv_seq_len))
 
     if is_mqa:
@@ -414,7 +422,7 @@ class SplashAttentionTest(AttentionTest):
       segment_ids = data.draw(segment_ids_strategy(q_seq_len))
     attn_logits_soft_cap = data.draw(attn_logits_soft_cap_strategy())
     masks = data.draw(mha_mask_strategy(q_seq_len, kv_seq_len, num_q_heads))
-    mask = mask_lib.MultiHeadMask(tuple((m.get_mask() for m in masks)))
+    mask = mask_lib.MultiHeadMask(tuple(m.get_mask() for m in masks))
     block_sizes = data.draw(block_sizes_strategy(q_seq_len, kv_seq_len))
     if is_mqa:
       attn_ref = splash.make_masked_mqa_reference(mask)
@@ -510,21 +518,18 @@ class SplashAttentionTest(AttentionTest):
         atols["dk"] = 0.09
     else:
       raise NotImplementedError
-    with self.subTest("dv"):
-      self._assert_allclose(
-          dv_vanilla, dv_ref, atol=atols_v["dv"], rtol=rtols_v["dv"]
-      )
-      self._assert_allclose(dv, dv_ref, atol=atols["dv"], rtol=rtols["dv"])
-    with self.subTest("dq"):
-      self._assert_allclose(
-          dq_vanilla, dq_ref, atol=atols_v["dq"], rtol=rtols_v["dq"]
-      )
-      self._assert_allclose(dq, dq_ref, atol=atols["dq"], rtol=rtols["dq"])
-    with self.subTest("dk"):
-      self._assert_allclose(
-          dk_vanilla, dk_ref, atol=atols_v["dk"], rtol=rtols_v["dk"]
-      )
-      self._assert_allclose(dk, dk_ref, atol=atols["dk"], rtol=rtols["dk"])
+    self._assert_allclose(
+        dv_vanilla, dv_ref, atol=atols_v["dv"], rtol=rtols_v["dv"]
+    )
+    self._assert_allclose(dv, dv_ref, atol=atols["dv"], rtol=rtols["dv"])
+    self._assert_allclose(
+        dq_vanilla, dq_ref, atol=atols_v["dq"], rtol=rtols_v["dq"]
+    )
+    self._assert_allclose(dq, dq_ref, atol=atols["dq"], rtol=rtols["dq"])
+    self._assert_allclose(
+        dk_vanilla, dk_ref, atol=atols_v["dk"], rtol=rtols_v["dk"]
+    )
+    self._assert_allclose(dk, dk_ref, atol=atols["dk"], rtol=rtols["dk"])
 
   @parameterized.product(
       is_mqa=(False, True),

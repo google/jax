@@ -15,6 +15,7 @@
 # JAX is Autograd and XLA
 
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@rules_python//python:defs.bzl", "py_library")
 load(
     "//jaxlib:jax.bzl",
     "if_building_jaxlib",
@@ -25,6 +26,7 @@ load(
     "jax_internal_test_harnesses_visibility",
     "jax_test_util_visibility",
     "jax_visibility",
+    "mosaic_gpu_internal_users",
     "mosaic_internal_users",
     "pallas_gpu_internal_users",
     "pallas_tpu_internal_users",
@@ -33,7 +35,6 @@ load(
     "pytype_library",
     "pytype_strict_library",
 )
-load("@rules_python//python:defs.bzl", "py_library")
 
 package(
     default_applicable_licenses = [],
@@ -104,6 +105,7 @@ package_group(
     name = "pallas_gpu_users",
     packages = [
         "//...",
+        "//learning/brain/research/jax",
     ] + pallas_gpu_internal_users,
 )
 
@@ -111,7 +113,16 @@ package_group(
     name = "pallas_tpu_users",
     packages = [
         "//...",
+        "//learning/brain/research/jax",
     ] + pallas_tpu_internal_users,
+)
+
+package_group(
+    name = "mosaic_gpu_users",
+    packages = [
+        "//...",
+        "//learning/brain/research/jax",
+    ] + mosaic_gpu_internal_users,
 )
 
 # JAX-private test utilities.
@@ -170,14 +181,16 @@ py_library(
     ] + jax_internal_export_back_compat_test_util_visibility,
     deps = [
         ":jax",
-        "//jax/experimental/export",
     ] + py_deps("numpy"),
 )
 
 py_library(
     name = "internal_export_back_compat_test_data",
     testonly = 1,
-    srcs = glob(["_src/internal_test_util/export_back_compat_test_data/*.py"]),
+    srcs = glob([
+        "_src/internal_test_util/export_back_compat_test_data/*.py",
+        "_src/internal_test_util/export_back_compat_test_data/pallas/*.py",
+    ]),
     visibility = [
         ":internal",
     ],
@@ -191,6 +204,7 @@ py_library_providing_imports_info(
         "_src/ad_checkpoint.py",
         "_src/api.py",
         "_src/array.py",
+        "_src/blocked_sampler.py",
         "_src/callback.py",
         "_src/checkify.py",
         "_src/custom_batching.py",
@@ -199,6 +213,7 @@ py_library_providing_imports_info(
         "_src/debugging.py",
         "_src/dispatch.py",
         "_src/dlpack.py",
+        "_src/earray.py",
         "_src/flatten_util.py",
         "_src/interpreters/__init__.py",
         "_src/interpreters/ad.py",
@@ -210,6 +225,7 @@ py_library_providing_imports_info(
         "_src/public_test_util.py",
         "_src/random.py",
         "_src/shard_alike.py",
+        "_src/sourcemap.py",
         "_src/stages.py",
         "_src/tree.py",
     ] + glob(
@@ -218,6 +234,7 @@ py_library_providing_imports_info(
             "_src/debugger/**/*.py",
             "_src/extend/**/*.py",
             "_src/image/**/*.py",
+            "_src/export/**/*.py",
             "_src/lax/**/*.py",
             "_src/nn/**/*.py",
             "_src/numpy/**/*.py",
@@ -271,6 +288,7 @@ py_library_providing_imports_info(
         ":cloud_tpu_init",
         ":compilation_cache_internal",
         ":compiler",
+        ":compute_on",
         ":config",
         ":core",
         ":custom_api_util",
@@ -303,7 +321,7 @@ py_library_providing_imports_info(
         ":xla",
         ":xla_bridge",
         "//jax/_src/lib",
-    ] + py_deps("numpy") + py_deps("scipy") + py_deps("opt_einsum") + jax_extra_deps,
+    ] + py_deps("numpy") + py_deps("scipy") + py_deps("opt_einsum") + py_deps("flatbuffers") + jax_extra_deps,
 )
 
 pytype_strict_library(
@@ -357,7 +375,9 @@ pytype_strict_library(
     name = "cloud_tpu_init",
     srcs = ["_src/cloud_tpu_init.py"],
     deps = [
+        ":config",
         ":hardware_utils",
+        ":version",
     ],
 )
 
@@ -370,6 +390,7 @@ pytype_strict_library(
         ":compilation_cache_interface",
         ":config",
         ":gfile_cache",
+        ":lru_cache",
         ":monitoring",
         ":path",
         "//jax/_src/lib",
@@ -393,6 +414,15 @@ pytype_strict_library(
         ":path",
         ":util",
     ],
+)
+
+pytype_strict_library(
+    name = "lru_cache",
+    srcs = ["_src/lru_cache.py"],
+    deps = [
+        ":compilation_cache_interface",
+        ":config",
+    ] + py_deps("filelock"),
 )
 
 pytype_strict_library(
@@ -432,7 +462,9 @@ pytype_strict_library(
         "_src/linear_util.py",
     ],
     deps = [
+        ":compute_on",
         ":config",
+        ":deprecations",
         ":dtypes",
         ":effects",
         ":pretty_printer",
@@ -548,6 +580,7 @@ pytype_strict_library(
         ":partial_eval",
         ":path",
         ":pickle_util",
+        ":sharding",
         ":sharding_impls",
         ":source_info_util",
         ":state_types",
@@ -580,6 +613,7 @@ pytype_strict_library(
         exclude = [
             "experimental/pallas/gpu.py",
             "experimental/pallas/tpu.py",
+            "experimental/pallas/ops/gpu/**/*.py",
             "experimental/pallas/ops/tpu/**/*.py",
         ],
     ),
@@ -600,9 +634,14 @@ pytype_strict_library(
         ":pallas_tpu_users",
     ],
     deps = [
-        ":pallas",  # buildcleaner: keep
+        ":pallas",  # build_cleaner: keep
         ":tpu_custom_call",
-        "//jax/_src/pallas/mosaic",
+        "//jax/_src/pallas/mosaic:core",
+        "//jax/_src/pallas/mosaic:lowering",
+        "//jax/_src/pallas/mosaic:pallas_call_registration",  # build_cleaner: keep
+        "//jax/_src/pallas/mosaic:pipeline",
+        "//jax/_src/pallas/mosaic:primitives",
+        "//jax/_src/pallas/mosaic:random",
     ],
 )
 
@@ -640,8 +679,39 @@ pytype_strict_library(
     ],
     deps = [
         ":pallas",
-        "//jax/_src/pallas/triton",
+        "//jax/_src/pallas/mosaic_gpu:pallas_call_registration",  # build_cleaner: keep
+        "//jax/_src/pallas/triton:pallas_call_registration",  # build_cleaner: keep
+        "//jax/_src/pallas/triton:primitives",
     ],
+)
+
+# This target only supports sm_90 GPUs.
+py_library(
+    name = "mosaic_gpu",
+    srcs = glob(["experimental/mosaic/gpu/*.py"]),
+    visibility = [
+        ":mosaic_gpu_users",
+    ],
+    deps = [
+        ":config",
+        ":core",
+        ":jax",
+        ":mlir",
+        "//jax/_src/lib",
+        "//jaxlib/mlir:arithmetic_dialect",
+        "//jaxlib/mlir:builtin_dialect",
+        "//jaxlib/mlir:func_dialect",
+        "//jaxlib/mlir:gpu_dialect",
+        "//jaxlib/mlir:ir",
+        "//jaxlib/mlir:llvm_dialect",
+        "//jaxlib/mlir:math_dialect",
+        "//jaxlib/mlir:memref_dialect",
+        "//jaxlib/mlir:nvgpu_dialect",
+        "//jaxlib/mlir:nvvm_dialect",
+        "//jaxlib/mlir:pass_manager",
+        "//jaxlib/mlir:scf_dialect",
+        "//jaxlib/mlir:vector_dialect",
+    ] + py_deps("absl/flags") + py_deps("numpy"),
 )
 
 pytype_strict_library(
@@ -650,6 +720,7 @@ pytype_strict_library(
     deps = [
         ":ad_util",
         ":api_util",
+        ":compute_on",
         ":config",
         ":core",
         ":dtypes",
@@ -711,6 +782,7 @@ pytype_strict_library(
     name = "sharding",
     srcs = ["_src/sharding.py"],
     deps = [
+        ":op_shardings",
         ":util",
         ":xla_bridge",
         "//jax/_src/lib",
@@ -718,13 +790,20 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
+    name = "compute_on",
+    srcs = ["_src/compute_on.py"],
+    deps = [],
+)
+
+pytype_strict_library(
     name = "layout",
     srcs = ["_src/layout.py"],
     deps = [
-        ":util",
-        ":xla_bridge",
+        ":dtypes",
+        ":sharding",
+        ":sharding_impls",
         "//jax/_src/lib",
-    ],
+    ] + py_deps("numpy"),
 )
 
 pytype_strict_library(
@@ -732,6 +811,7 @@ pytype_strict_library(
     srcs = ["_src/sharding_impls.py"],
     deps = [
         ":config",
+        ":core",
         ":mesh",
         ":op_shardings",
         ":partition_spec",
@@ -826,6 +906,8 @@ pytype_strict_library(
         "//jax/_src/lib",
     ] + if_building_jaxlib([
         "//jaxlib/mlir:ir",
+        "//jaxlib/mlir:mhlo_dialect",
+        "//jaxlib/mlir:pass_manager",
         "//jaxlib/mlir:stablehlo_dialect",
     ]) + py_deps("numpy") + py_deps("absl/flags"),
 )
@@ -870,6 +952,7 @@ pytype_strict_library(
         "_src/clusters/cluster.py",
         "_src/clusters/ompi_cluster.py",
         "_src/clusters/slurm_cluster.py",
+        "_src/clusters/mpi4py_cluster.py",
         "_src/distributed.py",
         "_src/xla_bridge.py",
     ],
@@ -993,7 +1076,11 @@ pytype_library(
 
 pytype_library(
     name = "experimental_host_callback",
-    srcs = ["experimental/host_callback.py"],
+    srcs = [
+        "experimental/__init__.py",  # To support JAX_HOST_CALLBACK_LEGACY=False
+        "experimental/host_callback.py",
+        "experimental/x64_context.py",  # To support JAX_HOST_CALLBACK_LEGACY=False
+    ],
     visibility = ["//visibility:public"],
     deps = [
         ":jax",
@@ -1024,6 +1111,7 @@ pytype_strict_library(
     visibility = [":jax_extend_users"],
     deps = [
         "//jax/extend",
+        "//jax/extend:backend",
         "//jax/extend:core",
         "//jax/extend:linear_util",
         "//jax/extend:random",

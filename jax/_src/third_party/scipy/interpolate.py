@@ -1,10 +1,9 @@
 from itertools import product
-import scipy.interpolate as osp_interpolate
 
 from jax.numpy import (asarray, broadcast_arrays, can_cast,
                        empty, nan, searchsorted, where, zeros)
 from jax._src.tree_util import register_pytree_node
-from jax._src.numpy.util import check_arraylike, promote_dtypes_inexact, implements
+from jax._src.numpy.util import check_arraylike, promote_dtypes_inexact
 
 
 def _ndim_coords_from_arrays(points, ndim=None):
@@ -31,15 +30,30 @@ def _ndim_coords_from_arrays(points, ndim=None):
   return points
 
 
-@implements(
-    osp_interpolate.RegularGridInterpolator,
-    lax_description="""
-In the JAX version, `bounds_error` defaults to and must always be `False` since no
-bound error may be raised under JIT.
-
-Furthermore, in contrast to SciPy no input validation is performed.
-""")
 class RegularGridInterpolator:
+  """Interpolate points on a regular rectangular grid.
+
+  JAX implementation of :func:`scipy.interpolate.RegularGridInterpolator`.
+
+  Args:
+    points: length-N sequence of arrays specifying the grid coordinates.
+    values: N-dimensional array specifying the grid values.
+    method: interpolation method, either ``"linear"`` or ``"nearest"``.
+    bounds_error: not implemented by JAX
+    fill_value: value returned for points outside the grid, defaults to NaN.
+
+  Returns:
+    interpolator: callable interpolation object.
+
+  Examples:
+    >>> points = (jnp.array([1, 2, 3]), jnp.array([4, 5, 6]))
+    >>> values = jnp.array([[10, 20, 30], [40, 50, 60], [70, 80, 90]])
+    >>> interpolate = RegularGridInterpolator(points, values, method='linear')
+
+    >>> query_points = jnp.array([[1.5, 4.5], [2.2, 5.8]])
+    >>> interpolate(query_points)
+    Array([30., 64.], dtype=float32)
+  """
   # Based on SciPy's implementation which in turn is originally based on an
   # implementation by Johannes Buchner
 
@@ -76,7 +90,6 @@ class RegularGridInterpolator:
     self.grid = tuple(asarray(p) for p in points)
     self.values = values
 
-  @implements(osp_interpolate.RegularGridInterpolator.__call__, update_doc=False)
   def __call__(self, xi, method=None):
     method = self.method if method is None else method
     if method not in ("linear", "nearest"):
@@ -151,7 +164,7 @@ register_pytree_node(
     lambda obj: ((obj.grid, obj.values, obj.fill_value),
                  (obj.method, obj.bounds_error)),
     lambda aux, children: RegularGridInterpolator(
-        *children[:2],  # type: ignore[index]
+        *children[:2],
         *aux,
-        *children[2:]),  # type: ignore[index]
+        *children[2:]),
 )

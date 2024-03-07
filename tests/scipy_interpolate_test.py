@@ -18,13 +18,13 @@ import operator
 from functools import reduce
 import numpy as np
 
+import jax
 from jax._src import test_util as jtu
 import scipy.interpolate as sp_interp
 import jax.scipy.interpolate as jsp_interp
 
-from jax import config
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class LaxBackedScipyInterpolateTests(jtu.JaxTestCase):

@@ -3,13 +3,12 @@ import scipy.optimize
 
 import jax
 from jax import grad
-from jax import config
 import jax.numpy as jnp
 import jax._src.test_util as jtu
 from jax._src.scipy.optimize.line_search import line_search
 
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 class TestLineSearch(jtu.JaxTestCase):
@@ -87,6 +86,7 @@ class TestLineSearch(jtu.JaxTestCase):
   @jtu.sample_product(
     name=['_line_func_1', '_line_func_2'],
   )
+  @jax.default_matmul_precision("float32")
   def test_line_search_wolfe2(self, name):
     def bind_index(func, idx):
       # Remember Python's closure semantics!

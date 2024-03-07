@@ -385,7 +385,7 @@ def bcoo_extract(sparr: BCOO, arr: ArrayLike, *, assume_unique: bool | None = No
     extracted : a BCOO array with the same sparsity pattern as self.
   """
   if not isinstance(sparr, BCOO):
-    raise ValueError(f"First argument to bcoo_extract should be a BCOO array. Got {type(sparr)=}")
+    raise TypeError(f"First argument to bcoo_extract should be a BCOO array. Got {type(sparr)=}")
   a = jnp.asarray(arr)
   if a.shape != sparr.shape:
     raise ValueError(f"shape mismatch: {sparr.shape=} {a.shape=}")
@@ -514,7 +514,7 @@ def bcoo_transpose(mat: BCOO, *, permutation: Sequence[int]) -> BCOO:
       batch, sparse, and dense dimensions. The i’th axis of the returned array
       corresponds to the axis numbered permutation[i] of ``mat``. Transpose
       permutation currently does not support permuting batch axes with non-batch
-      axes nor permutating dense axes with non-dense axes.
+      axes nor permuting dense axes with non-dense axes.
 
   Returns:
     A BCOO-format array.
@@ -641,7 +641,7 @@ def bcoo_dot_general(lhs: BCOO | Array, rhs: BCOO | Array, *, dimension_numbers:
                              preferred_element_type=preferred_element_type,
                              lhs_spinfo=lhs._info)
   elif isinstance(rhs, BCOO):
-    return _bcoo_rdot_general(lhs, rhs.data, rhs.indices, dimension_numbers=dimension_numbers,  # type: ignore[arg-type]
+    return _bcoo_rdot_general(lhs, rhs.data, rhs.indices, dimension_numbers=dimension_numbers,
                               preferred_element_type=preferred_element_type,
                               rhs_spinfo=rhs._info)
   else:
@@ -749,7 +749,7 @@ def _bcoo_dot_general_abstract_eval(lhs_data, lhs_indices, rhs, *, dimension_num
   n_batch, n_sparse, _, _ = _validate_bcoo(lhs_data, lhs_indices, lhs_spinfo.shape)
   if lhs_batch and max(lhs_batch) >= n_batch:
     raise NotImplementedError(
-      "bcoo_dot_general batch dimensions must be among the batch dimensions in the sparse representtaion.\n"
+      "bcoo_dot_general batch dimensions must be among the batch dimensions in the sparse representation.\n"
       f"got {lhs_batch=}, {n_batch=}")
 
   # TODO: support contraction of dense dimensions?
@@ -862,7 +862,7 @@ def _bcoo_dot_general_transpose(ct, lhs_data, lhs_indices, rhs, *, dimension_num
   rhs_kept = remaining(range(rhs_ndim), rhs_contract, rhs_batch)
   ans_batch, ans_lhs, ans_rhs = map(list, ranges_like(lhs_batch, lhs_kept, rhs_kept))
   if ad.is_undefined_primal(lhs_data):
-    dims: DotDimensionNumbers = ((ans_rhs, rhs_kept), (ans_batch, rhs_batch))  # type: ignore[assignment]
+    dims: DotDimensionNumbers = ((ans_rhs, rhs_kept), (ans_batch, rhs_batch))
     lhs_contract_sorted_by_rhs = list(np.take(lhs_contract, np.argsort(rhs_contract)))
     permutation = list(lhs_batch) + lhs_kept + lhs_contract_sorted_by_rhs
     out_axes = list(np.argsort(permutation))
@@ -895,7 +895,7 @@ def _bcoo_dot_general_transpose(ct, lhs_data, lhs_indices, rhs, *, dimension_num
       result = _bcoo_extract(lhs_indices, out_dense)
     return result, lhs_indices, rhs
   else:
-    dims = ((lhs_kept, ans_lhs), (lhs_batch, ans_batch))  # type: ignore[assignment]
+    dims = ((lhs_kept, ans_lhs), (lhs_batch, ans_batch))
     rhs_contract_sorted_by_lhs = list(np.take(rhs_contract, np.argsort(lhs_contract)))
     out_axes = list(np.argsort(list(rhs_batch) + rhs_contract_sorted_by_lhs + rhs_kept))
     result = _bcoo_dot_general(lhs_data, lhs_indices, ct, lhs_spinfo=lhs_spinfo,
@@ -1224,15 +1224,24 @@ def _bcoo_spdot_general_abstract_eval(lhs_data, lhs_indices, rhs_data, rhs_indic
   out_n_batch = lhs.n_batch + rhs.n_batch - len(lhs_batch)
   out_nse = min(out_nse, math.prod(out_aval.shape[out_n_batch:]))
 
+  lhs_batch_shape = np.broadcast_shapes(
+    tuple(lhs_data.shape[dim] for dim in range(lhs.n_batch) if dim not in lhs_batch),
+    tuple(lhs_indices.shape[dim] for dim in range(lhs.n_batch) if dim not in lhs_batch),
+  )
+  rhs_batch_shape = np.broadcast_shapes(
+    tuple(rhs_data.shape[dim] for dim in range(rhs.n_batch) if dim not in rhs_batch),
+    tuple(rhs_indices.shape[dim] for dim in range(rhs.n_batch) if dim not in rhs_batch),
+  )
+
   data_shape = (
     *(lhs_shape[dim] for dim in lhs_batch),
-    *(lhs_data.shape[dim] for dim in range(lhs.n_batch) if dim not in lhs_batch),
-    *(rhs_data.shape[dim] for dim in range(rhs.n_batch) if dim not in rhs_batch),
+    *lhs_batch_shape,
+    *rhs_batch_shape,
     out_nse)
   indices_shape = (
     *(lhs_shape[dim] for dim in lhs_batch),
-    *(lhs_indices.shape[dim] for dim in range(lhs.n_batch) if dim not in lhs_batch),
-    *(rhs_indices.shape[dim] for dim in range(rhs.n_batch) if dim not in rhs_batch),
+    *lhs_batch_shape,
+    *rhs_batch_shape,
     out_nse, lhs.n_sparse + rhs.n_sparse - 2 * len(lhs_contracting))
 
   data_aval = core.ShapedArray(data_shape, out_aval.dtype)
@@ -1951,7 +1960,7 @@ def bcoo_slice(mat: BCOO, *, start_indices: Sequence[int], limit_indices: Sequen
     out: BCOO array containing the slice.
   """
   if not isinstance(mat, BCOO):
-    raise ValueError(f"bcoo_slice: input should be BCOO array, got type(mat)={type(mat)}")
+    raise TypeError(f"bcoo_slice: input should be BCOO array, got type(mat)={type(mat)}")
   start_indices = [operator.index(i) for i in start_indices]
   limit_indices = [operator.index(i) for i in limit_indices]
   if strides is not None:
@@ -2030,7 +2039,7 @@ def bcoo_dynamic_slice(mat: BCOO, start_indices: Sequence[Any], slice_sizes: Seq
   jax.eval_shape(partial(lax.dynamic_slice, slice_sizes=slice_sizes),
     jax.ShapeDtypeStruct(mat.shape, mat.dtype), start_indices)
   if not isinstance(mat, BCOO):
-    raise ValueError(f"bcoo_slice: input should be BCOO array, got type(mat)={type(mat)}")
+    raise TypeError(f"bcoo_slice: input should be BCOO array, got type(mat)={type(mat)}")
   start_indices = tuple(jnp.asarray(i) for i in start_indices)
   assert all(jnp.issubdtype(i.dtype, np.integer) for i in start_indices)
   assert all(i.shape == () for i in start_indices)
@@ -2379,7 +2388,7 @@ def _convert_to_1d_for_conv(mat, index_dtype):
     # zero-out data at OOB indices, otherwise strange things happen.
     data = jnp.where(lax.squeeze(indices, (1,)) < mat.shape[-1], data, 0)
   else:
-    raise ValueError(f"bcoo_conv_general_dilated: input of type {type(mat)} not recognized.")
+    raise TypeError(f"bcoo_conv_general_dilated: input of type {type(mat)} not recognized.")
   return BCOO((data, indices), shape=mat.shape[2:])
 
 def _bcoo_conv_1d(lhs: BCOO, rhs: BCOO, padding: Sequence[int]) -> BCOO:

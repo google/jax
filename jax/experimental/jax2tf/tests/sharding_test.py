@@ -39,7 +39,6 @@ from jax._src import xla_bridge
 from jax import lax
 from jax.experimental import jax2tf
 from jax.experimental import pjit
-from jax.experimental.maps import xmap
 from jax.experimental.shard_map import shard_map
 from jax.sharding import NamedSharding
 from jax.sharding import Mesh
@@ -48,20 +47,20 @@ import jax.numpy as jnp
 
 import numpy as np
 
-import tensorflow as tf  # type: ignore[import]
+import tensorflow as tf
 
 config.parse_flags_with_absl()
 
 # Must come after initializing the flags
 from jax.experimental.jax2tf.tests import tf_test_util
 
-prev_xla_flags = None
-prev_spmd_lowering_flag = None
-
+_exit_stack = contextlib.ExitStack()
 topology = None
 
 def setUpModule():
-  global prev_xla_flags, topology
+  _exit_stack.enter_context(jtu.set_host_platform_device_count(8))
+
+  global topology
   if jtu.test_device_matches(["tpu"]):
     resolver = tf.distribute.cluster_resolver.TPUClusterResolver(tpu='')
     tf.config.experimental_connect_to_cluster(resolver)
@@ -70,26 +69,8 @@ def setUpModule():
   else:
     topology = None
 
-  prev_xla_flags = os.getenv("XLA_FLAGS")
-  flags_str = prev_xla_flags or ""
-  # Don't override user-specified device count, or other XLA flags.
-  if "xla_force_host_platform_device_count" not in flags_str:
-    os.environ["XLA_FLAGS"] = (flags_str +
-                               " --xla_force_host_platform_device_count=8")
-  # Clear any cached backends so new CPU backend will pick up the env var.
-  xla_bridge.get_backend.cache_clear()
-  global prev_spmd_lowering_flag
-  prev_spmd_lowering_flag = maps.SPMD_LOWERING.value
-  config.update('experimental_xmap_spmd_lowering', True)
-
-
 def tearDownModule():
-  if prev_xla_flags is None:
-    del os.environ["XLA_FLAGS"]
-  else:
-    os.environ["XLA_FLAGS"] = prev_xla_flags
-  xla_bridge.get_backend.cache_clear()
-  config.update('experimental_xmap_spmd_lowering', prev_spmd_lowering_flag)
+  _exit_stack.close()
 
 
 class ShardingTest(tf_test_util.JaxToTfTestCase):
@@ -454,54 +435,39 @@ class ShardingTest(tf_test_util.JaxToTfTestCase):
             (r"f32\[20,10\].*custom_call_target.*Sharding.*sharding.*devices=\[2,1\]", count_out_P),
         ])
 
-  @jtu.parameterized_filterable(
-    kwargs=[
-      dict(testcase_name=f"_kind={kind}_in_shardings={in_shardings}_out_shardings={out_shardings}",
-           kind=kind, in_shardings=in_shardings, out_shardings=out_shardings)
-      for kind in ("pjit", "jit", "sharding_constraint")
-      for in_shardings in (
-          ("none", "P") if kind == "sharding_constraint" else
-          ("unspecified",) if kind == "jit" else
-          ("unspecified", "none", "P"))
-      for out_shardings in (
-          ("unspecified",) if kind in ["sharding_constraint", "jit"] else
-          ("unspecified", "none", "P"))
-  ])
-  def test_pjit_error_inner_sharding(self, kind="pjit", in_shardings="P",
-                                     out_shardings="none"):
-    # Check that we raise an error if there is no top-level pjit but we convert
-    # a function with non-replicated shardings (with native lowering).
-    shardings_map = dict(none=None, P=P("x"))
-
+  def test_grad_sharding_different_mesh(self):
+    # Convert with two similar meshes, the only difference being
+    # the order of the devices. grad should not fail.
+    # https://github.com/google/jax/issues/21314
+    devices = jax.local_devices()[:2]
+    if len(devices) < 2:
+      raise unittest.SkipTest("Test requires 2 local devices")
     def f_jax(x):
-      if kind == "pjit":
-        pjit_kwargs = {}
-        if in_shardings != "unspecified":
-          pjit_kwargs["in_shardings"] = shardings_map[in_shardings]
-        if out_shardings != "unspecified":
-          pjit_kwargs["out_shardings"] = shardings_map[out_shardings]
-        res = pjit.pjit(lambda x: x * 2., **pjit_kwargs)(x)
-      elif kind == "jit":
-        res = jax.jit(lambda x: x * 2.)(x)
-      elif kind == "sharding_constraint":
-        res = jax.lax.with_sharding_constraint(x * 2., shardings_map[in_shardings])
-      else:
-        assert False
-      return res
+      return jnp.sum(x * 2.)
 
-    expect_error = (in_shardings == "P" or out_shardings == "P")
-    shape = (8, 10)
-    x = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+    mesh = Mesh(devices, "i")
+    # The same mesh with reversed order of devices
+    mesh_rev = Mesh(list(reversed(devices)), "i")
+    shardings = NamedSharding(mesh, jax.sharding.PartitionSpec(("i",)))
+    shardings_rev = NamedSharding(mesh_rev, jax.sharding.PartitionSpec(("i",)))
 
-    f_tf = tf.function(jax2tf.convert(f_jax, native_serialization=True),
-                       autograph=False, jit_compile=True)
-    with contextlib.ExitStack() as stack:
-      if expect_error:
-        stack.enter_context(self.assertRaisesRegex(
-            ValueError,
-            "Lowered function does not have a top-level pjit but it has non-replicated sharding annotations"))
-      with Mesh(self.devices, axis_names=("x",)):
-        f_tf(x)
+    f_tf = tf.function(jax2tf.convert(pjit.pjit(f_jax, in_shardings=shardings)),
+                       autograph=False)
+    f_tf_rev = tf.function(jax2tf.convert(pjit.pjit(f_jax, in_shardings=shardings_rev)),
+                           autograph=False)
+    inp = np.ones((2, 4), dtype=np.float32)
+
+    input_v = tf.Variable(inp)
+    with tf.GradientTape(persistent=True) as tape:
+      tape.watch(input_v)
+      res_tf = f_tf(input_v)
+      g = tape.gradient(res_tf, input_v)
+
+    with tf.GradientTape(persistent=True) as tape:
+      tape.watch(input_v)
+      res_tf_rev = f_tf_rev(input_v)
+      g_rev = tape.gradient(res_tf_rev, input_v)
+    self.assertAllClose(g, g_rev)
 
   @jtu.parameterized_filterable(
     kwargs=[
@@ -550,115 +516,6 @@ class ShardingTest(tf_test_util.JaxToTfTestCase):
           ValueError,
           "function with sharded arguments or results must be used under a `tf.function` context"):
         jax2tf.convert(f_jax)(a)
-
-  def test_xmap_basic(self):
-    devices = np.reshape(self.devices, (1, 2))
-    ashape = (16, 8, 5)
-    a = np.arange(np.prod(ashape), dtype=np.float32).reshape(ashape)
-    bshape = (2, 7)
-    b = np.arange(np.prod(bshape), dtype=np.float32).reshape(bshape)
-
-    # f_jax: f32[16,8,5], f32[2,7] -> f32[16,8,10], f32[2,28]
-    # lambda ...: f32[5], f32[7] -> f32[10], f32[28]
-    f_jax = xmap(lambda a, b: (jnp.concatenate([a, a], axis=0) * 2.,
-                               jnp.concatenate([b, b, b, b], axis=0) * 4.),
-                 in_axes=({0: 'a', 1: 'b'}, ['c', ...]),
-                 out_axes=({0: 'a', 1: 'b'}, ['c', ...]),
-                 axis_resources={'a': 'x', 'b': 'y', 'c': 'x'})
-
-    @tf.function(autograph=False, jit_compile=True)
-    def f_tf(a, b):
-      # xmap works only with native serialization
-      f_converted = jax2tf.convert(f_jax, native_serialization=True)
-      if jtu.test_device_matches(["tpu"]):
-        res = tf.compat.v1.tpu.rewrite(
-            f_converted, [tf.convert_to_tensor(a), tf.convert_to_tensor(b)],
-            device_assignment=self.device_assignment(
-                computation_shape=[1, 1, 1, 2])
-        )
-        return (res[0], res[1])
-      else:
-        return f_converted(a, b)
-
-    with Mesh(devices, ('x', 'y')):
-      res_jax = f_jax(a, b)
-      self.assertAllClose(res_jax, (jnp.concatenate([a, a], axis=2) * 2.,
-                                    jnp.concatenate([b, b, b, b], axis=1) * 4.))
-      res_tf = f_tf(a, b)
-      self.assertAllClose(res_tf, res_jax)
-
-      self.check_sharding(
-          jax2tf.convert(f_jax, native_serialization=True), [a, b],
-          checks=[
-              (r"f32\[16,8,5\].*custom_call_target.*Sharding.*sharding.*devices=\[1,2,1\]", 1),
-              # The output sharding
-              (r"f32\[2,7\].*custom_call_target.*Sharding.*sharding.*replicated", 1),
-              (r"f32\[2,28\].*custom_call_target.*Sharding.*sharding.*replicated", 1),
-          ])
-
-  def test_xmap_collective_reduce(self):
-    devices = np.reshape(self.devices, (1, 2))
-    ashape = (16, 8, 5)
-    a = np.arange(np.prod(ashape), dtype=np.float32).reshape(ashape)
-    bshape = (2, 7)
-    b = np.arange(np.prod(bshape), dtype=np.float32).reshape(bshape)
-    f_jax = xmap(lambda a, b: (lax.psum(a * 2., 'a'), b * 4.),
-                 in_axes=(['a', 'b', ...], {0: 'c'}),
-                 out_axes=(['b', ...], {0: 'c'}),
-                 axis_resources={'a': 'x', 'b': 'y', 'c': 'x'})
-
-    @tf.function(autograph=False, jit_compile=True)
-    def f_tf(a, b):
-      f_converted = jax2tf.convert(f_jax, native_serialization=True)
-      if jtu.test_device_matches(["tpu"]):
-        res = tf.compat.v1.tpu.rewrite(
-            f_converted, [tf.convert_to_tensor(a), tf.convert_to_tensor(b)],
-            device_assignment=self.device_assignment(
-                computation_shape=[1, 1, 1, 2])
-        )
-        return (res[0], res[1])
-      else:
-        return f_converted(a, b)
-
-    with Mesh(devices, ('x', 'y')):
-      res_jax = f_jax(a, b)
-      self.assertAllClose(res_jax, ((a * 2.).sum(0), b * 4.))
-      res_tf = f_tf(a, b)
-      self.assertAllClose(res_tf, res_jax)
-      self.check_sharding(
-          jax2tf.convert(f_jax, native_serialization=True), [a, b],
-          checks=[
-              (r"f32\[16,8,5\].*custom_call_target.*Sharding.*sharding.*devices=\[1,2,1\]", 1),
-              (r"f32\[2,7\].*custom_call_target.*Sharding.*sharding.*replicated", 2),
-              (r"f32\[8,5\].*custom_call_target.*Sharding.*sharding.*devices=\[2,1\]", 1),
-          ])
-
-  def test_grad_xmap(self):
-    devices = np.reshape(self.devices, (1, 2))
-    ashape = (16, 8, 5)
-    a = np.arange(np.prod(ashape), dtype=np.float32).reshape(ashape)
-
-    # f_jax: f32[16,8,5]-> f32[16,8,10]
-    # lambda ...: f32[5]-> f32[10]
-    f_jax = xmap(lambda a: jnp.concatenate([a, a], axis=0) * 2.,
-                 in_axes=({0: 'a', 1: 'b'}),
-                 out_axes={0: 'a', 1: 'b'},
-                 axis_resources={'a': 'x', 'b': 'y'})
-
-    def f_grad_tf(a, res_ct):
-      with tf.GradientTape(persistent=True) as tape:
-        tape.watch(a)
-        res_tf = jax2tf.convert(f_jax, native_serialization=True)(a)
-        return tape.gradient(res_tf, a, output_gradients=res_ct)
-
-    with Mesh(devices, ('x', 'y')):
-      self.check_sharding(f_grad_tf, [a, np.concatenate([a, a], axis=2)],
-          checks=[
-              # Primal input and grad output
-              (r"f32\[16,8,5\].*custom_call_target.*Sharding.*sharding.*devices=\[1,2,1\]", self.GEQ(2)),
-              # Input cotangent
-              (r"f32\[16,8,10\].*custom_call_target.*Sharding.*sharding.*devices=\[1,2,1\]", self.GEQ(1)),
-          ])
 
   @jtu.ignore_warning(category=UserWarning,
                       message="all_to_all .* are only implemented properly for TPUs and GPUs .*")

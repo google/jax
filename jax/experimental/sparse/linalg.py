@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import Union, Callable
+from collections.abc import Callable
 import functools
 
 import jax

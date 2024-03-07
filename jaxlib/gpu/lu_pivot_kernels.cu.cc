@@ -61,21 +61,19 @@ __global__ void LuPivotsToPermutationKernel(
 
 }  // namespace
 
-void LaunchLuPivotsToPermutationKernel(
-    gpuStream_t stream, void** buffers,
-    LuPivotsToPermutationDescriptor descriptor) {
-  const std::int32_t* pivots =
-      reinterpret_cast<const std::int32_t*>(buffers[0]);
-  std::int32_t* permutation_out = reinterpret_cast<std::int32_t*>(buffers[1]);
-
+void LaunchLuPivotsToPermutationKernel(gpuStream_t stream,
+                                       std::int64_t batch_size,
+                                       std::int32_t pivot_size,
+                                       std::int32_t permutation_size,
+                                       const std::int32_t* pivots,
+                                       std::int32_t* permutation) {
   const int block_dim = 128;
-  const std::int64_t grid_dim = std::min<std::int64_t>(
-      1024, (descriptor.batch_size + block_dim - 1) / block_dim);
+  const std::int64_t grid_dim =
+      std::min<std::int64_t>(1024, (batch_size + block_dim - 1) / block_dim);
 
   LuPivotsToPermutationKernel<<<grid_dim, block_dim,
                                 /*dynamic_shared_mem_bytes=*/0, stream>>>(
-      pivots, permutation_out, descriptor.batch_size, descriptor.pivot_size,
-      descriptor.permutation_size);
+      pivots, permutation, batch_size, pivot_size, permutation_size);
 }
 
 }  // namespace JAX_GPU_NAMESPACE

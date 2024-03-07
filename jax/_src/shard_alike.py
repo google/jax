@@ -23,7 +23,6 @@ from jax._src.tree_util import tree_flatten, tree_unflatten
 from jax._src.interpreters import batching
 from jax._src.util import safe_zip
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 from jax._src.api_util import shaped_abstractify
 from jax._src.lib.mlir import ir
 
@@ -31,8 +30,6 @@ _next_shard_group_id = itertools.count()
 
 def shard_alike(x, y):
   """Shards x and y alike."""
-  if xla_extension_version < 227:
-    raise ValueError("shard_alike requires jaxlib v0.4.24 or newer.")
   x_flat, x_tree = tree_flatten(x)
   y_flat, y_tree = tree_flatten(y)
 

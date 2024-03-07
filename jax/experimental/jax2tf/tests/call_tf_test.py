@@ -13,36 +13,35 @@
 # limitations under the License.
 """Tests for call_tf."""
 
+from collections.abc import Callable
 import contextlib
 from functools import partial
 import os
-from typing import Callable
 import unittest
 
 from absl import logging
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
-from jax import config
 from jax import dlpack
 from jax import dtypes
+from jax import export
 from jax import lax
 from jax import numpy as jnp
+from jax._src import config
 from jax._src import test_util as jtu
-from jax._src import xla_bridge
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
-from jax.experimental import export
 from jax.experimental import jax2tf
 from jax.experimental.jax2tf.tests import tf_test_util
 import numpy as np
 
 try:
-  import tensorflow as tf  # type: ignore[import]
+  import tensorflow as tf
 except ImportError:
   tf = None
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 
 def _maybe_jit(with_jit: bool, func: Callable) -> Callable:
@@ -696,7 +695,6 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
     jax.grad(cos_tf_sin_jax)(x)
 
     logging.info(jax.make_jaxpr(cos_tf_sin_jax)(x))
-    logging.info(jax.xla_computation(cos_tf_sin_jax)(x).as_hlo_text())
 
   def test_tf_gather(self):
     """tf_gather gradient output is tf.IndexSlices."""
@@ -779,7 +777,7 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
 
     lowering_platforms = ("tpu", "cpu", "cuda")
 
-    exp = export.export(f_jax,
+    exp = export.export(jax.jit(f_jax),
                         lowering_platforms=lowering_platforms)(x)
     for jax_platform in jax_and_tf_platforms:
       with self.subTest(jax_platform):
@@ -788,7 +786,7 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
         logging.info("Running harness natively on %s", jax_device)
         native_res = f_jax(x_device)
         logging.info("Running exported harness on %s", jax_device)
-        exported_res = export.call_exported(exp)(x_device)
+        exported_res = exp.call(x_device)
         self.assertAllClose(native_res, exported_res)
 
   def test_multi_platform_call_tf_graph(self):
@@ -854,7 +852,7 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
       with contextlib.ExitStack() as stack:
         stack.enter_context(jax.transfer_guard_device_to_device(guard_level))
         stack.enter_context(jax.transfer_guard_device_to_host(guard_level))
-        if not (type_ == jnp.int32 or xla_bridge.using_pjrt_c_api()):
+        if type_ != jnp.int32:
           stack.enter_context(jax.transfer_guard_host_to_device(guard_level))
         yield
 
@@ -1150,17 +1148,6 @@ class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
     _ = tf.add(1, 1)
     super().setUp()
 
-  def override_serialization_version(self, version_override: int):
-      version = config.jax_serialization_version
-      if version != version_override:
-        self.addCleanup(partial(config.update,
-                                "jax_serialization_version",
-                                version_override))
-        config.update("jax_serialization_version", version_override)
-      logging.info(
-        "Using JAX serialization version %s",
-        config.jax_serialization_version)
-
   def test_alternate(self):
     # Alternate sin/cos with sin in TF and cos in JAX
     f_tf_inner = tf.math.sin
@@ -1275,7 +1262,7 @@ class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
 
   @_parameterized_jit
   def test_shape_poly_static_output_shape(self, with_jit=True):
-    if config.jax2tf_default_native_serialization:
+    if jax.config.jax2tf_default_native_serialization:
       raise unittest.SkipTest("TODO(b/268386622): call_tf with shape polymorphism and native serialization.")
     x = np.array([0.7, 0.8], dtype=np.float32)
 
@@ -1289,7 +1276,7 @@ class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
 
   @_parameterized_jit
   def test_shape_poly(self, with_jit=False):
-    if config.jax2tf_default_native_serialization:
+    if jax.config.jax2tf_default_native_serialization:
       raise unittest.SkipTest("TODO(b/268386622): call_tf with shape polymorphism and native serialization.")
     x = np.array([7, 8, 9, 10], dtype=np.float32)
     def fun_jax(x):
@@ -1308,7 +1295,7 @@ class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
 
   @_parameterized_jit
   def test_shape_poly_pytree_result(self, with_jit=True):
-    if config.jax2tf_default_native_serialization:
+    if jax.config.jax2tf_default_native_serialization:
       raise unittest.SkipTest("TODO(b/268386622): call_tf with shape polymorphism and native serialization.")
     x = np.array([7, 8, 9, 10], dtype=np.float32)
     def fun_jax(x):
@@ -1394,7 +1381,7 @@ class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
     if kind == "bad_dim" and with_jit:
       # TODO: in jit more the error pops up later, at AddV2
       expect_error = "Dimensions must be equal, but are 4 and 9 for .* AddV2"
-    if kind == "bad_dim" and config.jax2tf_default_native_serialization:
+    if kind == "bad_dim" and jax.config.jax2tf_default_native_serialization:
       # TODO(b/268386622): call_tf with shape polymorphism and native serialization.
       expect_error = "Error compiling TensorFlow function"
     fun_tf_rt = _maybe_tf_jit(with_jit,
@@ -1432,7 +1419,7 @@ class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
                                f4_function=False, f4_saved_model=False):
     if (f2_saved_model and
         f4_saved_model and
-        not config.jax2tf_default_native_serialization):
+        not jax.config.jax2tf_default_native_serialization):
       # TODO: Getting error Found invalid capture Tensor("jax2tf_vjp/jax2tf_arg_0:0", shape=(), dtype=float32) when saving custom gradients
       # when saving f4, but only with non-native serialization.
       raise unittest.SkipTest("TODO: error invalid capture when saving custom gradients")
@@ -1661,116 +1648,127 @@ class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
     _, _ = tf_test_util.SaveAndLoadFunction(tf_f_rt_2, input_args=[])
 
   @jtu.parameterized_filterable(
-    kwargs=[dict(version=version) for version in [8, 9]]
+    kwargs=[dict(version=version) for version in [9]]
   )
   def test_call_tf_graph_ordered(self, *, version: int):
-    self.override_serialization_version(version)
-    @tf.function
-    def tf_print(x):
-      tf.print(x)
+    with config.jax_export_calling_convention_version(version):
+      logging.info(
+        "Using JAX serialization version %s",
+        jax.config.jax_export_calling_convention_version)
 
-    call_tf_print = jax2tf.call_tf(
-        tf_print,
-        call_tf_graph=True,
-        ordered=True,
-    )
+      @tf.function
+      def tf_print(x):
+        tf.print(x)
 
-    x = jnp.array(1.0, dtype=jnp.float32)
+      call_tf_print = jax2tf.call_tf(
+          tf_print,
+          call_tf_graph=True,
+          ordered=True,
+      )
 
-    def body(i, x):
-      call_tf_print(x)
-      return x + 1
+      x = jnp.array(1.0, dtype=jnp.float32)
 
-    @jax.jit
-    def f_jax(x):
-      return jax.lax.fori_loop(0, 4, body, x)
+      def body(i, x):
+        call_tf_print(x)
+        return x + 1
 
-    num_custom_calls = 0
+      @jax.jit
+      def f_jax(x):
+        return jax.lax.fori_loop(0, 4, body, x)
 
-    def _check_mlir_ops(op):
-      nonlocal num_custom_calls
+      num_custom_calls = 0
 
-      if (
-          op.operation.name == "stablehlo.custom_call"
-          and ir.StringAttr(op.attributes["call_target_name"]).value
-          == "tf.call_tf_function"
+      def _check_mlir_ops(op):
+        nonlocal num_custom_calls
+
+        if (
+            op.operation.name == "stablehlo.custom_call"
+            and ir.StringAttr(op.attributes["call_target_name"]).value
+            == "tf.call_tf_function"
+        ):
+          num_custom_calls += 1
+
+          # The custom call op must have `has_token_input_output` attribute.
+          tf_backend_config = ir.DictAttr(op.attributes["tf.backend_config"])
+          self.assertTrue(
+              ir.BoolAttr(tf_backend_config["has_token_input_output"]).value
+          )
+
+          # Verify that the first argument/result of the custom call op is a token
+          # type. This is a calling convention defined by `has_token_input_output`.
+          self.assertTrue(hlo.TokenType.isinstance(op.operands[0].type))
+          self.assertTrue(hlo.TokenType.isinstance(op.results[0].type))
+
+      stablehlo_module = None
+      with self.assertRaisesRegex(
+          ValueError,
+          "call_tf_graph=True only support exporting by jax2tf.convert currently",
       ):
-        num_custom_calls += 1
+        lower = f_jax.lower(x)
+        self.assertNotEmpty(lower._lowering.compile_args["ordered_effects"])
+        stablehlo_module = lower.compiler_ir("stablehlo")
+      if stablehlo_module:
+        self._walk_stablehlo_operations(stablehlo_module, _check_mlir_ops)
+        self.assertEqual(num_custom_calls, 1)
 
-        # The custom call op must have `has_token_input_output` attribute.
-        tf_backend_config = ir.DictAttr(op.attributes["tf.backend_config"])
-        self.assertTrue(
-            ir.BoolAttr(tf_backend_config["has_token_input_output"]).value
-        )
-
-        # Verify that the first argument/result of the custom call op is a token
-        # type. This is a calling convention defined by `has_token_input_output`.
-        self.assertTrue(hlo.TokenType.isinstance(op.operands[0].type))
-        self.assertTrue(hlo.TokenType.isinstance(op.results[0].type))
-
-    stablehlo_module = None
-    with self.assertRaisesRegex(
-        ValueError,
-        "call_tf_graph=True only support exporting by jax2tf.convert currently",
-    ):
-      lower = f_jax.lower(x)
-      self.assertNotEmpty(lower._lowering.compile_args["ordered_effects"])
-      stablehlo_module = lower.compiler_ir("stablehlo")
-    if stablehlo_module:
-      self._walk_stablehlo_operations(stablehlo_module, _check_mlir_ops)
-      self.assertEqual(num_custom_calls, 1)
-
-    f_tf = jax2tf.convert(
-        f_jax,
-        native_serialization=True,
-        with_gradient=False,
-    )
-    _, restored_model = tf_test_util.SaveAndLoadFunction(f_tf, input_args=[x])
+      f_tf = jax2tf.convert(
+          f_jax,
+          native_serialization=True,
+          with_gradient=False,
+      )
+      _, restored_model = tf_test_util.SaveAndLoadFunction(f_tf, input_args=[x])
 
   @jtu.parameterized_filterable(
     kwargs=[dict(poly=poly, version=version)
             for poly in [True, False]
-            for version in [8, 9]]
+            for version in [9]]
   )
   def test_call_tf_ordered_dead_inputs(self, *, poly: bool, version: int):
-    self.override_serialization_version(version)
-    def f_jax(x1, x_dead, x3):
-      return (x1, jax2tf.call_tf(lambda x: tf.math.sin(x), ordered=True,
-                                 call_tf_graph=True)(x3))
-    if poly:
-      polymorphic_shapes = ["b", None, None]
-    else:
-      polymorphic_shapes = None
-    f_tf = jax2tf.convert(f_jax, polymorphic_shapes=polymorphic_shapes)
-    x1 = np.arange(3, dtype=np.float32)
-    x_dead = np.arange(4, dtype=np.float32)
-    x3 = np.arange(5, dtype=np.float32)
-    self.assertAllClose(f_jax(x1, x_dead, x3),
-                        f_tf(x1, x_dead, x3))
+    with config.jax_export_calling_convention_version(version):
+      logging.info(
+        "Using JAX serialization version %s",
+        jax.config.jax_export_calling_convention_version)
+      def f_jax(x1, x_dead, x3):
+        return (x1, jax2tf.call_tf(lambda x: tf.math.sin(x), ordered=True,
+                                  call_tf_graph=True)(x3))
+      if poly:
+        polymorphic_shapes = ["b", None, None]
+      else:
+        polymorphic_shapes = None
+      f_tf = jax2tf.convert(f_jax, polymorphic_shapes=polymorphic_shapes)
+      x1 = np.arange(3, dtype=np.float32)
+      x_dead = np.arange(4, dtype=np.float32)
+      x3 = np.arange(5, dtype=np.float32)
+      self.assertAllClose(f_jax(x1, x_dead, x3),
+                          f_tf(x1, x_dead, x3))
 
   @jtu.parameterized_filterable(
     kwargs=[dict(ordered=ordered, version=version)
       for ordered in [True, False]
-      for version in [8, 9]
+      for version in [9]
     ]
   )
   def test_call_tf_graph_polymorphic(self, ordered: bool, version: int):
-    self.override_serialization_version(version)
-    @tf.function(jit_compile=True, autograph=False)
-    @partial(jax2tf.convert,
-      with_gradient=False,
-      native_serialization=True,
-      polymorphic_shapes=["(b)"])
-    @jax.jit
-    def tf_f_2(x):
-      tf_f = lambda x: print(tf.strings.length(tf.constant("hello, world")))
-      jax2tf.call_tf(tf_f,
-                     call_tf_graph=True,
-                     ordered=ordered)(x)
-      return x
+    with config.jax_export_calling_convention_version(version):
+      logging.info(
+        "Using JAX serialization version %s",
+        jax.config.jax_export_calling_convention_version)
 
-    x = np.arange(3, dtype=np.int32)
-    _ = tf.function(tf_f_2, autograph=False).get_concrete_function(x)
+      @tf.function(jit_compile=True, autograph=False)
+      @partial(jax2tf.convert,
+        with_gradient=False,
+        native_serialization=True,
+        polymorphic_shapes=["(b)"])
+      @jax.jit
+      def tf_f_2(x):
+        tf_f = lambda x: print(tf.strings.length(tf.constant("hello, world")))
+        jax2tf.call_tf(tf_f,
+                      call_tf_graph=True,
+                      ordered=ordered)(x)
+        return x
+
+      x = np.arange(3, dtype=np.int32)
+      _ = tf.function(tf_f_2, autograph=False).get_concrete_function(x)
 
   # TODO(b/293927250): call_tf_graph=True only accept concrete_function. The
   # workaround here is to set `module.call=concrete_fn.`.

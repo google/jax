@@ -16,29 +16,54 @@ from __future__ import annotations
 
 from functools import partial
 
-import scipy.integrate
-
 from jax import jit
-from jax._src.numpy import util
 from jax._src.typing import Array, ArrayLike
 import jax.numpy as jnp
 
-@util.implements(scipy.integrate.trapezoid)
+
 @partial(jit, static_argnames=('axis',))
 def trapezoid(y: ArrayLike, x: ArrayLike | None = None, dx: ArrayLike = 1.0,
               axis: int = -1) -> Array:
-  # TODO(phawkins): remove this annotation after fixing jnp types.
-  dx_array: Array
-  if x is None:
-    util.check_arraylike('trapezoid', y)
-    y_arr, = util.promote_dtypes_inexact(y)
-    dx_array = jnp.asarray(dx)
-  else:
-    util.check_arraylike('trapezoid', y, x)
-    y_arr, x_arr = util.promote_dtypes_inexact(y, x)
-    if x_arr.ndim == 1:
-      dx_array = jnp.diff(x_arr)
-    else:
-      dx_array = jnp.moveaxis(jnp.diff(x_arr, axis=axis), axis, -1)
-  y_arr = jnp.moveaxis(y_arr, axis, -1)
-  return 0.5 * (dx_array * (y_arr[..., 1:] + y_arr[..., :-1])).sum(-1)
+  r"""
+  Integrate along the given axis using the composite trapezoidal rule.
+
+  JAX implementation of :func:`scipy.integrate.trapezoid`
+
+  The trapezoidal rule approximates the integral under a curve by summing the
+  areas of trapezoids formed between adjacent data points.
+
+  Args:
+    y: array of data to integrate.
+    x: optional array of sample points corresponding to the ``y`` values. If not
+       provided, ``x`` defaults to equally spaced with spacing given by ``dx``.
+    dx: The spacing between sample points when `x` is None (default: 1.0).
+    axis: The axis along which to integrate (default: -1)
+
+  Returns:
+    The definite integral approximated by the trapezoidal rule.
+
+  See also:
+    :func:`jax.numpy.trapezoid`: NumPy-style API for trapezoidal integration
+
+  Examples:
+    Integrate over a regular grid, with spacing 1.0:
+
+    >>> y = jnp.array([1, 2, 3, 2, 3, 2, 1])
+    >>> jax.scipy.integrate.trapezoid(y, dx=1.0)
+    Array(13., dtype=float32)
+
+    Integrate over an irregular grid:
+
+    >>> x = jnp.array([0, 2, 5, 7, 10, 15, 20])
+    >>> jax.scipy.integrate.trapezoid(y, x)
+    Array(43., dtype=float32)
+
+    Approximate :math:`\int_0^{2\pi} \sin^2(x)dx`, which equals :math:`\pi`:
+
+    >>> x = jnp.linspace(0, 2 * jnp.pi, 1000)
+    >>> y = jnp.sin(x) ** 2
+    >>> result = jax.scipy.integrate.trapezoid(y, x)
+    >>> jnp.allclose(result, jnp.pi)
+    Array(True, dtype=bool)
+  """
+  return jnp.trapezoid(y, x, dx, axis)

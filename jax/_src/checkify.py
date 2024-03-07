@@ -13,11 +13,11 @@
 # limitations under the License.
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import dataclasses
 import functools
 import itertools as it
-from typing import Callable, TypeVar, Any, Union
+from typing import TypeVar, Any, Union
 
 import numpy as np
 
@@ -271,9 +271,9 @@ class Error:
       return None
 
   def _update(self, effect_type: ErrorEffect, pred, code, metadata, payload):
-    new_errs = {**self._pred, **{effect_type: pred}}  # type: ignore
-    new_codes = {**self._code, **{effect_type: code}}  # type: ignore
-    new_payload = {**self._payload, **{effect_type: payload}}  # type: ignore
+    new_errs = {**self._pred, **{effect_type: pred}}
+    new_codes = {**self._code, **{effect_type: code}}
+    new_payload = {**self._payload, **{effect_type: payload}}
     new_metadata = {**self._metadata, **metadata}
     return Error(new_errs, new_codes, new_metadata, new_payload)
 
@@ -751,7 +751,7 @@ def jaxpr_to_checkify_jaxpr(
   out_tree, error_effects = metadata()
   return checked_jaxpr, out_tree, error_effects
 
-def cond_error_check(error: Error, enabled_errors, index, *ops, branches, linear):
+def cond_error_check(error: Error, enabled_errors, index, *ops, branches):
   # Get the error-effects out of all branches so the cond can be called with
   # a merged error with all these effects.
   err_vals, err_tree = jtu.tree_flatten(error)
@@ -763,7 +763,6 @@ def cond_error_check(error: Error, enabled_errors, index, *ops, branches, linear
   effects = [get_error_effects_from_jaxpr(jxpr) for jxpr in branches]
   merged_error = error._add_placeholder_effects(set().union(*effects))
   err_vals, err_tree = jtu.tree_flatten(merged_error)
-  new_linear = (*[False] * len(err_vals), *linear)
 
   # Update branch jaxprs to be checkified jaxprs.
   in_avals = map(get_shaped_aval, [*err_vals, *ops])
@@ -773,7 +772,7 @@ def cond_error_check(error: Error, enabled_errors, index, *ops, branches, linear
 
   err_and_outs = lax.cond_p.bind(
       index, *err_vals, *ops,
-      branches=tuple(new_branches), linear=new_linear)
+      branches=tuple(new_branches))
 
   # we need to merge metadata across out_trees (a tuple)
   err0, out = tree_unflatten(out_trees[0], err_and_outs)
@@ -785,7 +784,7 @@ def cond_error_check(error: Error, enabled_errors, index, *ops, branches, linear
 error_checks[lax.cond_p] = cond_error_check
 
 def scan_error_check(error, enabled_errors, *in_flat, reverse, length, jaxpr,
-                     num_consts, num_carry, linear, unroll):
+                     num_consts, num_carry, linear, unroll, _split_transpose):
 
   consts, carry, xs = split_list(in_flat, [num_consts, num_carry])
   xs_mapped = [core.mapped_aval(length, 0, get_shaped_aval(val)) for val in xs]
@@ -812,7 +811,7 @@ def scan_error_check(error, enabled_errors, *in_flat, reverse, length, jaxpr,
   err_and_out = lax.scan_p.bind(
       *new_in_flat, reverse=reverse, length=length, jaxpr=checked_jaxpr,
       num_consts=len(consts), num_carry=len(carry)+len(err_vals),
-      linear=new_linear, unroll=unroll)
+      linear=new_linear, unroll=unroll, _split_transpose=_split_transpose)
   err, out = tree_unflatten(out_tree, err_and_out)
   return err, out
 
@@ -895,9 +894,9 @@ def while_loop_error_check(error, enabled_errors, *in_flat, cond_nconsts,
 error_checks[lax.while_p] = while_loop_error_check
 
 def pjit_error_check(error, enabled_errors, *vals_in, jaxpr,
-                     in_shardings, out_shardings, resource_env,
-                     donated_invars, name,
-                     inline, keep_unused):
+                     in_shardings, out_shardings,
+                     in_layouts, out_layouts,
+                     resource_env, donated_invars, name, inline, keep_unused):
   # jaxpr to checked_jaxpr
   err_vals, err_tree = jtu.tree_flatten(error)
   new_vals_in = [*err_vals, *vals_in]
@@ -908,10 +907,12 @@ def pjit_error_check(error, enabled_errors, *vals_in, jaxpr,
   # Update pjit params to account for extra error values.
   num_error_vals = len(err_vals)
   num_out_error_vals = out_tree.num_leaves - len(out_shardings)
-  sharding = sharding_impls.UNSPECIFIED
 
+  sharding = sharding_impls.UNSPECIFIED
   new_in_shardings = (*[sharding] * num_error_vals, *in_shardings)
   new_out_shardings = (*[sharding] * num_out_error_vals, *out_shardings)
+  new_in_layouts = (*[None] * num_error_vals, *in_layouts)
+  new_out_layouts = (*[None] * num_out_error_vals, *out_layouts)
   new_donated_invars = (*[False] * num_error_vals, *donated_invars)
 
   err_and_out = pjit.pjit_p.bind(
@@ -919,6 +920,8 @@ def pjit_error_check(error, enabled_errors, *vals_in, jaxpr,
       jaxpr=checked_jaxpr,
       in_shardings=new_in_shardings,
       out_shardings=new_out_shardings,
+      in_layouts=new_in_layouts,
+      out_layouts=new_out_layouts,
       resource_env=resource_env,
       donated_invars=new_donated_invars,
       name=name,
@@ -1296,6 +1299,6 @@ def check_error(error: Error) -> None:
   >>> error, _ = checkify.checkify(with_inner_jit)(-1)
   """
   if not isinstance(error, Error):
-    raise ValueError('check_error takes an Error as argument, '
+    raise TypeError('check_error takes an Error as argument, '
                      f'got type {type(error)} instead.')
   _check_error(error, debug=False)

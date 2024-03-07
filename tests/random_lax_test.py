@@ -65,6 +65,17 @@ class LaxRandomTest(jtu.JaxTestCase):
     # whether RBG keys may be involved, but that's no longer exact.
     if config.enable_custom_prng.value and samples.dtype == jnp.bfloat16:
       return
+    # kstest does not understand bfloat16 input, so cast to float32.
+    if samples.dtype == jnp.bfloat16:
+      samples = samples.astype('float32')
+    # kstest fails for infinities starting in scipy 1.12
+    # (https://github.com/scipy/scipy/issues/20386)
+    # TODO(jakevdp): remove this logic if/when fixed upstream.
+    scipy_version = jtu.parse_version(scipy.__version__)
+    if scipy_version >= (1, 12) and np.issubdtype(samples.dtype, np.floating):
+      samples = np.array(samples, copy=True)
+      samples[np.isposinf(samples)] = 0.01 * np.finfo(samples.dtype).max
+      samples[np.isneginf(samples)] = 0.01 * np.finfo(samples.dtype).min
     self.assertGreater(scipy.stats.kstest(samples, cdf).pvalue, fail_prob)
 
   def _CheckChiSquared(self, samples, pmf, *, pval=None):
@@ -201,22 +212,6 @@ class LaxRandomTest(jtu.JaxTestCase):
     self.assertTrue(max_val < 0.3)
     for samples in [uncompiled_samples, compiled_samples]:
       self._CheckKolmogorovSmirnovCDF(samples, scipy.stats.truncnorm(-0.3, 0.3).cdf)
-
-  @jtu.sample_product(dtype=jtu.dtypes.floating + jtu.dtypes.integer)
-  def testShuffle(self, dtype):
-    key = lambda: self.make_key(0)
-    x = np.arange(100).astype(dtype)
-    rand = lambda key: random.shuffle(key, x)
-    crand = jax.jit(rand)
-
-    with self.assertWarns((DeprecationWarning, FutureWarning)):
-      perm1 = rand(key())
-    with self.assertWarns((DeprecationWarning, FutureWarning)):
-      perm2 = crand(key())
-
-    self.assertAllClose(perm1, perm2)
-    self.assertFalse(np.all(perm1 == x))  # seems unlikely!
-    self.assertAllClose(np.sort(perm1), x, check_dtypes=False)
 
   @jtu.sample_product(
     [dict(shape=shape, replace=replace, axis=axis,
@@ -1083,7 +1078,7 @@ class LaxRandomTest(jtu.JaxTestCase):
 
     # TODO(jakevdp): key reuse checks for this OOM because of slice masking.
     # Can we fix this?
-    with jax.enable_key_reuse_checks(False):
+    with jax.debug_key_reuse(False):
       # just lower, don't run, takes too long
       jax.jit(f).lower()
 
@@ -1248,29 +1243,27 @@ class LaxRandomTest(jtu.JaxTestCase):
     self.assertArraysAllClose(samples2, jnp.array([jnp.nan, 0., jnp.nan, jnp.nan]), check_dtypes=False)
     self.assertArraysAllClose(samples3, jnp.array([jnp.nan, jnp.nan, jnp.nan]), check_dtypes=False)
 
-  def test_batched_key_warnings(self):
+  def test_batched_key_errors(self):
     keys = lambda: jax.random.split(self.make_key(0))
     msg = "{} accepts a single key, but was given a key array of shape.*"
 
-    # Check a handful of functions that are expected to warn.
-    with self.assertWarnsRegex(FutureWarning, msg.format('bits')):
+    # Check a handful of functions that are expected to error.
+    with self.assertRaisesRegex(ValueError, msg.format('bits')):
       jax.random.bits(keys(), shape=(2,))
-    with self.assertWarnsRegex(FutureWarning, msg.format('chisquare')):
+    with self.assertRaisesRegex(ValueError, msg.format('chisquare')):
       jax.random.chisquare(keys(), 1.0, shape=(2,))
-    with self.assertWarnsRegex(FutureWarning, msg.format('dirichlet')):
+    with self.assertRaisesRegex(ValueError, msg.format('dirichlet')):
       jax.random.dirichlet(keys(), jnp.arange(2.0), shape=(2,))
-    with self.assertWarnsRegex(FutureWarning, msg.format('gamma')):
+    with self.assertRaisesRegex(ValueError, msg.format('gamma')):
       jax.random.gamma(keys(), 1.0, shape=(2,))
-    with self.assertWarnsRegex(FutureWarning, msg.format('loggamma')):
+    with self.assertRaisesRegex(ValueError, msg.format('loggamma')):
       jax.random.loggamma(keys(), 1.0, shape=(2,))
-
-    # Other functions should error; test a few cases.
     with self.assertRaisesRegex(ValueError, msg.format('fold_in')):
       jax.random.fold_in(keys(), 0)
     with self.assertRaisesRegex(ValueError, msg.format('split')):
       jax.random.split(keys())
 
-    # Some shouldn't error or warn
+    # Shouldn't error or warn:
     with self.assertNoWarnings():
       jax.random.key_data(keys())
       jax.random.key_impl(keys())
@@ -1348,6 +1341,7 @@ class LaxRandomWithCustomPRNGTest(LaxRandomTest):
     out = vmap(vmap(random.fold_in), in_axes=(1, 0))(keys(), msgs.T)
     self.assertEqual(out.shape, (3, 2))
 
+  @jax.debug_key_reuse(False)
   def test_vmap_split_mapped_key(self):
     key = self.make_key(73)
     mapped_keys = random.split(key, num=3)
@@ -1382,7 +1376,7 @@ class LaxRandomWithRBGPRNGTest(LaxRandomTest):
     keys = random.split(key, 10)
     self.assertEqual(keys.shape, (10, *key.shape))
 
-  @jax.enable_key_reuse_checks(False)
+  @jax.debug_key_reuse(False)
   def test_vmap_fold_in_shape(self):
     # broadcast with scalar
     keys = random.split(self.make_key(73), 2)
@@ -1398,7 +1392,7 @@ class LaxRandomWithRBGPRNGTest(LaxRandomTest):
     out = vmap(random.fold_in, in_axes=(0, None))(keys, msgs[0])
     self.assertEqual(out.shape, keys.shape)
 
-  @jax.enable_key_reuse_checks(False)
+  @jax.debug_key_reuse(False)
   def test_vmap_split_not_mapped_key(self):
     key = self.make_key(73)
     single_split_key = random.split(key)
@@ -1408,24 +1402,58 @@ class LaxRandomWithRBGPRNGTest(LaxRandomTest):
       self.assertArraysEqual(random.key_data(vk),
                              random.key_data(single_split_key))
 
-  def test_vmap_split_mapped_key(self):
+  @jax.debug_key_reuse(False)
+  def test_vmap_split_mapped_key_shape(self):
     key = self.make_key(73)
     mapped_keys = random.split(key, num=3)
-    forloop_keys = [random.split(k) for k in mapped_keys]
     vmapped_keys = vmap(random.split)(mapped_keys)
     self.assertEqual(vmapped_keys.shape, (3, 2, *key.shape))
-    for fk, vk in zip(forloop_keys, vmapped_keys):
-      self.assertArraysEqual(random.key_data(fk),
-                             random.key_data(vk))
 
-  def test_vmap_random_bits(self):
-    rand_fun = lambda key: random.randint(key, (), 0, 100)
+  @jax.debug_key_reuse(False)
+  def test_vmap_split_mapped_key_values(self):
     key = self.make_key(73)
     mapped_keys = random.split(key, num=3)
-    forloop_rand_nums = [rand_fun(k) for k in mapped_keys]
+    vmapped_keys = vmap(random.split)(mapped_keys)
+    ref_keys = [random.split(k) for k in mapped_keys]
+    for rk, vk in zip(ref_keys, vmapped_keys):
+      self.assertArraysEqual(random.key_data(rk),
+                             random.key_data(vk))
+
+  @jax.debug_key_reuse(False)
+  def test_vmap_random_bits_shape(self):
+    rand_fun = lambda key, shape=(): random.randint(key, shape, 0, 100)
+    key = self.make_key(73)
+    mapped_keys = random.split(key, num=3)
     rand_nums = vmap(rand_fun)(mapped_keys)
     self.assertEqual(rand_nums.shape, (3,))
-    self.assertArraysEqual(rand_nums, jnp.array(forloop_rand_nums))
+
+  @jtu.skip_on_devices("tpu")
+  @jax.debug_key_reuse(False)
+  def test_vmap_random_bits_value(self):
+    rand_fun = lambda key, shape=(): random.randint(key, shape, 0, 100)
+    key = self.make_key(73)
+    mapped_keys = random.split(key, num=3)
+    rand_nums = vmap(rand_fun)(mapped_keys)
+    ref_nums = rand_fun(mapped_keys[0], shape=(3,))
+    self.assertArraysEqual(rand_nums, ref_nums)
+
+  def test_vmap_random_bits_distribution(self):
+    dtype = jnp.float32
+    keys = lambda: jax.random.split(self.make_key(0), 10)
+
+    def rand(key):
+      nums = jax.vmap(lambda key: random.uniform(key, (1000,), dtype))(key)
+      return nums.flatten()
+
+    crand = jax.jit(rand)
+
+    uncompiled_samples = rand(keys())
+    compiled_samples = crand(keys())
+
+    for samples in [uncompiled_samples, compiled_samples]:
+      self._CheckCollisions(samples, jnp.finfo(dtype).nmant)
+      self._CheckKolmogorovSmirnovCDF(samples, scipy.stats.uniform().cdf,
+                                      pval=0.005)
 
   def test_cannot_add(self):
     key = self.make_key(73)
@@ -1455,6 +1483,15 @@ class LaxRandomWithUnsafeRBGPRNGTest(LaxRandomWithRBGPRNGTest):
   def make_key(self, seed):
     return random.PRNGKey(seed, impl="unsafe_rbg")
 
+  @jtu.skip_on_devices("tpu")
+  @jax.debug_key_reuse(False)
+  def test_vmap_split_mapped_key_values(self):
+    key = self.make_key(73)
+    mapped_keys = random.split(key, num=3)
+    vmapped_keys = vmap(random.split)(mapped_keys)
+    ref_keys = random.split(mapped_keys[0], (3, 2))
+    self.assertArraysEqual(random.key_data(vmapped_keys),
+                           random.key_data(ref_keys))
 
 def _sampler_unimplemented_with_custom_prng(*args, **kwargs):
   raise SkipTest('sampler only implemented for default RNG')

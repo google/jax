@@ -1,0 +1,67 @@
+# Copyright 2024 The Jax Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+licenses(["notice"])
+
+load("@python//:defs.bzl", "compile_pip_requirements")
+load("@python_version_repo//:py_version.bzl", "REQUIREMENTS")
+load("//jaxlib:jax.bzl", "all_py_deps")
+
+compile_pip_requirements(
+    name = "requirements",
+    extra_args = [
+        "--allow-unsafe",
+        "--build-isolation",
+        "--rebuild",
+    ],
+    requirements_in = "requirements.in",
+    requirements_txt = REQUIREMENTS,
+    generate_hashes = True,
+    data = ["test-requirements.txt"]
+)
+
+compile_pip_requirements(
+    name = "requirements_nightly",
+    extra_args = [
+        "--allow-unsafe",
+        "--build-isolation",
+        "--extra-index-url=https://pypi.anaconda.org/scientific-python-nightly-wheels/simple",
+        "--pre",
+        "--upgrade"
+    ],
+    requirements_in = "requirements.in",
+    requirements_txt = REQUIREMENTS,
+    generate_hashes = False,
+    data = ["test-requirements.txt"]
+)
+
+compile_pip_requirements(
+    name = "requirements_dev",
+    extra_args = [
+        "--allow-unsafe",
+        "--build-isolation",
+        "--upgrade",
+        "--rebuild",
+    ],
+    requirements_in = "requirements.in",
+    requirements_txt = REQUIREMENTS,
+    generate_hashes = False,
+    data = ["test-requirements.txt"]
+)
+
+py_library(
+    name = "all_py_deps",
+    deps = all_py_deps(["zstandard"]),
+)

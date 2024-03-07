@@ -1,3 +1,4 @@
+(prng-design-jep)=
 # JAX PRNG Design
 We want a PRNG design that
 1. is **expressive** in that it is convenient to use and it doesn’t constrain the user’s ability to write numerical programs with exactly the behavior that they want,

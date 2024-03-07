@@ -17,9 +17,8 @@
 
 ## What is JAX?
 
-JAX is [Autograd](https://github.com/hips/autograd) and [XLA](https://www.tensorflow.org/xla),
-brought together for high-performance numerical computing, including
-large-scale machine learning research.
+JAX is a Python library for accelerator-oriented array computation and program transformation,
+designed for high-performance numerical computing and large-scale machine learning.
 
 With its updated version of [Autograd](https://github.com/hips/autograd),
 JAX can automatically differentiate native
@@ -84,7 +83,7 @@ perex_grads = jit(vmap(grad_loss, in_axes=(None, 0, 0)))  # fast per-example gra
 ## Quickstart: Colab in the Cloud
 Jump right in using a notebook in your browser, connected to a Google Cloud GPU.
 Here are some starter notebooks:
-- [The basics: NumPy on accelerators, `grad` for differentiation, `jit` for compilation, and `vmap` for vectorization](https://jax.readthedocs.io/en/latest/notebooks/quickstart.html)
+- [The basics: NumPy on accelerators, `grad` for differentiation, `jit` for compilation, and `vmap` for vectorization](https://jax.readthedocs.io/en/latest/quickstart.html)
 - [Training a Simple Neural Network, with TensorFlow Dataset Data Loading](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/neural_network_with_tfds_data.ipynb)
 
 **JAX now runs on Cloud TPUs.** To try out the preview, see the [Cloud TPU
@@ -361,8 +360,11 @@ Some standouts:
    startup (or set the environment variable `JAX_ENABLE_X64=True`).
    On TPU, JAX uses 32-bit values by default for everything _except_ internal
    temporary variables in 'matmul-like' operations, such as `jax.numpy.dot` and `lax.conv`.
-   Those ops have a `precision` parameter which can be used to simulate
-   true 32-bit, with a cost of possibly slower runtime.
+   Those ops have a `precision` parameter which can be used to approximate 32-bit operations
+   via three bfloat16 passes, with a cost of possibly slower runtime.
+   Non-matmul operations on TPU lower to implementations that often emphasize speed over
+   accuracy, so in practice computations on TPU will be less precise than similar
+   computations on other backends.
 1. Some of NumPy's dtype promotion semantics involving a mix of Python scalars
    and NumPy types aren't preserved, namely `np.add(1, np.array([2],
    np.float32)).dtype` is `float64` rather than `float32`.
@@ -394,8 +396,8 @@ Some standouts:
 
 | Hardware   | Instructions                                                                                                    |
 |------------|-----------------------------------------------------------------------------------------------------------------|
-| CPU        | `pip install -U "jax[cpu]"`                                                                                       |
-| NVIDIA GPU on x86_64 | `pip install -U "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html`        |
+| CPU        | `pip install -U jax`                                                                                            |
+| NVIDIA GPU | `pip install -U "jax[cuda12]"`                                                                                  |
 | Google TPU | `pip install -U "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html`                 |
 | AMD GPU    | Use [Docker](https://hub.docker.com/r/rocm/jax) or [build from source](https://jax.readthedocs.io/en/latest/developer.html#additional-notes-for-building-a-rocm-jaxlib-for-amd-gpus). |
 | Apple GPU  | Follow [Apple's instructions](https://developer.apple.com/metal/jax/).                                          |
@@ -412,7 +414,8 @@ community-supported conda build, and answers to some frequently-asked questions.
 Multiple Google research groups develop and share libraries for training neural
 networks in JAX. If you want a fully featured library for neural network
 training with examples and how-to guides, try
-[Flax](https://github.com/google/flax).
+[Flax](https://github.com/google/flax). Check out the new [NNX](https://flax.readthedocs.io/en/latest/nnx/index.html) API for a
+simplified development experience.
 
 Google X maintains the neural network library
 [Equinox](https://github.com/patrick-kidger/equinox). This is used as the

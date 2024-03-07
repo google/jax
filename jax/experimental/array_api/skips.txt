@@ -1,11 +1,36 @@
 # Known failures for the array api tests.
 
 # Test suite attempts in-place mutation:
-array_api_tests/test_special_cases.py::test_binary
 array_api_tests/test_special_cases.py::test_iop
 array_api_tests/test_special_cases.py::test_nan_propagation
-array_api_tests/test_special_cases.py::test_unary
 array_api_tests/test_array_object.py::test_setitem
 
-# fft test suite is buggy as of 83f0bcdc
-array_api_tests/test_fft.py
+# Raises NonInteractiveExampleWarning
+array_api_tests/test_special_cases.py::test_binary
+array_api_tests/test_special_cases.py::test_unary
+
+# Pending implementation update for proper dtype promotion behavior,
+# see https://github.com/data-apis/array-api-tests/issues/234
+array_api_tests/test_statistical_functions.py::test_sum
+array_api_tests/test_statistical_functions.py::test_prod
+
+# Pending bugfix, see https://github.com/data-apis/array-api-tests/issues/256
+array_api_tests/test_signatures.py::test_func_signature[logical_and]
+array_api_tests/test_signatures.py::test_func_signature[logical_or]
+array_api_tests/test_signatures.py::test_func_signature[logical_xor]
+
+# Returns int32 when int64 is expected
+array_api_tests/test_searching_functions.py::test_searchsorted
+
+# Various info functions not yet defined
+# Pending bugfix, see https://github.com/data-apis/array-api-tests/pull/262
+array_api_tests/test_has_names.py::test_has_names[info-capabilities]
+array_api_tests/test_has_names.py::test_has_names[info-default_device]
+array_api_tests/test_has_names.py::test_has_names[info-default_dtypes]
+array_api_tests/test_has_names.py::test_has_names[info-devices]
+array_api_tests/test_has_names.py::test_has_names[info-dtypes]
+array_api_tests/test_signatures.py::test_func_signature[capabilities]
+array_api_tests/test_signatures.py::test_func_signature[default_device]
+array_api_tests/test_signatures.py::test_func_signature[default_dtypes]
+array_api_tests/test_signatures.py::test_func_signature[devices]
+array_api_tests/test_signatures.py::test_func_signature[dtypes]

@@ -132,7 +132,7 @@ def f(token, x):
   return token, x
 ```
 If we rewrite `jax.print` to take in and return a token, we have now sequenced
-the two prints since the input to the second print depends is the output of the first print.
+the two prints since the input to the second print depends on the output of the first print.
 The actual value of `token` can be anything really, but we'll see in practice
 that the tokens are invisible to users.
 
@@ -207,7 +207,7 @@ computations will take the token as input and return it as an output.
 The implementation of this token threading involves upgrading the JAX lowering machinery to do
 this bookkeeping automatically.
 The main challenges involve dealing with higher-order primitives like call primitives
-and control-flow primitives. We won't go into details in how to handle those in this design note.
+and control-flow primitives. We won't go into details on how to handle those in this design note.
 
 ## Blocking on output tokens
 

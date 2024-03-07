@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Module for pallas-specific JAX primitives and functions."""
+"""Pallas-specific JAX primitives."""
+
 from __future__ import annotations
+
 import enum
 import functools
-
+import string
 from typing import Any
 
 import jax
@@ -24,66 +26,73 @@ from jax import lax
 from jax import tree_util
 from jax._src import ad_util
 from jax._src import core as jax_core
+from jax._src import effects
 from jax._src import pretty_printer as pp
 from jax._src import state
-from jax._src.util import (safe_map, safe_zip)
+from jax._src import util
+from jax._src.interpreters import ad
+from jax._src.interpreters import batching
+from jax._src.pallas import core as pallas_core
 from jax._src.state import discharge as state_discharge
 from jax._src.state import indexing
 from jax._src.state import primitives as sp
-from jax._src.interpreters import ad
 from jax.interpreters import mlir
 import jax.numpy as jnp
-
-from jax._src.pallas import core as pallas_core
-
-# TODO(sharadmv): enable type checking
-# mypy: ignore-errors
 
 partial = functools.partial
 Slice = indexing.Slice
 NDIndexer = indexing.NDIndexer
 
-map, unsafe_map = safe_map, map
-zip, unsafe_zip = safe_zip, zip
+map, unsafe_map = util.safe_map, map
+zip, unsafe_zip = util.safe_zip, zip
 
 program_id_p = jax_core.Primitive("program_id")
 
-def program_id(axis):
+def program_id(axis: int) -> jax.Array:
+  """Returns the kernel execution position along the given axis of the grid.
+
+  For example, with a 2D `grid` in the kernel execution corresponding to the
+  grid coordinates `(1, 2)`,
+  `program_id(axis=0)` returns `1` and `program_id(axis=1)` returns `2`.
+
+  Args:
+    axis: the axis of the grid along which to count the program.
+  """
   return program_id_p.bind(axis=axis)
 
 def program_id_bind(*, axis: int):
   grid_env = pallas_core.current_grid_env()
   if grid_env:
-    return grid_env[axis].axis_index
+    return grid_env[axis].index
+  frame = pallas_core.axis_frame()
+  # Query the size of the axis to make sure its a valid axis (and error
+  # otherwise).
+  _ = frame.size(axis)
   return jax_core.Primitive.bind(program_id_p, axis=axis)
 program_id_p.def_custom_bind(program_id_bind)
-
-def _program_id_impl(*, axis: int):
-  grid_env = pallas_core.current_grid_env()
-  return grid_env[axis].axis_index
-program_id_p.def_impl(_program_id_impl)
 
 def _program_id_abstract_eval(**_):
   return jax_core.ShapedArray((), jnp.int32)
 program_id_p.def_abstract_eval(_program_id_abstract_eval)
 
-
 num_programs_p = jax_core.Primitive("num_programs")
 
-def num_programs(axis):
+def num_programs(axis: int) -> int | jax.Array:
+  """Returns the size of the grid along the given axis."""
   return num_programs_p.bind(axis=axis)
 
 @num_programs_p.def_custom_bind
 def _num_programs_bind(*, axis: int):
+  # We might be using a local grid env
   grid_env = pallas_core.current_grid_env()
   if grid_env:
-    return jnp.asarray(grid_env[axis].axis_size, dtype=jnp.int32)
-  return jax_core.Primitive.bind(num_programs_p, axis=axis)
-
-@num_programs_p.def_impl
-def _num_programs_impl(*, axis: int):
-  grid_env = pallas_core.current_grid_env()
-  return jnp.asarray(grid_env[axis].axis_size, dtype=jnp.int32)
+    return grid_env[axis].size
+  # Otherwise, we look up the size of the grid in the axis env
+  frame = pallas_core.axis_frame()
+  size = frame.size(axis)
+  if size is pallas_core.dynamic_grid_dim:
+    return jax_core.Primitive.bind(num_programs_p, axis=axis)
+  return size
 
 @num_programs_p.def_abstract_eval
 def _num_programs_abstract_eval(**_):
@@ -223,7 +232,7 @@ multiple_of_p = jax_core.Primitive("multiple_of")
 multiple_of_p.def_impl(lambda x, **_: x)
 mlir.register_lowering(multiple_of_p, lambda _, x, **__: [x])
 
-def multiple_of(x, values):
+def multiple_of(x: jax.Array, values: list[int] | int) -> jax.Array:
   if not isinstance(values, list):
     values = [values]
   return multiple_of_p.bind(x, values=values)
@@ -280,12 +289,12 @@ def _load_jvp(primals, tangents, args_tree, **params):
     other_tangent = ad_util.instantiate(other_tangent)
   return (
       load_p.bind(
-          *tree_util.flatten(ref_primal, indexers, mask, other_primal),
+          *tree_util.tree_leaves((ref_primal, indexers, mask, other_primal)),
           args_tree=args_tree,
           **params,
       ),
       load_p.bind(
-          *tree_util.flatten(ref_tangent, indexers, mask, other_tangent),
+          *tree_util.tree_leaves((ref_tangent, indexers, mask, other_tangent)),
           args_tree=args_tree,
           **params,
       ),
@@ -294,6 +303,41 @@ def _load_jvp(primals, tangents, args_tree, **params):
 
 ad.primitive_jvps[load_p] = _load_jvp
 
+def uninitialized_value(shape, dtype):
+  if jnp.issubdtype(dtype, jnp.floating):
+    return jnp.full(shape, jnp.nan, dtype)
+  elif jnp.issubdtype(dtype, jnp.integer):
+    return jnp.full(shape, jnp.iinfo(dtype).min, dtype)
+  elif jnp.issubdtype(dtype, jnp.bool):
+    return jnp.full(shape, False, dtype)
+  raise NotImplementedError(dtype)
+
+def _pad_values_to_avoid_dynamic_slice_oob_shift(value,
+                                   slice_sizes, unpad=False):
+  """
+  DynamicSlice and DynamicUpdateSlice adjust the start index in cases where the
+  requested slice overruns the bounds of the array. This pads the array with
+  uninitialised values such that the requested slice will never overrun.
+
+  For example, if arr is [1.,2.,3.,4.] and a slice of size 4, start index 2 is
+  requested then the result will be [3.,4.,NaN,NaN] after padding, rather than
+  [1.,2.,3.,4.] from the unpadded array
+
+  unpad=True performs the inverse operation
+  """
+
+  padding_config = tuple((0, slice_size, 0) for slice_size in slice_sizes)
+  if unpad:
+    padding_config = tuple((-low, -high, -interior)
+                           for (low, high, interior) in padding_config)
+  padding_value = uninitialized_value(shape=(), dtype=value.dtype)
+  value = lax.pad(value,
+                  padding_config=padding_config,
+                  padding_value=padding_value)
+  return value
+
+_unpad_values_to_avoid_dynamic_slice_oob_shift = partial(
+  _pad_values_to_avoid_dynamic_slice_oob_shift, unpad=True)
 
 def _load_discharge_rule(in_avals, out_avals, *args_flat, args_tree, **_):
   del out_avals  # Unused.
@@ -303,10 +347,18 @@ def _load_discharge_rule(in_avals, out_avals, *args_flat, args_tree, **_):
     raise NotImplementedError("Only one indexer supported in discharge rule.")
   idx = indexers[0]
   if all((isinstance(s, Slice) or not s.shape) for s in idx.indices):
+    # TODO(b/329733289): support strided load/store in interpret mode.
+    for s in idx.indices:
+      if isinstance(s, Slice) and s.stride > 1:
+        raise NotImplementedError("Unimplemented stride support.")
     indices = idx.indices
     scalar_dims = [not isinstance(s, Slice) and not s.shape for s in indices]
     slice_starts = [s.start if isinstance(s, Slice) else s for s in indices]
     slice_sizes = tuple(s.size if isinstance(s, Slice) else 1 for s in indices)
+    # fixes an inconstency with lax.dynamic_slice where if the slice goes out
+    # of bounds, it will instead move the start_index backwards so the slice
+    # will fit in memory.
+    ref = _pad_values_to_avoid_dynamic_slice_oob_shift(ref, slice_sizes)
     out_ones = lax.dynamic_slice(ref, slice_starts, slice_sizes=slice_sizes)
     out_indexer = tuple(0 if scalar else slice(None) for scalar in scalar_dims)
     out = out_ones[out_indexer]
@@ -382,12 +434,12 @@ def _swap_jvp(primals, tangents, *, args_tree, **params):
   val_tangent = ad_util.instantiate(val_tangent)
   return (
       swap_p.bind(
-          *tree_util.flatten(ref_primal, indexers, val_primal, mask),
+          *tree_util.tree_leaves((ref_primal, indexers, val_primal, mask)),
           args_tree=args_tree,
           **params,
       ),
       swap_p.bind(
-          *tree_util.flatten(ref_tangent, indexers, val_tangent, mask),
+          *tree_util.tree_leaves((ref_tangent, indexers, val_tangent, mask)),
           args_tree=args_tree,
           **params,
       ),
@@ -404,6 +456,10 @@ def _swap_discharge_rule(in_avals, out_avals, *args_flat, args_tree, **_):
     raise NotImplementedError("Only one indexer supported in discharge rule.")
   idx = indexers[0]
   if all((isinstance(s, Slice) or not s.shape) for s in idx.indices):
+    # TODO(b/329733289): support strided load/store in interpret mode.
+    for s in idx.indices:
+      if isinstance(s, Slice) and s.stride > 1:
+        raise NotImplementedError("Unimplemented stride support.")
     indices = idx.indices
     scalar_dims = [
         i
@@ -412,6 +468,10 @@ def _swap_discharge_rule(in_avals, out_avals, *args_flat, args_tree, **_):
     ]
     slice_starts = [s.start if isinstance(s, Slice) else s for s in indices]
     slice_sizes = tuple(s.size if isinstance(s, Slice) else 1 for s in indices)
+    # Fixes an inconsistency with lax.dynamic_update_slice where if the slice
+    # goes out of bounds, it will instead move the start_index backwards so the
+    # slice will fit in memory.
+    ref = _pad_values_to_avoid_dynamic_slice_oob_shift(ref, slice_sizes)
     out = lax.dynamic_slice(ref, slice_starts, slice_sizes=slice_sizes)
     out = jnp.squeeze(out, scalar_dims)
     if mask is not None:
@@ -420,6 +480,7 @@ def _swap_discharge_rule(in_avals, out_avals, *args_flat, args_tree, **_):
       val = jnp.where(mask, val, out_)
     val = jnp.expand_dims(val, scalar_dims)
     x_new = lax.dynamic_update_slice(ref, val, start_indices=slice_starts)
+    x_new = _unpad_values_to_avoid_dynamic_slice_oob_shift(x_new, slice_sizes)
   elif all(not isinstance(s, Slice) for s in idx.indices):
     out = ref[idx.indices]
     if mask is not None:
@@ -476,3 +537,121 @@ def dot(a, b, trans_a: bool = False, trans_b: bool = False,
       precision=precision,
       preferred_element_type=jnp.float32,
   )
+
+
+class PrintEffect(effects.Effect):
+  __str__ = lambda self: "Print"
+
+
+debug_print_effect = PrintEffect()
+
+# TODO(slebedev): Consider making the effect ordered.
+effects.lowerable_effects.add_type(PrintEffect)
+effects.control_flow_allowed_effects.add_type(PrintEffect)
+effects.remat_allowed_effects.add_type(PrintEffect)
+effects.custom_derivatives_allowed_effects.add_type(PrintEffect)
+
+
+debug_print_p = jax_core.Primitive("debug_print")
+debug_print_p.multiple_results = True
+
+
+def debug_print(fmt: str, *args: jax.ArrayLike):
+  """Prints scalar values from inside a Pallas kernel.
+
+  Args:
+    fmt: A format string to be included in the output. The restrictions on the
+      format string depend on the backend:
+        * On GPU, when using Triton, ``fmt`` must not contain any placeholders
+          (``{...}``), since it is always printed before any of the values.
+        * On GPU, when using the experimental Mosaic GPU backend, ``fmt`` must
+          contain a placeholder for each value to be printed. Format specs and
+          conversions are not supported.
+        * In TPU, if ``fmt`` contains placeholders, all values must be 32-bit
+          integers. If there are no placeholders, the values are printed after
+          the format string.
+    *args: The scalar values to print.
+  """  # fmt: skip
+  has_placeholders = False
+  if fmt:
+    _, field_name, *_ = next(iter(string.Formatter().parse(fmt)))
+    has_placeholders = field_name is not None
+  return debug_print_p.bind(*args, fmt=fmt, has_placeholders=has_placeholders)
+
+
+def check_debug_print_format(
+    fmt: str, *args: jax.ArrayLike
+):
+  n_placeholders = 0
+  for _, field, spec, conversion in string.Formatter().parse(fmt):
+    if field is not None:
+      n_placeholders += 1
+    if spec or conversion:
+      raise ValueError(
+          "The format string should not contain any format specs or conversions"
+      )
+    if field:
+      raise ValueError(
+          "The format string should not reference arguments by position or name"
+      )
+
+  if len(args) != n_placeholders:
+    raise TypeError(
+        f"The format string expects {n_placeholders} "
+        f"argument{'' if n_placeholders == 1 else 's'}, but got {len(args)}"
+    )
+
+
+@debug_print_p.def_impl
+def debug_print_impl(*args: Any, fmt: str, has_placeholders: bool):
+  if has_placeholders:
+    print(fmt.format(*args))
+  else:
+    print(fmt, *args)
+  return ()
+
+
+@debug_print_p.def_effectful_abstract_eval
+def debug_print_abstract_eval(*avals: Any, fmt: str, has_placeholders: bool):
+  del fmt, has_placeholders
+  if any(aval.shape for aval in avals):
+    raise ValueError("Only scalar values are supported")
+  return [], {debug_print_effect}
+
+
+def debug_print_batching_rule(args, dims, **params):
+  """Unrolls the print primitive across the mapped axis."""
+  axis_size = next(x.shape[i] for x, i in zip(args, dims) if i is not None)
+
+  # TODO(sharadmv): implement in terms of rolled loop unstead of unrolled.
+  def get_arg_at_dim(i, dim, arg):
+    if dim is batching.not_mapped:
+      # Broadcast unmapped argument
+      return arg
+    return lax.index_in_dim(arg, i, axis=dim, keepdims=False)
+
+  outs = []
+  for i in range(axis_size):
+    args_idx = map(functools.partial(get_arg_at_dim, i), dims, args)
+    outs.append(debug_print_p.bind(*args_idx, **params))
+  outs = [jnp.stack(xs) for xs in zip(*outs)]
+  return outs, (0,) * len(outs)
+
+
+batching.primitive_batchers[debug_print_p] = functools.partial(
+    debug_print_batching_rule, debug_print_p
+)
+
+
+@functools.partial(mlir.register_lowering, debug_print_p)
+def debug_print_lowering_rule(ctx, *args, **params):
+  result, _, _ = mlir.emit_python_callback(
+      ctx,
+      functools.partial(debug_print_p.impl, **params),
+      None,
+      list(args),
+      ctx.avals_in,
+      ctx.avals_out,
+      has_side_effect=True,
+  )
+  return result

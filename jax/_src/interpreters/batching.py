@@ -14,10 +14,10 @@
 from __future__ import annotations
 
 import collections
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 import dataclasses
 from functools import partial
-from typing import Any, Callable, Union
+from typing import Any, Union
 
 import numpy as np
 
@@ -200,7 +200,7 @@ def _update_annotation(
   class Name:
     def __init__(self, a): self.a = a
   names = [Name(a) for a, _  in orig_type]
-  avals = [a.update(shape=tuple(names[d.val] if type(d) is pe.DBIdx else d  # type: ignore
+  avals = [a.update(shape=tuple(names[d.val] if type(d) is pe.DBIdx else d
                                 for d in a.shape))
            if type(a) is core.DShapedArray else a for a, e in orig_type if e]
 
@@ -245,7 +245,7 @@ def to_elt(trace: Trace, get_idx: GetIdx, x: Vmappable, spec: MapSpec) -> Elt:
                  for i, sz in enumerate(x.aval.elt_ty.shape)
                  if type(sz) is IndexedAxisSize)
     batch_axis = make_batch_axis(x.data.ndim, 0, [(d+1, ias.lengths)])
-    return BatchTracer(trace, x.data, batch_axis)  # type: ignore
+    return BatchTracer(trace, x.data, batch_axis)
   elif isinstance(spec, int) or spec is None:
     spec = spec and canonicalize_axis(spec, len(np.shape(x)))
     return (BatchTracer(trace, x, spec, source_info_util.current())
@@ -322,7 +322,7 @@ class BatchTracer(Tracer):
       assert type(batch_dim) in (NotMapped, int, RaggedAxis)
       if type(batch_dim) is int:
         aval = raise_to_shaped(core.get_aval(val))
-        assert 0 <= batch_dim < len(aval.shape)  # type: ignore
+        assert 0 <= batch_dim < len(aval.shape)
     self._trace = trace
     self.val = val
     self.batch_dim = batch_dim
@@ -338,7 +338,7 @@ class BatchTracer(Tracer):
     elif type(self.batch_dim) is RaggedAxis:
       new_aval = core.mapped_aval(
         aval.shape[self.batch_dim.stacked_axis], self.batch_dim.stacked_axis, aval)
-      shape = list(new_aval.shape)  # type: ignore
+      shape = list(new_aval.shape)  # pytype: disable=attribute-error
       for ragged_axis, segment_lengths in self.batch_dim.ragged_axes:
         size_tracer = BatchTracer(self._trace, segment_lengths, 0)
         if self.batch_dim.stacked_axis < ragged_axis:

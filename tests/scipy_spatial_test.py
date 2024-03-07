@@ -25,9 +25,8 @@ from scipy.spatial.transform import Slerp as osp_Slerp
 
 import jax.numpy as jnp
 import numpy as onp
-from jax import config
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 scipy_version = jtu.parse_version(scipy.version.version)
 

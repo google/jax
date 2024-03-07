@@ -17,7 +17,6 @@ import contextlib
 import unittest
 from absl.testing import absltest
 import jax
-from jax import config
 from jax._src import core
 from jax._src import test_util as jtu
 from jax._src.lib import xla_client as xc
@@ -31,7 +30,7 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 import numpy as np
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 prev_xla_flags = None
 

@@ -5,7 +5,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.0
+    jupytext_version: 1.16.1
 kernelspec:
   display_name: Python 3
   name: python3
@@ -15,15 +15,13 @@ kernelspec:
 
 # Distributed arrays and automatic parallelization
 
+<!--* freshness: { reviewed: '2024-04-16' } *-->
+
 +++ {"id": "pFtQjv4SzHRj"}
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/Distributed_arrays_and_automatic_parallelization.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/google/jax/blob/main/docs/notebooks/Distributed_arrays_and_automatic_parallelization.ipynb)
 
 This tutorial discusses parallelism via `jax.Array`, the unified array object model available in JAX v0.4.1 and newer.
-
-Refer to the [`jax.Array migration`](https://jax.readthedocs.io/en/latest/jax_array_migration.html#jax-array-migration) guide to learn how to migrate the existing JAX pre-v0.4.1 codebases to `jax.Array`.
-
-**Note:** The features required by `jax.Array` are not supported by the Colab TPU runtime at this time, but are available on Google Cloud TPU and Kaggle TPU VMs.
 
 ```{code-cell}
 :id: FNxScTfq3vGF
@@ -81,7 +79,7 @@ sharding = PositionalSharding(mesh_utils.create_device_mesh((8,)))
 :outputId: 3b518df8-5c29-4848-acc3-e41df939f30b
 
 # Create an array of random values:
-x = jax.random.normal(jax.random.PRNGKey(0), (8192, 8192))
+x = jax.random.normal(jax.random.key(0), (8192, 8192))
 # and use jax.device_put to distribute it across devices:
 y = jax.device_put(x, sharding.reshape(4, 2))
 jax.debug.visualize_array_sharding(y)
@@ -144,7 +142,7 @@ For example, here's a value with a single-device `Sharding`:
 :id: VmoX4SUp3vGJ
 
 import jax
-x = jax.random.normal(jax.random.PRNGKey(0), (8192, 8192))
+x = jax.random.normal(jax.random.key(0), (8192, 8192))
 ```
 
 ```{code-cell}
@@ -195,6 +193,8 @@ sharding
 ```
 
 +++ {"id": "uRLpOcmNj_Vt"}
+
+The device numbers here are not in numerical order, because the mesh reflects the underlying toroidal topology of the device.
 
 By writing `PositionalSharding(ndarray_of_devices)`, we fix the device order and the initial shape. Then we can reshape it:
 
@@ -609,7 +609,7 @@ sharding = PositionalSharding(mesh_utils.create_device_mesh((8,)))
 ```{code-cell}
 :id: Q1wuDp-L3vGT
 
-x = jax.random.normal(jax.random.PRNGKey(0), (8192, 8192))
+x = jax.random.normal(jax.random.key(0), (8192, 8192))
 x = jax.device_put(x, sharding.reshape(4, 2))
 ```
 
@@ -720,7 +720,7 @@ def init_model(key, layer_sizes, batch_size):
 layer_sizes = [784, 8192, 8192, 8192, 10]
 batch_size = 8192
 
-params, batch = init_model(jax.random.PRNGKey(0), layer_sizes, batch_size)
+params, batch = init_model(jax.random.key(0), layer_sizes, batch_size)
 ```
 
 +++ {"id": "sJv_h0AS2drh"}
@@ -902,7 +902,7 @@ def f(key, x):
   numbers = jax.random.uniform(key, x.shape)
   return x + numbers
 
-key = jax.random.PRNGKey(42)
+key = jax.random.key(42)
 x_sharding = jax.sharding.PositionalSharding(jax.devices())
 x = jax.device_put(jnp.arange(24), x_sharding)
 ```

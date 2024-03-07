@@ -1,4 +1,6 @@
-# GPU peformance tips
+# GPU performance tips
+
+<!--* freshness: { reviewed: '2024-06-10' } *-->
 
 This document focuses on performance tips for neural network workloads
 
@@ -22,6 +24,10 @@ code examples:
   bfloat16](https://github.com/google/maxtext/blob/07dc6ce27ced1246407d0de311d4a0d6a9fd46d8/MaxText/configs/base.yml#L41).
 
 ## XLA performance flags
+
+```{note}
+  JAX-Toolbox also has a page on [NVIDIA XLA performance FLAGS](https://github.com/NVIDIA/JAX-Toolbox/blob/main/rosetta/docs/GPU_performance.md).
+```
 
 The existence and exact behavior of XLA flags may be `jaxlib`-version dependent.
 
@@ -60,16 +66,12 @@ training on Nvidia GPUs](https://github.com/NVIDIA/JAX-Toolbox/blob/main/rosetta
 
 ### Communication flags
 
-* **--xla_gpu_enable_async_collectives** This flag enables the collective ops
-  such as `AllReduce`, `AllGather`, `ReduceScatter` and `CollectivePermute` to
-  be asynchronous. Asynchronous communication can overlap cross-core
-  communication with computation. The default value is False.
 * **--xla_gpu_enable_latency_hiding_scheduler** This flag enables latency hiding
   schedulers to overlap asynchronous communication with computation efficiently.
   The default value is False.
 * **--xla_gpu_enable_pipelined_collectives** When using pipeline parallelism,
   this flag enables overlapping the (i+1)-th layer weight `AllGather` with the
-  i-th layer computation. It also enables enable overlapping (i+1)-th layer
+  i-th layer computation. It also enables overlapping (i+1)-th layer
   weight `Reduce`/`ReduceScatter` with i-th layer's computation. The default
   value is False. **There are some bugs when this flag is turned on.**
 * **--xla_gpu_collective_permute_decomposer_threshold** This flag is useful when
@@ -107,3 +109,12 @@ os.environ.update({
 
 These NCCL flags could improve single-host communication speed. These flags
 don't seem useful for multi-host communication yet.
+
+## Multi-Process
+
+We recommand using one process per GPU and not one per node.  In some
+cases, this can speed up jitted computation. The
+{func}`jax.distributed.initialize` API will automatically understand
+that configuration when run under SLURM. However, this only a rule of
+thumb and it may be useful to test both one process per GPU and one
+process per node on your use case.

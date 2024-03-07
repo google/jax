@@ -5,7 +5,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.0
+    jupytext_version: 1.16.1
 kernelspec:
   display_name: Python 3
   name: python3
@@ -14,6 +14,8 @@ kernelspec:
 +++ {"id": "7XNMxdTwURqI"}
 
 # External Callbacks in JAX
+
+<!--* freshness: { reviewed: '2024-04-08' } *-->
 
 +++ {"id": "h6lXo6bSUYGq"}
 

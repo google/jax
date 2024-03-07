@@ -26,6 +26,9 @@ Experimental Modules
     jax.experimental.compilation_cache
     jax.experimental.key_reuse
     jax.experimental.mesh_utils
+    jax.experimental.serialize_executable
+    jax.experimental.shard_map
+    jax.experimental.pallas
 
 Experimental APIs
 -----------------

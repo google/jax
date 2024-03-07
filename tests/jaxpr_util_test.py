@@ -61,8 +61,8 @@ class JaxprStatsTest(jtu.JaxTestCase):
   def test_primitives_by_shape(self):
     def f(x, y):
       def sub(x, y):
-        return jnp.sum(jnp.array([x, y])), y
-      s, _ = jit(sub)(x, y)
+        return jnp.sum(jnp.array([x, y]))
+      s = jit(sub)(x, y)
       return jnp.sin(s) + jnp.cos(y)
 
     hist = jaxpr_util.primitives_by_shape(make_jaxpr(f)(1., 1.).jaxpr)
@@ -74,7 +74,7 @@ class JaxprStatsTest(jtu.JaxTestCase):
         f'cos :: float{t}[]',
         f'reduce_sum :: float{t}[]',
         f'concatenate :: float{t}[2]',
-        f'pjit :: float{t}[] *',
+        f'pjit :: float{t}[]',
     ]
     for k in shapes:
       self.assertEqual(hist[k], 1)

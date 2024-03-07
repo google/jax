@@ -16,13 +16,13 @@
 from __future__ import annotations
 
 import enum
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import cProfile
 import itertools
 import math
 import os
 from pstats import Stats
-from typing import Any, Callable
+from typing import Any
 import unittest
 
 from absl import logging
@@ -35,9 +35,7 @@ import operator as op
 import re
 
 import jax
-from jax.experimental import export
-from jax.experimental.export import _shape_poly as shape_poly
-from jax.experimental.export import _shape_poly_decision as shape_poly_decision
+from jax import export
 from jax.experimental import pjit
 from jax import lax
 import jax.numpy as jnp
@@ -46,6 +44,8 @@ from jax import random
 from jax._src import config
 from jax._src import core
 from jax._src import test_util as jtu
+from jax._src.export import shape_poly
+from jax._src.export import shape_poly_decision
 from jax._src.lax import lax as lax_internal
 from jax._src.lax import control_flow as lax_control_flow
 from jax._src.lib import xla_client
@@ -1267,11 +1267,11 @@ class PolyHarness(Harness):
       tst.assertEqual(getattr(jax.config, fname), fvalue, (
           f"Flag {fname} current value {getattr(jax.config, fname)} != {fvalue}"))
 
-    f_jax = self.dyn_fun
+    f_jax = jax.jit(self.dyn_fun)
     args = self.dyn_args_maker(tst.rng())
     args = jax.tree.map(jnp.array, args)
     args_specs = export.symbolic_args_specs(args, self.polymorphic_shapes,
-                                   symbolic_constraints=self.symbolic_constraints)
+        constraints=self.symbolic_constraints)
 
     if self.expect_error is not None:
       with tst.assertRaisesRegex(self.expect_error[0], self.expect_error[1]):
@@ -1283,7 +1283,7 @@ class PolyHarness(Harness):
       return None
     # Run the JAX natively and then the exported function and compare
     res_jax_native = f_jax(*args)
-    res_jax_exported = export.call_exported(exp)(*args)
+    res_jax_exported = exp.call(*args)
     custom_assert_lims = [
         l for l in self.limitations if l.custom_assert is not None]
     assert len(custom_assert_lims) <= 1, custom_assert_lims
@@ -1315,7 +1315,7 @@ def check_shape_poly(tst, f_jax: Callable, *,
                      symbolic_constraints: Sequence[str] = (),
                      expect_error=None) -> jax.Array | None:
   # Builds a PolyHarness and runs the test. See PolyHarness documentation.
-  h = PolyHarness("", "", f_jax,
+  h = PolyHarness("", "", jax.jit(f_jax),
                   arg_descriptors=arg_descriptors,
                   polymorphic_shapes=polymorphic_shapes,
                   symbolic_constraints=symbolic_constraints,
@@ -1408,11 +1408,10 @@ class ShapePolyTest(jtu.JaxTestCase):
     def f_jax(x, *, y):
       return x + jnp.sin(y)
 
-    f_exported = export.call_exported(
-        export.export(f_jax)(jax.ShapeDtypeStruct(export.symbolic_shape("b"),
-                                                  x.dtype),
-                             y=jax.ShapeDtypeStruct(y.shape, y.dtype)))
-    self.assertAllClose(f_jax(x, y=y), f_exported(x, y=y))
+    exp = export.export(jax.jit(f_jax))(
+        jax.ShapeDtypeStruct(export.symbolic_shape("b"), x.dtype),
+        y=jax.ShapeDtypeStruct(y.shape, y.dtype))
+    self.assertAllClose(f_jax(x, y=y), exp.call(x, y=y))
 
   def test_arg_avals_errors(self):
     """Test error reporting for shape polymorphism."""
@@ -1617,8 +1616,8 @@ class ShapePolyTest(jtu.JaxTestCase):
         acc += jnp.sum(slice, axis=0)
       return acc
 
-    _ = export.export(f)(jax.ShapeDtypeStruct(export.symbolic_shape("a, b"),
-                                              np.int32))
+    _ = export.export(jax.jit(f))(
+        jax.ShapeDtypeStruct(export.symbolic_shape("a, b"), np.int32))
 
 
   def test_constraints_compile_time_check(self):
@@ -1630,29 +1629,30 @@ class ShapePolyTest(jtu.JaxTestCase):
     x_spec = jax.ShapeDtypeStruct(
         export.symbolic_shape("a",
                               constraints=["a >= 2", "a <= 4"]), np.int32)
-    exp = export.export(f)(x_spec)
+    exp = export.export(jax.jit(f))(x_spec)
 
     x_2 = np.arange(2, dtype=np.int32)
-    res_2 = export.call_exported(exp)(x_2)
+    res_2 = exp.call(x_2)
     self.assertAllClose(x_2[0:2], res_2)
 
     x_4 = np.arange(4, dtype=np.int32)
-    res_4 = export.call_exported(exp)(x_4)
+    res_4 = exp.call(x_4)
     self.assertAllClose(x_4[1:3], res_4)
 
     with self.assertRaisesRegex(
         ValueError,
         re.escape("Expected 'a - 2' to be greater or equal to 0, but found -1")):
-      export.call_exported(exp)(np.arange(1, dtype=np.int32))
+      exp.call(np.arange(1, dtype=np.int32))
 
     with self.assertRaisesRegex(
         ValueError,
         re.escape("Expected '- a + 4' to be greater or equal to 0, but found -1")):
-      export.call_exported(exp)(np.arange(5, dtype=np.int32))
+      exp.call(np.arange(5, dtype=np.int32))
 
   def test_caching_with_scopes(self):
     f_tracing_count = 0
     expected_a_bounds = (1, np.inf)
+    @jax.jit
     def f(x):  # x: i32[a]
       nonlocal f_tracing_count
       f_tracing_count += 1
@@ -1757,7 +1757,7 @@ class ShapePolyTest(jtu.JaxTestCase):
                               polymorphic_shapes=["(b,)"])
     self.assertAllClose(f(x), res_tf)
 
-  @jax.enable_key_reuse_checks(False)
+  @jax.debug_key_reuse(False)
   def test_prng(self):
     # The PRNG implementation uses opaque types, test shape polymorphism
     with config.enable_custom_prng(True):
@@ -1997,6 +1997,30 @@ _POLY_SHAPE_TEST_HARNESSES = [
                   + jnp.sin(x))),
                 arg_descriptors=[RandArg((3, 4), _f32)],
                 polymorphic_shapes=["b, ..."]),
+    [  # approx_max_k
+        # x: f32[b, {n}, 32] with n being either 8 or the symbol "n"
+        # we reduce on dim=1, with size n
+        # k is either the constant 4 or the symbol "k"
+        PolyHarness("approx_max_k", f"n_{n}_k_{k}_agg={agg}",
+                    lambda x, x_k, agg: lax.approx_max_k(
+                        x, k=x_k.shape[0], reduction_dimension=1,
+                        aggregate_to_topk=agg),
+                    arg_descriptors=[RandArg((3, 8, 32), _f32),
+                                     RandArg((4,), _f32),
+                                     StaticArg(agg)],
+                    polymorphic_shapes=[f"b, {n}, 32", f"{k},"],
+                    # k must be at most the reduction dimension size
+                    symbolic_constraints=[f"{k} <= {n}"],
+                    expect_error=(
+                        (NotImplementedError, "aggregate_to_topk=False") if (
+                            not agg and (isinstance(k, str) or
+                                         isinstance(n, str))) else
+                        None
+                    ))
+        for n in [8, "n"]
+        for k in [4, "k"]
+        for agg in [True, False]
+    ],
     [  # arange
       PolyHarness("arange", name,
                   f_jax,
@@ -3071,6 +3095,12 @@ _POLY_SHAPE_TEST_HARNESSES = [
                 lambda x: jnp.tri(x.shape[0], M=x.shape[0] + 2) + x,
                 arg_descriptors=[RandArg((3, 1), _f32)],
                 polymorphic_shapes=["b, ..."]),
+    PolyHarness("tril", "",
+                lambda x: jnp.tril(jnp.ones((x.shape[0], x.shape[0] + x.shape[1]),
+                                            dtype=_f32),
+                                   k=x.shape[1]),
+                arg_descriptors=[RandArg((3, 4), _f32)],
+                polymorphic_shapes=["m, n"]),
     [
       PolyHarness("triangular_solve",
                   f"shape={jtu.format_shape_dtype_string(a_shape, dtype)}_{left_side=}_{a_poly=}_{b_poly=}",
@@ -3259,7 +3289,7 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
 
     if harness.group_name == "vmap_eigh" and jtu.test_device_matches(["gpu"]):
       # For eigh on GPU with shape polymorphism under native serialization,
-      # we use a different lowering for small matrices. See README.md.
+      # we use a different lowering for small matrices.
       shape = harness.original_harness.params["shape"]
       if 0 < shape[-1] <= 32:
         harness.check_result = False
@@ -3294,16 +3324,15 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
     # Update this here rather than in harness object because vmap_random_gamma is derived
     # from test_harnesses.all_harnesses, which strips override_jax_config_flags.
     if "random_gamma" in harness.group_name:
-      config_flags = {**config_flags, "jax_enable_key_reuse_checks": False}
+      config_flags = {**config_flags, "jax_debug_key_reuse": False}
 
-    prev_jax_config_flags = {fname: getattr(jax.config, fname) for fname in config_flags}
-    try:
-      for fname, fvalue in config_flags.items():
-        jax.config.update(fname, fvalue)
+    # TPU precision is a little lower since we swap the order of matmul operands.
+    if "cholesky" in harness.group_name and jtu.test_device_matches(["tpu"]):
+      harness.tol = 5e-5
+
+    with jtu.global_config_context(**config_flags):
       harness.run_test(self)
-    finally:
-      for fname, _ in config_flags.items():
-        jax.config.update(fname, prev_jax_config_flags[fname])
+
 
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())

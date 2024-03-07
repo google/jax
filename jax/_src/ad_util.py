@@ -13,8 +13,9 @@
 # limitations under the License.
 from __future__ import annotations
 
+from collections.abc import Callable
 import types
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from jax._src import core
 from jax._src import traceback_util

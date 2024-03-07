@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 
 from jax._src import core
@@ -30,59 +31,64 @@ map, unsafe_map = safe_map, map
 zip, unsafe_zip = safe_zip, zip
 
 JaxVal = Any
+Pytree = Any
 
 register = api_util.register_class_with_attrs
 
-class GetAttrPrimitive(core.Primitive):
-  def bind_with_trace(self, trace, args, params):
-    () = args
-    return trace.process_getattr(**params)
-getattr_p = GetAttrPrimitive('getattr')
-
-class SetAttrPrimitive(core.Primitive):
-  def bind_with_trace(self, trace, args, params):
-    val, = args
-    return trace.process_setattr(trace.full_raise(val), **params)
-setattr_p = SetAttrPrimitive('setattr')
+@contextmanager
+def top_trace():
+  stack = core.thread_local_state.trace_state.trace_stack.stack
+  main = stack.pop()
+  try:
+    trace = main.with_cur_sublevel()
+    yield trace
+  finally:
+    stack.append(main)
 
 def jax_getattr(obj: Any, attr: str):
-  return getattr_p.bind(obj=obj, attr=attr)
+  with top_trace() as trace:
+    return trace.process_getattr(obj, attr)
 
-def jax_setattr(obj: Any, attr: str, val: JaxVal):
-  setattr_p.bind(val, obj=obj, attr=attr)
+def jax_setattr(obj: Any, attr: str, val: Pytree):
+  with top_trace() as trace:
+    return trace.process_setattr(obj, attr, val)
 
-
-def _getattr_impl(_, *, obj, attr):
+def _getattr_impl(_, obj, attr):
   return getattr(obj, attr)
 core.EvalTrace.process_getattr = _getattr_impl
 
-def _setattr_impl(_, val, *, obj, attr):
+def _setattr_impl(_, obj, attr, val):
   setattr(obj, attr, val)
 core.EvalTrace.process_setattr = _setattr_impl
 
-
 def _ensure_tracked(trace: pe.DynamicJaxprTrace, obj: Any, attr: str):
   frame = trace.main.jaxpr_stack[-1]  # type: ignore
-  if (obj, attr) not in frame.attrs_tracked:
-    init_val = getattr(obj, attr)
-    aval = core.raise_to_shaped(core.get_aval(init_val))
+
+  def new_tracer(x):
+    aval = core.raise_to_shaped(core.get_aval(x))
     tracer = pe.DynamicJaxprTracer(trace, aval, pe.source_info_util.current())
     var = frame.tracer_to_var[id(tracer)] = frame.newvar(aval)
-    setattr(obj, attr, tracer)
-    frame.attrs_tracked.append((obj, attr))
-    frame.attrs_inits.append(init_val)
     frame.attrs_vars.append(var)
     frame.tracers.append(tracer)
+    return tracer
+
+  if (obj, attr) not in frame.attrs_tracked:
+    init_val = getattr(obj, attr)
+    frame.attrs_inits.append(init_val)
+    init_vals, init_tree = tree_flatten(init_val)
+    tracers = map(new_tracer, init_vals)
+    setattr(obj, attr, tree_unflatten(init_tree, tracers))
+    frame.attrs_tracked.append((obj, attr))
 pe.DynamicJaxprTrace._ensure_tracked = _ensure_tracked
 
-def _getattr_staging(trace, *, obj, attr):
+def _getattr_staging(trace, obj, attr):
   trace._ensure_tracked(obj, attr)
   return getattr(obj, attr)
 pe.DynamicJaxprTrace.process_getattr = _getattr_staging
 
-def _setattr_staging(trace, tracer, *, obj, attr):
+def _setattr_staging(trace, obj, attr, val):
   trace._ensure_tracked(obj, attr)
-  setattr(obj, attr, tracer)
+  setattr(obj, attr, val)
 pe.DynamicJaxprTrace.process_setattr = _setattr_staging
 
 
@@ -134,11 +140,18 @@ def jvp_subtrace2(main, primals, tangents):
   del main.attrs_tracked
   yield out_primals, out_tangents, tangent_attrs_out
 
-def _setattr_jvp(trace, tracer, *, obj, attr):
+def _setattr_jvp(trace, obj, attr, maybe_tracer):
+  tracer = trace.full_raise(maybe_tracer)
+  if isinstance(tracer.tangent, ad.Zero):
+    return setattr(obj, attr, tracer.primal)
   if (obj, attr) not in trace.main.attrs_tracked:
     trace.main.attrs_tracked.append((obj, attr))
-  setattr(obj, attr, tracer)
+  return setattr(obj, attr, tracer)
 ad.JVPTrace.process_setattr = _setattr_jvp
+
+def _getattr_jvp(trace, obj, attr):
+  return getattr(obj, attr)
+ad.JVPTrace.process_getattr = _getattr_jvp
 
 
 def linearize(f, *primals, attrs: list[tuple[Any, str]] = []):

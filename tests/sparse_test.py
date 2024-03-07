@@ -16,14 +16,12 @@ import contextlib
 from functools import partial
 import itertools
 import math
-import unittest
 
 from absl.testing import absltest
 from absl.testing import parameterized
 
 import jax
 import jax.random
-from jax import config
 from jax import dtypes
 from jax.experimental import sparse
 from jax.experimental.sparse import coo as sparse_coo
@@ -44,7 +42,7 @@ from jax.util import split_list
 import numpy as np
 import scipy.sparse
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 all_dtypes = jtu.dtypes.integer + jtu.dtypes.floating + jtu.dtypes.complex
 
@@ -351,9 +349,6 @@ class cuSparseTest(sptu.SparseTestCase):
     mat_resorted = mat_unsorted._sort_indices()
     self.assertArraysEqual(mat.todense(), mat_resorted.todense())
 
-  @unittest.skipIf(
-      not sptu.GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse"
-  )
   @jtu.run_on_devices("gpu")
   def test_coo_sorted_indices_gpu_lowerings(self):
     dtype = jnp.float32
@@ -544,9 +539,7 @@ class cuSparseTest(sptu.SparseTestCase):
       dtype=_lowerings.SUPPORTED_DATA_DTYPES,
       transpose=[True, False],
   )
-  @unittest.skipIf(
-      not sptu.GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse"
-  )
+  @jtu.run_on_devices("gpu")
   def test_coo_spmv(self, shape, dtype, transpose):
     rng_sparse = sptu.rand_sparse(self.rng())
     rng_dense = jtu.rand_default(self.rng())
@@ -569,9 +562,7 @@ class cuSparseTest(sptu.SparseTestCase):
       dtype=_lowerings.SUPPORTED_DATA_DTYPES,
       transpose=[True, False],
   )
-  @unittest.skipIf(
-      not sptu.GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse"
-  )
+  @jtu.run_on_devices("gpu")
   def test_coo_spmm(self, shape, dtype, transpose):
     rng_sparse = sptu.rand_sparse(self.rng())
     rng_dense = jtu.rand_default(self.rng())
@@ -594,9 +585,7 @@ class cuSparseTest(sptu.SparseTestCase):
       dtype=_lowerings.SUPPORTED_DATA_DTYPES,
       transpose=[True, False],
   )
-  @unittest.skipIf(
-      not sptu.GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse"
-  )
+  @jtu.run_on_devices("gpu")
   def test_csr_spmv(self, shape, dtype, transpose):
     rng_sparse = sptu.rand_sparse(self.rng())
     rng_dense = jtu.rand_default(self.rng())
@@ -617,9 +606,7 @@ class cuSparseTest(sptu.SparseTestCase):
       dtype=_lowerings.SUPPORTED_DATA_DTYPES,
       transpose=[True, False],
   )
-  @unittest.skipIf(
-      not sptu.GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse"
-  )
+  @jtu.run_on_devices("gpu")
   def test_csr_spmm(self, shape, dtype, transpose):
     rng_sparse = sptu.rand_sparse(self.rng())
     rng_dense = jtu.rand_default(self.rng())
@@ -1083,8 +1070,6 @@ class SparseSolverTest(sptu.SparseTestCase):
   )
   @jtu.run_on_devices("cpu", "cuda")
   def test_sparse_qr_linear_solver(self, size, reorder, dtype):
-    if jtu.test_device_matches(["cuda"]) and not sptu.GPU_LOWERING_ENABLED:
-      raise unittest.SkipTest('test requires cusparse/cusolver')
     rng = sptu.rand_sparse(self.rng())
     a = rng((size, size), dtype)
     nse = (a != 0).sum()
@@ -1110,8 +1095,6 @@ class SparseSolverTest(sptu.SparseTestCase):
   )
   @jtu.run_on_devices("cpu", "cuda")
   def test_sparse_qr_linear_solver_grads(self, size, dtype):
-    if jtu.test_device_matches(["cuda"]) and not sptu.GPU_LOWERING_ENABLED:
-      raise unittest.SkipTest('test requires cusparse/cusolver')
     rng = sptu.rand_sparse(self.rng())
     a = rng((size, size), dtype)
     nse = (a != 0).sum()

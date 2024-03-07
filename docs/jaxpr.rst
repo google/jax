@@ -34,7 +34,7 @@ There are two related representations in the code for jaxprs,
 :py:class:`jax.core.Jaxpr`, and is what you obtain when you use
 :py:func:`jax.make_jaxpr` to inspect jaxprs. It has the following fields:
 
-  * ``jaxpr``: is a :py:class:`jax.core.Jaxpr` representing the actual
+  * ``jaxpr`` is a :py:class:`jax.core.Jaxpr` representing the actual
     computation content of the function (described below).
   * ``consts`` is a list of constants.
 
@@ -42,9 +42,9 @@ The most interesting part of the ClosedJaxpr is the actual execution content,
 represented as a :py:class:`jax.core.Jaxpr` as printed using the following
 grammar::
 
-   jaxpr ::= { lambda Var* ; Var+.
-               let Eqn*
-               in  [Expr+] }
+  Jaxpr ::= { lambda Var* ; Var+. let
+                Eqn*
+              in  [Expr+] }
 
 where:
   * The parameters of the jaxpr are shown as two lists of variables separated by
@@ -62,7 +62,7 @@ where:
 
 Equations are printed as follows::
 
-  Eqn  ::= let Var+ = Primitive [ Param* ] Expr+
+  Eqn  ::= Var+ = Primitive [ Param* ] Expr+
 
 where:
   * ``Var+`` are one or more intermediate variables to be defined as the output
@@ -76,7 +76,7 @@ where:
     square brackets. Each parameter is shown as ``Name = Value``.
 
 
-Most jaxpr primitives are first-order (they take just one or more Expr as arguments)::
+Most jaxpr primitives are first-order (they take just one or more ``Expr`` as arguments)::
 
   Primitive := add | sub | sin | mul | ...
 
@@ -103,8 +103,8 @@ Here there are no constvars, ``a`` and ``b`` are the input variables
 and they correspond respectively to
 ``first`` and ``second`` function parameters. The scalar literal ``3.0`` is kept
 inline.
-The ``reduce_sum`` primitive has named parameters ``axes`` and ``input_shape``, in
-addition to the operand ``e``.
+The ``reduce_sum`` primitive has named parameter ``axes``, in addition to the
+operand ``e``.
 
 Note that even though execution of a program that calls into JAX builds a jaxpr,
 Python-level control-flow and Python-level functions execute normally.
@@ -218,18 +218,12 @@ For example:
         { lambda ; h:f32[]. let i:f32[] = sub h 2.0 in (i,) }
         { lambda ; j:f32[]. let k:f32[] = add j 3.0 in (k,) }
       )
-      linear=(False,)
     ] d b
   in (e,) }
 
-The cond primitive has a number of parameters:
-
-  * `branches` are jaxprs that correspond to the branch
-    functionals. In this example, those functionals each take one
-    input variable, corresponding to ``x``.
-  * `linear` is a tuple of booleans that is used internally by the
-    auto-differentiation machinery to encode which of the input
-    parameters are used linearly in the conditional.
+The `branches` parameter to the cond primitive corresponds to the branch
+functionals. In this example, those functionals each take one input variable,
+corresponding to ``x``.
 
 The above instance of the cond primitive takes two operands.  The first
 one (``d``) is the branch index, then ``b`` is the operand (``arg``) to
@@ -255,7 +249,6 @@ Another example, using :py:func:`lax.cond`:
         { lambda ; e:f32[]. let f:f32[] = sub e 3.0 in (f,) }
         { lambda ; g:f32[]. let h:f32[] = add g 3.0 in (h,) }
       )
-      linear=(False,)
     ] c a
   in (d,) }
 
@@ -287,7 +280,6 @@ contains a constant ``jnp.ones(1)`` that is hoisted as a `constvar`
           in (l,) }
         { lambda ; m_:i32[1] n:f32[1] o:f32[]. let  in (n,) }
       )
-      linear=(False, False, False)
     ] f a c d
   in (g,) }
 
@@ -306,7 +298,7 @@ and :py:func:`jax.lax.fori_loop`
     lax.fori_loop(start: int, end: int, body: (int -> C -> C), init: C) -> C
 
 
-In the above signature, “C” stands for the type of a the loop “carry” value.
+In the above signature, “C” stands for the type of the loop “carry” value.
 For example, here is an example fori loop
 
 >>> import numpy as np
@@ -371,6 +363,7 @@ For the example consider the function ``func11`` below
 { lambda ; a:f32[16] b:f32[]. let
     c:f32[16] = broadcast_in_dim[broadcast_dimensions=() shape=(16,)] 1.0
     d:f32[] e:f32[16] = scan[
+      _split_transpose=False
       jaxpr={ lambda ; f:f32[] g:f32[] h:f32[] i:f32[]. let
           j:f32[] = mul h i
           k:f32[] = convert_element_type[new_dtype=float32 weak_type=False] g

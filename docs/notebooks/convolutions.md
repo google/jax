@@ -5,7 +5,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.0
+    jupytext_version: 1.16.1
 kernelspec:
   display_name: Python 3
   language: python
@@ -15,6 +15,8 @@ kernelspec:
 +++ {"id": "TVT_MVvc02AA"}
 
 # Generalized Convolutions in JAX
+
+<!--* freshness: { reviewed: '2024-04-08' } *-->
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/convolutions.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/google/jax/blob/main/docs/notebooks/convolutions.ipynb)
 
@@ -43,7 +45,7 @@ from jax import random
 import jax.numpy as jnp
 import numpy as np
 
-key = random.PRNGKey(1701)
+key = random.key(1701)
 
 x = jnp.linspace(0, 10, 500)
 y = jnp.sin(x) + 0.2 * random.normal(key, shape=(500,))
@@ -84,7 +86,7 @@ ax[0].imshow(image, cmap='binary_r')
 ax[0].set_title('original')
 
 # Create a noisy version by adding random Gaussian noise
-key = random.PRNGKey(1701)
+key = random.key(1701)
 noisy_image = image + 50 * random.normal(key, image.shape)
 ax[1].imshow(noisy_image, cmap='binary_r')
 ax[1].set_title('noisy')

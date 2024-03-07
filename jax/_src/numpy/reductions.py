@@ -15,11 +15,11 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 import math
 import operator
-from typing import overload, Any, Callable, Literal, Protocol, Union
+from typing import overload, Any, Literal, Protocol, Union
 import warnings
 
 import numpy as np
@@ -33,7 +33,7 @@ from jax._src.numpy.util import (
     _broadcast_to, check_arraylike, _complex_elem_type,
     promote_dtypes_inexact, promote_dtypes_numeric, _where, implements)
 from jax._src.lax import lax as lax_internal
-from jax._src.typing import Array, ArrayLike, DType, DTypeLike
+from jax._src.typing import Array, ArrayLike, DType, DTypeLike, DeprecatedArg
 from jax._src.util import (
     canonicalize_axis as _canonicalize_axis, maybe_named_axis,
     NumpyComplexWarning)
@@ -64,6 +64,20 @@ def _upcast_f16(dtype: DTypeLike) -> DType:
   if np.dtype(dtype) in [np.float16, dtypes.bfloat16]:
     return np.dtype('float32')
   return np.dtype(dtype)
+
+def _promote_integer_dtype(dtype: DTypeLike) -> DTypeLike:
+  # Note: NumPy always promotes to 64-bit; jax instead promotes to the
+  # default dtype as defined by dtypes.int_ or dtypes.uint.
+  if dtypes.issubdtype(dtype, np.bool_):
+    return dtypes.int_
+  elif dtypes.issubdtype(dtype, np.unsignedinteger):
+    if np.iinfo(dtype).bits < np.iinfo(dtypes.uint).bits:
+      return dtypes.uint
+  elif dtypes.issubdtype(dtype, np.integer):
+    if np.iinfo(dtype).bits < np.iinfo(dtypes.int_).bits:
+      return dtypes.int_
+  return dtype
+
 
 ReductionOp = Callable[[Any, Any], Any]
 
@@ -103,16 +117,7 @@ def _reduction(a: ArrayLike, name: str, np_fun: Any, op: ReductionOp, init_val: 
   result_dtype = dtype or dtypes.dtype(a)
 
   if dtype is None and promote_integers:
-    # Note: NumPy always promotes to 64-bit; jax instead promotes to the
-    # default dtype as defined by dtypes.int_ or dtypes.uint.
-    if dtypes.issubdtype(result_dtype, np.bool_):
-      result_dtype = dtypes.int_
-    elif dtypes.issubdtype(result_dtype, np.unsignedinteger):
-      if np.iinfo(result_dtype).bits < np.iinfo(dtypes.uint).bits:
-        result_dtype = dtypes.uint
-    elif dtypes.issubdtype(result_dtype, np.integer):
-      if np.iinfo(result_dtype).bits < np.iinfo(dtypes.int_).bits:
-        result_dtype = dtypes.int_
+    result_dtype = _promote_integer_dtype(result_dtype)
 
   result_dtype = dtypes.canonicalize_dtype(result_dtype)
 
@@ -199,15 +204,6 @@ def _ensure_optional_axes(x: Axis) -> Axis:
     force, x, "The axis argument must be known statically.")
 
 
-# TODO(jakevdp) change promote_integers default to False
-_PROMOTE_INTEGERS_DOC = """
-promote_integers : bool, default=True
-    If True, then integer inputs will be promoted to the widest available integer
-    dtype, following numpy's behavior. If False, the result will have the same dtype
-    as the input. ``promote_integers`` is ignored if ``dtype`` is specified.
-"""
-
-
 @partial(api.jit, static_argnames=('axis', 'dtype', 'keepdims', 'promote_integers'), inline=True)
 def _reduce_sum(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
                 out: None = None, keepdims: bool = False,
@@ -219,10 +215,76 @@ def _reduce_sum(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
                     initial=initial, where_=where, parallel_reduce=lax.psum,
                     promote_integers=promote_integers)
 
-@implements(np.sum, skip_params=['out'], extra_params=_PROMOTE_INTEGERS_DOC)
+
 def sum(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
         out: None = None, keepdims: bool = False, initial: ArrayLike | None = None,
         where: ArrayLike | None = None, promote_integers: bool = True) -> Array:
+  r"""Sum of the elements of the array over a given axis.
+
+  JAX implementation of :func:`numpy.sum`.
+
+  Args:
+    a: Input array.
+    axis: int or array, default=None. Axis along which the sum to be computed.
+      If None, the sum is computed along all the axes.
+    dtype: The type of the output array. Default=None.
+    out: Unused by JAX
+    keepdims: bool, default=False. If true, reduced axes are left in the result
+      with size 1.
+    initial: int or array, Default=None. Initial value for the sum.
+    where: int or array, default=None. The elements to be used in the sum. Array
+      should be broadcast compatible to the input.
+    promote_integers : bool, default=True. If True, then integer inputs will be
+      promoted to the widest available integer dtype, following numpy's behavior.
+      If False, the result will have the same dtype as the input.
+      ``promote_integers`` is ignored if ``dtype`` is specified.
+
+  Returns:
+    An array of the sum along the given axis.
+
+  See also:
+    - :func:`jax.numpy.prod`: Compute the product of array elements over a given
+      axis.
+    - :func:`jax.numpy.max`: Compute the maximum of array elements over given axis.
+    - :func:`jax.numpy.min`: Compute the minimum of array elements over given axis.
+
+  Examples:
+
+    By default, the sum is computed along all the axes.
+
+    >>> x = jnp.array([[1, 3, 4, 2],
+    ...                [5, 2, 6, 3],
+    ...                [8, 1, 3, 9]])
+    >>> jnp.sum(x)
+    Array(47, dtype=int32)
+
+    If ``axis=1``, the sum is computed along axis 1.
+
+    >>> jnp.sum(x, axis=1)
+    Array([10, 16, 21], dtype=int32)
+
+    If ``keepdims=True``, ``ndim`` of the output is equal to that of the input.
+
+    >>> jnp.sum(x, axis=1, keepdims=True)
+    Array([[10],
+           [16],
+           [21]], dtype=int32)
+
+    To include only specific elements in the sum, you can use ``where``.
+
+    >>> where=jnp.array([[0, 0, 1, 0],
+    ...                  [0, 0, 1, 1],
+    ...                  [1, 1, 1, 0]], dtype=bool)
+    >>> jnp.sum(x, axis=1, keepdims=True, where=where)
+    Array([[ 4],
+           [ 9],
+           [12]], dtype=int32)
+    >>> where=jnp.array([[False],
+    ...                  [False],
+    ...                  [False]])
+    >>> jnp.sum(x, axis=0, keepdims=True, where=where)
+    Array([[0, 0, 0, 0]], dtype=int32)
+  """
   return _reduce_sum(a, axis=_ensure_optional_axes(axis), dtype=dtype, out=out,
                      keepdims=keepdims, initial=initial, where=where,
                      promote_integers=promote_integers)
@@ -238,11 +300,77 @@ def _reduce_prod(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None
                     axis=axis, dtype=dtype, out=out, keepdims=keepdims,
                     initial=initial, where_=where, promote_integers=promote_integers)
 
-@implements(np.prod, skip_params=['out'], extra_params=_PROMOTE_INTEGERS_DOC)
+
 def prod(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
          out: None = None, keepdims: bool = False,
          initial: ArrayLike | None = None, where: ArrayLike | None = None,
          promote_integers: bool = True) -> Array:
+  r"""Return product of the array elements over a given axis.
+
+  JAX implementation of :func:`numpy.prod`.
+
+  Args:
+    a: Input array.
+    axis: int or array, default=None. Axis along which the product to be computed.
+      If None, the product is computed along all the axes.
+    dtype: The type of the output array. Default=None.
+    keepdims: bool, default=False. If true, reduced axes are left in the result
+      with size 1.
+    initial: int or array, Default=None. Initial value for the product.
+    where: int or array, default=None. The elements to be used in the product.
+      Array should be broadcast compatible to the input.
+    promote_integers : bool, default=True. If True, then integer inputs will be
+      promoted to the widest available integer dtype, following numpy's behavior.
+      If False, the result will have the same dtype as the input.
+      ``promote_integers`` is ignored if ``dtype`` is specified.
+    out: Unused by JAX.
+
+  Returns:
+    An array of the product along the given axis.
+
+  See also:
+    - :func:`jax.numpy.sum`: Compute the sum of array elements over a given axis.
+    - :func:`jax.numpy.max`: Compute the maximum of array elements over given axis.
+    - :func:`jax.numpy.min`: Compute the minimum of array elements over given axis.
+
+  Examples:
+    By default, ``jnp.prod`` computes along all the axes.
+
+    >>> x = jnp.array([[1, 3, 4, 2],
+    ...                [5, 2, 1, 3],
+    ...                [2, 1, 3, 1]])
+    >>> jnp.prod(x)
+    Array(4320, dtype=int32)
+
+    If ``axis=1``, product is computed along axis 1.
+
+    >>> jnp.prod(x, axis=1)
+    Array([24, 30,  6], dtype=int32)
+
+    If ``keepdims=True``, ``ndim`` of the output is equal to that of the input.
+
+    >>> jnp.prod(x, axis=1, keepdims=True)
+    Array([[24],
+           [30],
+           [ 6]], dtype=int32)
+
+    To include only specific elements in the sum, you can use a``where``.
+
+    >>> where=jnp.array([[1, 0, 1, 0],
+    ...                  [0, 0, 1, 1],
+    ...                  [1, 1, 1, 0]], dtype=bool)
+    >>> jnp.prod(x, axis=1, keepdims=True, where=where)
+    Array([[4],
+           [3],
+           [6]], dtype=int32)
+    >>> where = jnp.array([[False],
+    ...                    [False],
+    ...                    [False]])
+    >>> jnp.prod(x, axis=1, keepdims=True, where=where)
+    Array([[1],
+           [1],
+           [1]], dtype=int32)
+  """
   return _reduce_prod(a, axis=_ensure_optional_axes(axis), dtype=dtype,
                       out=out, keepdims=keepdims, initial=initial, where=where,
                       promote_integers=promote_integers)
@@ -256,10 +384,77 @@ def _reduce_max(a: ArrayLike, axis: Axis = None, out: None = None,
                     axis=axis, out=out, keepdims=keepdims,
                     initial=initial, where_=where, parallel_reduce=lax.pmax)
 
-@implements(np.max, skip_params=['out'])
+
 def max(a: ArrayLike, axis: Axis = None, out: None = None,
         keepdims: bool = False, initial: ArrayLike | None = None,
         where: ArrayLike | None = None) -> Array:
+  r"""Return the maximum of the array elements along a given axis.
+
+  JAX implementation of :func:`numpy.max`.
+
+  Args:
+    a: Input array.
+    axis: int or array, default=None. Axis along which the maximum to be computed.
+      If None, the maximum is computed along all the axes.
+    keepdims: bool, default=False. If true, reduced axes are left in the result
+      with size 1.
+    initial: int or array, default=None. Initial value for the maximum.
+    where: int or array of boolean dtype, default=None. The elements to be used
+      in the maximum. Array should be broadcast compatible to the input.
+      ``initial`` must be specified when ``where`` is used.
+    out: Unused by JAX.
+
+  Returns:
+    An array of maximum values along the given axis.
+
+  See also:
+    - :func:`jax.numpy.min`: Compute the minimum of array elements along a given
+      axis.
+    - :func:`jax.numpy.sum`: Compute the sum of array elements along a given axis.
+    - :func:`jax.numpy.prod`: Compute the product of array elements along a given
+      axis.
+
+  Examples:
+
+    By default, ``jnp.max`` computes the maximum of elements along all the axes.
+
+    >>> x = jnp.array([[9, 3, 4, 5],
+    ...                [5, 2, 7, 4],
+    ...                [8, 1, 3, 6]])
+    >>> jnp.max(x)
+    Array(9, dtype=int32)
+
+    If ``axis=1``, the maximum will be computed along axis 1.
+
+    >>> jnp.max(x, axis=1)
+    Array([9, 7, 8], dtype=int32)
+
+    If ``keepdims=True``, ``ndim`` of the output will be same of that of the input.
+
+    >>> jnp.max(x, axis=1, keepdims=True)
+    Array([[9],
+           [7],
+           [8]], dtype=int32)
+
+    To include only specific elements in computing the maximum, you can use
+    ``where``. It can either have same dimension as input
+
+    >>> where=jnp.array([[0, 0, 1, 0],
+    ...                  [0, 0, 1, 1],
+    ...                  [1, 1, 1, 0]], dtype=bool)
+    >>> jnp.max(x, axis=1, keepdims=True, initial=0, where=where)
+    Array([[4],
+           [7],
+           [8]], dtype=int32)
+
+    or must be broadcast compatible with input.
+
+    >>> where = jnp.array([[False],
+    ...                    [False],
+    ...                    [False]])
+    >>> jnp.max(x, axis=0, keepdims=True, initial=0, where=where)
+    Array([[0, 0, 0, 0]], dtype=int32)
+  """
   return _reduce_max(a, axis=_ensure_optional_axes(axis), out=out,
                      keepdims=keepdims, initial=initial, where=where)
 
@@ -271,10 +466,76 @@ def _reduce_min(a: ArrayLike, axis: Axis = None, out: None = None,
                     axis=axis, out=out, keepdims=keepdims,
                     initial=initial, where_=where, parallel_reduce=lax.pmin)
 
-@implements(np.min, skip_params=['out'])
+
 def min(a: ArrayLike, axis: Axis = None, out: None = None,
         keepdims: bool = False, initial: ArrayLike | None = None,
         where: ArrayLike | None = None) -> Array:
+  r"""Return the minimum of array elements along a given axis.
+
+  JAX implementation of :func:`numpy.min`.
+
+  Args:
+    a: Input array.
+    axis: int or array, default=None. Axis along which the minimum to be computed.
+      If None, the minimum is computed along all the axes.
+    keepdims: bool, default=False. If true, reduced axes are left in the result
+      with size 1.
+    initial: int or array, Default=None. Initial value for the minimum.
+    where: int or array, default=None. The elements to be used in the minimum.
+      Array should be broadcast compatible to the input. ``initial`` must be
+      specified when ``where`` is used.
+    out: Unused by JAX.
+
+  Returns:
+    An array of minimum values along the given axis.
+
+  See also:
+    - :func:`jax.numpy.max`: Compute the maximum of array elements along a given
+      axis.
+    - :func:`jax.numpy.sum`: Compute the sum of array elements along a given axis.
+    - :func:`jax.numpy.prod`: Compute the product of array elements along a given
+      axis.
+
+  Examples:
+    By default, the minimum is computed along all the axes.
+
+    >>> x = jnp.array([[2, 5, 1, 6],
+    ...                [3, -7, -2, 4],
+    ...                [8, -4, 1, -3]])
+    >>> jnp.min(x)
+    Array(-7, dtype=int32)
+
+    If ``axis=1``, the minimum is computed along axis 1.
+
+    >>> jnp.min(x, axis=1)
+    Array([ 1, -7, -4], dtype=int32)
+
+    If ``keepdims=True``, ``ndim`` of the output will be same of that of the input.
+
+    >>> jnp.min(x, axis=1, keepdims=True)
+    Array([[ 1],
+           [-7],
+           [-4]], dtype=int32)
+
+    To include only specific elements in computing the minimum, you can use
+    ``where``. ``where`` can either have same dimension as input.
+
+    >>> where=jnp.array([[1, 0, 1, 0],
+    ...                  [0, 0, 1, 1],
+    ...                  [1, 1, 1, 0]], dtype=bool)
+    >>> jnp.min(x, axis=1, keepdims=True, initial=0, where=where)
+    Array([[ 0],
+           [-2],
+           [-4]], dtype=int32)
+
+    or must be broadcast compatible with input.
+
+    >>> where = jnp.array([[False],
+    ...                    [False],
+    ...                    [False]])
+    >>> jnp.min(x, axis=0, keepdims=True, initial=0, where=where)
+    Array([[0, 0, 0, 0]], dtype=int32)
+  """
   return _reduce_min(a, axis=_ensure_optional_axes(axis), out=out,
                      keepdims=keepdims, initial=initial, where=where)
 
@@ -284,9 +545,53 @@ def _reduce_all(a: ArrayLike, axis: Axis = None, out: None = None,
   return _reduction(a, "all", np.all, lax.bitwise_and, True, preproc=_cast_to_bool,
                     axis=axis, out=out, keepdims=keepdims, where_=where)
 
-@implements(np.all, skip_params=['out'])
+
 def all(a: ArrayLike, axis: Axis = None, out: None = None,
         keepdims: bool = False, *, where: ArrayLike | None = None) -> Array:
+  r"""Test whether all array elements along a given axis evaluate to True.
+
+  JAX implementation of :func:`numpy.all`.
+
+  Args:
+    a: Input array.
+    axis: int or array, default=None. Axis along which to be tested. If None,
+      tests along all the axes.
+    keepdims: bool, default=False. If true, reduced axes are left in the result
+      with size 1.
+    where: int or array of boolean dtype, default=None. The elements to be used
+      in the test. Array should be broadcast compatible to the input.
+    out: Unused by JAX.
+
+  Returns:
+    An array of boolean values.
+
+  Examples:
+    By default, ``jnp.all`` tests for True values along all the axes.
+
+    >>> x = jnp.array([[True, True, True, False],
+    ...                [True, False, True, False],
+    ...                [True, True, False, False]])
+    >>> jnp.all(x)
+    Array(False, dtype=bool)
+
+    If ``axis=0``, tests for True values along axis 0.
+
+    >>> jnp.all(x, axis=0)
+    Array([ True, False, False, False], dtype=bool)
+
+    If ``keepdims=True``, ``ndim`` of the output will be same of that of the input.
+
+    >>> jnp.all(x, axis=0, keepdims=True)
+    Array([[ True, False, False, False]], dtype=bool)
+
+    To include specific elements in testing for True values, you can use a``where``.
+
+    >>> where=jnp.array([[1, 0, 1, 0],
+    ...                  [0, 0, 1, 1],
+    ...                  [1, 1, 1, 0]], dtype=bool)
+    >>> jnp.all(x, axis=0, keepdims=True, where=where)
+    Array([[ True,  True, False, False]], dtype=bool)
+  """
   return _reduce_all(a, axis=_ensure_optional_axes(axis), out=out,
                      keepdims=keepdims, where=where)
 
@@ -296,14 +601,69 @@ def _reduce_any(a: ArrayLike, axis: Axis = None, out: None = None,
   return _reduction(a, "any", np.any, lax.bitwise_or, False, preproc=_cast_to_bool,
                     axis=axis, out=out, keepdims=keepdims, where_=where)
 
-@implements(np.any, skip_params=['out'])
+
 def any(a: ArrayLike, axis: Axis = None, out: None = None,
         keepdims: bool = False, *, where: ArrayLike | None = None) -> Array:
+  r"""Test whether any of the array elements along a given axis evaluate to True.
+
+  JAX implementation of :func:`numpy.any`.
+
+  Args:
+    a: Input array.
+    axis: int or array, default=None. Axis along which to be tested. If None,
+      tests along all the axes.
+    keepdims: bool, default=False. If true, reduced axes are left in the result
+      with size 1.
+    where: int or array of boolean dtype, default=None. The elements to be used
+      in the test. Array should be broadcast compatible to the input.
+    out: Unused by JAX.
+
+  Returns:
+    An array of boolean values.
+
+  Examples:
+    By default, ``jnp.any`` tests along all the axes.
+
+    >>> x = jnp.array([[True, True, True, False],
+    ...                [True, False, True, False],
+    ...                [True, True, False, False]])
+    >>> jnp.any(x)
+    Array(True, dtype=bool)
+
+    If ``axis=0``, tests along axis 0.
+
+    >>> jnp.any(x, axis=0)
+    Array([ True,  True,  True, False], dtype=bool)
+
+    If ``keepdims=True``, ``ndim`` of the output will be same of that of the input.
+
+    >>> jnp.any(x, axis=0, keepdims=True)
+    Array([[ True,  True,  True, False]], dtype=bool)
+
+    To include specific elements in testing for True values, you can use a``where``.
+
+    >>> where=jnp.array([[1, 0, 1, 0],
+    ...                  [0, 1, 0, 1],
+    ...                  [1, 0, 1, 0]], dtype=bool)
+    >>> jnp.any(x, axis=0, keepdims=True, where=where)
+    Array([[ True, False,  True, False]], dtype=bool)
+  """
   return _reduce_any(a, axis=_ensure_optional_axes(axis), out=out,
                      keepdims=keepdims, where=where)
 
-amin = min
-amax = max
+def amin(a: ArrayLike, axis: Axis = None, out: None = None,
+        keepdims: bool = False, initial: ArrayLike | None = None,
+        where: ArrayLike | None = None) -> Array:
+  """Alias of :func:`jax.numpy.min`."""
+  return min(a, axis=axis, out=out, keepdims=keepdims,
+             initial=initial, where=where)
+
+def amax(a: ArrayLike, axis: Axis = None, out: None = None,
+        keepdims: bool = False, initial: ArrayLike | None = None,
+        where: ArrayLike | None = None) -> Array:
+  """Alias of :func:`jax.numpy.max`."""
+  return max(a, axis=axis, out=out, keepdims=keepdims,
+             initial=initial, where=where)
 
 def _axis_size(a: ArrayLike, axis: int | Sequence[int]):
   if not isinstance(axis, (tuple, list)):
@@ -316,10 +676,65 @@ def _axis_size(a: ArrayLike, axis: int | Sequence[int]):
     size *= maybe_named_axis(a, lambda i: a_shape[i], lambda name: lax.psum(1, name))
   return size
 
-@implements(np.mean, skip_params=['out'])
+
 def mean(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
          out: None = None, keepdims: bool = False, *,
          where: ArrayLike | None = None) -> Array:
+  r"""Return the mean of array elements along a given axis.
+
+  JAX implementation of :func:`numpy.mean`.
+
+  Args:
+    a: input array.
+    axis: optional, int or sequence of ints, default=None. Axis along which the
+      mean to be computed. If None, mean is computed along all the axes.
+    dtype: The type of the output array. Default=None.
+    keepdims: bool, default=False. If true, reduced axes are left in the result
+      with size 1.
+    where: optional, boolean array, default=None. The elements to be used in the
+      mean. Array should be broadcast compatible to the input.
+    out: Unused by JAX.
+
+  Returns:
+    An array of the mean along the given axis.
+
+  See also:
+    - :func:`jax.numpy.sum`: Compute the sum of array elements over a given axis.
+    - :func:`jax.numpy.max`: Compute the maximum of array elements over given axis.
+    - :func:`jax.numpy.min`: Compute the minimum of array elements over given axis.
+
+  Examples:
+    By default, the mean is computed along all the axes.
+
+    >>> x = jnp.array([[1, 3, 4, 2],
+    ...                [5, 2, 6, 3],
+    ...                [8, 1, 2, 9]])
+    >>> jnp.mean(x)
+    Array(3.8333335, dtype=float32)
+
+    If ``axis=1``, the mean is computed along axis 1.
+
+    >>> jnp.mean(x, axis=1)
+    Array([2.5, 4. , 5. ], dtype=float32)
+
+    If ``keepdims=True``, ``ndim`` of the output is equal to that of the input.
+
+    >>> jnp.mean(x, axis=1, keepdims=True)
+    Array([[2.5],
+           [4. ],
+           [5. ]], dtype=float32)
+
+    To use only specific elements of ``x`` to compute the mean, you can use
+    ``where``.
+
+    >>> where = jnp.array([[1, 0, 1, 0],
+    ...                    [0, 1, 0, 1],
+    ...                    [1, 1, 0, 1]], dtype=bool)
+    >>> jnp.mean(x, axis=1, keepdims=True, where=where)
+    Array([[2.5],
+           [2.5],
+           [6. ]], dtype=float32)
+  """
   return _mean(a, _ensure_optional_axes(axis), dtype, out, keepdims,
                where=where)
 
@@ -425,16 +840,92 @@ def _average(a: ArrayLike, axis: Axis = None, weights: ArrayLike | None = None,
   return avg
 
 
-@implements(np.var, skip_params=['out'])
 def var(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
         out: None = None, ddof: int = 0, keepdims: bool = False, *,
-        where: ArrayLike | None = None) -> Array:
-  return _var(a, _ensure_optional_axes(axis), dtype, out, ddof, keepdims,
+        where: ArrayLike | None = None, correction: int | float | None = None) -> Array:
+  r"""Compute the variance along a given axis.
+
+  JAX implementation of :func:`numpy.var`.
+
+  Args:
+    a: input array.
+    axis: optional, int or sequence of ints, default=None. Axis along which the
+      variance is computed. If None, variance is computed along all the axes.
+    dtype: The type of the output array. Default=None.
+    ddof: int, default=0. Degrees of freedom. The divisor in the variance computation
+      is ``N-ddof``, ``N`` is number of elements along given axis.
+    keepdims: bool, default=False. If true, reduced axes are left in the result
+      with size 1.
+    where: optional, boolean array, default=None. The elements to be used in the
+      variance. Array should be broadcast compatible to the input.
+    correction: int or float, default=None. Alternative name for ``ddof``.
+      Both ddof and correction can't be provided simultaneously.
+    out: Unused by JAX.
+
+  Returns:
+    An array of the variance along the given axis.
+
+  See also:
+    - :func:`jax.numpy.mean`: Compute the mean of array elements over a given axis.
+    - :func:`jax.numpy.std`: Compute the standard deviation of array elements over
+      given axis.
+    - :func:`jax.numpy.nanvar`: Compute the variance along a given axis, ignoring
+      NaNs values.
+    - :func:`jax.numpy.nanstd`: Computed the standard deviation of a given axis,
+      ignoring NaN values.
+
+  Examples:
+    By default, ``jnp.var`` computes the variance along all axes.
+
+    >>> x = jnp.array([[1, 3, 4, 2],
+    ...                [5, 2, 6, 3],
+    ...                [8, 4, 2, 9]])
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   jnp.var(x)
+    Array(5.74, dtype=float32)
+
+    If ``axis=1``, variance is computed along axis 1.
+
+    >>> jnp.var(x, axis=1)
+    Array([1.25  , 2.5   , 8.1875], dtype=float32)
+
+    To preserve the dimensions of input, you can set ``keepdims=True``.
+
+    >>> jnp.var(x, axis=1, keepdims=True)
+    Array([[1.25  ],
+           [2.5   ],
+           [8.1875]], dtype=float32)
+
+    If ``ddof=1``:
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.var(x, axis=1, keepdims=True, ddof=1))
+    [[ 1.67]
+     [ 3.33]
+     [10.92]]
+
+    To include specific elements of the array to compute variance, you can use
+    ``where``.
+
+    >>> where = jnp.array([[1, 0, 1, 0],
+    ...                    [0, 1, 1, 0],
+    ...                    [1, 1, 1, 0]], dtype=bool)
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.var(x, axis=1, keepdims=True, where=where))
+    [[2.25]
+     [4.  ]
+     [6.22]]
+  """
+  if correction is None:
+    correction = ddof
+  elif not isinstance(ddof, int) or ddof != 0:
+    raise ValueError("ddof and correction can't be provided simultaneously.")
+  return _var(a, _ensure_optional_axes(axis), dtype, out, correction, keepdims,
               where=where)
 
 @partial(api.jit, static_argnames=('axis', 'dtype', 'keepdims'))
 def _var(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
-         out: None = None, ddof: int = 0, keepdims: bool = False, *,
+         out: None = None, correction: int | float = 0, keepdims: bool = False, *,
          where: ArrayLike | None = None) -> Array:
   check_arraylike("var", a)
   dtypes.check_user_dtype_supported(dtype, "var")
@@ -460,9 +951,9 @@ def _var(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
   else:
     normalizer = sum(_broadcast_to(where, np.shape(a)), axis,
                      dtype=computation_dtype, keepdims=keepdims)
-  normalizer = lax.sub(normalizer, lax.convert_element_type(ddof, computation_dtype))
+  normalizer = lax.sub(normalizer, lax.convert_element_type(correction, computation_dtype))
   result = sum(centered, axis, dtype=computation_dtype, keepdims=keepdims, where=where)
-  return lax.div(result, normalizer).astype(dtype)
+  return _where(normalizer > 0, lax.div(result, normalizer).astype(dtype), np.nan)
 
 
 def _var_promote_types(a_dtype: DTypeLike, dtype: DTypeLike | None) -> tuple[DType, DType]:
@@ -486,16 +977,88 @@ def _var_promote_types(a_dtype: DTypeLike, dtype: DTypeLike | None) -> tuple[DTy
   return _upcast_f16(computation_dtype), np.dtype(dtype)
 
 
-@implements(np.std, skip_params=['out'])
 def std(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
         out: None = None, ddof: int = 0, keepdims: bool = False, *,
-        where: ArrayLike | None = None) -> Array:
-  return _std(a, _ensure_optional_axes(axis), dtype, out, ddof, keepdims,
+        where: ArrayLike | None = None, correction: int | float | None = None) -> Array:
+  r"""Compute the standard deviation along a given axis.
+
+  JAX implementation of :func:`numpy.std`.
+
+  Args:
+    a: input array.
+    axis: optional, int or sequence of ints, default=None. Axis along which the
+      standard deviation is computed. If None, standard deviaiton is computed
+      along all the axes.
+    dtype: The type of the output array. Default=None.
+    ddof: int, default=0. Degrees of freedom. The divisor in the standard deviation
+      computation is ``N-ddof``, ``N`` is number of elements along given axis.
+    keepdims: bool, default=False. If true, reduced axes are left in the result
+      with size 1.
+    where: optional, boolean array, default=None. The elements to be used in the
+      standard deviation. Array should be broadcast compatible to the input.
+    correction: int or float, default=None. Alternative name for ``ddof``.
+      Both ddof and correction can't be provided simultaneously.
+    out: Unused by JAX.
+
+  Returns:
+    An array of the standard deviation along the given axis.
+
+  See also:
+    - :func:`jax.numpy.var`: Compute the variance of array elements over given
+      axis.
+    - :func:`jax.numpy.mean`: Compute the mean of array elements over a given axis.
+    - :func:`jax.numpy.nanvar`: Compute the variance along a given axis, ignoring
+      NaNs values.
+    - :func:`jax.numpy.nanstd`: Computed the standard deviation of a given axis,
+      ignoring NaN values.
+
+  Examples:
+    By default, ``jnp.std`` computes the standard deviation along all axes.
+
+    >>> x = jnp.array([[1, 3, 4, 2],
+    ...                [4, 2, 5, 3],
+    ...                [5, 4, 2, 3]])
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   jnp.std(x)
+    Array(1.21, dtype=float32)
+
+    If ``axis=0``, computes along axis 0.
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.std(x, axis=0))
+    [1.7  0.82 1.25 0.47]
+
+    To preserve the dimensions of input, you can set ``keepdims=True``.
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.std(x, axis=0, keepdims=True))
+    [[1.7  0.82 1.25 0.47]]
+
+    If ``ddof=1``:
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.std(x, axis=0, keepdims=True, ddof=1))
+    [[2.08 1.   1.53 0.58]]
+
+    To include specific elements of the array to compute standard deviation, you
+    can use ``where``.
+
+    >>> where = jnp.array([[1, 0, 1, 0],
+    ...                    [0, 1, 0, 1],
+    ...                    [1, 1, 1, 0]], dtype=bool)
+    >>> jnp.std(x, axis=0, keepdims=True, where=where)
+    Array([[2., 1., 1., 0.]], dtype=float32)
+  """
+  if correction is None:
+    correction = ddof
+  elif not isinstance(ddof, int) or ddof != 0:
+    raise ValueError("ddof and correction can't be provided simultaneously.")
+  return _std(a, _ensure_optional_axes(axis), dtype, out, correction, keepdims,
               where=where)
 
 @partial(api.jit, static_argnames=('axis', 'dtype', 'keepdims'))
 def _std(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
-         out: None = None, ddof: int = 0, keepdims: bool = False, *,
+         out: None = None, correction: int | float = 0, keepdims: bool = False, *,
          where: ArrayLike | None = None) -> Array:
   check_arraylike("std", a)
   dtypes.check_user_dtype_supported(dtype, "std")
@@ -503,7 +1066,7 @@ def _std(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
     raise ValueError(f"dtype argument to jnp.std must be inexact; got {dtype}")
   if out is not None:
     raise NotImplementedError("The 'out' argument to jnp.std is not supported.")
-  return lax.sqrt(var(a, axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, where=where))
+  return lax.sqrt(var(a, axis=axis, dtype=dtype, correction=correction, keepdims=keepdims, where=where))
 
 
 @implements(np.ptp, skip_params=['out'])
@@ -663,7 +1226,8 @@ match the dtype of the input.
 """
 
 def _make_cumulative_reduction(np_reduction: Any, reduction: Callable[..., Array],
-                               fill_nan: bool = False, fill_value: ArrayLike = 0) -> CumulativeReduction:
+                               fill_nan: bool = False, fill_value: ArrayLike = 0,
+                               promote_integers: bool = False) -> CumulativeReduction:
   @implements(np_reduction, skip_params=['out'],
           lax_description=CUML_REDUCTION_LAX_DESCRIPTION)
   def cumulative_reduction(a: ArrayLike, axis: Axis = None,
@@ -691,12 +1255,18 @@ def _make_cumulative_reduction(np_reduction: Any, reduction: Callable[..., Array
     if fill_nan:
       a = _where(lax_internal._isnan(a), _lax_const(a, fill_value), a)
 
-    if not dtype and dtypes.dtype(a) == np.bool_:
-      dtype = dtypes.canonicalize_dtype(dtypes.int_)
-    if dtype:
-      a = lax.convert_element_type(a, dtype)
+    result_type: DTypeLike = dtypes.dtype(dtype or a)
+    if dtype is None and promote_integers or dtypes.issubdtype(result_type, np.bool_):
+      result_type = _promote_integer_dtype(result_type)
+    result_type = dtypes.canonicalize_dtype(result_type)
 
-    return reduction(a, axis)
+    a = lax.convert_element_type(a, result_type)
+    result = reduction(a, axis)
+
+    # We downcast to boolean because we accumulate in integer types
+    if dtypes.issubdtype(dtype, np.bool_):
+      result = lax.convert_element_type(result, np.bool_)
+    return result
 
   return cumulative_reduction
 
@@ -707,50 +1277,88 @@ nancumsum = _make_cumulative_reduction(np.nancumsum, lax.cumsum,
                                        fill_nan=True, fill_value=0)
 nancumprod = _make_cumulative_reduction(np.nancumprod, lax.cumprod,
                                         fill_nan=True, fill_value=1)
+_cumsum_with_promotion = _make_cumulative_reduction(
+  np.cumsum, lax.cumsum, fill_nan=False, promote_integers=True
+)
+
+@implements(getattr(np, 'cumulative_sum', None))
+def cumulative_sum(
+    x: ArrayLike, /, *, axis: int | None = None,
+    dtype: DTypeLike | None = None,
+    include_initial: bool = False) -> Array:
+  check_arraylike("cumulative_sum", x)
+  x = lax_internal.asarray(x)
+  if x.ndim == 0:
+    raise ValueError(
+      "The input must be non-scalar to take a cumulative sum, however a "
+      "scalar value or scalar array was given."
+    )
+  if axis is None:
+    axis = 0
+    if x.ndim > 1:
+      raise ValueError(
+        f"The input array has rank {x.ndim}, however axis was not set to an "
+        "explicit value. The axis argument is only optional for one-dimensional "
+        "arrays.")
+
+  axis = _canonicalize_axis(axis, x.ndim)
+  dtypes.check_user_dtype_supported(dtype)
+  out = _cumsum_with_promotion(x, axis=axis, dtype=dtype)
+  if include_initial:
+    zeros_shape = list(x.shape)
+    zeros_shape[axis] = 1
+    out = lax_internal.concatenate(
+      [lax_internal.full(zeros_shape, 0, dtype=out.dtype), out],
+      dimension=axis)
+  return out
 
 # Quantiles
+
+# TODO(jakevdp): interpolation argument deprecated 2024-05-16
 @implements(np.quantile, skip_params=['out', 'overwrite_input'])
-@partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation',
-                               'keepdims', 'method'))
+@partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation', 'keepdims', 'method'))
 def quantile(a: ArrayLike, q: ArrayLike, axis: int | tuple[int, ...] | None = None,
              out: None = None, overwrite_input: bool = False, method: str = "linear",
-             keepdims: bool = False, interpolation: None = None) -> Array:
+             keepdims: bool = False, *, interpolation: DeprecatedArg | str = DeprecatedArg()) -> Array:
   check_arraylike("quantile", a, q)
   if overwrite_input or out is not None:
     msg = ("jax.numpy.quantile does not support overwrite_input=True or "
            "out != None")
     raise ValueError(msg)
-  if interpolation is not None:
+  if not isinstance(interpolation, DeprecatedArg):
     warnings.warn("The interpolation= argument to 'quantile' is deprecated. "
-                  "Use 'method=' instead.", DeprecationWarning)
-  return _quantile(lax_internal.asarray(a), lax_internal.asarray(q), axis, interpolation or method, keepdims, False)
+                  "Use 'method=' instead.", DeprecationWarning, stacklevel=2)
+    method = interpolation
+  return _quantile(lax_internal.asarray(a), lax_internal.asarray(q), axis, method, keepdims, False)
 
+# TODO(jakevdp): interpolation argument deprecated 2024-05-16
 @implements(np.nanquantile, skip_params=['out', 'overwrite_input'])
-@partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation',
-                               'keepdims', 'method'))
+@partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation', 'keepdims', 'method'))
 def nanquantile(a: ArrayLike, q: ArrayLike, axis: int | tuple[int, ...] | None = None,
                 out: None = None, overwrite_input: bool = False, method: str = "linear",
-                keepdims: bool = False, interpolation: None = None) -> Array:
+                keepdims: bool = False, *, interpolation: DeprecatedArg | str = DeprecatedArg()) -> Array:
   check_arraylike("nanquantile", a, q)
   if overwrite_input or out is not None:
     msg = ("jax.numpy.nanquantile does not support overwrite_input=True or "
            "out != None")
     raise ValueError(msg)
-  if interpolation is not None:
+  if not isinstance(interpolation, DeprecatedArg):
     warnings.warn("The interpolation= argument to 'nanquantile' is deprecated. "
-                  "Use 'method=' instead.", DeprecationWarning)
-  return _quantile(lax_internal.asarray(a), lax_internal.asarray(q), axis, interpolation or method, keepdims, True)
+                  "Use 'method=' instead.", DeprecationWarning, stacklevel=2)
+    method = interpolation
+  return _quantile(lax_internal.asarray(a), lax_internal.asarray(q), axis, method, keepdims, True)
 
 def _quantile(a: Array, q: Array, axis: int | tuple[int, ...] | None,
-              interpolation: str, keepdims: bool, squash_nans: bool) -> Array:
-  if interpolation not in ["linear", "lower", "higher", "midpoint", "nearest"]:
-    raise ValueError("interpolation can only be 'linear', 'lower', 'higher', "
-                     "'midpoint', or 'nearest'")
+              method: str, keepdims: bool, squash_nans: bool) -> Array:
+  if method not in ["linear", "lower", "higher", "midpoint", "nearest"]:
+    raise ValueError("method can only be 'linear', 'lower', 'higher', 'midpoint', or 'nearest'")
   a, = promote_dtypes_inexact(a)
   keepdim = []
   if dtypes.issubdtype(a.dtype, np.complexfloating):
     raise ValueError("quantile does not support complex input, as the operation is poorly defined.")
   if axis is None:
+    if keepdims:
+      keepdim = [1] * a.ndim
     a = a.ravel()
     axis = 0
   elif isinstance(axis, tuple):
@@ -842,50 +1450,57 @@ def _quantile(a: Array, q: Array, axis: int | tuple[int, ...] | None,
       high_weight = lax.broadcast_in_dim(high_weight, high_value.shape,
                                         broadcast_dimensions=(0,))
 
-  if interpolation == "linear":
+  if method == "linear":
     result = lax.add(lax.mul(low_value.astype(q.dtype), low_weight),
                      lax.mul(high_value.astype(q.dtype), high_weight))
-  elif interpolation == "lower":
+  elif method == "lower":
     result = low_value
-  elif interpolation == "higher":
+  elif method == "higher":
     result = high_value
-  elif interpolation == "nearest":
+  elif method == "nearest":
     pred = lax.le(high_weight, _lax_const(high_weight, 0.5))
     result = lax.select(pred, low_value, high_value)
-  elif interpolation == "midpoint":
+  elif method == "midpoint":
     result = lax.mul(lax.add(low_value, high_value), _lax_const(low_value, 0.5))
   else:
-    raise ValueError(f"interpolation={interpolation!r} not recognized")
+    raise ValueError(f"{method=!r} not recognized")
   if keepdims and keepdim:
     if q_ndim > 0:
       keepdim = [np.shape(q)[0], *keepdim]
     result = result.reshape(keepdim)
   return lax.convert_element_type(result, a.dtype)
 
+# TODO(jakevdp): interpolation argument deprecated 2024-05-16
 @implements(np.percentile, skip_params=['out', 'overwrite_input'])
-@partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation',
-                                   'keepdims', 'method'))
+@partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation', 'keepdims', 'method'))
 def percentile(a: ArrayLike, q: ArrayLike,
                axis: int | tuple[int, ...] | None = None,
                out: None = None, overwrite_input: bool = False, method: str = "linear",
-               keepdims: bool = False, interpolation: None = None) -> Array:
+               keepdims: bool = False, *, interpolation: str | DeprecatedArg = DeprecatedArg()) -> Array:
   check_arraylike("percentile", a, q)
   q, = promote_dtypes_inexact(q)
+  if not isinstance(interpolation, DeprecatedArg):
+    warnings.warn("The interpolation= argument to 'percentile' is deprecated. "
+                  "Use 'method=' instead.", DeprecationWarning, stacklevel=2)
+    method = interpolation
   return quantile(a, q / 100, axis=axis, out=out, overwrite_input=overwrite_input,
-                  interpolation=interpolation, method=method, keepdims=keepdims)
+                  method=method, keepdims=keepdims)
 
+# TODO(jakevdp): interpolation argument deprecated 2024-05-16
 @implements(np.nanpercentile, skip_params=['out', 'overwrite_input'])
-@partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation',
-                               'keepdims', 'method'))
+@partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation', 'keepdims', 'method'))
 def nanpercentile(a: ArrayLike, q: ArrayLike,
                   axis: int | tuple[int, ...] | None = None,
                   out: None = None, overwrite_input: bool = False, method: str = "linear",
-                  keepdims: bool = False, interpolation: None = None) -> Array:
+                  keepdims: bool = False, *, interpolation: str | DeprecatedArg = DeprecatedArg()) -> Array:
   check_arraylike("nanpercentile", a, q)
   q = ufuncs.true_divide(q, 100.0)
+  if not isinstance(interpolation, DeprecatedArg):
+    warnings.warn("The interpolation= argument to 'nanpercentile' is deprecated. "
+                  "Use 'method=' instead.", DeprecationWarning, stacklevel=2)
+    method = interpolation
   return nanquantile(a, q, axis=axis, out=out, overwrite_input=overwrite_input,
-                     interpolation=interpolation, method=method,
-                     keepdims=keepdims)
+                     method=method, keepdims=keepdims)
 
 @implements(np.median, skip_params=['out', 'overwrite_input'])
 @partial(api.jit, static_argnames=('axis', 'overwrite_input', 'keepdims'))

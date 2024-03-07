@@ -78,7 +78,7 @@ if __name__ == "__main__":
 
     @jit
     def objective(params, t):
-        rng = random.PRNGKey(t)
+        rng = random.key(t)
         return -batch_elbo(funnel_log_density, rng, params, num_samples)
 
     # Set up figure.
@@ -107,7 +107,7 @@ if __name__ == "__main__":
         # Plot random samples from variational distribution.
         # Here we clone the rng used in computing the objective
         # so that we can show exactly the same samples.
-        rngs = random.split(random.PRNGKey(t), num_samples)
+        rngs = random.split(random.key(t), num_samples)
         samples = vmap(diag_gaussian_sample, in_axes=(0, None, None))(rngs, *params)
         ax.plot(samples[:, 0], samples[:, 1], 'b.')
 

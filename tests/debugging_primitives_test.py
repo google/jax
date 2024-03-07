@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import collections
+import contextlib
 import functools
 import textwrap
 import unittest
@@ -19,14 +20,13 @@ import unittest
 from absl.testing import absltest
 import jax
 from jax import lax
-from jax import config
-from jax.experimental import maps
 from jax.experimental import pjit
 from jax.interpreters import pxla
 from jax._src import ad_checkpoint
 from jax._src import debugging
 from jax._src import dispatch
 from jax._src import test_util as jtu
+from jax._src.maps import xmap
 import jax.numpy as jnp
 import numpy as np
 
@@ -35,23 +35,20 @@ try:
 except ModuleNotFoundError:
   rich = None
 
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 debug_print = debugging.debug_print
 
 def _format_multiline(text):
   return textwrap.dedent(text).lstrip()
 
-prev_xla_flags = None
+_exit_stack = contextlib.ExitStack()
 
 def setUpModule():
-  global prev_xla_flags
-  # This will control the CPU devices. On TPU we always have 2 devices
-  prev_xla_flags = jtu.set_host_platform_device_count(2)
+  _exit_stack.enter_context(jtu.set_host_platform_device_count(2))
 
-# Reset to previous configuration in case other test modules will be run.
 def tearDownModule():
-  prev_xla_flags()
+  _exit_stack.close()
 
 class DummyDevice:
   def __init__(self, platform, id):
@@ -171,7 +168,7 @@ class DebugPrintTest(jtu.JaxTestCase):
     with jtu.capture_stdout() as output:
       f(np.array(2, np.int32))
       jax.effects_barrier()
-    self.assertEqual(output(), f"x: {str(dict(foo=np.array(2, np.int32)))}\n")
+    self.assertEqual(output(), f"x: {str(dict(foo=jnp.array(2, np.int32)))}\n")
 
   def test_debug_print_should_use_default_layout(self):
     data = np.array(
@@ -795,7 +792,7 @@ class DebugPrintParallelTest(jtu.JaxTestCase):
         idx = lax.axis_index('foo')
         debug_print("{idx}: {x}", idx=idx, x=x)
         return jnp.mean(x, axis=['foo'])
-      out = maps.xmap(foo, in_axes=['foo'], out_axes=[...])(x)
+      out = xmap(foo, in_axes=['foo'], out_axes=[...])(x)
       debug_print("Out: {}", out)
       return out
     mesh = jax.sharding.Mesh(np.array(jax.devices()), ['dev'])
@@ -808,13 +805,14 @@ class DebugPrintParallelTest(jtu.JaxTestCase):
         lines = ["0: 0", "1: 2", "2: 4", "3: 6", "4: 8", "5: 10", "6: 12",
                  "7: 14", "Out: 7.0", ""]
         jax.effects_barrier()
-        self._assertLinesEqual(output(), "\n".join(lines))
+
+      self._assertLinesEqual(output(), "\n".join(lines))
 
   def test_unordered_print_with_xmap(self):
     def f(x):
       debug_print("{}", x, ordered=False)
-    f = maps.xmap(f, in_axes=['a'], out_axes=None, backend='cpu',
-                  axis_resources={'a': 'dev'})
+    f = xmap(f, in_axes=['a'], out_axes=None, backend='cpu',
+             axis_resources={'a': 'dev'})
     with jax.sharding.Mesh(np.array(jax.devices()), ['dev']):
       with jtu.capture_stdout() as output:
         f(np.arange(40))

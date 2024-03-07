@@ -87,14 +87,14 @@ if __name__ == "__main__":
   batch_size = 32
   nrow, ncol = 10, 10  # sampled image grid size
 
-  test_rng = random.PRNGKey(1)  # fixed prng key for evaluation
+  test_rng = random.key(1)  # fixed prng key for evaluation
   imfile = os.path.join(os.getenv("TMPDIR", "/tmp/"), "mnist_vae_{:03d}.png")
 
   train_images, _, test_images, _ = datasets.mnist(permute_train=True)
   num_complete_batches, leftover = divmod(train_images.shape[0], batch_size)
   num_batches = num_complete_batches + bool(leftover)
 
-  enc_init_rng, dec_init_rng = random.split(random.PRNGKey(2))
+  enc_init_rng, dec_init_rng = random.split(random.key(2))
   _, init_encoder_params = encoder_init(enc_init_rng, (batch_size, 28 * 28))
   _, init_decoder_params = decoder_init(dec_init_rng, (batch_size, 10))
   init_params = init_encoder_params, init_decoder_params
@@ -131,7 +131,7 @@ if __name__ == "__main__":
   opt_state = opt_init(init_params)
   for epoch in range(num_epochs):
     tic = time.time()
-    opt_state = run_epoch(random.PRNGKey(epoch), opt_state, train_images)
+    opt_state = run_epoch(random.key(epoch), opt_state, train_images)
     test_elbo, sampled_images = evaluate(opt_state, test_images)
     print(f"{epoch: 3d} {test_elbo} ({time.time() - tic:.3f} sec)")
     plt.imsave(imfile.format(epoch), sampled_images, cmap=plt.cm.gray)

@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import dataclasses
 from functools import update_wrapper, reduce, partial
 import inspect
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from jax._src import config
 from jax._src import core
@@ -40,10 +40,12 @@ from jax._src.interpreters import partial_eval as pe
 from jax._src.interpreters import xla
 from jax._src.interpreters.batching import not_mapped
 from jax._src.lax import lax
-from jax._src.tree_util import (tree_flatten, tree_unflatten, tree_map,
-                                treedef_is_leaf, treedef_tuple,
-                                register_pytree_node_class, tree_leaves)
-from jax._src.util import cache, safe_zip, safe_map, split_list, Unhashable
+from jax._src.tree_util import (
+    tree_flatten, tree_unflatten, tree_map, treedef_is_leaf, treedef_tuple,
+    register_pytree_node_class, tree_leaves, tree_flatten_with_path, keystr,
+    treedef_children)
+from jax._src.util import (cache, safe_zip, safe_map, split_list, Unhashable,
+                           unzip2)
 
 
 traceback_util.register_exclusion(__file__)
@@ -178,7 +180,7 @@ class custom_jvp(Generic[ReturnValue]):
     Returns:
       None.
 
-    Example::
+    Examples:
 
       @jax.custom_jvp
       def f(x, y):
@@ -210,7 +212,7 @@ class custom_jvp(Generic[ReturnValue]):
     Returns:
       None.
 
-    Example::
+    Examples:
 
       @jax.custom_jvp
       def f(x, y):
@@ -250,7 +252,7 @@ class custom_jvp(Generic[ReturnValue]):
       static_args = [args[i] for i in self.nondiff_argnums]
       jvp = _add_args(lu.wrap_init(self.jvp), static_args)
     else:
-      f_, dyn_args = lu.wrap_init(self.fun), args  # type: ignore
+      f_, dyn_args = lu.wrap_init(self.fun), args
       jvp = lu.wrap_init(self.jvp)
     args_flat, in_tree = tree_flatten(dyn_args)
     flat_fun, out_type1 = _flatten_fun_nokwargs(f_, in_tree)
@@ -357,9 +359,9 @@ class CustomJVPCallPrimitive(core.Primitive):
         fun, self, top_trace and top_trace.level, False)
     jvp, env_trace_todo2 = process_env_traces(
         jvp, self, top_trace and top_trace.level, True)
-    tracers = map(top_trace.full_raise, args)  # type: ignore
-    outs = top_trace.process_custom_jvp_call(self, fun, jvp, tracers,  # type: ignore
-                                             symbolic_zeros=symbolic_zeros)  # type: ignore
+    tracers = map(top_trace.full_raise, args)
+    outs = top_trace.process_custom_jvp_call(self, fun, jvp, tracers,
+                                             symbolic_zeros=symbolic_zeros)
     _, env_trace_todo = lu.merge_linear_aux(env_trace_todo1, env_trace_todo2)
     return core.apply_todos(env_trace_todo, map(core.full_lower, outs))
 
@@ -565,7 +567,7 @@ class custom_vjp(Generic[ReturnValue]):
     Returns:
       None.
 
-    Example::
+    Examples:
 
       @jax.custom_vjp
       def f(x, y):
@@ -727,12 +729,15 @@ def _flatten_bwd(in_tree, in_avals, out_trees, *args):
   py_res = tree_unflatten(res_tree, res)
   py_cts_out = tree_unflatten(out_tree, cts_out)
   py_cts_in = yield (py_res, py_cts_out), {}
+  if isinstance(py_cts_in, list) and len(py_cts_in) == len(treedef_children(in_tree)):
+    py_cts_in = tuple(py_cts_in)
   # For each None in py_cts_in, indicating an argument for which the rule
   # produces no cotangent, we replace it with a pytree with the structure of the
   # corresponding subtree of in_tree and with leaves of a non-pytree sentinel
   # object, to be replaced with Nones in the final returned result.
   zero = object()  # non-pytree sentinel to replace Nones in py_cts_in
   dummy = tree_unflatten(in_tree, [object()] * in_tree.num_leaves)
+  keypaths, _ = unzip2(tree_flatten_with_path(dummy)[0])
   cts_in_flat = []
   def append(x, d):
     num_leaves = len(tree_flatten(d)[0])
@@ -747,18 +752,51 @@ def _flatten_bwd(in_tree, in_avals, out_trees, *args):
     tree_map(append, py_cts_in, dummy, is_leaf=lambda x: x is None)
   except ValueError:
     _, in_tree2 = tree_flatten(py_cts_in)
-    msg = ("Custom VJP rule must produce an output with the same container "
+    msg = ("Custom VJP bwd rule must produce an output with the same container "
            "(pytree) structure as the args tuple of the primal function, "
            "and in particular must produce a tuple of length equal to the "
-           "number of arguments to the primal function, but got VJP output "
+           "number of arguments to the primal function, but got bwd output "
            "structure {} for primal input structure {}.")
     raise TypeError(msg.format(in_tree2, in_tree)) from None
-  # Ignore any None cotangents, and any corresponding to inputs for which the
-  # type doesn't equal the tangent type (i.e. float0s)
-  # TODO(mattjj): change this to check if tangent type represents 0dim vspace
-  yield [Zero(a.at_least_vspace()) if ct is zero or a != a.at_least_vspace()
-         else ct for a, ct in zip(in_avals, cts_in_flat)]
+  results = []
+  for kp, a, ct in zip(keypaths, in_avals, cts_in_flat):
+    if ct is zero or a != a.at_least_vspace():
+      results.append(Zero(a.at_least_vspace()))
+    elif type(ct) is SymbolicZero:
+      if not core.typecompat(a.at_least_vspace(), a_ := ct.aval):
+        msg = ("Custom VJP bwd rule produced a SymbolicZero with a shape/dtype "
+               "that does not match the corresponding input tangent shape/dtype: "
+               f"at output{keystr(kp)} the SymbolicZero had shape/dtype "
+               f"{a_.str_short()} while the "
+               f"corresponding input had shape/dtype {a.str_short()}. "
+               "Consider just returning a None here instead of a SymbolicZero "
+               "object.")
+        raise ValueError(msg)
+      results.append(Zero(ct.aval))
+    else:
+      if (not core.typecompat(a.at_least_vspace(), a_ := core.get_aval(ct))
+          and not (_temporary_dtype_exception(a, a_) or
+                   _temporary_shape_exception(a, a_))):
+        msg = ("Custom VJP bwd rule must produce an output with the same "
+               "shape/dtypes as the args tuple of the primal function, but at "
+               f"output{keystr(kp)} the bwd rule produced an output of "
+               f"shape/dtype {raise_to_shaped(a_).str_short()} corresponding "
+               f"to an input of shape/dtype {a.str_short()}.")
+        raise ValueError(msg)
+      results.append(ct)
+  yield results
 
+# TODO(mattjj): remove both these exceptions to cotangent compatibility check
+def _temporary_dtype_exception(a, a_) -> bool:
+  if isinstance(a, core.ShapedArray) and isinstance(a_, core.ShapedArray):
+    return (a.shape == a_.shape and
+            (dtypes.issubdtype(a_.dtype, dtypes.extended) or
+             dtypes.issubdtype(a.dtype, dtypes.np.inexact)))
+  return False
+
+# TODO(mattjj): remove both these exceptions to cotangent compatibility check
+def _temporary_shape_exception(a, a_) -> bool:
+  return config.custom_vjp_disable_shape_check.value
 
 class CustomVJPCallPrimitive(core.CallPrimitive):
   initial_style: core.Primitive
@@ -770,7 +808,7 @@ class CustomVJPCallPrimitive(core.CallPrimitive):
         fun, self, top_trace and top_trace.level, False)
     fwd, env_trace_todo2 = process_env_traces_fwd(
       fwd, top_trace and top_trace.level, out_trees)
-    tracers = map(top_trace.full_raise, args)  # type: ignore
+    tracers = map(top_trace.full_raise, args)
     bwd_ = lambda *args: bwd(*args)
     outs = top_trace.process_custom_vjp_call(self, fun, fwd, bwd_, tracers,
                                              out_trees=out_trees,

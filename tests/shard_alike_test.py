@@ -12,42 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
+import contextlib
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from absl.testing import absltest
-from jax._src import xla_bridge
 from jax._src import test_util as jtu
 from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.experimental.shard_alike import shard_alike
 from jax.experimental.shard_map import shard_map
-from jax._src.lib import xla_extension_version
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
-prev_xla_flags = None
-
+# Run all tests with 8 CPU devices.
+_exit_stack = contextlib.ExitStack()
 
 def setUpModule():
-  global prev_xla_flags
-  prev_xla_flags = os.getenv("XLA_FLAGS")
-  flags_str = prev_xla_flags or ""
-  # Don't override user-specified device count, or other XLA flags.
-  if "xla_force_host_platform_device_count" not in flags_str:
-    os.environ["XLA_FLAGS"] = (flags_str +
-                               " --xla_force_host_platform_device_count=8")
-  # Clear any cached backends so new CPU backend will pick up the env var.
-  xla_bridge.get_backend.cache_clear()
+  _exit_stack.enter_context(jtu.set_host_platform_device_count(8))
 
 def tearDownModule():
-  if prev_xla_flags is None:
-    del os.environ["XLA_FLAGS"]
-  else:
-    os.environ["XLA_FLAGS"] = prev_xla_flags
-  xla_bridge.get_backend.cache_clear()
+  _exit_stack.close()
 
 
 class ShardAlikeDownstreamTest(jtu.JaxTestCase):
@@ -64,8 +49,6 @@ class ShardAlikeTest(jtu.JaxTestCase):
 
   def setUp(self):
     super().setUp()
-    if xla_extension_version < 227:
-      self.skipTest('Requires xla_extension_version >= 227')
 
   def test_basic(self):
     mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))

@@ -24,6 +24,7 @@ limitations under the License.
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
+#include "mlir/include/mlir/IR/BuiltinTypes.h"
 #include "mlir/include/mlir/IR/IRMapping.h"
 #include "jaxlib/mosaic/dialect/tpu/tpu_dialect.h"
 
@@ -65,7 +66,8 @@ LogicalResult MemRefSliceOp::verify() {
       (target_memory_space == nullptr ||
        target_memory_space == source_type.getMemorySpace()) &&
       ((isa<AffineMapAttr>(target_layout) && target_layout.isIdentity()) ||
-       target_type.getLayout() == source_type.getLayout()));
+       target_type.getLayout() == source_type.getLayout()) &&
+      getDynamicSizes().size() == target_type.getNumDynamicDims());
 }
 
 LogicalResult MemRefSliceOp::canonicalize(MemRefSliceOp op,
@@ -81,8 +83,9 @@ LogicalResult MemRefSliceOp::canonicalize(MemRefSliceOp op,
   auto new_result_type = MemRefType::get(
       op.getResult().getType().getShape(), layout_ty.getElementType(),
       layout_ty.getLayout(), layout_ty.getMemorySpace());
-  auto slice = rewriter.create<MemRefSliceOp>(op.getLoc(), new_result_type,
-                                              layout_ref, op.getBaseIdx());
+  auto slice =
+      rewriter.create<MemRefSliceOp>(op.getLoc(), new_result_type, layout_ref,
+                                     op.getBaseIdx(), op.getDynamicSizes());
   rewriter.replaceOpWithNewOp<EraseLayoutOp>(op, op.getType(), slice);
   return success();
 }
@@ -180,6 +183,45 @@ LogicalResult MemRefSqueezeOp::canonicalize(MemRefSqueezeOp op,
   return success();
 }
 
+template <typename Op>
+LogicalResult verifyStridedOp(Op op, MemRefType memref_ty,
+                              VectorType vector_ty) {
+  auto indices = op.getIndices();
+  auto strides = op.getStrides();
+  if (memref_ty.getRank() != indices.size()) {
+    op.emitError("Base memref's rank and indices size do not match: ")
+        << memref_ty.getRank() << " vs " << indices.size();
+    return failure();
+  }
+  if (memref_ty.getRank() != strides.size()) {
+    op.emitError("Base memref's rank and strides size do not match: ")
+        << memref_ty.getRank() << " vs " << strides.size();
+    return failure();
+  }
+  if (memref_ty.getRank() != vector_ty.getRank()) {
+    op.emitError("Base memref's rank and result's rank do not match: ")
+        << memref_ty.getRank() << " vs " << vector_ty.getRank();
+    return failure();
+  }
+  for (int64_t i = 0; i < memref_ty.getRank(); ++i) {
+    if (strides[i] < 1) {
+      op.emitError("Strides[") << i << "]=" << strides[i] << " must be >= 1";
+      return failure();
+    }
+  }
+  return success();
+}
+
+LogicalResult StridedLoadOp::verify() {
+  return verifyStridedOp<StridedLoadOp>(*this, getMemRefType(getBase()),
+                                        getType());
+}
+
+LogicalResult StridedStoreOp::verify() {
+  return verifyStridedOp<StridedStoreOp>(*this, getMemRefType(getBase()),
+                                         getValueToStore().getType());
+}
+
 LogicalResult ReinterpretCastOp::verify() {
   auto source_type = getMemRefType(getInput());
   auto target_type = getType();
@@ -188,33 +230,38 @@ LogicalResult ReinterpretCastOp::verify() {
       source_type.getMemorySpace() == target_type.getMemorySpace());
 }
 
-LogicalResult RotateOp::verify() {
-  auto vty = getResult().getType();
-  if (vty.getRank() <= getDimension() || getDimension() < 0) {
-    emitOpError("Invalid dimension: ") << getDimension();
+template <typename Op>
+LogicalResult verifyRotateOp(Op op) {
+  auto vty = op.getResult().getType();
+  if (vty.getRank() <= op.getDimension() || op.getDimension() < 0) {
+    op.emitOpError("Invalid dimension: ") << op.getDimension();
     return failure();
   }
-  if (getAmount() < 0) {
-    emitOpError("Rotate amount must be >= 0");
+  if (op.getStride().has_value() && op.getStride().value() < 0) {
+    op.emitOpError("Rotate stride must be >= 0 if it is specified");
     return failure();
   }
-  if (getStride().has_value() && getStride().value() < 0) {
-    emitOpError("Rotate stride must be >= 0 if it is specified");
+  if (op.getStrideDimension().has_value() &&
+      (vty.getRank() <= op.getStrideDimension().value() ||
+       op.getStrideDimension().value() < 0)) {
+    op.emitOpError("Invalid stride dimension: ")
+        << op.getStrideDimension().value();
     return failure();
   }
-  if (getStrideDimension().has_value() &&
-      (vty.getRank() <= getStrideDimension().value() ||
-       getStrideDimension().value() < 0)) {
-    emitOpError("Invalid stride dimension: ") << getStrideDimension().value();
-    return failure();
-  }
-  if (getStride().has_value() != getStrideDimension().has_value()) {
-    emitOpError(
+  if (op.getStride().has_value() != op.getStrideDimension().has_value()) {
+    op.emitOpError(
         "Expected  either none or both stride and stride dimension are "
         "present");
     return failure();
   }
   return success();
+}
+
+// TODO(b/347016737): deprecate static rotate
+LogicalResult RotateOp::verify() { return verifyRotateOp<RotateOp>(*this); }
+
+LogicalResult DynamicRotateOp::verify() {
+  return verifyRotateOp<DynamicRotateOp>(*this);
 }
 
 // a + matmul(l, r, 0) == matmul(l, r, a)
@@ -275,8 +322,7 @@ LogicalResult GetBarrierSemaphoreOp::verify() {
 LogicalResult SemaphoreSignalOp::verify() {
   auto sem_type = getMemRefType(getSemaphore());
   if (sem_type.getRank() != 0) {
-    emitOpError("Semaphore reference must be rank 0");
-    return failure();
+    return emitOpError("Semaphore reference must be rank 0");
   }
   return success();
 }
@@ -286,14 +332,19 @@ LogicalResult EnqueueDMAOp::verify() {
   if (source_sem) {
     auto source_sem_type = getMemRefType(getSourceSemaphore());
     if (source_sem_type.getRank() != 0) {
-      emitOpError("DMA source semaphore reference must be rank 0");
-      return failure();
+      return emitOpError("DMA source semaphore reference must be rank 0");
     }
   }
   auto target_sem_type = getMemRefType(getTargetSemaphore());
   if (target_sem_type.getRank() != 0) {
-    emitOpError("DMA target semaphore must be rank 0");
-    return failure();
+    return emitOpError("DMA target semaphore must be rank 0");
+  }
+  if (getDeviceId() || getCoreId()) {
+    if (!getSourceSemaphore()) {
+      return emitOpError(
+          "DMA source semaphore must be specified when "
+          "device_id or core_id is specified");
+    }
   }
   return success();
 }

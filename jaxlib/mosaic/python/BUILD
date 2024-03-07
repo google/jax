@@ -14,8 +14,8 @@
 
 # Mosaic Python bindings
 
-load("@llvm-project//mlir:tblgen.bzl", "gentbl_filegroup")
 load("@rules_python//python:defs.bzl", "py_library")
+load("@llvm-project//mlir:tblgen.bzl", "gentbl_filegroup")
 
 gentbl_filegroup(
     name = "tpu_python_gen_raw",

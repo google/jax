@@ -14,10 +14,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 import itertools as it
-from typing import Any, Callable, NamedTuple, Union
+from typing import Any, NamedTuple, Union
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -29,7 +29,6 @@ from jax._src import core
 from jax._src import config
 from jax._src import linear_util as lu
 from jax._src.interpreters import partial_eval as pe
-from jax._src import prng
 from jax._src import test_util as jtu
 from jax._src.util import tuple_insert
 import jax.numpy as jnp
@@ -49,7 +48,7 @@ from jax._src.state.primitives import (get_p, swap_p, addupdate_p,
                                        ref_addupdate, ref_get, ref_set,
                                        ref_swap)
 from jax._src.state.types import (shaped_array_ref, ReadEffect, WriteEffect,
-                                  AccumEffect, RefEffect, AbstractRef)
+                                  AccumEffect, AbstractRef)
 
 config.parse_flags_with_absl()
 
@@ -1496,55 +1495,6 @@ class RunStateTest(jtu.JaxTestCase):
     jtu.check_grads(f, (0.5,), order=3)
 
 
-class MutableArrayTest(jtu.JaxTestCase):
-
-  @parameterized.parameters([True, False])
-  def test_basic(self, jit):
-    def f(x_mut):
-      x_mut[...] += 1.
-      x_mut[0] += 1
-      x_mut[1] += 5
-
-    if jit:
-      f = jax.jit(f)
-
-    x_mut = core.mutable_array(jnp.zeros(3))
-    f(x_mut)
-
-    self.assertAllClose(x_mut[...], jnp.array([2., 6., 1.]),
-                        check_dtypes=False)
-
-    jaxpr = jax.make_jaxpr(f)(x_mut)
-    self.assertTrue(any(isinstance(e, RefEffect) for e in jaxpr.effects))
-
-  def test_staging_error(self):
-    x = jnp.zeros(3)
-    with self.assertRaises(Exception):
-      jax.jit(core.mutable_array)(x)
-
-  @parameterized.parameters([True, False])
-  def test_multiple_inputs_and_outputs(self, jit):
-    def f(x_mut, y, z_mut, w):
-      x_mut[...] += 1
-      z_mut[...] += 1
-      return x_mut[...] + y + z_mut[...] + w, y + w
-
-    if jit:
-      f = jax.jit(f)
-
-    x_mut = core.mutable_array(jnp.zeros((1, 3)))
-    y = jnp.ones((2, 3))
-    z_mut = core.mutable_array(jnp.zeros((2, 3)))
-    w = jnp.ones((2, 1))
-
-    out1, out2 = f(x_mut, y, z_mut, w)
-
-    self.assertAllClose(x_mut[...], jnp.ones((1, 3)), check_dtypes=False)
-    self.assertAllClose(z_mut[...], jnp.ones((2, 3)), check_dtypes=False)
-    self.assertAllClose(out1, 4 * jnp.ones((2, 3)), check_dtypes=False)
-    self.assertAllClose(out2, y + w, check_dtypes=False)
-
-
 if CAN_USE_HYPOTHESIS:
 
   class FuncSpec(NamedTuple):
@@ -1735,8 +1685,8 @@ if CAN_USE_HYPOTHESIS:
       y, impl_vjp = jax.vjp(impl, x)
       y_ref, ref_vjp = jax.vjp(ref, x)
       self.assertAllClose(y, y_ref)
-      t = random.normal(prng.reuse_key(k2), x.shape)
-      y2 = random.normal(prng.reuse_key(k1), y.shape)
+      t = random.normal(jax.random.clone(k2), x.shape)
+      y2 = random.normal(jax.random.clone(k1), y.shape)
       self.assertAllClose(impl_vjp(t), ref_vjp(t))
 
       # Second order
@@ -1752,7 +1702,7 @@ if CAN_USE_HYPOTHESIS:
       (x,), impl_vjp2 = jax.vjp(impl_vjp, t2)
       (x_ref,), ref_vjp2 = jax.vjp(ref_vjp, t2)
       self.assertAllClose(x, x_ref)
-      y2 = random.normal(prng.reuse_key(k1), y.shape)
+      y2 = random.normal(jax.random.clone(k1), y.shape)
       self.assertAllClose(impl_vjp2((y2,)), ref_vjp2((y2,)))
 
 if __name__ == '__main__':

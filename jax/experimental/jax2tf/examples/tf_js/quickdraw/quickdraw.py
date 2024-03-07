@@ -21,7 +21,6 @@ from flax import linen as nn
 from flax.training import train_state
 
 import jax
-from jax import lax
 from jax import numpy as jnp
 
 import optax
@@ -30,7 +29,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflowjs as tfjs
 
-import input_pipeline  # type: ignore[import]
+from . import input_pipeline
 
 
 _NUM_EPOCHS = flags.DEFINE_integer(

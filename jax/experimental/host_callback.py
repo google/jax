@@ -13,7 +13,11 @@
 # limitations under the License.
 """Primitives for calling Python functions on the host from JAX accelerator code.
 
-**Experimental: please give feedback, and expect changes.**
+.. warning::
+  The host_callback APIs are deprecated as of March 20, 2024.
+  The functionality is subsumed by the
+  `new JAX external callbacks <https://jax.readthedocs.io/en/latest/notebooks/external_callbacks.html>`_
+  See https://github.com/google/jax/issues/20385.
 
 This module introduces the host callback functions :func:`call`,
 :func:`id_tap`, and :func:`id_print`, that send their arguments from the device
@@ -498,15 +502,17 @@ Still to do:
 from __future__ import annotations
 
 import atexit
-from collections.abc import Sequence
+import enum
+from collections.abc import Callable, Sequence
 import functools
 import itertools
 import logging
 import math
 import threading
 import traceback
-from typing import Any, Callable, Optional, cast
+from typing import Any, cast
 
+import jax
 from jax._src import api
 from jax._src import core
 from jax._src import config
@@ -514,6 +520,7 @@ from jax import custom_derivatives
 from jax._src import dtypes
 from jax import lax
 from jax.experimental import pjit
+from jax.experimental import io_callback
 from jax._src.interpreters import ad, batching, pxla
 from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
@@ -534,12 +541,12 @@ from jax._src.lib.mlir.dialects import hlo
 import numpy as np
 
 
-_HOST_CALLBACK_INLINE = config.DEFINE_bool(
+_HOST_CALLBACK_INLINE = config.bool_flag(
     'jax_host_callback_inline',
     config.bool_env('JAX_HOST_CALLBACK_INLINE', False),
     help='Inline the host_callback, if not in a staged context.'
 )
-_HOST_CALLBACK_MAX_QUEUE_BYTE_SIZE = config.DEFINE_integer(
+_HOST_CALLBACK_MAX_QUEUE_BYTE_SIZE = config.int_flag(
     'jax_host_callback_max_queue_byte_size',
     config.int_env('JAX_HOST_CALLBACK_MAX_QUEUE_BYTE_SIZE', int(256 * 1e6)),
     help=('The size in bytes of the buffer used to hold outfeeds from each '
@@ -548,13 +555,22 @@ _HOST_CALLBACK_MAX_QUEUE_BYTE_SIZE = config.DEFINE_integer(
           'until the Python callback consume more outfeeds.'),
     lower_bound=int(16 * 1e6)
 )
-_HOST_CALLBACK_OUTFEED = config.DEFINE_bool(
+_HOST_CALLBACK_OUTFEED = config.bool_flag(
     'jax_host_callback_outfeed',
     config.bool_env('JAX_HOST_CALLBACK_OUTFEED', False),
     help=(
         'Use outfeed implementation for host_callback, even on CPU and GPU. '
         'If false, use the CustomCall implementation. '
         'Has no effect on TPU, since only the outfeed mechanism is implemented.'
+    )
+)
+_HOST_CALLBACK_LEGACY = config.bool_flag(
+    'jax_host_callback_legacy',
+    config.bool_env('JAX_HOST_CALLBACK_LEGACY', True),
+    help=(
+        'Use old implementation of host_callback, documented in the module docstring.'
+        'If False, use the jax.experimental.io_callback implementation. '
+        'See https://github.com/google/jax/issues/20385.'
     )
 )
 
@@ -570,9 +586,8 @@ def _raise_if_using_outfeed_with_pjrt_c_api(backend: xb.XlaBackend):
   """Should be called whenever outfeed (or infeed) will be used."""
   if xb.using_pjrt_c_api(backend):
     raise NotImplementedError(
-        "host_callback functionality isn't supported with the new Cloud TPU "
-        "runtime. See https://jax.readthedocs.io/en/latest/debugging/index.html"
-        " and "
+        "host_callback functionality isn't supported with PJRT C API. "
+        "See https://jax.readthedocs.io/en/latest/debugging/index.html and "
         "https://jax.readthedocs.io/en/latest/notebooks/external_callbacks.html"
         " for alternatives. Please file a feature request at "
         "https://github.com/google/jax/issues if none of the alternatives are "
@@ -588,17 +603,31 @@ XlaDevice = xla_client.Device
 XlaLocalClient = xla_client.Client
 DType = Any
 
+class CallbackFlavor(enum.Enum):
+  """Specifies which flavor of callback to use under JAX_HOST_CALLBACK_LEGACY=False.
 
-def id_tap(tap_func,
+  See https://github.com/google/jax/issues/20385.
+  """
+  IO_CALLBACK = 1  # uses jax.experimental.io_callback
+  PURE = 2  # uses jax.pure_callback
+  DEBUG = 3  # uses jax.debug.callback, valid only when there are no results
+
+
+def _deprecated_id_tap(tap_func,
            arg,
            *,
            result=None,
            tap_with_device=False,
            device_index=0,
+           callback_flavor=CallbackFlavor.IO_CALLBACK,
            **kwargs):
   """Host-callback tap primitive, like identity function with a call to ``tap_func``.
 
-  **Experimental: please give feedback, and expect changes!**
+  .. warning::
+    The host_callback APIs are deprecated as of March 20, 2024.
+    The functionality is subsumed by the
+    `new JAX external callbacks <https://jax.readthedocs.io/en/latest/notebooks/external_callbacks.html>`_
+    See https://github.com/google/jax/issues/20385.
 
   ``id_tap`` behaves semantically like the identity function but has the
   side-effect that a user-defined Python function is called with the runtime
@@ -622,6 +651,9 @@ def id_tap(tap_func,
     device_index: specifies from which device the tap function is invoked in a
       SPMD program. Works only when using the outfeed implementation mechanism,
       i.e., does not work on CPU unless --jax_host_callback_outfeed=True.
+    callback_flavor: if running with `JAX_HOST_CALLBACK_LEGACY=False` specifies
+       the flavor of callback to use.
+       See https://github.com/google/jax/issues/20385.
 
   Returns:
     ``arg``, or ``result`` if given.
@@ -654,7 +686,8 @@ def id_tap(tap_func,
       call_with_device=tap_with_device,
       result_shape=None,
       identity=True,
-      device_index=device_index)
+      device_index=device_index,
+      callback_flavor=callback_flavor)
 
   if result is not None:
     return result
@@ -662,17 +695,22 @@ def id_tap(tap_func,
     return call_res
 
 
-def id_print(arg,
+def _deprecated_id_print(arg,
              *,
              result=None,
              tap_with_device=False,
              device_index=0,
              output_stream=None,
              threshold=None,
+             callback_flavor=CallbackFlavor.IO_CALLBACK,
              **kwargs):
   """Like :func:`id_tap` with a printing tap function.
 
-   **Experimental: please give feedback, and expect changes!**
+  .. warning::
+    The host_callback APIs are deprecated as of March 20, 2024.
+    The functionality is subsumed by the
+    `new JAX external callbacks <https://jax.readthedocs.io/en/latest/notebooks/external_callbacks.html>`_
+    See https://github.com/google/jax/issues/20385.
 
    On each invocation of the printing tap, the ``kwargs`` if present
    will be printed first (sorted by keys). Then arg will be printed,
@@ -688,27 +726,36 @@ def id_print(arg,
      built-in ``print``. The string will be passed as
      ``output_stream.write(s)``.
    * ``threshold`` is passed to ``numpy.array2string``.
+   * ``callback_flavor``: if running with `JAX_HOST_CALLBACK_LEGACY=False` specifies
+       the flavor of callback to use.
+       See https://github.com/google/jax/issues/20385.
 
   For more details see the :mod:`jax.experimental.host_callback` module documentation.
   """
   printer = functools.partial(_print_tap_func,
                               output_stream=output_stream,
                               threshold=threshold, **kwargs)
-  return id_tap(
+  return _deprecated_id_tap(
       printer,
       arg,
       result=result,
       tap_with_device=tap_with_device,
-      device_index=device_index)
+      device_index=device_index,
+      callback_flavor=callback_flavor)
 
 
-def call(callback_func: Callable, arg, *,
+def _deprecated_call(callback_func: Callable, arg, *,
          result_shape=None,
          call_with_device=False,
-         device_index=0):
+         device_index=0,
+         callback_flavor=CallbackFlavor.IO_CALLBACK):
   """Make a call to the host, and expect a result.
 
-  **Experimental: please give feedback, and expect changes!**
+  .. warning::
+    The host_callback APIs are deprecated as of March 20, 2024.
+    The functionality is subsumed by the
+    `new JAX external callbacks <https://jax.readthedocs.io/en/latest/notebooks/external_callbacks.html>`_
+    See https://github.com/google/jax/issues/20385.
 
   Args:
     callback_func: The Python function to invoke on the host as
@@ -736,14 +783,26 @@ def call(callback_func: Callable, arg, *,
     device_index: specifies from which device the tap function is invoked in a
       SPMD program. Works only when using the outfeed implementation mechanism,
       i.e., does not work on CPU unless --jax_host_callback_outfeed=True.
+    callback_flavor: if running with `JAX_HOST_CALLBACK_LEGACY=False` specifies
+       the flavor of callback to use.
+       See https://github.com/google/jax/issues/20385.
+
   Returns:
     the result of the ``callback_func`` invocation.
 
   For more details see the :mod:`jax.experimental.host_callback` module documentation.
   """
+  if (not _HOST_CALLBACK_LEGACY.value and
+      callback_flavor is CallbackFlavor.DEBUG and
+      result_shape is not None):
+    raise NotImplementedError(
+        "When using JAX_HOST_CALLBACK_LEGACY=False you can use the `DEBUG` "
+        "flavor of callback only when the `result_shape` is None. "
+        "See https://github.com/google/jax/issues/20385."
+    )
   return _call(callback_func, arg, result_shape=result_shape,
                call_with_device=call_with_device, identity=False,
-               device_index=device_index)
+               device_index=device_index, callback_flavor=callback_flavor)
 
 
 # We need the wrapper function to have hash and equality defined since it is
@@ -754,6 +813,11 @@ class _CallbackWrapper:
     self.callback_func = callback_func
     self.identity = identity
     self.call_with_device = call_with_device
+    if not _HOST_CALLBACK_LEGACY.value and call_with_device:
+      raise NotImplementedError(
+          "When using JAX_HOST_CALLBACK_LEGACY=False, the host_callback APIs"
+          " do not support `tap_with_device` and `call_with_device`. "
+          "See https://github.com/google/jax/issues/20385.")
 
   def __hash__(self):
     return hash((self.callback_func, self.identity, self.call_with_device))
@@ -763,7 +827,16 @@ class _CallbackWrapper:
             self.identity == other.identity and
             self.call_with_device == other.call_with_device)
 
-  def __call__(self, arg, device, transforms):
+  def __call__(self, *args, **kwargs):
+    if _HOST_CALLBACK_LEGACY.value:
+      return self._call_legacy(*args, **kwargs)
+    else:
+      if self.identity:
+        # For id_tap, we pass empty transforms, for backwards compatibility
+        return self.callback_func(args[0], ())
+      return self.callback_func(*args, **kwargs)
+
+  def _call_legacy(self, arg, device, transforms):
     if self.identity:
       # For id_tap, we pass the transforms, for backwards compatibility
       if self.call_with_device:
@@ -785,14 +858,16 @@ def _call(callback_func: Callable,
           result_shape=None,
           call_with_device=False,
           device_index=0,
-          identity=False):
-  # Lazy initialization
-  _initialize_outfeed_receiver(
-      max_callback_queue_size_bytes=_HOST_CALLBACK_MAX_QUEUE_BYTE_SIZE.value)
+          identity=False,
+          callback_flavor=CallbackFlavor.IO_CALLBACK):
+  if _HOST_CALLBACK_LEGACY.value:
+    # Lazy initialization
+    _initialize_outfeed_receiver(
+        max_callback_queue_size_bytes=_HOST_CALLBACK_MAX_QUEUE_BYTE_SIZE.value)
   api.check_callable(callback_func)
   flat_args, arg_treedef = tree_util.tree_flatten(arg)
-  for arg in flat_args:
-    dispatch.check_arg(arg)
+  for arg_ in flat_args:
+    dispatch.check_arg(arg_)
   # See definition of outside_call_p for what parameters it takes
   params: dict[str, Any] = {}
   # TODO: wrap function
@@ -817,8 +892,27 @@ def _call(callback_func: Callable,
 
     params["result_treedef"] = result_treedef
     params["flat_results_aval"] = tuple(flat_results_aval)
-  flat_results = outside_call_p.bind(*flat_args, **params)
-  return result_treedef.unflatten(flat_results) if not identity else arg_treedef.unflatten(flat_results)
+
+  if _HOST_CALLBACK_LEGACY.value:
+    flat_results = outside_call_p.bind(*flat_args, **params)
+    return result_treedef.unflatten(flat_results) if not identity else arg_treedef.unflatten(flat_results)
+  else:
+    callback_device = jax.local_devices()[device_index]
+    sharding = jax.sharding.SingleDeviceSharding(callback_device)
+    callback_func = _CallbackWrapper(callback_func, identity,
+                                     call_with_device)
+    if callback_flavor is CallbackFlavor.DEBUG:
+      assert identity
+      jax.debug.callback(callback_func, arg)
+      return arg
+    elif callback_flavor is CallbackFlavor.PURE:
+      call_res = jax.pure_callback(callback_func, result_shape, arg,
+                                   sharding=sharding)
+    else:
+      call_res = io_callback(callback_func, result_shape, arg,
+                             sharding=sharding,
+                             ordered=True)
+    return call_res if not identity else arg
 
 
 # We need the lock for when we use the CustomCall implementation of callbacks.
@@ -843,7 +937,6 @@ def _print_tap_func(
     threshold: the value of numpy.array2string threshold parameter.
     **kwargs: all other keyword args are printed before printing `arg`.
   """
-
   def emit_str(s: str):
     if output_stream is not None:
       output_stream.write(s + "\n")
@@ -1435,7 +1528,7 @@ def _rewrite_eqn(eqn: core.JaxprEqn, eqns: list[core.JaxprEqn],
                 body_jaxpr=_rewrite_closed_jaxpr(body_jaxpr, True, True),
                 cond_jaxpr=_rewrite_closed_jaxpr(cond_jaxpr, True, False))))
   elif eqn.primitive is lax.cond_p:
-    branches, linear = util.split_dict(eqn.params, ["branches", "linear"])
+    branches, = util.split_dict(eqn.params, ["branches"])
     index, *operands = eqn.invars
     new_invars = [index, *operands, input_token_var, input_itoken_var]
     eqns.append(
@@ -1445,13 +1538,12 @@ def _rewrite_eqn(eqn: core.JaxprEqn, eqns: list[core.JaxprEqn],
                 eqn.params,
                 branches=tuple(
                     _rewrite_closed_jaxpr(jaxpr, True, True)
-                    for jaxpr in branches),
-                linear=(*linear, False, False))))
+                    for jaxpr in branches))))
   elif eqn.primitive is lax.scan_p:
-    num_consts, num_carry, carry_jaxpr, linear, _, _, _ = util.split_dict(
+    num_consts, num_carry, carry_jaxpr, linear, _, _, _, _ = util.split_dict(
         eqn.params,
         ["num_consts", "num_carry", "jaxpr", "linear", "reverse", "length",
-         "unroll"])
+         "unroll", "_split_transpose"])
     # We add the tokens right at the end of carry
     nr_const_and_carry = num_consts + num_carry
     new_invars = eqn.invars[0:nr_const_and_carry] + [
@@ -1549,6 +1641,8 @@ def _rewrite_eqn(eqn: core.JaxprEqn, eqns: list[core.JaxprEqn],
                     eqn.params["out_shardings"]
                     + (sharding_impls.UNSPECIFIED, sharding_impls.UNSPECIFIED)
                 ),
+                in_layouts=(eqn.params["in_layouts"] + (None, None)),
+                out_layouts=(eqn.params["out_layouts"] + (None, None)),
             ),
         )
     )
@@ -1799,20 +1893,20 @@ def _initialize_outfeed_receiver(
       _callback_handler_data.receiver = outfeed_receiver_module.start(
           _callback_input_received, tuple(clients_with_outfeed),
           max_callback_queue_size_bytes,
-          compiler.get_compile_options(1, 1).executable_build_options)  # type:ignore
+          compiler.get_compile_options(1, 1).executable_build_options)
 
     def exit_handler():
       # Prevent logging usage during compilation, gives errors under pytest
-      dispatch._on_exit = True  # type: ignore[protected-access]
+      dispatch._on_exit = True
       if not _callback_handler_data.on_exit:
         _callback_handler_data.on_exit = True
-        barrier_wait("at_exit")
+        _deprecated_barrier_wait("at_exit")
 
     atexit.register(exit_handler)  # We wait as long as we have callbacks
     _callback_handler_data.initialized = True
 
 
-def barrier_wait(logging_name: str | None = None):
+def _deprecated_barrier_wait(logging_name: str | None = None):
   """Blocks the calling thread until all current outfeed is processed.
 
   Waits until all callbacks from computations already running on all devices
@@ -1832,6 +1926,10 @@ def barrier_wait(logging_name: str | None = None):
 
   For more details see the :mod:`jax.experimental.host_callback` module documentation.
   """
+  if not _HOST_CALLBACK_LEGACY.value:
+    jax.effects_barrier()
+    return
+
   logging_name = logging_name or ""
   logger.debug("barrier_wait[%s]: start", logging_name)
 
@@ -1858,7 +1956,7 @@ def barrier_wait(logging_name: str | None = None):
   for d_idx, d in enumerate(_callback_handler_data.devices):
     logger.debug("barrier_wait[%s]: enqueueing barrier on device %s", logging_name, d)
     x_on_dev = api.device_put(d_idx, device=d)
-    api.jit(lambda x: id_tap(barrier_tap_received, x), device=d)(x_on_dev)
+    api.jit(lambda x: _deprecated_id_tap(barrier_tap_received, x), device=d)(x_on_dev)
 
   logger.debug("barrier_wait[%s]: waiting for callbacks", logging_name)
 
@@ -1875,8 +1973,13 @@ def barrier_wait(logging_name: str | None = None):
         f"Last one was: {formatted_last_exception}") from last_exception
 
 
-def stop_outfeed_receiver():
+def _deprecated_stop_outfeed_receiver():
   """Stops the outfeed receiver runtime.
+
+  .. warning::
+    The host_callback APIs are deprecated as of March 20, 2024.
+    The functionality is subsumed by the
+    `new JAX external callbacks <https://jax.readthedocs.io/en/latest/notebooks/external_callbacks.html>`_
 
   This waits for all outfeeds from computations already running on all devices,
   and then stops the outfeed receiver runtime. The runtime will be restarted
@@ -1886,3 +1989,30 @@ def stop_outfeed_receiver():
   using lax.outfeed directly after having used host callbacks.
   """
   _callback_handler_data.stop()
+
+_deprecation_msg = (
+    "The host_callback APIs are deprecated as of March 20, 2024. The functionality "
+    "is subsumed by the new JAX external callbacks. "
+    "See https://github.com/google/jax/issues/20385.")
+
+_deprecations = {
+    # Added March 20, 2024
+    "id_tap": (_deprecation_msg, _deprecated_id_tap),
+    "id_print": (_deprecation_msg, _deprecated_id_print),
+    "call": (_deprecation_msg, _deprecated_call),
+    "barrier_wait": (_deprecation_msg, _deprecated_barrier_wait),
+    "stop_outfeed_receiver": (_deprecation_msg, _deprecated_stop_outfeed_receiver),
+}
+
+import typing
+if typing.TYPE_CHECKING:
+  id_tap = _deprecated_id_tap
+  id_print = _deprecated_id_print
+  call = _deprecated_call
+  barrier_wait = _deprecated_barrier_wait
+  stop_outfeed_receiver = _deprecated_stop_outfeed_receiver
+else:
+  from jax._src.deprecations import deprecation_getattr as _deprecation_getattr
+  __getattr__ = _deprecation_getattr(__name__, _deprecations)
+  del _deprecation_getattr
+del typing

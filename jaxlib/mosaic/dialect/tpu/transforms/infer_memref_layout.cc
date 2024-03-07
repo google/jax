@@ -23,6 +23,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "absl/log/check.h"
+#include "absl/log/log.h"
 #include "jaxlib/mosaic/dialect/tpu/tpu_dialect.h"
 #include "jaxlib/mosaic/dialect/tpu/util.h"
 #include "xla/layout.h"
@@ -32,6 +33,23 @@ namespace mlir::tpu {
 #define GEN_PASS_DECL_INFERMEMREFLAYOUTPASS
 #define GEN_PASS_DEF_INFERMEMREFLAYOUTPASS
 #include "jaxlib/mosaic/dialect/tpu/tpu_passes.h.inc"
+
+SmallVector<int64_t> ComputeTileStrides(MemRefType memref_ty,
+                                        int64_t leading_tile_rows) {
+  SmallVector<int64_t> tile_strides(memref_ty.getRank());
+  int64_t stride = 1;
+  for (int i = memref_ty.getRank() - 1; i >= 0; --i) {
+    tile_strides[i] = stride;
+    if (i == memref_ty.getRank() - 1) {
+      stride *= llvm::divideCeil(memref_ty.getShape()[i], 128);
+    } else if (i == memref_ty.getRank() - 2) {
+      stride *= llvm::divideCeil(memref_ty.getShape()[i], leading_tile_rows);
+    } else {
+      stride *= memref_ty.getShape()[i];
+    }
+  }
+  return tile_strides;
+}
 
 // Returns the number of 128-element groups in a tile.
 //
@@ -55,7 +73,8 @@ int getTilingFactor(const int num_128s, const int hardware_generation,
 }
 
 FailureOr<TiledLayoutAttr> inferLayout(MemRefType memref_ty,
-                                       const int hardware_generation) {
+                                       const int hardware_generation,
+                                       int64_t leading_tile_rows = 0) {
   if (auto tiled_layout_attr =
           dyn_cast<TiledLayoutAttr>(memref_ty.getLayout())) {
     return tiled_layout_attr;
@@ -91,11 +110,14 @@ FailureOr<TiledLayoutAttr> inferLayout(MemRefType memref_ty,
       }
       return TiledLayoutAttr::get(memref_ty.getContext(), tiles, {1});
     }
+
     // memref.getRank() > 1
     const ArrayRef<int64_t> shape = memref_ty.getShape();
     const int64_t second_minor = shape[shape.size() - 2];
-    const int64_t leading_tile_rows =
-        getTilingFactor(second_minor, hardware_generation, bitwidth);
+    if (leading_tile_rows == 0) {
+      leading_tile_rows =
+          getTilingFactor(second_minor, hardware_generation, bitwidth);
+    }
     SmallVector<xla::Tile> tiles{xla::Tile({leading_tile_rows, 128})};
     if (bitwidth != 32) {
       if (!llvm::has_single_bit<unsigned>(bitwidth) || bitwidth > 32) {
@@ -105,19 +127,7 @@ FailureOr<TiledLayoutAttr> inferLayout(MemRefType memref_ty,
       }
       tiles.push_back(xla::Tile({32 / bitwidth, 1}));
     }
-    SmallVector<int64_t> tile_strides(memref_ty.getRank());
-    int64_t stride = 1;
-    for (int i = memref_ty.getRank() - 1; i >= 0; --i) {
-      tile_strides[i] = stride;
-      if (i == memref_ty.getRank() - 1) {
-        stride *= (memref_ty.getShape()[i] + 127) / 128;
-      } else if (i == memref_ty.getRank() - 2) {
-        stride *= (memref_ty.getShape()[i] + leading_tile_rows - 1) /
-                  leading_tile_rows;
-      } else {
-        stride *= memref_ty.getShape()[i];
-      }
-    }
+    auto tile_strides = ComputeTileStrides(memref_ty, leading_tile_rows);
     return TiledLayoutAttr::get(memref_ty.getContext(), tiles, tile_strides);
   }
   return emitError(UnknownLoc::get(memref_ty.getContext()),
@@ -149,7 +159,8 @@ LogicalResult checkTiles(MLIRContext *mlir_ctx,
 }
 
 FailureOr<MemRefType> inferMemref(MemRefType memref,
-                                  const int hardware_generation) {
+                                  const int hardware_generation,
+                                  int64_t leading_tile_rows) {
   if (isa<SemaphoreType, DMASemaphoreType>(memref.getElementType())) {
     const Attribute semaphore_mem = tpu::MemorySpaceAttr::get(
         memref.getContext(), MemorySpace::kSemaphoreMem);
@@ -169,8 +180,9 @@ FailureOr<MemRefType> inferMemref(MemRefType memref,
       tpu::MemorySpaceAttr::get(memref.getContext(), MemorySpace::vmem);
   const Attribute memory_space =
       memref.getMemorySpace() == nullptr ? vmem : memref.getMemorySpace();
-  FAILUREOR_ASSIGN_OR_RETURN(const TiledLayoutAttr layout,
-                             inferLayout(memref, hardware_generation));
+  FAILUREOR_ASSIGN_OR_RETURN(
+      const TiledLayoutAttr layout,
+      inferLayout(memref, hardware_generation, leading_tile_rows));
 
   const ArrayRef<xla::Tile> tiles = layout.getTiles();
   if (failed(checkTiles(memref.getContext(), tiles))) {
@@ -244,14 +256,24 @@ LogicalResult inferFunc(func::FuncOp f, const int hardware_generation) {
   Block &entry = f.getBody().front();
   SmallVector<Type> new_arg_types;
   auto builder = OpBuilder::atBlockBegin(&entry);
-  for (BlockArgument arg : entry.getArguments()) {
+  for (int i = 0; i < entry.getNumArguments(); ++i) {
+    BlockArgument arg = entry.getArgument(i);
     const auto memref_ty = dyn_cast<MemRefType>(arg.getType());
     if (memref_ty == nullptr) {
       new_arg_types.push_back(arg.getType());
       continue;
     }
-    FAILUREOR_ASSIGN_OR_RETURN(const MemRefType new_memref_ty,
-                               inferMemref(memref_ty, hardware_generation));
+    int64_t leading_tile_rows = 0;
+    auto leading_tile_rows_attr =
+        f.getArgAttrOfType<mlir::IntegerAttr>(i, kLeadingTileRows);
+    if (leading_tile_rows_attr != nullptr) {
+      leading_tile_rows = leading_tile_rows_attr.getInt();
+      f.removeArgAttr(i, kLeadingTileRows);
+    }
+
+    FAILUREOR_ASSIGN_OR_RETURN(
+        const MemRefType new_memref_ty,
+        inferMemref(memref_ty, hardware_generation, leading_tile_rows));
     arg.setType(new_memref_ty);
     new_arg_types.push_back(arg.getType());
     if (memref_ty != new_memref_ty) {

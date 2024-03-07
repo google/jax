@@ -84,12 +84,13 @@ if CAN_USE_HYPOTHESIS:
   class AllGatherTest(jtu.JaxTestCase):
 
     def setUp(self):
-      super().setUp()
       if not jtu.test_device_matches(["tpu"]):
         self.skipTest("Need TPU devices")
       if not jtu.is_device_tpu(version=5, variant="e"):
         # TODO(sharadmv,apaszke): expand support to more versions
         self.skipTest("Currently only supported on TPU v5e")
+
+      super().setUp()
 
     @hp.given(hps.booleans(), _array_shapes(), _array_dtypes())
     def test_all_gather_1d_mesh(self, is_vmem, shape, dtype):

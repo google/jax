@@ -26,16 +26,25 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 #
+import inspect
+import operator
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath('..'))
 
-
-# Currently type aliases are expanded. We tried a workaround along the lines of:
+# Workaround to avoid expanding type aliases. See:
 # https://github.com/sphinx-doc/sphinx/issues/6518#issuecomment-589613836
-# Unfortunately, this workaround makes Sphinx drop module-level documentation.
-# See https://github.com/google/jax/issues/3452.
+from typing import ForwardRef
+
+def _do_not_evaluate_in_jax(
+    self, globalns, *args, _evaluate=ForwardRef._evaluate,
+):
+  if globalns.get('__name__', '').startswith('jax'):
+    return self
+  return _evaluate(self, globalns, *args)
+
+ForwardRef._evaluate = _do_not_evaluate_in_jax
 
 # -- Project information -----------------------------------------------------
 
@@ -63,16 +72,16 @@ extensions = [
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
     'sphinx.ext.intersphinx',
+    'sphinx.ext.linkcode',
     'sphinx.ext.mathjax',
     'sphinx.ext.napoleon',
-    'sphinx.ext.viewcode',
     'matplotlib.sphinxext.plot_directive',
-    'sphinx_autodoc_typehints',
     'myst_nb',
     "sphinx_remove_toctrees",
     'sphinx_copybutton',
     'jax_extensions',
-    'sphinx_design'
+    'sphinx_design',
+    'sphinxext.rediraffe',
 ]
 
 intersphinx_mapping = {
@@ -124,8 +133,8 @@ exclude_patterns = [
     'pallas/quickstart.md',
     'pallas/tpu/pipelining.md',
     'jep/9407-type-promotion.md',
-    'jax-101/*.md',
     'autodidax.md',
+    'sharded-computation.md',
 ]
 
 # The name of the Pygments (syntax highlighting) style to use.
@@ -197,8 +206,6 @@ nb_execution_timeout = 100
 # List of patterns, relative to source directory, that match notebook
 # files that will not be executed.
 nb_execution_excludepatterns = [
-    # Includes GPU timings that shouldn't be executed by doc build
-    'notebooks/quickstart.*',
     # Slow notebook: long time to load tf.ds
     'notebooks/neural_network_with_tfds_data.*',
     # Slow notebook
@@ -206,13 +213,14 @@ nb_execution_excludepatterns = [
     # Has extra requirements: networkx, pandas, pytorch, tensorflow, etc.
     'jep/9407-type-promotion.*',
     # TODO(jakevdp): enable execution on the following if possible:
-    'jax-101/*',
     'notebooks/xmap_tutorial.*',
     'notebooks/Distributed_arrays_and_automatic_parallelization.*',
     'notebooks/autodiff_remat.*',
     # Requires accelerators
     'pallas/quickstart.*',
     'pallas/tpu/pipelining.*',
+    'sharded-computation.*',
+    'distributed_data_loading.*'
 ]
 
 # -- Options for HTMLHelp output ---------------------------------------------
@@ -292,17 +300,56 @@ epub_exclude_files = ['search.html']
 
 # -- Extension configuration -------------------------------------------------
 
-# Tell sphinx-autodoc-typehints to generate stub parameter annotations including
-# types, even if the parameters aren't explicitly documented.
-always_document_param_types = True
-
-
 # Tell sphinx autodoc how to render type aliases.
+autodoc_typehints = "description"
+autodoc_typehints_description_target = "all"
 autodoc_type_aliases = {
-    'ArrayLike': 'ArrayLike',
-    'DTypeLike': 'DTypeLike',
+    'ArrayLike': 'jax.typing.ArrayLike',
+    'DTypeLike': 'jax.typing.DTypeLike',
 }
-
 
 # Remove auto-generated API docs from sidebars. They take too long to build.
 remove_from_toctrees = ["_autosummary/*"]
+
+# Customize code links via sphinx.ext.linkcode
+
+def linkcode_resolve(domain, info):
+  import jax
+
+  if domain != 'py':
+    return None
+  if not info['module']:
+    return None
+  if not info['fullname']:
+    return None
+  if info['module'].split(".")[0] != 'jax':
+     return None
+  try:
+    mod = sys.modules.get(info['module'])
+    obj = operator.attrgetter(info['fullname'])(mod)
+    if isinstance(obj, property):
+        obj = obj.fget
+    while hasattr(obj, '__wrapped__'):  # decorated functions
+        obj = obj.__wrapped__
+    filename = inspect.getsourcefile(obj)
+    source, linenum = inspect.getsourcelines(obj)
+  except:
+    return None
+  filename = os.path.relpath(filename, start=os.path.dirname(jax.__file__))
+  lines = f"#L{linenum}-L{linenum + len(source)}" if linenum else ""
+  return f"https://github.com/google/jax/blob/main/jax/{filename}{lines}"
+
+# Generate redirects from deleted files to new sources
+rediraffe_redirects = {
+    'notebooks/quickstart.md': 'quickstart.md',
+    'jax-101/01-jax-basics.md': 'key-concepts.md',
+    'jax-101/02-jitting.md': 'jit-compilation.md',
+    'jax-101/03-vectorization.md': 'automatic-vectorization.md',
+    'jax-101/04-advanced-autodiff.md': 'automatic-differentiation.md',
+    'jax-101/05-random-numbers.md': 'random-numbers.md',
+    'jax-101/05.1-pytrees.md': 'working-with-pytrees.md',
+    'jax-101/06-parallelism.md': 'sharded-computation.md',
+    'jax-101/07-state.md': 'stateful-computations.md',
+    'jax-101/08-pjit.rst': 'sharded-computation.md',
+    'jax-101/index.rst': 'tutorials.rst',
+}

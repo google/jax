@@ -23,9 +23,7 @@ import jax
 from jax import lax
 from jax._src import test_util as jtu
 
-from jax import config
-
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 ignore_jit_of_pmap_warning = partial(
     jtu.ignore_warning,message=".*jit-of-pmap.*")

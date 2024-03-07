@@ -148,11 +148,12 @@ def ref_addupdate(ref_or_view: AbstractRef, idx: Indexer | None, x: Array) -> No
 
 
 def _shape_after_indexing(
-    shape: tuple[int, ...], indexers: tuple[indexing.NDIndexer, ...]
-) -> tuple[int, ...]:
+    shape: tuple[int | Array, ...], indexers: tuple[indexing.NDIndexer, ...]
+) -> tuple[int | Array, ...]:
   for indexer in indexers:
     # Run some simple checks that all the indexers have consistent shapes
-    assert indexer.shape == shape, (indexer.shape, shape)
+    if not indexer.is_dynamic_size:
+      assert indexer.shape == shape, (indexer.shape, shape)
     shape = indexer.get_indexer_shape()
   return shape
 
@@ -192,7 +193,7 @@ def _swap_abstract_eval(ref_aval: AbstractRef,
     if ref_aval.dtype != val_aval.dtype:
       raise ValueError("Invalid dtype for `swap`. "
                        f"Ref dtype: {ref_aval.dtype}. "
-                       f"Value shape: {val_aval.dtype}. ")
+                       f"Value dtype: {val_aval.dtype}. ")
     out_aval = core.ShapedArray(expected_out_shape, ref_aval.dtype)
   else:
     if indexers:
@@ -239,12 +240,26 @@ def _pp_slice(context: core.JaxprPpContext, dim, slc: indexing.Slice
   start, size = slc.start, slc.size
   if isinstance(start, core.Var):
     start_str = core.pp_var(start, context)
-    end_str = f'{start_str}+{size}'
+    size_str = (
+        core.pp_var(size, context)
+        if isinstance(size, core.Var)
+        else str(size)
+    )
+    return f'{start_str}:{start_str}+{size_str}'
   else:
-    start_str = '' if start == 0 else str(start)
-    end = start + size
-    end_str = '' if end == dim else str(end)
-  return f'{start_str}:{end_str}'
+    start_str = str(start)
+    if start == 0:
+      start_str = ''
+    if isinstance(size, core.Var):
+      size_str = core.pp_var(size, context)
+      if start_str:
+        return f'{start_str}:{start_str}+{size_str}'
+      else:
+        return f':{size_str}'
+    else:
+      end = start + size
+      end_str = '' if end == dim else str(end)
+      return f'{start_str}:{end_str}'
 
 def pp_indexer(context: core.JaxprPpContext,indexer: indexing.NDIndexer
                 ) -> pp.Doc:
@@ -328,7 +343,7 @@ def _get_jvp(primals: list[Any], tangents: list[Any], **params: Any):
   ref_tangent, *_ = tangents
   assert isinstance(ref_tangent.aval, AbstractRef)
   return (get_p.bind(ref_primal, *idx, **params),
-          get_p.bind(ref_tangent, *idx, **params))  # type: ignore[arg-type]
+          get_p.bind(ref_tangent, *idx, **params))
 ad.primitive_jvps[get_p] = _get_jvp
 
 def _swap_jvp(primals: list[Any], tangents: list[Any], **params: Any):
@@ -337,8 +352,8 @@ def _swap_jvp(primals: list[Any], tangents: list[Any], **params: Any):
   ref_tangent, x_tangent, *_ = tangents
   assert isinstance(ref_tangent.aval, AbstractRef)
   x_tangent = ad_util.instantiate(x_tangent)
-  return (swap_p.bind(ref_primal, x_primal, *idx, **params),  # type: ignore[arg-type]
-          swap_p.bind(ref_tangent, x_tangent, *idx, **params))  # type: ignore[arg-type]
+  return (swap_p.bind(ref_primal, x_primal, *idx, **params),
+          swap_p.bind(ref_tangent, x_tangent, *idx, **params))
 ad.primitive_jvps[swap_p] = _swap_jvp
 
 def addupdate_jvp_rule(primals: list[Any], tangents: list[Any], **params: Any):

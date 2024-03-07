@@ -12,135 +12,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
 
-import functools
+import builtins
 from typing import NamedTuple
-import jax
+import numpy as np
+
 import jax.numpy as jnp
 
+from jax._src.lib import xla_client as xc
+from jax._src.sharding import Sharding
+from jax._src import dtypes as _dtypes
 
-from jax.experimental.array_api._dtypes import (
-  bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64,
-  float32, float64, complex64, complex128
-)
-
-_valid_dtypes = {
-    bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64,
-    float32, float64, complex64, complex128
-}
-
-_promotion_table = {
-  (bool, bool): bool,
-  (int8, int8): int8,
-  (int8, int16): int16,
-  (int8, int32): int32,
-  (int8, int64): int64,
-  (int8, uint8): int16,
-  (int8, uint16): int32,
-  (int8, uint32): int64,
-  (int16, int8): int16,
-  (int16, int16): int16,
-  (int16, int32): int32,
-  (int16, int64): int64,
-  (int16, uint8): int16,
-  (int16, uint16): int32,
-  (int16, uint32): int64,
-  (int32, int8): int32,
-  (int32, int16): int32,
-  (int32, int32): int32,
-  (int32, int64): int64,
-  (int32, uint8): int32,
-  (int32, uint16): int32,
-  (int32, uint32): int64,
-  (int64, int8): int64,
-  (int64, int16): int64,
-  (int64, int32): int64,
-  (int64, int64): int64,
-  (int64, uint8): int64,
-  (int64, uint16): int64,
-  (int64, uint32): int64,
-  (uint8, int8): int16,
-  (uint8, int16): int16,
-  (uint8, int32): int32,
-  (uint8, int64): int64,
-  (uint8, uint8): uint8,
-  (uint8, uint16): uint16,
-  (uint8, uint32): uint32,
-  (uint8, uint64): uint64,
-  (uint16, int8): int32,
-  (uint16, int16): int32,
-  (uint16, int32): int32,
-  (uint16, int64): int64,
-  (uint16, uint8): uint16,
-  (uint16, uint16): uint16,
-  (uint16, uint32): uint32,
-  (uint16, uint64): uint64,
-  (uint32, int8): int64,
-  (uint32, int16): int64,
-  (uint32, int32): int64,
-  (uint32, int64): int64,
-  (uint32, uint8): uint32,
-  (uint32, uint16): uint32,
-  (uint32, uint32): uint32,
-  (uint32, uint64): uint64,
-  (uint64, uint8): uint64,
-  (uint64, uint16): uint64,
-  (uint64, uint32): uint64,
-  (uint64, uint64): uint64,
-  (float32, float32): float32,
-  (float32, float64): float64,
-  (float32, complex64): complex64,
-  (float32, complex128): complex128,
-  (float64, float32): float64,
-  (float64, float64): float64,
-  (float64, complex64): complex128,
-  (float64, complex128): complex128,
-  (complex64, float32): complex64,
-  (complex64, float64): complex128,
-  (complex64, complex64): complex64,
-  (complex64, complex128): complex128,
-  (complex128, float32): complex128,
-  (complex128, float64): complex128,
-  (complex128, complex64): complex128,
-  (complex128, complex128): complex128,
-}
+# TODO(micky774): Update jax.numpy dtypes to dtype *objects*
+bool = np.dtype('bool')
+int8 = np.dtype('int8')
+int16 = np.dtype('int16')
+int32 = np.dtype('int32')
+int64 = np.dtype('int64')
+uint8 = np.dtype('uint8')
+uint16 = np.dtype('uint16')
+uint32 = np.dtype('uint32')
+uint64 = np.dtype('uint64')
+float32 = np.dtype('float32')
+float64 = np.dtype('float64')
+complex64 = np.dtype('complex64')
+complex128 = np.dtype('complex128')
 
 
-def _is_valid_dtype(t):
-  try:
-    return t in _valid_dtypes
-  except TypeError:
-    return False
-
-
-def _promote_types(t1, t2):
-  if not _is_valid_dtype(t1):
-    raise ValueError(f"{t1} is not a valid dtype")
-  if not _is_valid_dtype(t2):
-    raise ValueError(f"{t2} is not a valid dtype")
-  if result := _promotion_table.get((t1, t2), None):
-    return result
-  else:
-    raise ValueError("No promotion path for {t1} & {t2}")
-
-
-def astype(x, dtype, /, *, copy=True):
-  return jnp.array(x, dtype=dtype, copy=copy)
-
-
-def can_cast(from_, to, /):
-  if isinstance(from_, jax.Array):
-    from_ = from_.dtype
-  if not _is_valid_dtype(from_):
-    raise ValueError(f"{from_} is not a valid dtype")
-  if not _is_valid_dtype(to):
-    raise ValueError(f"{to} is not a valid dtype")
-  try:
-    result = _promote_types(from_, to)
-  except ValueError:
-    return False
-  else:
-    return result == to
+# TODO(micky774): Remove when jax.numpy.astype is deprecation is completed
+def astype(x, dtype, /, *, copy: builtins.bool = True, device: xc.Device | Sharding | None = None):
+  src_dtype = x.dtype if hasattr(x, "dtype") else _dtypes.dtype(x)
+  if (
+    src_dtype is not None
+    and _dtypes.isdtype(src_dtype, "complex floating")
+    and _dtypes.isdtype(dtype, ("integral", "real floating"))
+  ):
+    raise ValueError(
+      "Casting from complex to non-complex dtypes is not permitted. Please "
+      "first use jnp.real or jnp.imag to take the real/imaginary component of "
+      "your input."
+    )
+  return jnp.astype(x, dtype, copy=copy, device=device)
 
 
 class FInfo(NamedTuple):
@@ -151,14 +64,8 @@ class FInfo(NamedTuple):
     smallest_normal: float
     dtype: jnp.dtype
 
-
-class IInfo(NamedTuple):
-    bits: int
-    max: int
-    min: int
-    dtype: jnp.dtype
-
-
+# TODO(micky774): Update jax.numpy.finfo so that its attributes are python
+# floats
 def finfo(type, /) -> FInfo:
   info = jnp.finfo(type)
   return FInfo(
@@ -169,43 +76,3 @@ def finfo(type, /) -> FInfo:
     smallest_normal=float(info.smallest_normal),
     dtype=jnp.dtype(type)
   )
-
-
-def iinfo(type, /) -> IInfo:
-  info = jnp.iinfo(type)
-  return IInfo(bits=info.bits, max=info.max, min=info.min, dtype=jnp.dtype(type))
-
-
-def isdtype(dtype, kind):
-  return jax.numpy.isdtype(dtype, kind)
-
-
-def result_type(*arrays_and_dtypes):
-  dtypes = []
-  for val in arrays_and_dtypes:
-    if isinstance(val, jax.Array):
-      val = val.dtype
-    if _is_valid_dtype(val):
-      dtypes.append(val)
-    else:
-      raise ValueError(f"{val} is not a valid dtype")
-  if len(dtypes) == 0:
-    raise ValueError("result_type requires at least one argument")
-  if len(dtypes) == 1:
-    return dtypes[0]
-  return functools.reduce(_promote_types, dtypes)
-
-
-def _promote_to_default_dtype(x):
-  if x.dtype.kind == 'b':
-    return x
-  elif x.dtype.kind == 'i':
-    return x.astype(jnp.int_)
-  elif x.dtype.kind == 'u':
-    return x.astype(jnp.uint)
-  elif x.dtype.kind == 'f':
-    return x.astype(jnp.float_)
-  elif x.dtype.kind == 'c':
-    return x.astype(jnp.complex_)
-  else:
-    raise ValueError(f"Unrecognized {x.dtype=}")

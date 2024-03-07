@@ -23,12 +23,12 @@ import scipy.stats as osp_stats
 import scipy.version
 
 import jax
+import jax.numpy as jnp
 from jax._src import dtypes, test_util as jtu
 from jax.scipy import stats as lsp_stats
 from jax.scipy.special import expit
 
-from jax import config
-config.parse_flags_with_absl()
+jax.config.parse_flags_with_absl()
 
 scipy_version = jtu.parse_version(scipy.version.version)
 
@@ -130,7 +130,6 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
 
     def args_maker():
       k, mu, loc = map(rng, shapes, dtypes)
-      k = np.floor(k)
       # clipping to ensure that rate parameter is strictly positive
       mu = np.clip(np.abs(mu), a_min=0.1, a_max=None).astype(mu.dtype)
       loc = np.floor(loc)
@@ -149,7 +148,6 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
 
     def args_maker():
       k, mu, loc = map(rng, shapes, dtypes)
-      k = np.floor(k)
       # clipping to ensure that rate parameter is strictly positive
       mu = np.clip(np.abs(mu), a_min=0.1, a_max=None).astype(mu.dtype)
       loc = np.floor(loc)
@@ -253,7 +251,7 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
 
   @genNamedParametersNArgs(5)
   def testBetaLogPdf(self, shapes, dtypes):
-    rng = jtu.rand_positive(self.rng())
+    rng = jtu.rand_default(self.rng())
     scipy_fun = osp_stats.beta.logpdf
     lax_fun = lsp_stats.beta.logpdf
 
@@ -321,6 +319,23 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
     x = np.array([0., 1.])
     self.assertAllClose(
       osp_stats.beta.pdf(x, a, b), lsp_stats.beta.pdf(x, a, b), atol=1e-5,
+      rtol=2e-5)
+
+  def testBetaLogPdfNegativeConstants(self):
+    a = b = -1.1
+    x = jnp.array([0., 0.5, 1.])
+    self.assertAllClose(
+      osp_stats.beta.pdf(x, a, b), lsp_stats.beta.pdf(x, a, b), atol=1e-5,
+      rtol=2e-5)
+
+  def testBetaLogPdfNegativeScale(self):
+    a = b = 1.
+    x = jnp.array([0., 0.5, 1.])
+    loc = 0
+    scale = -1
+    self.assertAllClose(
+      osp_stats.beta.pdf(x, a, b, loc, scale),
+      lsp_stats.beta.pdf(x, a, b, loc, scale), atol=1e-5,
       rtol=2e-5)
 
   @genNamedParametersNArgs(3)
@@ -1476,14 +1491,14 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
     ndim = shape[0] if len(shape) > 1 else 1
 
     func = partial(resample, shape=())
-    with jax.enable_key_reuse_checks(False):
+    with jax.debug_key_reuse(False):
       self._CompileAndCheck(
         func, args_maker, rtol={np.float32: 3e-07, np.float64: 4e-15})
     result = func(*args_maker())
     assert result.shape == (ndim,)
 
     func = partial(resample, shape=(4,))
-    with jax.enable_key_reuse_checks(False):
+    with jax.debug_key_reuse(False):
       self._CompileAndCheck(
         func, args_maker, rtol={np.float32: 3e-07, np.float64: 4e-15})
     result = func(*args_maker())
@@ -1618,21 +1633,25 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
     self._CompileAndCheck(lax_fun, args_maker, rtol=tol)
 
   @jtu.sample_product(
-    [dict(shape=shape, axis=axis, ddof=ddof, nan_policy=nan_policy)
+    [dict(shape=shape, axis=axis, ddof=ddof, nan_policy=nan_policy, keepdims=keepdims)
       for shape in [(5,), (5, 6), (5, 6, 7)]
       for axis in [None, *range(len(shape))]
       for ddof in [0, 1, 2, 3]
       for nan_policy in ["propagate", "omit"]
+      for keepdims in [True, False]
     ],
     dtype=jtu.dtypes.integer + jtu.dtypes.floating,
   )
-  def testSEM(self, shape, dtype, axis, ddof, nan_policy):
+  def testSEM(self, shape, dtype, axis, ddof, nan_policy, keepdims):
 
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(shape, dtype)]
 
-    scipy_fun = partial(osp_stats.sem, axis=axis, ddof=ddof, nan_policy=nan_policy)
-    lax_fun = partial(lsp_stats.sem, axis=axis, ddof=ddof, nan_policy=nan_policy)
+    kwds = {} if scipy_version < (1, 11) else {'keepdims': keepdims}
+    scipy_fun = partial(osp_stats.sem, axis=axis, ddof=ddof, nan_policy=nan_policy,
+                        **kwds)
+    lax_fun = partial(lsp_stats.sem, axis=axis, ddof=ddof, nan_policy=nan_policy,
+                      **kwds)
     tol_spec = {np.float32: 2e-4, np.float64: 5e-6}
     tol = jtu.tolerance(dtype, tol_spec)
     self._CheckAgainstNumpy(scipy_fun, lax_fun, args_maker, check_dtypes=False,

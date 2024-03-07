@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import scipy.signal as osp_signal
 from typing import Any
 import warnings
 
@@ -43,10 +42,20 @@ def _triage_segments(window: ArrayLike | str | tuple[Any, ...], nperseg: int | N
   if isinstance(window, (str, tuple)):
     nperseg_int = input_length if nperseg is None else int(nperseg)
     if nperseg_int > input_length:
-      warnings.warn(f'nperseg = {nperseg_int} is greater than input length '
-                    f' = {input_length}, using nperseg = {input_length}')
+      warnings.warn(f'nperseg={nperseg_int} is greater than {input_length=},'
+                    f' using nperseg={input_length}')
       nperseg_int = input_length
-    win = jnp.array(osp_signal.get_window(window, nperseg_int), dtype=dtype)
+    if window == 'hann':
+      # Implement the default case without scipy
+      win = jnp.array([1.0]) if nperseg_int == 1 else jnp.sin(jnp.linspace(0, jnp.pi, nperseg_int, endpoint=False)) ** 2
+    else:
+      # TODO(jakevdp): implement get_window() in JAX to remove optional scipy dependency
+      try:
+        from scipy.signal import get_window
+      except ImportError as err:
+        raise ImportError(f"scipy must be available to use {window=}") from err
+      win = get_window(window, nperseg_int)
+    win = jnp.array(win, dtype=dtype)
   else:
     win = jnp.asarray(window)
     nperseg_int = win.size if nperseg is None else int(nperseg)

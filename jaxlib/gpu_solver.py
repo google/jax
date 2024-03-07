@@ -28,12 +28,12 @@ from jaxlib import xla_client
 
 from .hlo_helpers import (
     DimensionSize, ShapeTypePair, mk_result_types_and_shapes,
-    custom_call, ensure_hlo_s32, hlo_s32, dense_int_array, dense_int_array_v6)
+    custom_call, ensure_hlo_s32, hlo_s32, dense_int_array)
 
 try:
   from .cuda import _blas as _cublas  # pytype: disable=import-error
 except ImportError:
-  for cuda_module_name in ["jax_cuda12_plugin", "jax_cuda11_plugin"]:
+  for cuda_module_name in ["jax_cuda12_plugin"]:
     try:
       _cublas = importlib.import_module(f"{cuda_module_name}._blas")
     except ImportError:
@@ -45,7 +45,7 @@ if _cublas:
   for _name, _value in _cublas.registrations().items():
     xla_client.register_custom_call_target(_name, _value, platform="CUDA")
 
-for cuda_module_name in [".cuda", "jax_cuda12_plugin", "jax_cuda11_plugin"]:
+for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
   try:
     _cusolver = importlib.import_module(
         f"{cuda_module_name}._solver", package="jaxlib"
@@ -59,21 +59,34 @@ if _cusolver:
   for _name, _value in _cusolver.registrations().items():
     xla_client.register_custom_call_target(_name, _value, platform="CUDA")
 
-
 try:
   from .rocm import _blas as _hipblas  # pytype: disable=import-error
+except ImportError:
+  for rocm_module_name in ["jax_rocm60_plugin"]:
+    try:
+      _hipblas = importlib.import_module(f"{rocm_module_name}._blas")
+    except:
+      _hipblas = None
+    else:
+      break
+
+if _hipblas:
   for _name, _value in _hipblas.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="ROCM")
-except ImportError:
-  _hipblas = None
+      xla_client.register_custom_call_target(_name, _value, platform="ROCM")
 
-try:
-  from .rocm import _solver as _hipsolver  # pytype: disable=import-error
+for rocm_module_name in [".rocm", "jax_rocm60_plugin"]:
+  try:
+    _hipsolver = importlib.import_module(
+        f"{rocm_module_name}._solver", package="jaxlib"
+    )
+  except ImportError:
+    _hipsolver = None
+  else:
+    break
+
+if _hipsolver:
   for _name, _value in _hipsolver.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="ROCM")
-except ImportError:
-  _hipsolver = None
-
+      xla_client.register_custom_call_target(_name, _value, platform="ROCM")
 
 def _real_type(dtype):
   """Returns the real equivalent of 'dtype'."""
@@ -536,14 +549,13 @@ def _sytrd_hlo(platform, gpu_solver, dtype, a, *, lower):
   # simply copy it back to where it needs to be:
   intattr = lambda xs: ir.DenseIntElementsAttr.get(np.asarray(xs, np.int64))
   intarrattr = lambda xs: dense_int_array(np.asarray(xs, np.int64))
-  intarrattr_v6 = lambda xs: dense_int_array_v6(np.asarray(xs, np.int64))
   if not lower and platform == "cu" and m > 1:
     start = (0,) * len(batch_dims) + (0,)
     end = batch_dims + (1,)
     s = hlo.slice(
         e, intarrattr(start), intarrattr(end), intarrattr([1] * len(start)))
     s_type = ir.RankedTensorType.get(batch_dims + (1, 1), diag_type)
-    s = hlo.broadcast_in_dim(s_type, s, intarrattr_v6(range(len(dims) - 1)))
+    s = hlo.broadcast_in_dim(s_type, s, intarrattr(range(len(dims) - 1)))
     # The diagonals are always real; convert to complex if needed.
     s = hlo.convert(
         ir.RankedTensorType.get(s_type.shape, a_type.element_type), s)

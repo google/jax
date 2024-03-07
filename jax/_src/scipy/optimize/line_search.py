@@ -118,7 +118,7 @@ def _zoom(restricted_func_and_grad, wolfe_one, wolfe_two, a_lo, phi_lo,
 
     # This will cause the line search to stop, and since the Wolfe conditions
     # are not satisfied the minimization should stop too.
-    threshold = jnp.where((jnp.finfo(dalpha).bits < 64), 1e-5, 1e-10)
+    threshold = jnp.where((jnp.finfo(dalpha.dtype).bits < 64), 1e-5, 1e-10)
     state = state._replace(failed=state.failed | (dalpha <= threshold))
 
     # Cubmin is sometimes nan, though in this case the bounds check will fail.

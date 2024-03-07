@@ -22,11 +22,8 @@ limitations under the License.
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
@@ -55,9 +52,11 @@ rule_type as_generic_rule(void (*rule)(Op)) {
 
 void assertIsValidSubwindow(Operation *op, mlir::ValueRange base_indices,
                             ArrayRef<int64_t> window_shape,
-                            ArrayRef<int64_t> full_shape) {
+                            ArrayRef<int64_t> full_shape,
+                            ArrayRef<int32_t> strides = {}) {
   if (base_indices.size() != window_shape.size() ||
-      base_indices.size() != full_shape.size()) {
+      base_indices.size() != full_shape.size() ||
+      (!strides.empty() && base_indices.size() != strides.size())) {
     return;  // Malformed op.
   }
   if (base_indices.empty()) {
@@ -68,14 +67,15 @@ void assertIsValidSubwindow(Operation *op, mlir::ValueRange base_indices,
   for (auto [dim, access] :
        llvm::enumerate(llvm::zip(base_indices, window_shape, full_shape))) {
     auto [idx, size, bound] = access;
+    int64_t stride = strides.empty() ? 1 : strides[dim];
     Value positive = builder.create<arith::CmpIOp>(
         arith::CmpIPredicate::sge, idx,
         builder.create<arith::ConstantOp>(builder.getIntegerAttr(idx_type, 0)));
     Value in_bounds = builder.create<arith::CmpIOp>(
-        arith::CmpIPredicate::sle,
+        arith::CmpIPredicate::slt,
         builder.create<arith::AddIOp>(
             idx, builder.create<arith::ConstantOp>(
-                     builder.getIntegerAttr(idx_type, size))),
+                     builder.getIntegerAttr(idx_type, (size - 1) * stride))),
         builder.create<arith::ConstantOp>(
             builder.getIntegerAttr(idx_type, bound)));
     std::string msg;
@@ -107,6 +107,21 @@ void tpu_memref_slice_rule(tpu::MemRefSliceOp op) {
                          /*full_shape=*/op.getMemRef().getType().getShape());
 }
 
+void tpu_strided_load_rule(tpu::StridedLoadOp op) {
+  assertIsValidSubwindow(op, op.getIndices(),
+                         /*window_shape=*/op.getResult().getType().getShape(),
+                         /*full_shape=*/op.getBase().getType().getShape(),
+                         /*strides=*/op.getStrides());
+}
+
+void tpu_strided_store_rule(tpu::StridedStoreOp op) {
+  assertIsValidSubwindow(
+      op, op.getIndices(),
+      /*window_shape=*/op.getValueToStore().getType().getShape(),
+      /*full_shape=*/op.getBase().getType().getShape(),
+      /*strides=*/op.getStrides());
+}
+
 const llvm::StringMap<rule_type> &rules() {
   static auto rules = new llvm::StringMap<rule_type>{
       // TODO: tpu::LoadOp, tpu::StoreOp
@@ -114,6 +129,10 @@ const llvm::StringMap<rule_type> &rules() {
       {vector::StoreOp::getOperationName(), as_generic_rule(vector_store_rule)},
       {tpu::MemRefSliceOp::getOperationName(),
        as_generic_rule(tpu_memref_slice_rule)},
+      {tpu::StridedLoadOp::getOperationName(),
+       as_generic_rule(tpu_strided_load_rule)},
+      {tpu::StridedStoreOp::getOperationName(),
+       as_generic_rule(tpu_strided_store_rule)},
   };
   return *rules;
 }

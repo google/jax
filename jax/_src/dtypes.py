@@ -31,7 +31,7 @@ import ml_dtypes
 import numpy as np
 
 from jax._src import config
-from jax._src.typing import DType, DTypeLike
+from jax._src.typing import Array, DType, DTypeLike
 from jax._src.util import set_module, StrictABC
 
 from jax._src import traceback_util
@@ -340,22 +340,36 @@ def issubdtype(a: DTypeLike | None, b: DTypeLike | None) -> bool:
   #   don't conform to the standard numpy type hierarchy (e.g. the bfloat16 scalar
   #   type is not a subclass of np.floating) so we must also handle these specially.
 
-  # First handle extended dtypes. This is important for performance because
-  # isinstance(x, extended) is called frequently within JAX internals.
-  if _issubclass(b, extended):
+  # We cannot use the cached version directly for all inputs, because some may be
+  # unhashable (e.g. custom objects with a dtype attribute). The following check is
+  # fast and covers the majority of calls to this function within JAX library code.
+  return _issubdtype_cached(
+    a if isinstance(a, (type, np.dtype, ExtendedDType)) else np.dtype(a),  # type: ignore[arg-type]
+    b if isinstance(b, (type, np.dtype, ExtendedDType)) else np.dtype(b),  # type: ignore[arg-type]
+  )
+
+
+@functools.lru_cache(512)  # don't use util.memoize because there is no X64 dependence.
+def _issubdtype_cached(a: type | np.dtype | ExtendedDType,
+                       b: type | np.dtype | ExtendedDType) -> bool:
+  # First handle extended dtypes, which require their own logic.
+  a_is_type = isinstance(a, type)
+  b_is_type = isinstance(b, type)
+  if b_is_type and _issubclass(b, extended):
     if isinstance(a, ExtendedDType):
       return _issubclass(a.type, b)
-    if _issubclass(a, np.generic):
+    if a_is_type and _issubclass(a, np.generic):
       return _issubclass(a, b)
     return _issubclass(np.dtype(a).type, b)
   if isinstance(b, ExtendedDType):
     return isinstance(a, ExtendedDType) and a == b
   if isinstance(a, ExtendedDType):
     a = a.type
+    a_is_type = isinstance(a, type)
 
   # For all others, normalize inputs to scalar types.
-  a_sctype = a if _issubclass(a, np.generic) else np.dtype(a).type
-  b_sctype = b if _issubclass(b, np.generic) else np.dtype(b).type
+  a_sctype = a if a_is_type and _issubclass(a, np.generic) else np.dtype(a).type
+  b_sctype = b if b_is_type and _issubclass(b, np.generic) else np.dtype(b).type
 
   # Now do special handling of custom float and int types, as they don't conform
   # to the normal scalar type hierarchy.
@@ -421,7 +435,7 @@ _dtype_kinds: dict[str, set] = {
 }
 
 
-def isdtype(dtype: DTypeLike, kind: str | DType | tuple[str | DType, ...]) -> bool:
+def isdtype(dtype: DTypeLike, kind: str | DTypeLike | tuple[str | DTypeLike, ...]) -> bool:
   """Returns a boolean indicating whether a provided dtype is of a specified kind.
 
   Args:
@@ -444,18 +458,25 @@ def isdtype(dtype: DTypeLike, kind: str | DType | tuple[str | DType, ...]) -> bo
     True or False
   """
   the_dtype = np.dtype(dtype)
-  kind_tuple: tuple[DType | str, ...] = kind if isinstance(kind, tuple) else (kind,)
+  kind_tuple: tuple[str | DTypeLike, ...] = (
+    kind if isinstance(kind, tuple) else (kind,)
+  )
   options: set[DType] = set()
   for kind in kind_tuple:
-    if isinstance(kind, str):
-      if kind not in _dtype_kinds:
-        raise ValueError(f"Unrecognized {kind=} expected one of {list(_dtype_kinds.keys())}")
+    if isinstance(kind, str) and kind in _dtype_kinds:
       options.update(_dtype_kinds[kind])
-    elif isinstance(kind, np.dtype):
-      options.add(kind)
-    else:
-      # TODO(jakevdp): should we handle scalar types or ScalarMeta here?
-      raise TypeError(f"Expected kind to be a dtype, string, or tuple; got {kind=}")
+      continue
+    try:
+      _dtype = np.dtype(kind)
+    except TypeError as e:
+      if isinstance(kind, str):
+        raise ValueError(
+          f"Unrecognized {kind=} expected one of {list(_dtype_kinds.keys())}, "
+          "or a compatible input for jnp.dtype()")
+      raise TypeError(
+        f"Expected kind to be a dtype, string, or tuple; got {kind=}"
+      ) from e
+    options.add(_dtype)
   return the_dtype in options
 
 
@@ -620,10 +641,12 @@ def promote_types(a: DTypeLike, b: DTypeLike) -> DType:
   return np.dtype(_least_upper_bound(config.numpy_dtype_promotion.value, a_tp, b_tp))
 
 def is_weakly_typed(x: Any) -> bool:
+  if type(x) in _weak_types:
+    return True
   try:
     return x.aval.weak_type
   except AttributeError:
-    return type(x) in _weak_types
+    return False
 
 def is_python_scalar(x: Any) -> bool:
   try:
@@ -640,11 +663,12 @@ def dtype(x: Any, *, canonicalize: bool = False) -> DType:
   """Return the dtype object for a value or type, optionally canonicalized based on X64 mode."""
   if x is None:
     raise ValueError(f"Invalid argument to dtype: {x}.")
-  elif isinstance(x, type) and x in python_scalar_dtypes:
+  is_type = isinstance(x, type)
+  if is_type and x in python_scalar_dtypes:
     dt = python_scalar_dtypes[x]
   elif type(x) in python_scalar_dtypes:
     dt = python_scalar_dtypes[type(x)]
-  elif _issubclass(x, np.generic):
+  elif is_type and _issubclass(x, np.generic):
     return np.dtype(x)
   elif issubdtype(getattr(x, 'dtype', None), extended):
     dt = x.dtype
@@ -717,6 +741,12 @@ def result_type(*args: Any, return_weak_type_flag: bool = False) -> DType | tupl
   return (dtype, weak_type) if return_weak_type_flag else dtype  # type: ignore[return-value]
 
 def check_user_dtype_supported(dtype, fun_name=None):
+  if isinstance(dtype, Array):
+    # Deprecation warning added 2024 June 13.
+    warnings.warn("Passing an array as a dtype argument is deprecated; "
+                  "instead of dtype=arr use dtype=arr.dtype.",
+                  category=DeprecationWarning, stacklevel=3)
+    return  # no further check needed, as array dtypes have already been validated.
   if issubdtype(dtype, extended):
     return
   # Avoid using `dtype in [...]` because of numpy dtype equality overloading.
@@ -728,14 +758,14 @@ def check_user_dtype_supported(dtype, fun_name=None):
     msg = f"JAX only supports number and bool dtypes, got dtype {dtype}"
     msg += f" in {fun_name}" if fun_name else ""
     raise TypeError(msg)
-  if dtype is not None and np_dtype != canonicalize_dtype(dtype):
+  if dtype is not None and np_dtype != canonicalize_dtype(np_dtype):
     msg = ("Explicitly requested dtype {} {} is not available, "
            "and will be truncated to dtype {}. To enable more dtypes, set the "
            "jax_enable_x64 configuration option or the JAX_ENABLE_X64 shell "
            "environment variable. "
            "See https://github.com/google/jax#current-gotchas for more.")
     fun_name = f"requested in {fun_name}" if fun_name else ""
-    truncated_dtype = canonicalize_dtype(dtype).name
+    truncated_dtype = canonicalize_dtype(np_dtype).name
     warnings.warn(msg.format(dtype, fun_name, truncated_dtype), stacklevel=3)
 
 def safe_to_cast(input_dtype_or_value: Any,

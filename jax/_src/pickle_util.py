@@ -18,7 +18,7 @@ import io
 from typing import Any
 
 try:
-  import cloudpickle  # type: ignore[import]
+  import cloudpickle  # type: ignore[import-not-found]
 except ImportError:
   cloudpickle = None
 
