@@ -44,14 +44,6 @@ To build `jaxlib` from source, you must also install some prerequisites:
 
   See below for Windows build instructions.
 
-- Python packages: `numpy`, `wheel`, `build`.
-
-You can install the necessary Python dependencies using `pip`:
-
-```
-pip install numpy wheel build
-```
-
 To build `jaxlib` for CPU or TPU, you can run:
 
 ```
@@ -69,8 +61,12 @@ and jax-cuda-pjrt). You can set `gpu_plugin_cuda_version` to 11 or 12.
 See `python build/build.py --help` for configuration options, including ways to
 specify the paths to CUDA and CUDNN, which you must have installed. Here
 `python` should be the name of your Python 3 interpreter; on some systems, you
-may need to use `python3` instead. By default, the wheel is written to the
-`dist/` subdirectory of the current directory.
+may need to use `python3` instead. Despite calling the script with `python`,
+Bazel will use its own hermetic python interpreter and deps, this allows
+building jaxlib for versions of python that you don't have locally. See
+configuration options for more.
+By default, the wheel is written to the `dist/` subdirectory of the current
+directory.
 
 ### Building jaxlib from source with a modified XLA repository.
 
@@ -215,12 +211,6 @@ bazel test //tests:cpu_tests //tests:backend_independent_tests
 
 `//tests:gpu_tests` and `//tests:tpu_tests` are also available, if you have the necessary hardware.
 
-To use a preinstalled `jaxlib` instead of building `jaxlib` from source, run
-
-```
-bazel test --//jax:build_jaxlib=false //tests:cpu_tests //tests:backend_independent_tests
-```
-
 A number of test behaviors can be controlled using environment variables (see
 below). Environment variables may be passed to JAX tests using the
 `--test_env=FLAG=value` flag to Bazel.
@@ -228,7 +218,7 @@ below). Environment variables may be passed to JAX tests using the
 Some of JAX tests are for multiple accelerators (i.e. GPUs, TPUs). When JAX is already installed, you can run GPUs tests like this:
 
 ```
-bazel test //tests:gpu_tests --local_test_jobs=4 --test_tag_filters=multiaccelerator --//jax:build_jaxlib=false --test_env=XLA_PYTHON_CLIENT_ALLOCATOR=platform
+bazel test //tests:gpu_tests --local_test_jobs=4 --test_tag_filters=multiaccelerator --test_env=XLA_PYTHON_CLIENT_ALLOCATOR=platform
 ```
 
 You can speed up single accelerator tests by running them in parallel on multiple accelerators. This also triggers multiple concurrent tests per accelerator. For GPUs, you can do it like this:
@@ -241,9 +231,6 @@ MULTI_GPU="--run_under $PWD/build/parallel_accelerator_execute.sh --test_env=JAX
 bazel test //tests:gpu_tests //tests:backend_independent_tests --test_env=XLA_PYTHON_CLIENT_PREALLOCATE=false --test_tag_filters=-multiaccelerator $MULTI_GPU
 ```
 
-Some test targets, like a `//tests:logpcg_tests` optionally use matplotlib, so you may need to `pip
-install matplotlib` to run tests via bazel.
-
 ### Using `pytest`
 
 To run all the JAX tests using `pytest`, we recommend using `pytest-xdist`,
@@ -255,6 +242,8 @@ From the repository root directory run:
 ```
 pytest -n auto tests
 ```
+
+Note: This is the only way to run tests with a preinstalled `jaxlib`.
 
 ### Controlling test behavior
 

@@ -17,6 +17,7 @@
 load("@com_github_google_flatbuffers//:build_defs.bzl", _flatbuffer_cc_library = "flatbuffer_cc_library")
 load("@local_config_cuda//cuda:build_defs.bzl", _cuda_library = "cuda_library", _if_cuda_is_configured = "if_cuda_is_configured")
 load("@local_config_rocm//rocm:build_defs.bzl", _if_rocm_is_configured = "if_rocm_is_configured", _rocm_library = "rocm_library")
+load("@python_version_repo//:py_version.bzl", "JAX_PYTHON_VERSION")
 load("@rules_cc//cc:defs.bzl", _cc_proto_library = "cc_proto_library")
 load("@tsl//tsl:tsl.bzl", _if_windows = "if_windows", _pybind_extension = "tsl_pybind_extension_opensource")
 load("@tsl//tsl/platform:build_config_root.bzl", _tf_cuda_tests_tags = "tf_cuda_tests_tags", _tf_exec_properties = "tf_exec_properties")
@@ -46,13 +47,41 @@ jax_internal_test_harnesses_visibility = []
 jax_test_util_visibility = []
 loops_visibility = []
 
+def get_importlib_metadata():
+    if JAX_PYTHON_VERSION == "3.9":
+        return ["@pypi_importlib_metadata//:pkg"]
+    return []
+
+_py_deps = {
+    "absl/logging": ["@pypi_absl_py//:pkg"],
+    "absl/testing": ["@pypi_absl_py//:pkg"],
+    "absl/flags": ["@pypi_absl_py//:pkg"],
+    "cloudpickle": ["@pypi_cloudpickle//:pkg"],
+    "colorama": ["@pypi_colorama//:pkg"],
+    "epath": ["@pypi_etils//:pkg"],  # etils.epath
+    "flatbuffers": ["@pypi_flatbuffers//:pkg"],
+    "hypothesis": ["@pypi_hypothesis//:pkg"],
+    "importlib_metadata": get_importlib_metadata(),
+    "jax_triton": [],
+    "matplotlib": ["@pypi_matplotlib//:pkg"],
+    "opt_einsum": ["@pypi_opt_einsum//:pkg"],
+    "pil": ["@pypi_pillow//:pkg"],
+    "portpicker": ["@pypi_portpicker//:pkg"],
+    "ml_dtypes": ["@pypi_ml_dtypes//:pkg"],
+    "numpy": ["@pypi_numpy//:pkg"],
+    "scipy": ["@pypi_scipy//:pkg"],
+    "tensorflow_core": [],
+    "torch": [],
+    "zstandard": ["@pypi_zstandard//:pkg"],
+}
+
 def py_deps(_package):
     """Returns the Bazel deps for Python package `package`."""
 
     # We assume the user has installed all dependencies in their Python environment.
     # This indirection exists because in Google's internal build we build
     # dependencies from source with Bazel, but that's not something most people would want.
-    return []
+    return _py_deps[_package]
 
 def jax_visibility(_target):
     """Returns the additional Bazel visibilities for `target`."""
@@ -155,7 +184,7 @@ def windows_cc_shared_mlir_library(name, out, deps = [], srcs = [], exported_sym
 
 ALL_BACKENDS = ["cpu", "gpu", "tpu"]
 
-def if_building_jaxlib(if_building, if_not_building = []):
+def if_building_jaxlib(if_building, if_not_building = ["@pypi_jaxlib//:pkg"]):
     return select({
         "//jax:enable_jaxlib_build": if_building,
         "//conditions:default": if_not_building,
