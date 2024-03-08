@@ -34,7 +34,7 @@ You need to follow these steps in Python:
 * Define its abstract evaluation.
 * Define its lowering to MLIR.
 * [Optional] Define the gradient.
-* [Optional] Use [xmap](https://jax.readthedocs.io/en/latest/notebooks/xmap_tutorial.html) (or one of the experimental [custom_partitioning](https://jax.readthedocs.io/en/latest/jax.experimental.custom_partitioning.html) or [shard_map](https://jax.readthedocs.io/en/latest/jep/14273-shard-map.html) functions) for fast multi-GPU.
+* [Optional] Use [xmap](https://jax.readthedocs.io/en/latest/notebooks/xmap_tutorial.html), [custom_partitioning](https://jax.readthedocs.io/en/latest/jax.experimental.custom_partitioning.html) or [shard_map](https://jax.readthedocs.io/en/latest/jep/14273-shard-map.html) functions for fast multi-GPU.
 
 
 ## C code
@@ -525,7 +525,7 @@ with mesh:
     print(pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string())
     out = pjitted(x, weight)
 
-jnp.allclose(ref, out, atol=1e-2, rtol=1e-2)
+jnp.allclose(ref, out, atol=1e-5, rtol=1e-5)
 ```
 ```python
 HloModule pjit_rms_norm, entry_computation_layout={(bf16[4,512,512]{2,1,0},bf16[512,512]{1,0})->bf16[4,512,512]{2,1,0}}
@@ -558,7 +558,15 @@ The values have been computed correctly for forward operation, however, the gene
 
 As XLA does not have enough knowledge about the custom functions to shard input tensors, it decides to replicate them to produce correct values before making the custom call.
 
-To avoid this overhead, we need to use the xmap manual sharding with the following configuration updates
+To avoid this duplication, we can:
+- [custom_partitioning](https://jax.readthedocs.io/en/latest/jax.experimental.custom_partitioning.html): to make it behave like all native JAX operations (but more complicated)
+- Use manual sharding
+  - [xmap](https://jax.readthedocs.io/en/latest/notebooks/xmap_tutorial.html): deprecated and bugged in some cases when combined with grad
+  - [shard_map](https://jax.readthedocs.io/en/latest/jep/14273-shard-map.html): experimental but should work
+
+We show examples for xmap and custom_partitioning below.
+
+### Shard the forward function with xmap
 
 ```python
 jax.config.update("experimental_xmap_spmd_lowering", True)
@@ -605,7 +613,7 @@ with mesh:
     print(pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string())
     out = pjitted(x, weight)
 
-jnp.allclose(ref, out, atol=1e-2, rtol=1e-2)
+jnp.allclose(ref, out, atol=1e-5, rtol=1e-5)
 ```
 ```python
 HloModule pjit__unnamed_wrapped_function_, entry_computation_layout={(bf16[4,512,512]{2,1,0},bf16[512,512]{1,0})->bf16[4,512,512]{2,1,0}}
@@ -623,7 +631,83 @@ True
 
 With this modification, the `all-gather` operation is eliminated and the custom call is made on each shard of `x`.
 
-### Test the backward function
+### Shard the forward function with custom_partitioning
+
+When using custom_partitioning, it isn't needed to define the JAX config
+experimental_xmap_spmd_lowering and
+experimental_xmap_spmd_lowering_manual.
+
+We create an helper function to help with all the JAX registration needed.
+
+```python
+def register_primitive(cls):
+...
+```
+
+We define 2 JAX primitives, one inner primitive that map to the
+real kernel we want to warp in JAX. And an outer primitive that will
+be used with the custom_partitioning registration and for the
+gradient. (And if you implement the interface to support vmat, it will
+also be on the outer primitive).
+
+JAX custom_partitioning implementation are callbacks from XLA to Python during XLA sharding logic.
+XLA sharding goes in two phases: a sharding propagation phase and a partition phase.
+The propagation phase is when XLA plan the sharding to be created. It is the partition phase that create the sharded graph.
+For XLA to be able to shard our custom operations, it needs us to define 2 extra functions:
+infer_sharding_from_operands() and partition(). They are used in the first and second phase respectively.
+
+The infer_sharding_from_operands() function must do what its name say: infer the output sharding from the input sharding.
+
+The partition() function will do a few things:
+- tell which input sharding will be expected. XLA will reshad if needed.
+- tell the final version of the output sharding.
+- give a function that will create the new instruction from the sharded inputs.
+
+See the code comments for more explanation:
+
+```python
+    def infer_sharding_from_operands(eps : float, mesh : jax.sharding.Mesh,
+                                     arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
+                                     result_infos : tuple[jax._src.core.ShapedArray]):
+        del eps, result_infos  # Not needed for this example.
+        x_info, weight_info = arg_infos
+        assert len(x_info.shape) == 3
+        assert len(weight_info.shape) == 2
+        # partition() will force all dims of all inputs to be replicated except the
+        # first dim of x that will be kept as is.
+        # This is because the implementaion can only be sharded on the batch dimensions.
+
+        x_spec = arg_infos[0].sharding.spec
+        # None mean that we replicate on that dimension.
+        output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
+        invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
+        return (output_sharding, invvar_sharding)
+
+    def partition(eps : float, mesh : jax.sharding.Mesh,
+                  arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
+                  result_infos : tuple[jax._src.api.ShapeDtypeStruct]):
+        del result_infos  # Not needed for this example.
+        x_info, weight_info = arg_infos
+        assert len(x_info.shape) == 3
+        assert len(weight_info.shape) == 2
+        x_spec = arg_infos[0].sharding.spec
+        # We only support sharding on the batch dimensions.
+        # Force sharding on all others dimensions with None.
+        arg_shardings = (NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
+                         NamedSharding(mesh, PartitionSpec(None, None)))
+        invvar_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0]))
+        output_shardings = (arg_shardings[0], invvar_sharding)
+        # Sharded_impl only accepts positional arugments
+        # And they should be Jax traceable variables
+        impl = partial(RmsNormFwdClass.impl, eps=eps)
+
+        return mesh, impl, output_shardings, arg_shardings
+register_primitive(RmsNormFwdClass)
+
+```
+
+
+### Shard the backward function with xmap
 
 We are moving onto the backward operation using `jax.grad` on multiple devices.
 
@@ -632,16 +716,16 @@ Similarly to the forward operation test, we are creating a simple 1D mesh and sh
 We also define the `loss` function with `xmap_rms_norm` instead of `rms_norm`
 
 ```python
-def loss_ref(x, weight):
+def ref_loss(x, weight):
     predictions = rms_norm(x, weight)
     return -jnp.mean(predictions**2)
 
 
-ref = jax.grad(loss_ref, argnums=(0, 1))(x, weight)
+ref = jax.grad(ref_loss, argnums=(0, 1))(x, weight)
 
 
 # Re-define loss to use xmap_rms_norm instead of rms_norm
-def loss(x, weight, *, device_count):
+def xmap_loss(x, weight, *, device_count):
     predictions = xmap_rms_norm(x, weight, device_count=device_count)
     return -jnp.mean(predictions**2)
 
@@ -649,7 +733,7 @@ def loss(x, weight, *, device_count):
 with mesh:
 
     pjitted = pjit(
-        jax.grad(partial(loss, device_count=jax.local_device_count()), argnums=(0, 1)),
+        jax.grad(partial(xmap_loss, device_count=jax.local_device_count()), argnums=(0, 1)),
         # Shard x by batch dimension and replicate weight on all devices.
         in_shardings=(
             PartitionSpec("x", None, None),
@@ -664,7 +748,7 @@ with mesh:
     out = pjitted(x, weight)
 
 for r, o in zip(ref, out):
-    print(jnp.allclose(r, o, atol=1e-2, rtol=1e-2))
+    print(jnp.allclose(r, o, atol=1e-5, rtol=1e-5))
 ```
 ```python
 True
@@ -792,307 +876,69 @@ return (
 )
 ```
 
+### Shard the backward function with custom_partitioning
+
+```python
+    def infer_sharding_from_operands(eps : float, mesh : jax.sharding.Mesh,
+                                     arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
+                                     result_infos : tuple[jax._src.core.ShapedArray]):
+        del eps, result_infos  # Not needed for this example.
+        g_info, invvar_info, x_info, weight_info = arg_infos
+        assert len(g_info.shape) == 3
+        assert len(invvar_info.shape) == 1
+        assert len(x_info.shape) == 3
+        assert len(weight_info.shape) == 2
+        # partition() will force all dims to be replicated except the batch dimension.
+        x_spec = x_info.sharding.spec
+        output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
+        invvar_sharding = NamedSharding(mesh, PartitionSpec(None, None))
+        return (output_sharding, invvar_sharding, output_sharding, )
+
+    @staticmethod
+    def partition(eps : float, mesh : jax.sharding.Mesh,
+                  arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
+                  result_infos : tuple[jax._src.api.ShapeDtypeStruct]):
+        del result_infos  # Not needed for this example.
+        g_info, invvar_info, x_info, weight_info = arg_infos
+        assert len(g_info.shape) == 3
+        assert len(invvar_info.shape) == 1
+        assert len(x_info.shape) == 3
+        assert len(weight_info.shape) == 2
+
+        # We only support sharding on the batch dimensions.
+        # Force sharding on all others dimensions with None.
+        # Also force gx, x and invvar to have the same batch sharding/replication.
+        x_spec = x_info.sharding.spec
+        arg_shardings = (NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
+                         NamedSharding(mesh, PartitionSpec(x_spec[0],)),
+                         NamedSharding(mesh, PartitionSpec(x_spec[0], None, None)),
+                         NamedSharding(mesh, PartitionSpec(None, None)))
+
+        output_sharding = NamedSharding(mesh, PartitionSpec(x_spec[0], None, None))
+        invvar_sharding = NamedSharding(mesh, PartitionSpec(None, None))
+        output_shardings = (output_sharding, invvar_sharding, invvar_sharding)
+
+
+        # Sharded_impl only accepts positional arugments
+        # And they should be Jax traceable variables
+        def impl(g, invvar, x, weight):
+            grad_input, grad_weight, part_grad = _rms_norm_bwd_p.bind(
+                g, invvar, x, weight, eps=eps
+            )
+            # We need to sum the weight gradient from all partition.
+            global_weight = grad_weight
+            if x_spec[0]:
+                global_weight = jax.lax.psum(grad_weight, x_spec[0])
+            return grad_input, global_weight, part_grad
+        return mesh, impl, output_shardings, arg_shardings
+register_primitive(RmsNormBwdClass)
+```
+
 ## Let's put it together
 
 Here is the complete code.
-
-```python
-from functools import partial, reduce
-from operator import mul
-
-import jax
-import jax.numpy as jnp
-from build import gpu_ops
-from jax import core, dtypes
-from jax.core import ShapedArray
-from jax.experimental.maps import xmap
-from jax.experimental.pjit import pjit
-from jax.interpreters import mlir, xla
-from jax.interpreters.mlir import ir
-from jax.lib import xla_client
-from jax.sharding import Mesh, PartitionSpec
-from jaxlib.hlo_helpers import custom_call
-
-
-# Create _rms_norm_fwd_p for forward operation.
-_rms_norm_fwd_p = core.Primitive("rms_norm_fwd")
-_rms_norm_fwd_p.multiple_results = True
-_rms_norm_fwd_p.def_impl(partial(xla.apply_primitive, _rms_norm_fwd_p))
-
-
-def rms_norm_fwd(x, weight, eps=1e-05):
-    output, invvar = _rms_norm_fwd_p.bind(x, weight, eps=eps)
-    return output, (invvar, x, weight)
-
-
-# Create _rms_norm_bwd_p for backward operation.
-_rms_norm_bwd_p = core.Primitive("rms_norm_bwd")
-_rms_norm_bwd_p.multiple_results = True
-_rms_norm_bwd_p.def_impl(partial(xla.apply_primitive, _rms_norm_bwd_p))
-
-
-def rms_norm_bwd(eps, res, g):
-    invvar, x, weight = res
-    grad_input, grad_weight, part_grad = _rms_norm_bwd_p.bind(
-        g, invvar, x, weight, eps=eps
-    )
-    return grad_input, grad_weight
-
-
-####################
-# Lowering to MLIR #
-####################
-
-
-# Register functions defined in gpu_ops as custom call target for GPUs
-for _name, _value in gpu_ops.get_rms_norm_registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="gpu")
-
-
-def element_type_to_descriptor_type_mapping(element_type):
-    _element_type_to_descriptor_type_mapping = {
-        ir.BF16Type.get(): gpu_ops.ElementType.BF16,
-        ir.F16Type.get(): gpu_ops.ElementType.F16,
-        ir.F32Type.get(): gpu_ops.ElementType.F32,
-        ir.F64Type.get(): gpu_ops.ElementType.F64,
-    }
-    return _element_type_to_descriptor_type_mapping.get(element_type)
-
-
-def default_layouts(*shapes):
-    return [range(len(shape) - 1, -1, -1) for shape in shapes]
-
-
-def _rms_norm_fwd_cuda_lowering(ctx, x, weight, eps):
-    x_type = ir.RankedTensorType(x.type)
-    x_shape = x_type.shape
-    w_type = ir.RankedTensorType(weight.type)
-    w_shape = w_type.shape
-    iv_element_type = (
-        ir.F32Type.get()
-        if x_type.element_type in [ir.F16Type.get(), ir.BF16Type.get()]
-        else x_type.element_type
-    )
-
-    n2 = reduce(lambda x, y: x * y, w_shape)
-    n1 = reduce(lambda x, y: x * y, x_shape) // n2
-
-    opaque = gpu_ops.create_rms_norm_descriptor(
-        n1,
-        n2,
-        eps,
-        element_type_to_descriptor_type_mapping(x_type.element_type),
-        element_type_to_descriptor_type_mapping(w_type.element_type),
-        0,  # unused
-    )
-    out = custom_call(
-        b"rms_forward_affine_mixed_dtype",
-        result_types=[
-            ir.RankedTensorType.get(x_shape, w_type.element_type),
-            ir.RankedTensorType.get((n1,), iv_element_type),
-        ],
-        operands=[x, weight],
-        backend_config=opaque,
-        operand_layouts=default_layouts(x_shape, w_shape),
-        result_layouts=default_layouts(x_shape, (n1,)),
-    ).results
-    return out
-
-
-mlir.register_lowering(
-    _rms_norm_fwd_p,
-    _rms_norm_fwd_cuda_lowering,
-    platform="gpu",
-)
-
-
-def _rms_norm_bwd_cuda_lowering(ctx, grad_output, invvar, x, weight, eps):
-    x_type = ir.RankedTensorType(x.type)
-    x_shape = x_type.shape
-    w_type = ir.RankedTensorType(weight.type)
-    w_shape = w_type.shape
-    iv_type = ir.RankedTensorType(invvar.type)
-
-    n2 = reduce(lambda x, y: x * y, w_shape)
-    n1 = reduce(lambda x, y: x * y, x_shape) // n2
-
-    part_grad_shape = ctx.avals_out[-1].shape
-
-    opaque = gpu_ops.create_rms_norm_descriptor(
-        n1,
-        n2,
-        eps,
-        element_type_to_descriptor_type_mapping(x_type.element_type),
-        element_type_to_descriptor_type_mapping(w_type.element_type),
-        part_grad_shape[0],
-    )
-    out = custom_call(
-        b"rms_backward_affine",
-        result_types=[
-            ir.RankedTensorType.get(x_shape, x_type.element_type),
-            ir.RankedTensorType.get(w_shape, w_type.element_type),
-            ir.RankedTensorType.get(part_grad_shape, iv_type.element_type),
-        ],
-        operands=[grad_output, invvar, x, weight],
-        backend_config=opaque,
-        operand_layouts=default_layouts(x_shape, (n1,), x_shape, w_shape),
-        result_layouts=default_layouts(x_shape, w_shape, part_grad_shape),
-    ).results
-    return out
-
-
-mlir.register_lowering(
-    _rms_norm_bwd_p,
-    _rms_norm_bwd_cuda_lowering,
-    platform="gpu",
-)
-
-
-#######################
-# Abstract evaluation #
-#######################
-
-
-def _rms_norm_fwd_abstract(x, weight, eps):
-    w_dtype = dtypes.canonicalize_dtype(weight.dtype)
-    iv_dtype = dtypes.canonicalize_dtype(x.dtype)
-    if iv_dtype in [jnp.float16, jnp.bfloat16]:
-        iv_dtype = jnp.float32
-    n2 = reduce(mul, weight.shape)
-    n1 = reduce(mul, x.shape) // n2
-    return (
-        ShapedArray(x.shape, w_dtype, named_shape=x.named_shape),  # output
-        ShapedArray((n1,), iv_dtype, named_shape=x.named_shape),  # invvar
-    )
-
-
-_rms_norm_fwd_p.def_abstract_eval(_rms_norm_fwd_abstract)
-
-
-def _rms_norm_bwd_abstract(grad_output, invvar, x, weight, eps):
-    iv_dtype = dtypes.canonicalize_dtype(invvar.dtype)
-    w_dtype = dtypes.canonicalize_dtype(weight.dtype)
-    x_dtype = dtypes.canonicalize_dtype(x.dtype)
-    n2 = reduce(lambda x, y: x * y, weight.shape)
-    n1 = reduce(lambda x, y: x * y, x.shape) // n2
-    part_grad_shape = (16, n2)
-    assert dtypes.canonicalize_dtype(grad_output.dtype) == w_dtype
-    assert grad_output.shape == x.shape
-    assert invvar.shape == (n1,)
-    assert (
-        iv_dtype == jnp.float32 if x_dtype in [jnp.float16, jnp.bfloat16] else x_dtype
-    )
-    assert grad_output.named_shape == x.named_shape
-    weight_named_shape = (
-        weight_named_shape if weight.named_shape else grad_output.named_shape
-    )
-    return (
-        ShapedArray(
-            x.shape, x_dtype, named_shape=x.named_shape
-        ),  # grad input
-        ShapedArray(
-            weight.shape, w_dtype, named_shape=weight_named_shape
-        ),  # grad weight
-        ShapedArray(
-            part_grad_shape, iv_dtype, named_shape=weight_named_shape
-        ),  # part grad
-    )
-
-
-_rms_norm_bwd_p.def_abstract_eval(_rms_norm_bwd_abstract)
-
-
-#######################################
-# Top-level interface with custom vjp #
-#######################################
-
-
-@partial(jax.custom_vjp, nondiff_argnums=(2,))
-def rms_norm(x, weight, eps=1e-05):
-    output, _ = rms_norm_fwd(x, weight, eps=eps)
-    return output
-
-
-rms_norm.defvjp(rms_norm_fwd, rms_norm_bwd)
-
-
-######################
-# RMS norm with xmap #
-######################
-
-
-jax.config.update("experimental_xmap_spmd_lowering", True)
-jax.config.update("experimental_xmap_spmd_lowering_manual", True)
-
-
-def xmap_rms_norm(x, weight, *, device_count):
-    reshaped = x.reshape(device_count, x.shape[0] // device_count, *x.shape[1:])
-    xmapped = xmap(
-        rms_norm,
-        in_axes=(("x", None, None, None), (None, None)),
-        out_axes=("x", None, None, None),
-        axis_resources={"x": "x"},
-    )
-    reshaped_out = xmapped(reshaped, weight)
-    return reshaped_out.reshape(x.shape)
-
-
-########
-# Test #
-########
-
-
-import jax
-
-
-per_core_batch_size=4
-seq_len=512
-emb_dim=512
-x = jax.random.normal(
-    jax.random.PRNGKey(0),
-    shape=(jax.local_device_count() * per_core_batch_size, seq_len, emb_dim),
-    dtype=jnp.bfloat16,
-)
-norm_shape = x.shape[-2:]
-weight = jnp.ones(norm_shape, dtype=jnp.bfloat16)
-
-
-def loss_ref(x, weight):
-    predictions = rms_norm(x, weight)
-    return -jnp.mean(predictions**2)
-
-
-ref = jax.grad(loss_ref, argnums=(0, 1))(x, weight)
-
-
-def loss(x, weight, *, device_count):
-    predictions = xmap_rms_norm(x, weight, device_count=device_count)
-    return -jnp.mean(predictions**2)
-
-
-with Mesh(jax.local_devices(), ("x",)):
-
-    pjitted = pjit(
-        jax.grad(partial(loss, device_count=jax.local_device_count()), argnums=(0, 1)),
-        # Shard x by batch dimension and replicate weight on all devices.
-        in_shardings=(
-            PartitionSpec("x", None, None),
-            PartitionSpec(None, None),
-        ),
-        # Shard the output by batch dimension and replicate weight grad on all devices.
-        out_shardings=(
-            PartitionSpec("x", None, None),
-            PartitionSpec(None, None),
-        ),
-    )
-    out = pjitted(x, weight)
-
-for r, o in zip(ref, out):
-    print(jnp.allclose(r, o, atol=1e-2, rtol=1e-2))
+TODO: Update the code!
 ```
-```python
-True
-True
 ```
 
 ## Appendix
