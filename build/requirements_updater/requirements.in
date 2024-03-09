@@ -1,0 +1,17 @@
+# test deps
+-r test-requirements.txt
+matplotlib
+
+# build deps
+numpy~=1.22.0; python_version<="3.10"
+numpy~=1.23.2; python_version=="3.11"
+numpy~=1.26.0; python_version>="3.12"
+
+# runtime deps
+importlib_metadata; python_version<"3.10"
+ml_dtypes>=0.2.0
+opt_einsum
+scipy~=1.9.0; python_version < "3.12"
+scipy>=1.11.1 ; python_version >= "3.12"
+zstandard
+etils[epath]

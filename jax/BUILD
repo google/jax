@@ -881,7 +881,7 @@ pytype_strict_library(
         ":traceback_util",
         ":util",
         "//jax/_src/lib",
-    ],
+    ] + py_deps("importlib_metadata"),
 )
 
 # Public JAX libraries below this point.

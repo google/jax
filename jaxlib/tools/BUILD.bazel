@@ -42,7 +42,10 @@ py_binary(
     ]),
     deps = [
       "//jax/tools:build_utils",
-      "@bazel_tools//tools/python/runfiles"
+      "@bazel_tools//tools/python/runfiles",
+      "@pypi_build//:pkg",
+      "@pypi_wheel//:pkg",
+      "@pypi_setuptools//:pkg",
     ],
 )
 
@@ -71,7 +74,10 @@ py_binary(
     ]),
     deps = [
       "//jax/tools:build_utils",
-      "@bazel_tools//tools/python/runfiles"
+      "@bazel_tools//tools/python/runfiles",
+      "@pypi_build//:pkg",
+      "@pypi_wheel//:pkg",
+      "@pypi_setuptools//:pkg",
     ],
 )
 
@@ -90,6 +96,9 @@ py_binary(
     ]),
     deps = [
       "//jax/tools:build_utils",
-      "@bazel_tools//tools/python/runfiles"
+      "@bazel_tools//tools/python/runfiles",
+      "@pypi_build//:pkg",
+      "@pypi_wheel//:pkg",
+      "@pypi_setuptools//:pkg",
     ],
 )
