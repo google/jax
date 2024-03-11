@@ -7,15 +7,18 @@ from build import gpu_ops
 from jax import core, dtypes
 from jax.core import ShapedArray
 from jax.experimental.custom_partitioning import custom_partitioning
-from jax.experimental.maps import xmap
 from jax.experimental.pjit import pjit
-from jax.interpreters import mlir, xla
+from jax.interpreters import batching, mlir, xla
 from jax.interpreters.mlir import ir
 from jax.lib import xla_client
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from jaxlib.hlo_helpers import custom_call
 from jax._src import dispatch
 
+
+######################################################################
+# Created Primitives for unsharded RMS norm reference implementation #
+######################################################################
 
 # Create _rms_norm_fwd_p for forward operation.
 _rms_norm_fwd_p = core.Primitive("rms_norm_fwd")
@@ -218,30 +221,18 @@ def rms_norm(x, weight, eps=1e-05):
 
 rms_norm.defvjp(rms_norm_fwd, rms_norm_bwd)
 
+###########################################################
+# Create primitives for RMS norm with custom_partitioning #
+###########################################################
 
-######################
-# RMS norm with xmap #
-######################
-
-
-jax.config.update("experimental_xmap_spmd_lowering", True)
-jax.config.update("experimental_xmap_spmd_lowering_manual", True)
-
-
-def xmap_rms_norm(x, weight, *, device_count):
-    reshaped = x.reshape(device_count, x.shape[0] // device_count, *x.shape[1:])
-    xmapped = xmap(
-        rms_norm,
-        in_axes=(("x", None, None, None), (None, None)),
-        out_axes=("x", None, None, None),
-        axis_resources={"x": "x"},
-    )
-    reshaped_out = xmapped(reshaped, weight)
-    return reshaped_out.reshape(x.shape)
-
-#####################################
-# RMS norm with custom_partitioning #
-#####################################
+def _check_valid_batch_dims(bdims):
+    """
+    Assert out non-supported bath dims
+    """
+    for dim in bdims:
+        assert dim in [0, None], \
+            "Currently only support batch_dim in [0, None], " \
+            f"but got {dim=}"
 
 def register_primitive(cls):
     """
@@ -278,7 +269,7 @@ def register_primitive(cls):
     outer_p.multiple_results = cls.multiple_results
     outer_p.def_impl(cls.impl)
     outer_p.def_abstract_eval(cls.abstract)
-    #batching.primitive_batchers[outer_p] = cls.batcher
+    batching.primitive_batchers[outer_p] = cls.batcher
     outer_p_lower = custom_partitioning(cls.impl, static_argnums=cls.impl_static_args)
     outer_p_lower.def_partition(infer_sharding_from_operands=cls.infer_sharding_from_operands,
                                 partition=cls.partition)
@@ -310,14 +301,13 @@ class RmsNormFwdClass:
 
     @staticmethod
     def batcher(batched_args, batch_dims, *, eps):
-        # TODO: Add to the tutorial!
         _check_valid_batch_dims(batch_dims)
-        assert RmsNormFwdPrimitive.outer_primitive is not None
+        assert RmsNormFwdClass.outer_primitive is not None
         x, gamma = batched_args
         x_bdim, _ = batch_dims
 
         out_bdims = x_bdim, x_bdim
-        return RmsNormFwdPrimitive.outer_primitive.bind(x, gamma, eps=eps), out_bdims
+        return RmsNormFwdClass.outer_primitive.bind(x, gamma, eps=eps), out_bdims
 
     @staticmethod
     def infer_sharding_from_operands(eps : float, mesh : jax.sharding.Mesh,
@@ -356,6 +346,7 @@ class RmsNormFwdClass:
         return mesh, impl, output_shardings, arg_shardings
 
 register_primitive(RmsNormFwdClass)
+
 class RmsNormBwdClass:
     name = "rms_norm_bwd"
     multiple_results = True
@@ -381,12 +372,12 @@ class RmsNormBwdClass:
     def batcher(batched_args, batch_dims, *, eps):
         # TODO: Add to the tutorial!
         _check_valid_batch_dims(batch_dims)
-        assert RmsNormBwdPrimitive.outer_primitive is not None
+        assert RmsNormBwdClass.outer_primitive is not None
         x, gamma = batched_args
         x_bdim, _ = batch_dims
 
         out_bdims = x_bdim, x_bdim
-        return RmsNormBwdPrimitive.outer_primitive.bind(x, gamma, eps=eps), out_bdims
+        return RmsNormBwdClass.outer_primitive.bind(x, gamma, eps=eps), out_bdims
 
     @staticmethod
     def infer_sharding_from_operands(eps : float, mesh : jax.sharding.Mesh,
@@ -431,16 +422,17 @@ class RmsNormBwdClass:
 
         # Sharded_impl only accepts positional arugments
         # And they should be Jax traceable variables
-        def impl(g, invvar, x, weight):
-            grad_input, grad_weight, part_grad = _rms_norm_bwd_p.bind(
+        def sharded_impl(g, invvar, x, weight):
+            grad_input, grad_weight, part_grad = RmsNormBwdClass.impl(
                 g, invvar, x, weight, eps=eps
             )
             # We need to sum the weight gradient from all partition.
+            # when the input is sharded and weights are replicated
             global_weight = grad_weight
             if x_spec[0]:
                 global_weight = jax.lax.psum(grad_weight, x_spec[0])
             return grad_input, global_weight, part_grad
-        return mesh, impl, output_shardings, arg_shardings
+        return mesh, sharded_impl, output_shardings, arg_shardings
 
 register_primitive(RmsNormBwdClass)
 
@@ -450,10 +442,7 @@ def custom_p_rms_norm_fwd(x, weight, eps=1e-05):
 
 @partial(jax.custom_vjp, nondiff_argnums=(2,))
 def custom_p_rms_norm(x, weight, eps=1e-05):
-    # TODO: Why not called?
-    import pdb;pdb.set_trace()
     output, _ = custom_p_rms_norm_fwd(x, weight, eps=eps)
-
     return output
 
 def custom_p_rms_norm_bwd(eps, res, g):
@@ -470,7 +459,6 @@ custom_p_rms_norm.defvjp(custom_p_rms_norm_fwd, custom_p_rms_norm_bwd)
 
 
 import jax
-
 
 per_core_batch_size=4
 seq_len=512
@@ -489,15 +477,9 @@ def ref_loss(x, weight):
     predictions = rms_norm(x, weight)
     return -jnp.mean(predictions**2)
 
-
-ref = jax.grad(ref_loss, argnums=(0, 1))(x, weight)
-
-
-def xmap_loss(x, weight, *, device_count):
-    predictions = xmap_rms_norm(x, weight, device_count=device_count)
-    return -jnp.mean(predictions**2)
-
-def custom_p_loss(x, weight, *, device_count):
+ref_out = jax.grad(ref_loss, argnums=(0, 1))(x, weight)
+    
+def custom_p_loss(x, weight):
     predictions = custom_p_rms_norm(x, weight)
     return -jnp.mean(predictions**2)
 
@@ -505,7 +487,7 @@ def custom_p_loss(x, weight, *, device_count):
 with Mesh(jax.local_devices(), ("x",)):
     def run_and_verify(loss):
         pjitted = pjit(
-            jax.grad(partial(loss, device_count=jax.local_device_count()), argnums=(0, 1)),
+            jax.grad(loss, argnums=(0, 1)),
             # Shard x by batch dimension and replicate weight on all devices.
             in_shardings=(
                 PartitionSpec("x", None, None),
@@ -517,19 +499,15 @@ with Mesh(jax.local_devices(), ("x",)):
                 PartitionSpec(None, None),
             ),
         )
-        hlo = pjitted.lower(x, weight).compile().runtime_executable().hlo_modules()[0].to_string()
+        hlo = pjitted.lower(x, weight).compile().as_text()
         out = pjitted(x, weight)
-        print(hlo)
         assert "all-reduce-done" in hlo, "The gradient will produce wrong value!"
         if "all-gather-start" in hlo:
             print("NOT OPTIMIZED, ALL_GATHER in the graph!")
         return out
-    print("xmap graph")
-    xmap_out = run_and_verify(xmap_loss)
-    print("custom_partitioning graph")
+
     custom_p_out = run_and_verify(custom_p_loss)
 
-for r, o in zip(ref, xmap_out):
-    print(jnp.allclose(r, o, atol=1e-6, rtol=1e-6))
-for r, o in zip(ref, custom_p_out):
+
+for r, o in zip(ref_out, custom_p_out):
     print(jnp.allclose(r, o, atol=1e-6, rtol=1e-6))
