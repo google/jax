@@ -1091,9 +1091,13 @@ triton_lowering_rules[lax.div_p] = _div_lowering_rule
 
 
 def _iota_lowering_rule(ctx: LoweringRuleContext, *, dtype, shape, dimension):
-  if dimension != 0:
-    raise NotImplementedError
-  return _cast(_make_range(0, *shape), _dtype_to_ir_type(dtype))
+  extent = shape[dimension]
+  res = _cast(_make_range(0, extent), _dtype_to_ir_type(dtype))
+  if dimension != 0 or len(shape) > 1:
+    expand_dims = [i for i in range(len(shape)) if i != dimension]
+    for dim in expand_dims:
+      res = _expand_dims(res, dim)
+  return _bcast_to(res, shape)
 
 
 triton_lowering_rules[lax.iota_p] = _iota_lowering_rule
@@ -1289,6 +1293,22 @@ def _convert_element_type_lowering_rule(
 triton_lowering_rules[lax.convert_element_type_p] = (
     _convert_element_type_lowering_rule
 )
+
+
+def _bitcast(ctx: LoweringRuleContext, x, *, new_dtype):
+  dst_type = _dtype_to_ir_type(new_dtype)
+  if ir.RankedTensorType.isinstance(
+      x.type
+  ) and not ir.RankedTensorType.isinstance(dst_type):
+    src_type = ir.RankedTensorType(x.type)
+    dst_type = ir.RankedTensorType.get(
+        src_type.shape,
+        dst_type,
+        src_type.encoding,
+    )
+  return tt_dialect.bitcast(dst_type, x)
+
+triton_lowering_rules[lax.bitcast_convert_type_p] = _bitcast
 
 
 def select_n_lowering_rule(ctx: LoweringRuleContext, pred, x, y):
@@ -1899,6 +1919,97 @@ def _reduction_lowering(body, ctx: LoweringRuleContext, a, axes):
     tt_dialect.reduce_return(results)
   reduce_op.verify()
   return list(reduce_op.result)
+
+
+# sort_p helpers
+
+def _compare_and_swap(xs, flip, i, n_dims):
+  n_outer = xs[0].size >> n_dims
+  shape = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]
+  y = jnp.reshape(xs[0], shape)
+  # slice left/right with 'stride' 2**(n_dims - i - 1)
+  mask = jnp.arange(0, 2).reshape(1, 2, 1)
+  left = jnp.broadcast_to(jnp.sum(y * (1 - mask), axis=1, keepdims=True), shape)
+  right = jnp.broadcast_to(jnp.sum(y * mask, axis=1, keepdims=True), shape)
+  left = jnp.reshape(left, xs[0].shape)
+  right = jnp.reshape(right, xs[0].shape)
+  left_gt_right = left > right
+  # actual compare-and-swap
+  rets = []
+  for x in xs:
+    idtype = jnp.dtype(f'int{jnp.dtype(x.dtype).itemsize * 8}')
+    y = jnp.reshape(x, shape)
+    left = jnp.broadcast_to(
+        jnp.sum(y * (1 - mask), axis=1, keepdims=True), shape).reshape(x.shape)
+    right = jnp.broadcast_to(
+        jnp.sum(y * mask, axis=1, keepdims=True), shape).reshape(x.shape)
+    ileft = left.view(idtype)
+    iright = right.view(idtype)
+    ix = x.view(idtype)
+    ret = ix ^ jnp.where(left_gt_right ^ flip,
+                         ileft ^ iright,
+                         jnp.zeros_like(ix))
+    rets.append(ret.view(x.dtype))
+  return rets
+
+
+def _bitonic_merge(xs, stage, order, n_dims):
+  """
+  order_type 0 == ascending
+  order_type 1 == descending
+  order_type 2 == alternating
+  """
+  n_outer = xs[0].size >> n_dims
+  # flip denotes whether to re-arrange sub-sequences of elements in ascending or
+  # descending order.
+  # if flip = 00000000... then all elements will be re-arranged ascendingly at
+  #   this stage.
+  # if flip = 00110011... then all the elements will be re-arranged
+  #   alternatingly (with a stride of 2) at this stage
+  if order == 2:
+    shape = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]
+    flip = jnp.reshape(
+        jnp.broadcast_to(jnp.arange(0, 2).reshape(1, 2, 1), shape),
+        xs[0].shape)
+  else:
+    flip = order
+  # perform `stage` rounds of `compare-and-swap`
+  for i in range(stage):
+    xs = _compare_and_swap(xs, flip, i + (n_dims - stage), n_dims)
+  return xs
+
+
+def _log2(i):
+  log2 = 0
+  n = i
+  while n > 1:
+    n >>= 1
+    log2 += 1
+  return log2
+
+
+def _sort(*xs, axis=-1, descending=False):
+  # iteratively run bitonic merge-sort steps
+  assert all(xs[0].shape == x.shape for x in xs)
+  assert axis == xs[0].ndim - 1
+  n_dims = _log2(xs[0].shape[axis])
+  for i in range(1, n_dims + 1):
+    xs = _bitonic_merge(xs, i, 2 if i < n_dims else descending, n_dims)
+  return xs
+
+
+def _sort_lowering(ctx: LoweringRuleContext,
+                   *operands,
+                   dimension,
+                   is_stable,
+                   num_keys):
+  assert dimension == ctx.avals_in[0].ndim - 1
+  assert num_keys == 1
+  assert not is_stable
+  return lower_fun(_sort, multiple_results=True)(ctx, *operands, axis=dimension)
+
+
+triton_lowering_rules[lax.sort_p] = _sort_lowering
 
 
 def _reduce_lowering(body, ctx: LoweringRuleContext, a, *, axes):
