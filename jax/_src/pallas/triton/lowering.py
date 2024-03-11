@@ -216,7 +216,7 @@ def _process_grid_to_3d_grid(grid_mapping: GridMapping):
     out_idx = launch_grid_to_pallas_grid[i]
     s = _i32_constant(s)
     out_indices[out_idx] = _mod(grid0, s)
-    grid0 = _floordiv(grid0, s)
+    grid0 = _floordiv(False, grid0, s)
 
   for i in range(len(prog_id_dims)):
     out_idx = launch_grid_to_pallas_grid[num_collapse + i]
@@ -831,12 +831,12 @@ def _mul(x: ir.Value, y: ir.Value) -> ir.Value:
   raise NotImplementedError(f"unsupported types: {x.type} and {y.type}")
 
 
-def _floordiv(x: ir.Value, y: ir.Value) -> ir.Value:
+def _floordiv(is_signed: bool, x: ir.Value, y: ir.Value) -> ir.Value:
   assert x.type == y.type, (str(x.type), str(y.type))
   x_element_type = _element_type(x.type)
   if not isinstance(x_element_type, ir.IntegerType):
     raise NotImplementedError(f"unsupported types: {x.type} and {y.type}")
-  if x_element_type.is_signed:
+  if is_signed:
     return arith_dialect.divsi(x, y)
   else:
     return arith_dialect.divui(x, y)
@@ -854,15 +854,15 @@ def _truediv(x: ir.Value, y: ir.Value) -> ir.Value:
   raise NotImplementedError(f"unsupported types: {x.type} and {y.type}")
 
 
-def _mod(x: ir.Value, y: ir.Value) -> ir.Value:
+def _mod(x: ir.Value, y: ir.Value, ctx: LoweringRuleContext = None) -> ir.Value:
   assert x.type == y.type, (str(x.type), str(y.type))
   x_element_type = _element_type(x.type)
   if not isinstance(x_element_type, ir.IntegerType):
     raise NotImplementedError(f"unsupported types: {x.type} and {y.type}")
-  if x_element_type.is_signed:
-    return arith_dialect.remsi(x, y)
-  else:
+  if ctx is None or jnp.issubdtype(ctx.avals_in[0].dtype, jnp.unsignedinteger):
     return arith_dialect.remui(x, y)
+  else:
+    return arith_dialect.remsi(x, y)
 
 
 def _cmp(
@@ -871,13 +871,15 @@ def _cmp(
     si_pred: arith_dialect.CmpIPredicate,
     ui_pred: arith_dialect.CmpIPredicate,
     f_pred: arith_dialect.CmpFPredicate,
+    ctx: LoweringRuleContext = None,
 ) -> ir.Value:
   assert x.type == y.type, (str(x.type), str(y.type))
   x_element_type = _element_type(x.type)
   if isinstance(x_element_type, ir.IntegerType):
-    return arith_dialect.cmpi(
-        si_pred if x_element_type.is_signed else ui_pred, x, y
-    )
+    is_signed = False
+    if ctx is not None:
+      is_signed = jnp.issubdtype(ctx.avals_in[0].dtype, jnp.signedinteger)
+    return arith_dialect.cmpi(si_pred if is_signed else ui_pred, x, y)
   elif isinstance(x_element_type, ir.FloatType):
     return arith_dialect.cmpf(f_pred, x, y)
   else:
@@ -926,20 +928,22 @@ _JAX_TO_TRITON_BINARY = {
     lax.add_p: _add,
     lax.sub_p: _sub,
     lax.mul_p: _mul,
-    lax.rem_p: _mod,
     lax.and_p: arith_dialect.andi,
     lax.or_p: arith_dialect.ori,
     lax.xor_p: arith_dialect.xori,
     lax.shift_left_p: arith_dialect.shli,
     lax.shift_right_arithmetic_p: arith_dialect.shrsi,
     lax.shift_right_logical_p: arith_dialect.shrui,
+    ad_util.add_any_p: _add,
+}
+_JAX_TO_TRITON_BINARY_WITH_CTX = {
+    lax.rem_p: _mod,
     lax.eq_p: _equal,
     lax.ne_p: _not_equal,
     lax.gt_p: _greater_than,
     lax.ge_p: _greater_equal,
     lax.lt_p: _less_than,
     lax.le_p: _less_equal,
-    ad_util.add_any_p: _add,
 }
 
 for prim, fn in _JAX_TO_TRITON_BINARY.items():
@@ -947,6 +951,15 @@ for prim, fn in _JAX_TO_TRITON_BINARY.items():
   def rule(ctx: LoweringRuleContext, x, y, fn=fn):
     x, y = _bcast(x, y, *ctx.avals_in, *ctx.avals_out)
     return fn(x, y)
+
+  triton_lowering_rules[prim] = rule
+
+
+for prim, fn in _JAX_TO_TRITON_BINARY_WITH_CTX.items():
+
+  def rule(ctx: LoweringRuleContext, x, y, fn=fn):
+    x, y = _bcast(x, y, *ctx.avals_in, *ctx.avals_out)
+    return fn(x, y, ctx=ctx)
 
   triton_lowering_rules[prim] = rule
 
@@ -1084,16 +1097,21 @@ def _div_lowering_rule(ctx: LoweringRuleContext, x, y):
       y_aval.dtype, np.floating
   ):
     return _truediv(x, y)
-  return _floordiv(x, y)
+  is_signed = jnp.issubdtype(ctx.avals_in[0].dtype, jnp.signedinteger)
+  return _floordiv(is_signed, x, y)
 
 
 triton_lowering_rules[lax.div_p] = _div_lowering_rule
 
 
 def _iota_lowering_rule(ctx: LoweringRuleContext, *, dtype, shape, dimension):
-  if dimension != 0:
-    raise NotImplementedError
-  return _cast(_make_range(0, *shape), _dtype_to_ir_type(dtype))
+  extent = shape[dimension]
+  res = _cast(_make_range(0, extent), _dtype_to_ir_type(dtype))
+  if dimension != 0 or len(shape) > 1:
+    expand_dims = [i for i in range(len(shape)) if i != dimension]
+    for dim in expand_dims:
+      res = _expand_dims(res, dim)
+  return _bcast_to(res, shape)
 
 
 triton_lowering_rules[lax.iota_p] = _iota_lowering_rule
@@ -1289,6 +1307,22 @@ def _convert_element_type_lowering_rule(
 triton_lowering_rules[lax.convert_element_type_p] = (
     _convert_element_type_lowering_rule
 )
+
+
+def _bitcast(ctx: LoweringRuleContext, x, *, new_dtype):
+  dst_type = _dtype_to_ir_type(new_dtype)
+  if ir.RankedTensorType.isinstance(
+      x.type
+  ) and not ir.RankedTensorType.isinstance(dst_type):
+    src_type = ir.RankedTensorType(x.type)
+    dst_type = ir.RankedTensorType.get(
+        src_type.shape,
+        dst_type,
+        src_type.encoding,
+    )
+  return tt_dialect.bitcast(dst_type, x)
+
+triton_lowering_rules[lax.bitcast_convert_type_p] = _bitcast
 
 
 def select_n_lowering_rule(ctx: LoweringRuleContext, pred, x, y):
@@ -1899,6 +1933,97 @@ def _reduction_lowering(body, ctx: LoweringRuleContext, a, axes):
     tt_dialect.reduce_return(results)
   reduce_op.verify()
   return list(reduce_op.result)
+
+
+# sort_p helpers
+
+def _compare_and_swap(xs, flip, i, n_dims):
+  n_outer = xs[0].size >> n_dims
+  shape = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]
+  y = jnp.reshape(xs[0], shape)
+  # slice left/right with 'stride' 2**(n_dims - i - 1)
+  mask = jnp.arange(0, 2, dtype=jnp.uint16).reshape(1, 2, 1)
+  left = jnp.broadcast_to(jnp.sum(y * (1 - mask), axis=1, keepdims=True), shape)
+  right = jnp.broadcast_to(jnp.sum(y * mask, axis=1, keepdims=True), shape)
+  left = jnp.reshape(left, xs[0].shape)
+  right = jnp.reshape(right, xs[0].shape)
+  left_gt_right = left > right
+  # actual compare-and-swap
+  rets = []
+  for x in xs:
+    idtype = jnp.dtype(f'int{jnp.dtype(x.dtype).itemsize * 8}')
+    y = jnp.reshape(x, shape)
+    left = jnp.broadcast_to(
+        jnp.sum(y * (1 - mask), axis=1, keepdims=True), shape).reshape(x.shape)
+    right = jnp.broadcast_to(
+        jnp.sum(y * mask, axis=1, keepdims=True), shape).reshape(x.shape)
+    ileft = left.view(idtype)
+    iright = right.view(idtype)
+    ix = x.view(idtype)
+    ret = ix ^ jnp.where(left_gt_right ^ flip,
+                         ileft ^ iright,
+                         jnp.zeros_like(ix))
+    rets.append(ret.view(x.dtype))
+  return rets
+
+
+def _bitonic_merge(xs, stage, order, n_dims):
+  """
+  order_type 0 == ascending
+  order_type 1 == descending
+  order_type 2 == alternating
+  """
+  n_outer = xs[0].size >> n_dims
+  # flip denotes whether to re-arrange sub-sequences of elements in ascending or
+  # descending order.
+  # if flip = 00000000... then all elements will be re-arranged ascendingly at
+  #   this stage.
+  # if flip = 00110011... then all the elements will be re-arranged
+  #   alternatingly (with a stride of 2) at this stage
+  if order == 2:
+    shape = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]
+    flip = jnp.reshape(
+        jnp.broadcast_to(jnp.arange(0, 2).reshape(1, 2, 1), shape),
+        xs[0].shape)
+  else:
+    flip = order
+  # perform `stage` rounds of `compare-and-swap`
+  for i in range(stage):
+    xs = _compare_and_swap(xs, flip, i + (n_dims - stage), n_dims)
+  return xs
+
+
+def _log2(i):
+  log2 = 0
+  n = i
+  while n > 1:
+    n >>= 1
+    log2 += 1
+  return log2
+
+
+def _sort(*xs, axis=-1, descending=False):
+  # iteratively run bitonic merge-sort steps
+  assert all(xs[0].shape == x.shape for x in xs)
+  assert axis == xs[0].ndim - 1
+  n_dims = _log2(xs[0].shape[axis])
+  for i in range(1, n_dims + 1):
+    xs = _bitonic_merge(xs, i, 2 if i < n_dims else descending, n_dims)
+  return xs
+
+
+def _sort_lowering(ctx: LoweringRuleContext,
+                   *operands,
+                   dimension,
+                   is_stable,
+                   num_keys):
+  assert dimension == ctx.avals_in[0].ndim - 1
+  assert num_keys == 1
+  assert not is_stable
+  return lower_fun(_sort, multiple_results=True)(ctx, *operands, axis=dimension)
+
+
+triton_lowering_rules[lax.sort_p] = _sort_lowering
 
 
 def _reduce_lowering(body, ctx: LoweringRuleContext, a, *, axes):

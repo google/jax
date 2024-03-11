@@ -733,6 +733,64 @@ class PallasCallTest(PallasTest):
       y_ref = jnp.cumsum(x, axis=axis)
       np.testing.assert_allclose(y, y_ref, atol=1e-2, rtol=1e-2, err_msg=i)
 
+  @parameterized.parameters("float16", "float32", "int32", "uint32")
+  def test_sort(self, dtype):
+    m, n = 32, 8
+    out_dtype = dtype
+    def make_x(key):
+      if jnp.issubdtype(dtype, jnp.integer):
+        return random.permutation(
+          key, jnp.arange(m * n, dtype=dtype) - (m * n) // 2, independent=True
+        ).reshape(m, n)
+      else:
+        return random.normal(key, (m, n), dtype=dtype)
+    out_shape = jax.ShapeDtypeStruct((m, n), out_dtype)
+    grid = ()
+    @functools.partial(
+        self.pallas_call,
+        out_shape=out_shape,
+        grid=grid)
+    def sort_it(x_ref, y_ref):
+      x = x_ref[...]
+      y_ref[...] = jnp.sort(x, axis=-1, stable=False)
+    for i, key in enumerate(random.split(random.key(0), 20)):
+      x = make_x(key)
+      y = sort_it(x)
+      y_ref = jnp.sort(x, axis=-1, stable=False)
+      np.testing.assert_allclose(y, y_ref, atol=1e-2, rtol=1e-2, err_msg=i)
+
+  @parameterized.parameters("float16", "float32", "int32", "uint32")
+  def test_argsort(self, dtype):
+    m, n = 32, 8
+    out_dtype = jnp.int32
+    def make_x(key):
+      if jnp.issubdtype(dtype, jnp.integer):
+        return random.permutation(
+          key, jnp.arange(m * n, dtype=dtype) - (m * n) // 2, independent=True
+        ).reshape(m, n)
+      else:
+        return random.normal(key, (m, n), dtype=dtype)
+    out_shape = jax.ShapeDtypeStruct((m, n), out_dtype)
+    grid = ()
+    @functools.partial(
+        self.pallas_call,
+        out_shape=out_shape,
+        grid=grid)
+    def argsort_it(x_ref, y_ref):
+      x = x_ref[...]
+      y_ref[...] = jnp.argsort(x, axis=-1, stable=False)
+    n_skips = 0
+    for i, key in enumerate(random.split(random.key(0), 20)):
+      x = make_x(key)
+      if not all(len(set(x_.tolist())) == len(x_) for x_ in x):
+        # If elements are not unique (happens for float16), don't check.
+        n_skips += 1
+        continue
+      y = argsort_it(x)
+      y_ref = jnp.argsort(x, axis=-1, stable=False)
+      np.testing.assert_allclose(y, y_ref, atol=1e-2, rtol=1e-2, err_msg=i)
+    self.assertLess(n_skips, 12)
+
   def test_using_pallas_slice(self):
     m, n = 32, 4
     out_shape = jax.ShapeDtypeStruct((4, n), jnp.float32)
@@ -1550,6 +1608,31 @@ class PallasOpsTest(PallasTest):
     x = jnp.arange(8.)
     x = x.at[3].set(jnp.nan)
     np.testing.assert_allclose(isnan(x), jnp.isnan(x))
+
+  @parameterized.named_parameters(
+      ("add", jnp.add, jnp.int32),
+      ("sub", jnp.subtract, jnp.int32),
+      ("mul", jnp.multiply, jnp.int32),
+      # ("floordiv", jnp.floor_divide, jnp.int32),  # needs sign_p lowering.
+      ("rem", jnp.remainder, jnp.int32),
+      ("lt", jnp.less, jnp.bool_),
+      ("le", jnp.less_equal, jnp.bool_),
+      ("gt", jnp.greater, jnp.bool_),
+      ("ge", jnp.greater_equal, jnp.bool_),
+      ("eq", jnp.equal, jnp.bool_),
+      ("ne", jnp.not_equal, jnp.bool_),
+      )
+  def test_signed_int_ops(self, f, out_dtype):
+    @functools.partial(
+        self.pallas_call, out_shape=jax.ShapeDtypeStruct((8,), out_dtype),
+        grid=1)
+    def f_i32(x_ref, y_ref, o_ref):
+      o_ref[...] = f(x_ref[...], y_ref[...])
+
+    x = jnp.int32([1, 3, -4, -6, 2, 5, 4, -7])
+    y = jnp.int32([3, 1, -4, -5, 2, -2, 0, 4])
+    np.testing.assert_allclose(f(x, y), f_i32(x, y))
+
 
 class PallasOpsInterpretTest(PallasOpsTest):
   INTERPRET = True
