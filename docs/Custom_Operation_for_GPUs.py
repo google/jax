@@ -501,6 +501,7 @@ with Mesh(jax.local_devices(), ("x",)):
         )
         hlo = pjitted.lower(x, weight).compile().as_text()
         out = pjitted(x, weight)
+        print(hlo)
         assert "all-reduce-done" in hlo, "The gradient will produce wrong value!"
         if "all-gather-start" in hlo:
             print("NOT OPTIMIZED, ALL_GATHER in the graph!")
