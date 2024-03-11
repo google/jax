@@ -113,14 +113,19 @@ def _eval_jaxpr_discharge_state(
                        if d and isinstance(v.aval, AbstractRef)}
 
   for eqn in jaxpr.eqns:
-    if _has_refs(eqn) and any(id(v.aval) in refs_to_discharge
-                              for v in eqn.invars):
+    # if _has_refs(eqn) and any(id(v.aval) in refs_to_discharge
+    #                           for v in eqn.invars):
+    invals = map(env.read, eqn.invars)
+    in_avals = [v.aval for v in eqn.invars]
+    out_avals, effs = eqn.primitive.abstract_eval(*in_avals, **eqn.params)
+    effs = {e for e in effs if isinstance(e, RefEffect)
+            and id(eqn.invars[e.input_index].aval) in refs_to_discharge}
+    if effs:
+      if 'custom_jvp' in str(eqn.primitive): breakpoint()
       if eqn.primitive not in _discharge_rules:
+        breakpoint()
         raise NotImplementedError("No state discharge rule implemented for "
             f"primitive: {eqn.primitive}")
-      invals = map(env.read, eqn.invars)
-      in_avals = [v.aval for v in eqn.invars]
-      out_avals = [v.aval for v in eqn.outvars]
       new_invals, ans = _discharge_rules[eqn.primitive](
           in_avals, out_avals, *invals, **eqn.params)
       for new_inval, invar in zip(new_invals, eqn.invars):
@@ -131,8 +136,7 @@ def _eval_jaxpr_discharge_state(
       # we assume any higher-order primitives inside of the jaxpr are *not*
       # stateful.
       subfuns, bind_params = eqn.primitive.get_bind_params(eqn.params)
-      ans = eqn.primitive.bind(*subfuns, *map(env.read, eqn.invars),
-                               **bind_params)
+      ans = eqn.primitive.bind(*subfuns, *invals, **bind_params)
     if eqn.primitive.multiple_results:
       map(env.write, eqn.outvars, ans)
     else:
@@ -765,23 +769,32 @@ def initial_style_jaxpr(
 
 @weakref_lru_cache
 def _initial_style_jaxpr(fun, in_tree, in_avals):
-  fun_, out_tree_thunk = api_util.flatten_fun_nokwargs(lu.wrap_init(fun),
-      tree_util.treedef_tuple((in_tree,)))
+  fun_, out_tree_thunk = api_util.flatten_fun_nokwargs(
+      lu.wrap_init(fun), tree_util.treedef_tuple((in_tree,)))
   debug = pe.debug_info(fun_, in_tree, out_tree_thunk, False, 'run_state')
   jaxpr, _, consts, () = pe.trace_to_jaxpr_dynamic(fun_, in_avals, debug)
   return jaxpr, consts, out_tree_thunk()
 
 def run_state(f: Callable[..., None]):
   def wrapped(args):
+    none, out = run_state2(f)(args)
+    if none is not None: raise Exception
+    return out
+  return wrapped
+
+def run_state2(f: Callable[..., None]):
+  def wrapped(args):
     flat_args, in_tree = tree_util.tree_flatten(args)
     avals = [core.raise_to_shaped(core.get_aval(arg)) for arg in flat_args]
-    jaxpr_, consts, _ = initial_style_jaxpr(f, in_tree, map(AbstractRef, avals))
+    jaxpr_, consts, val_tree = initial_style_jaxpr(f, in_tree, map(AbstractRef, avals))
     jaxpr = hoist_consts_to_refs(jaxpr_)
     which_linear = (False,) * (len(consts) + len(flat_args))
     out_const_flat = run_state_p.bind(*consts, *flat_args, jaxpr=jaxpr,
                                       which_linear=which_linear)
-    _, out_flat = split_list(out_const_flat, [len(consts)])
-    return in_tree.unflatten(out_flat)
+    _, out_vals_, out_state_ = split_list(out_const_flat, [len(consts), val_tree.num_leaves])
+    out_vals = tree_util.tree_unflatten(val_tree, out_vals_)
+    out_state = tree_util.tree_unflatten(in_tree, out_state_)
+    return out_vals, out_state
   return wrapped
 
 def run_state_reference(f: Callable[..., None]):

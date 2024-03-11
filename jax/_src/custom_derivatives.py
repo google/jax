@@ -44,6 +44,7 @@ from jax._src.tree_util import (tree_flatten, tree_unflatten, tree_map,
                                 treedef_is_leaf, treedef_tuple,
                                 register_pytree_node_class, tree_leaves)
 from jax._src.util import cache, safe_zip, safe_map, split_list, Unhashable
+from jax._src.state.types import ReadEffect, WriteEffect, AccumEffect
 
 
 traceback_util.register_exclusion(__file__)
@@ -417,6 +418,9 @@ def process_env_traces(primitive, level: int, jvp_was_run: bool, *args):
 
 
 effects.custom_derivatives_allowed_effects.add_type(lax.InOutFeedEffect)
+effects.custom_derivatives_allowed_effects.add_type(ReadEffect)
+effects.custom_derivatives_allowed_effects.add_type(WriteEffect)
+effects.custom_derivatives_allowed_effects.add_type(AccumEffect)
 
 custom_jvp_call_p = CustomJVPCallPrimitive('custom_jvp_call')
 
@@ -430,6 +434,10 @@ def _custom_jvp_call_typecheck(_, *in_avals, call_jaxpr, jvp_jaxpr_thunk,
         f'Effects not supported in `custom_jvp`: {disallowed_effects}')
   return call_jaxpr.out_avals, call_jaxpr.effects
 core.custom_typechecks[custom_jvp_call_p] = _custom_jvp_call_typecheck
+
+@custom_jvp_call_p.def_effectful_abstract_eval
+def _custom_jvp_call_abstract_eval(*args, **kwargs):
+  return _custom_jvp_call_typecheck(None, *args, **kwargs)
 
 def _custom_jvp_call_mlir_translation(ctx, *args, call_jaxpr, jvp_jaxpr_thunk,
                                       num_consts, symbolic_zeros):
