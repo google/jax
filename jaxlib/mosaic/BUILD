@@ -53,6 +53,7 @@ cc_library(
     # compatible with libtpu
     deps = [
         ":tpu_inc_gen",
+        ":tpu_ops_inc_gen",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:ControlFlowDialect",
@@ -80,7 +81,7 @@ cc_library(
 )
 
 gentbl_cc_library(
-    name = "tpu_inc_gen",
+    name = "tpu_ops_inc_gen",
     # compatible with libtpu
     tbl_outs = [
         (
@@ -91,6 +92,16 @@ gentbl_cc_library(
             ["-gen-op-defs"],
             "dialect/tpu/tpu_ops.cc.inc",
         ),
+    ],
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "dialect/tpu/tpu_ops.td",
+    deps = [":tpu_td_files"],
+)
+
+gentbl_cc_library(
+    name = "tpu_inc_gen",
+    # compatible with libtpu
+    tbl_outs = [
         (
             ["-gen-dialect-decls"],
             "dialect/tpu/tpu_dialect.h.inc",
@@ -154,6 +165,7 @@ td_library(
     name = "tpu_td_files",
     srcs = [
         "dialect/tpu/tpu.td",
+        "dialect/tpu/tpu_ops.td",
     ],
     # compatible with libtpu
     deps = [
@@ -185,6 +197,7 @@ cc_library(
     deps = [
         ":tpu_dialect",
         ":tpu_inc_gen",
+        ":tpu_ops_inc_gen",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:CAPIIR",
         "@llvm-project//mlir:FuncDialect",
