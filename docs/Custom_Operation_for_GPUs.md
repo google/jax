@@ -687,6 +687,7 @@ class RmsNormFwdClass:
         return mesh, impl, output_shardings, arg_shardings
 register_primitive(RmsNormFwdClass)
 ```
+Next we define the primitive for the backward pass of RMSNorm
 
 ### Shard the backward function with custom_partitioning
 
@@ -753,7 +754,7 @@ class RmsNormBwdClass:
         return mesh, impl, output_shardings, arg_shardings
 register_primitive(RmsNormBwdClass)
 ```
-# Plumbing to establisht the forward and backward primtives with a custom_vjp rule
+Plumbing to establish the forward and backward primtives with a custom_vjp rule as before:
 
 ```python
 @partial(jax.custom_vjp, nondiff_argnums=(2,))
@@ -774,7 +775,7 @@ def custom_p_rms_norm_bwd(eps, res, g):
 custom_p_rms_norm.defvjp(custom_p_rms_norm_fwd, custom_p_rms_norm_bwd)
 ```
 
-# We define a reference unsharded loss and the loss using the primitive that implementes custom_partitioning
+With that we have completely define our custom RMS norm primitive with custom_partitioning. To check for correctness we define the following loss functions: ref_loss is the reference value to compare against, while custom_p_loss uses our new primitive that implements custom_partitioning.
 
 ```python
 def ref_loss(x, weight):
@@ -862,7 +863,7 @@ Now there are no all-gathers in the HLO, sharding is respected and only gradient
 
 ## Let's put it together
 
-The complete definition of the primitives using custom_partitioning can be found in `Custom_Operation_for_GPUs.py`
+The complete definition of the primitives using custom_partitioning can be found in `Custom_Operation_for_GPUs.py`. All the cpp code used in this example is included below.
 
 ## Appendix
 
