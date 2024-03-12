@@ -867,4 +867,4 @@ The complete definition of the primitives using custom_partitioning can be found
 [gpu_ops/kernels.h](gpu_ops/kernels.h) \
 [gpu_ops/pybind11_kernel_helpers.h](gpu_ops/pybind11_kernel_helpers.h) \
 [gpu_ops/gpu_ops.cpp](gpu_ops/gpu_ops.cpp) \
-[gpu_ops/rms_norm_kernels.cu](gpu_ops/rms_norm_kernels.cu) \
+[gpu_ops/rms_norm_kernels.cu](gpu_ops/rms_norm_kernels.cu) 
