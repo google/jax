@@ -568,7 +568,7 @@ This example demonstrates the use of custom_partitioning.
 
 ### Shard the forward function with custom_partitioning
 
-We first create aa helper function to help with all the JAX/XLA callback registration required.
+We first create a helper function to help with all the JAX/XLA callback registration required.
 
 ```python
 def register_primitive(cls):
@@ -863,8 +863,8 @@ Now there are no all-gathers in the HLO, sharding is respected and only gradient
 
 The complete definition of the primitives using custom_partitioning can be found in [Custom_Operation_for_GPUs.py](Custom_Operation_for_GPUs.py) and the corresponding C++ code the defines python bindings in addition to the kernel implementations can be found below:
 
-[gpu_ops/kernel_helpers.h](gpu_ops/kernel_helpers.h)
-[gpu_ops/kernels.h](gpu_ops/kernels.h)
-[gpu_ops/pybind11_kernel_helpers.h](gpu_ops/pybind11_kernel_helpers.h)
-[gpu_ops/gpu_ops.cpp](gpu_ops/gpu_ops.cpp)
-[gpu_ops/rms_norm_kernels.cu](gpu_ops/rms_norm_kernels.cu)
+[gpu_ops/kernel_helpers.h](gpu_ops/kernel_helpers.h) \
+[gpu_ops/kernels.h](gpu_ops/kernels.h) \
+[gpu_ops/pybind11_kernel_helpers.h](gpu_ops/pybind11_kernel_helpers.h) \
+[gpu_ops/gpu_ops.cpp](gpu_ops/gpu_ops.cpp) \
+[gpu_ops/rms_norm_kernels.cu](gpu_ops/rms_norm_kernels.cu) \
