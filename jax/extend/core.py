@@ -16,5 +16,15 @@
 # See PEP 484 & https://github.com/google/jax/issues/7570
 
 from jax._src.abstract_arrays import (
-  array_types as array_types
+  array_types as array_types,
+)
+from jax._src.core import (
+    ClosedJaxpr as ClosedJaxpr,
+    jaxpr_as_fun as jaxpr_as_fun,
+    Jaxpr as Jaxpr,
+    JaxprEqn as JaxprEqn,
+    Literal as Literal,
+    Primitive as Primitive,
+    Token as Token,
+    Var as Var,
 )
