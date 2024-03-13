@@ -647,8 +647,8 @@ class RmsNormFwdClass:
 
     @staticmethod
     def infer_sharding_from_operands(eps : float, mesh : jax.sharding.Mesh,
-                                     arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
-                                     result_infos : tuple[jax._src.core.ShapedArray]):
+                                     arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
+                                     result_infos : Tuple[jax._src.core.ShapedArray]):
         del eps, result_infos  # Not needed for this example.
         x_info, weight_info = arg_infos
         assert len(x_info.shape) == 3
@@ -665,8 +665,8 @@ class RmsNormFwdClass:
 
     @staticmethod
     def partition(eps : float, mesh : jax.sharding.Mesh,
-                  arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
-                  result_infos : tuple[jax._src.api.ShapeDtypeStruct]):
+                  arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
+                  result_infos : Tuple[jax._src.api.ShapeDtypeStruct]):
         del result_infos  # Not needed for this example.
         x_info, weight_info = arg_infos
         assert len(x_info.shape) == 3
@@ -699,8 +699,8 @@ class RmsNormBwdClass:
 
     @staticmethod
     def infer_sharding_from_operands(eps : float, mesh : jax.sharding.Mesh,
-                                     arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
-                                     result_infos : tuple[jax._src.core.ShapedArray]):
+                                     arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
+                                     result_infos : Tuple[jax._src.core.ShapedArray]):
         del eps, result_infos  # Not needed for this example.
         g_info, invvar_info, x_info, weight_info = arg_infos
         assert len(g_info.shape) == 3
@@ -715,8 +715,8 @@ class RmsNormBwdClass:
 
     @staticmethod
     def partition(eps : float, mesh : jax.sharding.Mesh,
-                  arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
-                  result_infos : tuple[jax._src.api.ShapeDtypeStruct]):
+                  arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
+                  result_infos : Tuple[jax._src.api.ShapeDtypeStruct]):
         del result_infos  # Not needed for this example.
         g_info, invvar_info, x_info, weight_info = arg_infos
         assert len(g_info.shape) == 3
@@ -862,6 +862,8 @@ Now there are no all-gathers in the HLO, sharding is respected and only gradient
 ## Let's put it together
 
 The complete definition of the primitives using custom_partitioning can be found in [Custom_Operation_for_GPUs.py](Custom_Operation_for_GPUs.py) and the corresponding C++ code the defines python bindings in addition to the kernel implementations can be found below:
+
+### `gpu_ops` code listing
 
 [gpu_ops/kernel_helpers.h](gpu_ops/kernel_helpers.h) \
 [gpu_ops/kernels.h](gpu_ops/kernels.h) \

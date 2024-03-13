@@ -1,5 +1,6 @@
 from functools import partial, reduce
 from operator import mul
+from typing import Tuple
 
 import jax
 import jax.numpy as jnp
@@ -238,14 +239,14 @@ def register_primitive(cls):
     """
     register jax primitive
 
-    The order of calls.
+    The order of calls. Each operation is composed of two primitives: Inner and Outer.
 
-    Inner, only the basic to wrap the TE XLA(not JAX) custom_call itself.
-    - Impl to TE XLA custom_call in C.
+    Inner, only the basic to wrap the custom_call itself.
+    - impl to XLA custom_call in C.
     - abstract to know the static shapes
-    - lower to StableHLO TE XLA custom_call.
+    - lower to StableHLO XLA custom_call.
     Outer, mostly all the rest:
-    - impl: Bind to the inner primitive? Why??? Not used for real computation, but only for tracing. So we only need to bind.
+    - impl: Bind to the inner primitive. Not used for real computation, but only for tracing. So we only need to bind.
     - abstract: same
     - lower to StableHLO custom_p. (XLA will call the python callback from it)
     - custom_p
@@ -311,8 +312,8 @@ class RmsNormFwdClass:
 
     @staticmethod
     def infer_sharding_from_operands(eps : float, mesh : jax.sharding.Mesh,
-                                     arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
-                                     result_infos : tuple[jax._src.core.ShapedArray]):
+                                     arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
+                                     result_infos : Tuple[jax._src.core.ShapedArray]):
         del eps, result_infos  # Not needed for this example.
         x_info, weight_info = arg_infos
         assert len(x_info.shape) == 3
@@ -326,8 +327,8 @@ class RmsNormFwdClass:
 
     @staticmethod
     def partition(eps : float, mesh : jax.sharding.Mesh,
-                  arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
-                  result_infos : tuple[jax._src.api.ShapeDtypeStruct]):
+                  arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
+                  result_infos : Tuple[jax._src.api.ShapeDtypeStruct]):
         del result_infos  # Not needed for this example.
         x_info, weight_info = arg_infos
         assert len(x_info.shape) == 3
@@ -381,8 +382,8 @@ class RmsNormBwdClass:
 
     @staticmethod
     def infer_sharding_from_operands(eps : float, mesh : jax.sharding.Mesh,
-                                     arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
-                                     result_infos : tuple[jax._src.core.ShapedArray]):
+                                     arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
+                                     result_infos : Tuple[jax._src.core.ShapedArray]):
         del eps, result_infos  # Not needed for this example.
         g_info, invvar_info, x_info, weight_info = arg_infos
         assert len(g_info.shape) == 3
@@ -397,8 +398,8 @@ class RmsNormBwdClass:
 
     @staticmethod
     def partition(eps : float, mesh : jax.sharding.Mesh,
-                  arg_infos : tuple[jax._src.api.ShapeDtypeStruct],
-                  result_infos : tuple[jax._src.api.ShapeDtypeStruct]):
+                  arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
+                  result_infos : Tuple[jax._src.api.ShapeDtypeStruct]):
         del result_infos  # Not needed for this example.
         g_info, invvar_info, x_info, weight_info = arg_infos
         assert len(g_info.shape) == 3
