@@ -18,3 +18,5 @@
 from jax._src.abstract_arrays import (
   array_types as array_types
 )
+
+from . import primitives as primitives
