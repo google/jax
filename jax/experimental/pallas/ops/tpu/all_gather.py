@@ -30,7 +30,6 @@ from collections.abc import Sequence
 import jax
 from jax import lax
 from jax.experimental import pallas as pl
-from jax.experimental import shard_map
 from jax.experimental.pallas import tpu as pltpu
 import jax.numpy as jnp
 
@@ -149,7 +148,7 @@ def all_gather(x, *, mesh: jax.sharding.Mesh, axis_name: str | Sequence[str],
     )(x_shard)
     return out.reshape((axis_size * x_shard.shape[0], *x_shard.shape[1:]))
 
-  return shard_map.shard_map(
+  return jax.shard_map(
       ag_local, mesh=mesh, in_specs=P(axis_name), out_specs=P(None),
       check_rep=False
   )(x)

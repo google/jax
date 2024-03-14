@@ -37,11 +37,11 @@ from jax._src import core
 from jax._src import source_info_util
 from jax._src import test_util as jtu
 from jax._src import xla_bridge as xb
+from jax._src.shard_map import shard_map
 from jax.experimental import jax2tf
 from jax.experimental import export
 from jax.experimental.jax2tf.tests import tf_test_util
 from jax.experimental.maps import xmap
-from jax.experimental.shard_map import shard_map
 from jax.experimental import pjit
 from jax.sharding import PartitionSpec as P
 

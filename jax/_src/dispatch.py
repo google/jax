@@ -220,9 +220,7 @@ class SourceInfo(NamedTuple):
 def jaxpr_shardings(
     jaxpr: core.Jaxpr,
 ) -> Iterator[tuple[XLACompatibleSharding, SourceInfo]]:
-  from jax._src import pjit
-  from jax.experimental import shard_map
-
+  from jax._src import pjit, shard_map
   for eqn in jaxpr.eqns:
     if eqn.primitive is pjit.sharding_constraint_p:
       source_info = SourceInfo(eqn.source_info, eqn.primitive.name)

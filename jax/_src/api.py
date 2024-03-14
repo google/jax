@@ -1584,7 +1584,7 @@ def pmap(
   # TODO(yashkatariya): Move this out after shard_map is out of experimental and
   # in _src
   if config.pmap_shmap_merge.value:
-    from jax.experimental.shard_map import pmap
+    from jax._src.shard_map import pmap
     return pmap(fun, axis_name, in_axes=in_axes, out_axes=out_axes,
                 static_broadcasted_argnums=static_broadcasted_argnums,
                 devices=devices, backend=backend,

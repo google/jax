@@ -34,13 +34,13 @@ import jax
 from jax._src import compiler
 from jax._src import config
 from jax._src import maps
+from jax._src.shard_map import shard_map
 from jax._src import test_util as jtu
 from jax._src import xla_bridge
 from jax import lax
 from jax.experimental import jax2tf
 from jax.experimental import pjit
 from jax.experimental.maps import xmap
-from jax.experimental.shard_map import shard_map
 from jax.sharding import NamedSharding
 from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
