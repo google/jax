@@ -954,3 +954,94 @@ def _array_local_result_handler(aval, sharding, indices):
   )
 pxla.local_result_handlers[core.ShapedArray] = _array_local_result_handler
 pxla.local_result_handlers[core.ConcreteArray] = _array_local_result_handler
+
+
+# EArray is an Array that can contain extended dtypes.
+class EArray(basearray.Array):
+  __slots__ = ['aval', '_data']
+
+  def __init__(self, aval, data):
+    self.aval = aval
+    self._data = data
+
+  def block_until_ready(self):
+    _ = self._data.block_until_ready()
+    return self
+
+  def copy_to_host_async(self):
+    self._data.copy_to_host_async()
+
+  # forward to aval
+  shape = property(lambda self: self.aval.shape)
+  dtype = property(lambda self: self.aval.dtype)
+
+  # computed from shape and dtype
+  ndim = property(lambda self: len(self.aval.shape))
+  size = property(lambda self: math.prod(self.aval.shape))
+  def __len__(self):
+    if self.ndim == 0: raise TypeError('len() of unsized object')
+    return self.shape[0]
+
+  # forward to self._data
+  device = property(lambda self: self._data.device)
+  devices = property(lambda self: self._data.devices)
+  _device = property(lambda self: self._data._device)
+  _committed = property(lambda self: self._data._committed)
+  is_fully_addressable = property(lambda self: self._data.is_fully_addressable)
+  is_fully_replicated = property(lambda self: self._data.is_fully_replicated)
+  delete = property(lambda self: self._data.delete)
+  is_deleted = property(lambda self: self._data.is_deleted)
+  on_device_size_in_bytes = property(lambda self: self._data.on_device_size_in_bytes)
+  unsafe_buffer_pointer = property(lambda self: self._data.unsafe_buffer_pointer)
+
+  # defer to dtype
+
+  @property
+  def sharding(self):
+    phys_sharding = self._data.sharding
+    return self.aval.dtype._rules.logical_sharding(self.aval, phys_sharding)
+
+  itemsize = property(lambda self: self.aval.dtype.itemsize)
+
+  # Not classified yet...
+
+  def addressable_data(self, index: int) -> EArray:
+    raise NotImplementedError
+
+  @property
+  def addressable_shards(self):
+    raise NotImplementedError
+
+  @property
+  def global_shards(self):
+    raise NotImplementedError
+
+  def __repr__(self):
+    return 'E' + repr(self._data)
+
+  def __iter__(self):
+    if self.ndim == 0: raise TypeError('iteration over a 0-d array')
+    raise NotImplementedError
+
+  def copy(self):
+    return EArray(self.aval, self._data.copy())
+
+  __hash__ = None
+  __array_priority__ = 100
+
+  # TODO more methods from ArrayImpl?
+
+# TODO _set_array_base_attributes
+
+
+def _earray_shard_arg_handler(x, sharding):
+  arr = x._data
+  phys_sharding = x.aval.dtype._rules.physical_sharding(x.aval, sharding)
+  return pxla.shard_arg_handlers[type(arr)](arr, phys_sharding)
+pxla.shard_arg_handlers[EArray] = _earray_shard_arg_handler
+
+api_util._shaped_abstractify_handlers[EArray] = lambda self: self.aval
+core.pytype_aval_mappings[EArray] = lambda x: x.aval
+xla.canonicalize_dtype_handlers[EArray] = lambda x: x
+tree_util.dispatch_registry.register_node(
+    EArray, lambda x: ((x._data,), x.aval), lambda a, xs: EArray(a, xs[0]))
