@@ -428,7 +428,7 @@ class PJitTest(jtu.BufferDonationTestCase):
     s = NamedSharding(mesh, P('x'))
 
     def _callback(x):
-      self.assertIs(type(x), np.ndarray)
+      self.assertIsInstance(x, jax.Array)
 
     @partial(pjit, donate_argnames=('x'))
     def f(x):

@@ -9,6 +9,12 @@ Remember to align the itemized text with the first line of an item within a list
 ## jax 0.4.26
 
 * Deprecations & Removals
+* Changes
+  * {func}`jax.pure_callback` and {func}`jax.experimental.io_callback
+    now use {class}`jax.Array` instead of {class}`np.ndarray`. You can recover
+    the old behavior by transforming the arguments via
+    `jax.tree.map(np.asarray, args)` before passing them to the callback.
+* Deprecations & Removals
   * {func}`jax.tree_map` is deprecated; use `jax.tree.map` instead, or for backward
     compatibility with older JAX versions, use {func}`jax.tree_util.tree_map`.
   * {func}`jax.clear_backends` is deprecated as it does not necessarily do what
