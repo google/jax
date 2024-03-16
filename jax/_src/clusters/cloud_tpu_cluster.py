@@ -73,8 +73,11 @@ def is_gce_env():
   except:
     return False
 
+def has_megascale_address():
+  return get_tpu_env_value('MEGASCALE_COORDINATOR_ADDRESS') is not None
+
 def is_multislice_gce_env():
-  return is_gce_env() and get_tpu_env_value('MEGASCALE_COORDINATOR_ADDRESS') is not None
+  return is_gce_env() and has_megascale_address()
 
 def is_gke_env():
   return os.environ.get("TPU_WORKER_HOSTNAMES", None) is not None
@@ -110,7 +113,10 @@ class MultisliceGceTpuCluster(clusters.ClusterEnv):
 
   @classmethod
   def get_coordinator_address(cls) -> str:
-    coordinator_address = get_tpu_env_value('MEGASCALE_COORDINATOR_ADDRESS')
+    if has_megascale_address():
+      coordinator_address = get_tpu_env_value('MEGASCALE_COORDINATOR_ADDRESS')
+    else:
+      coordinator_address = str(os.environ.get('TPU_WORKER_HOSTNAMES', None)).split(',')[0]
     coordinator_address = coordinator_address.split(':')[0]
 
     # The coordinator may not be up before the other hosts try to
@@ -136,14 +142,12 @@ class MultisliceGceTpuCluster(clusters.ClusterEnv):
 
   @classmethod
   def get_process_count(cls) -> int:
-    processes_per_slice = cls._get_process_count_per_slice()
-    num_slices = int(get_tpu_env_value('MEGASCALE_NUM_SLICES'))
-    return processes_per_slice * num_slices
+    return cls._get_process_count_per_slice() * cls._get_num_slices()
 
   @classmethod
   def get_process_id(cls) -> int:
     process_id_in_slice = cls._get_process_id_in_slice()
-    slice_id = int(get_tpu_env_value('MEGASCALE_SLICE_ID'))
+    slice_id = cls._get_slice_id()
     processes_per_slice = cls._get_process_count_per_slice()
     return process_id_in_slice + slice_id * processes_per_slice
 
@@ -156,12 +160,26 @@ class MultisliceGceTpuCluster(clusters.ClusterEnv):
     return len(get_gce_worker_endpoints())
 
   @staticmethod
+  def _get_slice_id() -> int:
+    if has_megascale_address():
+      return int(get_tpu_env_value('MEGASCALE_SLICE_ID'))
+    else:
+      return 0
+
+  @staticmethod
   def _get_process_id_in_slice() -> int:
     return int(get_metadata('agent-worker-number'))
 
+  @staticmethod
+  def _get_num_slices() -> int:
+    if has_megascale_address():
+      return int(get_tpu_env_value('MEGASCALE_NUM_SLICES'))
+    else:
+      return 1
+
 class GkeTpuCluster(MultisliceGceTpuCluster):
   # This class handles both single and multislice GKE as the environment
-  # variables are set the same in both cases.
+  # variables are set similarly in both cases.
   @classmethod
   def is_env_present(cls) -> bool:
     return running_in_cloud_tpu_vm and is_gke_env()
