@@ -32,20 +32,24 @@ config.parse_flags_with_absl()
 Array = jnp.ndarray
 
 def sdpa_train(query: Array,
-            key: Array,
-            value: Array,
-            grad: Array,
-            bias: Optional[Array] = None,
-            mask: Optional[Array] = None,
-            scale: float = 0.5,
-            is_causal_mask: bool = False,
-            dropout_rate: float = 0.1) -> Array:
+               key: Array,
+               value: Array,
+               grad: Array,
+               bias: Optional[Array] = None,
+               mask: Optional[Array] = None,
+               scale: float = 0.5,
+               is_causal_mask: bool = False,
+               is_bnth: bool = False,
+               dropout_rate: float = 0.1) -> Array:
   if mask is not None:
     # convert bool mask to dtype mask
     mask = mask.astype(query.dtype)
   out, sdpa_vjp = jax.vjp(
-    partial(dot_product_attention, scale=scale, is_causal_mask=is_causal_mask, dropout_rate=dropout_rate, is_training=True),
-    query, key, value, bias, mask)
+      partial(dot_product_attention, scale=scale, is_causal_mask=is_causal_mask,
+              dropout_rate=dropout_rate,
+              qkv_layout='BNTH' if is_bnth else 'BTNH',
+              is_training=True),
+      query, key, value, bias, mask)
   query_grad, key_grad, value_grad, _, _ = sdpa_vjp(grad)
   return out, (query_grad, key_grad, value_grad)
 
@@ -270,6 +274,33 @@ class DotProductAttentionTest(jtu.JaxTestCase):
       query = jnp.empty((4, sql_q, 4, head_dim))
       key = jnp.empty((4, sql_v, 4, head_dim))
       self.assertEqual(check_is_flash_attention(query, key, cudnn_version, has_bias, is_training), v)
+
+  def test_layouts(self):
+    dtype = 'bfloat16'
+    B, T, N, H = 4, 1024, 8, 128
+    S = T
+    k0, k1, k2, k3 = jax.random.split(jax.random.key(123), 4)
+    query = jax.random.normal(k0, (B, T, N, H), dtype=dtype)
+    key = jax.random.normal(k1, (B, S, N, H), dtype=dtype)
+    value = jax.random.normal(k2, (B, S, N, H), dtype=dtype)
+    grad = jax.random.normal(k3, (B, T, N, H), dtype=dtype)
+
+    btnh_fn = jax.jit(partial(sdpa_train_ref, scale=.5, is_causal_mask=True,
+                              dropout_rate=0.0))
+    out_ref, (dq_ref, dk_ref, dv_ref) = btnh_fn(query, key, value, grad)
+
+    def _cvt(x):
+      return jnp.einsum('BTNH->BNTH', x)
+    def _cvt_back(x):
+      return jnp.einsum('BNTH->BTNH', x)
+    bnth_fn = jax.jit(partial(sdpa_train, scale=.5, is_causal_mask=True,
+                              is_bnth=True, dropout_rate=0.0))
+    out, (dq, dk, dv) = bnth_fn(_cvt(query), _cvt(key), _cvt(value), _cvt(grad))
+
+    self.assertArraysAllClose(out_ref, _cvt_back(out))
+    self.assertArraysAllClose(dq_ref, _cvt_back(dq))
+    self.assertArraysAllClose(dk_ref, _cvt_back(dk))
+    self.assertArraysAllClose(dv_ref, _cvt_back(dv))
 
 if __name__ == '__main__':
   absltest.main(testLoader=jtu.JaxTestLoader())
