@@ -185,7 +185,6 @@ class DLPackTest(jtu.JaxTestCase):
     shape=all_shapes,
     dtype=numpy_dtypes,
   )
-  @unittest.skipIf(numpy_version < (1, 23, 0), "Requires numpy 1.23 or newer")
   @jtu.run_on_devices("cpu") # NumPy only accepts cpu DLPacks
   def testJaxToNumpy(self, shape, dtype):
     rng = jtu.rand_default(self.rng())

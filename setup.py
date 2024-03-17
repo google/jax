@@ -74,7 +74,7 @@ setup(
     python_requires='>=3.9',
     install_requires=[
         'ml_dtypes>=0.2.0',
-        'numpy>=1.22',
+        'numpy>=1.23',
         "numpy>=1.23.2; python_version>='3.11'",
         "numpy>=1.26.0; python_version>='3.12'",
         'opt_einsum',

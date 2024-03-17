@@ -63,7 +63,7 @@ setup(
     install_requires=[
         'scipy>=1.9',
         "scipy>=1.11.1; python_version>='3.12'",
-        'numpy>=1.22',
+        'numpy>=1.23',
         'ml_dtypes>=0.2.0',
     ],
     extras_require={

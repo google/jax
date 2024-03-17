@@ -9,6 +9,8 @@ Remember to align the itemized text with the first line of an item within a list
 ## jax 0.4.26
 
 * Deprecations
+  * JAX now requires NumPy 1.23 or newer as per the
+    [deprecation policy](https://jax.readthedocs.io/en/latest/deprecation.html).
   * {func}`jax.tree_map` is deprecated; use `jax.tree.map` instead, or for backward
     compatibility with older JAX versions, use {func}`jax.tree_util.tree_map`.
   * The `jax.experimental.maps` module and `jax.experimental.maps.xmap` are
@@ -18,6 +20,10 @@ Remember to align the itemized text with the first line of an item within a list
     that cannot be converted to a JAX array now results in an exception.
 
 ## jaxlib 0.4.26
+
+* Deprecations:
+  * jaxlib now requires NumPy 1.23 or newer as per the
+    [deprecation policy](https://jax.readthedocs.io/en/latest/deprecation.html).
 
 ## jax 0.4.25 (Feb 26, 2024)
 

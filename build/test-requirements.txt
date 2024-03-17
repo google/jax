@@ -4,7 +4,7 @@ cloudpickle
 colorama>=0.4.4
 flatbuffers
 hypothesis
-numpy>=1.22
+numpy>=1.23
 pillow>=9.1.0
 portpicker
 pytest-xdist
