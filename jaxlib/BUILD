@@ -21,6 +21,7 @@ load(
     "pybind_extension",
     "pytype_library",
 )
+load("@xla//xla/tsl:tsl.bzl", "if_hermetic_cuda_libs")
 
 licenses(["notice"])
 
@@ -212,7 +213,7 @@ pybind_extension(
         "@xla//xla/tsl/cuda:cublas",
         "@xla//xla/tsl/cuda:cudart",
         "@xla//xla/tsl/python/lib/core:numpy",
-    ],
+    ] + if_hermetic_cuda_libs(["@cuda_cudart//:cuda_driver"]),
 )
 
 pybind_extension(
