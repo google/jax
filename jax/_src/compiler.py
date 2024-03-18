@@ -330,7 +330,8 @@ def compile_or_get_cached(
       # Host callbacks are currently baked into the HLO module so we cant share
       # them.
       and len(host_callbacks) == 0
-      and _total_graph_constant_size(computation.operation) <= config.share_binary_between_hosts_size_threshold
+      and (config.share_binary_between_hosts_size_threshold > 0 and 
+           _total_graph_constant_size(computation.operation) <= config.share_binary_between_hosts_size_threshold)
   ):
     return _compile_and_share_module(
         backend,
