@@ -23,6 +23,7 @@ load(
     "jax_internal_export_back_compat_test_util_visibility",
     "jax_internal_packages",
     "jax_internal_test_harnesses_visibility",
+    "jax_layouts_internal_users",
     "jax_test_util_visibility",
     "jax_visibility",
     "mosaic_internal_users",
@@ -112,6 +113,13 @@ package_group(
     packages = [
         "//...",
     ] + pallas_tpu_internal_users,
+)
+
+package_group(
+    name = "jax_layouts_users",
+    packages = [
+        "//...",
+    ] + jax_layouts_internal_users,
 )
 
 # JAX-private test utilities.
@@ -720,6 +728,9 @@ pytype_strict_library(
 pytype_strict_library(
     name = "layout",
     srcs = ["_src/layout.py"],
+    visibility = [
+        ":jax_layouts_users",
+    ],
     deps = [
         ":util",
         ":xla_bridge",
