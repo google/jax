@@ -25,6 +25,7 @@ import jax
 from jax import tree_util
 from jax import flatten_util
 from jax._src import test_util as jtu
+from jax._src.lib import xla_extension_version
 from jax._src.tree_util import prefix_errors, flatten_one_level
 import jax.numpy as jnp
 
@@ -761,6 +762,12 @@ class TreeTest(jtu.JaxTestCase):
   def testNamedTupleRegisteredWithoutKeysIsntTreatedAsLeaf(self):
     leaves, _ = tree_util.tree_flatten_with_path(ATuple2(1, 'hi'))
     self.assertLen(leaves, 1)
+
+  @unittest.skipIf(xla_extension_version < 147,
+                   'Test requires xla_extension_version >= 147')
+  def testTreeMapPrefixNone(self):
+    with self.assertRaisesRegex(ValueError, "must also be a None"):
+      tree_util.tree_map(lambda x: x, None, 3.0)
 
 
 class StaticTest(parameterized.TestCase):
