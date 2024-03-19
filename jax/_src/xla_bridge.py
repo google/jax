@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from __future__ import annotations
 
+import atexit
 from collections.abc import Mapping
 import dataclasses
 from functools import lru_cache, partial
@@ -244,6 +245,8 @@ def make_cpu_client() -> xla_client.Client:
       )
     if _CPU_ENABLE_MPI_COLLECTIVES.value:
       collectives = xla_client._xla.make_mpi_collectives()  # type: ignore
+      collectives.Init()
+      atexit.register(collectives.Finalize)
     return xla_client.make_cpu_client(  # type: ignore
       distributed_client=distributed.global_state.client,
       node_id=distributed.global_state.process_id,
