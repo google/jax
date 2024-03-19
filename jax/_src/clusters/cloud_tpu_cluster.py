@@ -112,7 +112,9 @@ class BaseTpuCluster(clusters.ClusterEnv):
     # communicate with it. We check for its existence with retries.
     coordinator_found = False
     lookup_attempt = 1
-    max_coordinator_lookups = 50
+    coordinator_timeout_seconds = int(os.environ.get("JAX_DISTRIBUTED_COORDINATOR_TIMEOUT", 300))
+    coordinator_retry_seconds = 5
+    max_coordinator_lookups = max(1, coordinator_timeout_seconds // coordinator_retry_seconds)
     while not coordinator_found and lookup_attempt <= max_coordinator_lookups:
       try:
         ip_address = socket.gethostbyname(coordinator_address)
@@ -120,7 +122,7 @@ class BaseTpuCluster(clusters.ClusterEnv):
       except socket.gaierror:
         print(f"Failed to recognize coordinator address {coordinator_address} on attempt {lookup_attempt}, retrying...")
         lookup_attempt += 1
-        time.sleep(5)
+        time.sleep(coordinator_retry_seconds)
     if not coordinator_found:
       raise RuntimeError(f"Failed to recognize coordinator address {coordinator_address}")
 
