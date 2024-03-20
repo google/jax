@@ -42,14 +42,29 @@ class ClusterEnv:
                                            coordinator_address: str | None,
                                            num_processes: int | None,
                                            process_id: int | None,
-                                           local_device_ids: Sequence[int] | None
+                                           local_device_ids: Sequence[int] | None,
+                                           spec_detection_method: str | None,
                                           ) -> tuple[str | None, int | None, int | None,
                                                      Sequence[int] | None]:
+
     if all(p is not None for p in (coordinator_address, num_processes,
       process_id, local_device_ids)):
       return (coordinator_address, num_processes, process_id,
               local_device_ids)
-    env = next((env for env in cls._cluster_types if env.is_env_present()), None)
+    
+    # First, we check the spec detection method because it will ignore submitted values
+    # If if succeeds.
+    if spec_detection_method == "mpi4py":
+      # We directly select the Mpi4pyCluster environment with an override here to opt in:
+      from jax._src.clusters.mpi4py_cluster import Mpi4pyCluster
+      env = Mpi4pyCluster if Mpi4pyCluster.is_env_present(opt_in=True) else None
+    else:
+      env = next((env for env in cls._cluster_types if env.is_env_present()), None)
+
+    # Above: I have wrapped the env selection in a conditional to go through
+    # opt-in methods first (currently only mpi4py) but to check all possible options 
+    # otherwise.  Passing no spec_detection_method results in the default, original behavior.
+
     if env:
       logger.debug('Initializing distributed JAX environment via %s', env.__name__)
       if coordinator_address is None:

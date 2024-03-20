@@ -41,15 +41,19 @@ class State:
                  num_processes: int | None = None,
                  process_id: int | None = None,
                  local_device_ids: int | Sequence[int] | None = None,
+                 spec_detection_method: str | None = None,
                  initialization_timeout: int = 300):
     coordinator_address = (coordinator_address or
                            os.environ.get('JAX_COORDINATOR_ADDRESS', None))
     if isinstance(local_device_ids, int):
       local_device_ids = [local_device_ids]
 
+    if spec_detection_method is not None and spec_detection_method not in ["mpi4py"]:
+      raise ValueError("spec_detection method should only be None, or \"mpi4py\".")
+
     (coordinator_address, num_processes, process_id, local_device_ids) = (
         clusters.ClusterEnv.auto_detect_unset_distributed_params(
-            coordinator_address, num_processes, process_id, local_device_ids
+            coordinator_address, num_processes, process_id, local_device_ids, spec_detection_method
         )
     )
 
@@ -69,6 +73,18 @@ class State:
       config.update("jax_rocm_visible_devices", visible_devices)
 
     self.process_id = process_id
+
+    # Emit a warning about PROXY variables if they are in the user's env:
+    proxy_vars = [ key for key in os.environ.keys() if 'proxy' in key.lower()]
+
+    if len(proxy_vars) > 0:
+      vars = " ".join(proxy_vars) + ". "
+      warning = (
+        f'JAX detected proxy variable(s) in the environment as distributed setup: {vars}'
+        'On some systems, this may cause a hang of distributed.initialize and '
+        'you may need to unset these ENV variable(s)'
+      )
+      logger.warning(warning)
 
     if process_id == 0:
       if self.service is not None:
@@ -114,6 +130,7 @@ def initialize(coordinator_address: str | None = None,
                num_processes: int | None = None,
                process_id: int | None = None,
                local_device_ids: int | Sequence[int] | None = None,
+               spec_detect_method: str | None = None,
                initialization_timeout: int = 300):
   """Initializes the JAX distributed system.
 
@@ -133,6 +150,11 @@ def initialize(coordinator_address: str | None = None,
   Otherwise, you must provide the ``coordinator_address``,
   ``num_processes``, and ``process_id`` arguments to :func:`~jax.distributed.initialize`.
 
+  Please note: on some systems, particularly HPC clusters that only access external networks
+  through proxy variables such as HTTP_PROXY, HTTPS_PROXY, etc., the call to
+  :func`~jax.distributed.initialize` may timeout.  You may need to unset these variables
+  prior to application launch.
+
   Args:
     coordinator_address: the IP address of process `0` and a port on which that
       process should launch a coordinator service. The choice of
@@ -149,6 +171,11 @@ def initialize(coordinator_address: str | None = None,
     local_device_ids: Restricts the visible devices of the current process to ``local_device_ids``.
       If ``None``, defaults to all local devices being visible to the process except when processes
       are launched via Slurm and Open MPI on GPUs. In that case, it will default to a single device per process.
+    spec_detect_method: An optional string to attempt to autodetect the configuration of the distributed
+      run.  Available options are "mpipy" only at the moment, though more options may be available in the future.  
+      Note that "mpi4py" method requires you to have a working `mpi4py` install in your environment, 
+      and launch the applicatoin with an MPI-compatible job launcher such as `mpiexec`.  
+      Legacy auto-detect options (OMPI, Slurm) remain enabled.
     initialization_timeout: Time period (in seconds) for which connection will
       be retried. If the initialization takes more than the timeout specified,
       the initialization will error. Defaults to 300 secs i.e. 5 mins.
@@ -174,7 +201,7 @@ def initialize(coordinator_address: str | None = None,
     raise RuntimeError("jax.distributed.initialize() must be called before "
                         "any JAX computations are executed.")
   global_state.initialize(coordinator_address, num_processes, process_id,
-                          local_device_ids, initialization_timeout)
+                          local_device_ids, spec_detect_method, initialization_timeout)
   atexit.register(shutdown)
 
 
