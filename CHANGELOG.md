@@ -378,6 +378,9 @@ Remember to align the itemized text with the first line of an item within a list
   * Devices passed to `jax.sharding.Mesh` should be hashable. This specifically
     applies to mock devices or user created devices. `jax.devices()` are
     already hashable.
+  * The host_callback mechanism now uses custom calls on GPUs by default.
+    You can still use `--jax_host_callback_use_outfeed` to revert to the
+    previous outfeed implementation mechanism.
 
 * Breaking changes:
   * jax2tf now uses native serialization by default. See

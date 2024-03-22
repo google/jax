@@ -1141,6 +1141,7 @@ jax_test(
     main = "host_callback_test.py",
     shard_count = {
         "gpu": 5,
+        "tpu": 5,
     },
     deps = [
         "//jax:experimental",
