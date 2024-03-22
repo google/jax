@@ -12,9 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
-
+from jax._src.lib import xla_client as xc
+from jax._src.sharding import Sharding
 
 def arange(start, /, stop=None, step=1, *, dtype=None, device=None):
   return jax.device_put(jnp.arange(start, stop, step, dtype=dtype), device=device)
@@ -31,8 +34,8 @@ def empty_like(x, /, *, dtype=None, device=None):
 def eye(n_rows, n_cols=None, /, *, k=0, dtype=None, device=None):
   return jax.device_put(jnp.eye(n_rows, n_cols, k=k, dtype=dtype), device=device)
 
-def from_dlpack(x, /):
-  return jnp.from_dlpack(x)
+def from_dlpack(x, /, *, device: xc.Device | Sharding | None = None, copy: bool | None = None):
+  return jnp.from_dlpack(x, device=device, copy=copy)
 
 def full(shape, fill_value, *, dtype=None, device=None):
   return jax.device_put(jnp.full(shape, fill_value, dtype=dtype), device=device)
