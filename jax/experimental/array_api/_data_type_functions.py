@@ -12,13 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import annotations
 
+import builtins
 import functools
 from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
 
+from jax._src.lib import xla_client as xc
+from jax._src.sharding import Sharding
+from jax._src import dtypes as _dtypes
 from jax.experimental.array_api._dtypes import (
   bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64,
   float32, float64, complex64, complex128
@@ -124,8 +129,19 @@ def _promote_types(t1, t2):
     raise ValueError("No promotion path for {t1} & {t2}")
 
 
-def astype(x, dtype, /, *, copy=True):
-  return jnp.array(x, dtype=dtype, copy=copy)
+def astype(x, dtype, /, *, copy: builtins.bool = True, device: xc.Device | Sharding | None = None):
+  src_dtype = x.dtype if hasattr(x, "dtype") else _dtypes.dtype(x)
+  if (
+    src_dtype is not None
+    and _dtypes.isdtype(src_dtype, "complex floating")
+    and _dtypes.isdtype(dtype, ("integral", "real floating"))
+  ):
+    raise ValueError(
+      "Casting from complex to non-complex dtypes is not permitted. Please "
+      "first use jnp.real or jnp.imag to take the real/imaginary component of "
+      "your input."
+    )
+  return jnp.astype(x, dtype, copy=copy, device=device)
 
 
 def can_cast(from_, to, /):
