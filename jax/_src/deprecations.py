@@ -47,7 +47,7 @@ def deprecation_getattr(module, deprecations):
   def getattr(name):
     if name in deprecations:
       message, fn = deprecations[name]
-      if fn is None:
+      if fn is None:  # Is the deprecation accelerated?
         raise AttributeError(message)
       warnings.warn(message, DeprecationWarning, stacklevel=2)
       return fn
@@ -57,11 +57,18 @@ def deprecation_getattr(module, deprecations):
 
 
 def accelerate_module_deprecation(module: ModuleType, name: str) -> None:
-  """Accelerate the deprecation of a module-level attribute"""
+  """Accelerate the deprecation of a module-level attribute.
+
+  Raises an AttributeError instead of a DeprecationWarning upon attribute access.
+  Used in Google-internal code to implement faster deprecation.
+  """
   message, _ = module._deprecations[name]
   module._deprecations[name] = (message, None)
 
 
+# Maps (module, attr) to False if the attribute is deprecated and should emit
+# a DeprecationWarning and to True if it is deprecated and should raise an
+# AttributeError.
 _registered_deprecations: dict[tuple[str, str], bool] = {}
 
 
