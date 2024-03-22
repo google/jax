@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from jax._src import shard_alike
 import builtins
 from collections.abc import Sequence
 import enum
@@ -61,10 +62,12 @@ from jax._src.lax.utils import (
   standard_multi_result_abstract_eval, standard_named_shape_rule,
   standard_primitive)
 from jax._src import xla_bridge
+from jax._src import pjit
 from jax._src.lib import xla_client
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import chlo
 from jax._src.lib.mlir.dialects import hlo
+
 from jax._src.sharding_impls import PmapSharding
 from jax._src.typing import Array, ArrayLike, DuckTypedArray, DTypeLike, Shape
 from jax._src.util import (cache, safe_zip, safe_map, canonicalize_axis,
@@ -1256,7 +1259,11 @@ def full(shape: Shape, fill_value: ArrayLike, dtype: DTypeLike | None = None, *,
     shard = broadcast(fill_value, broadcast_shape)
     return array.make_array_from_callback(shape, sharding, lambda _: shard)
 
-  return broadcast(fill_value, shape)
+  result = broadcast(fill_value, shape)
+  if sharding is not None:
+    print('Running with sharding constraint!!!')
+    result = pjit.with_sharding_constraint(result, sharding)
+  return result
 
 
 
@@ -1415,19 +1422,18 @@ def full_like(x: ArrayLike | DuckTypedArray,
   if dtypes.issubdtype(dtype, dtypes.extended):
     return dtype._rules.full(fill_shape, fill_value, dtype)  # type: ignore[union-attr]
 
+  # NB: consider reusng x.sharding for mismatched shapes
+  # if x is replicated or single device.
   use_x_sharding = (
-      sharding is None and
-      isinstance(x, array.ArrayImpl) and
-      not weak_type and x._committed and
-      # NB: consider reusng x.sharding for mismatched shapes
-      # if x is replicated or single device.
-      fill_shape == x.shape)
-  if use_x_sharding:
-    assert isinstance(x, array.ArrayImpl)   # makes pytype happy.
+      sharding is None and not weak_type and fill_shape == np.shape(x))
+
+  if use_x_sharding and isinstance(x, array.ArrayImpl) and x._committed:
     # TODO(yashkatariya): Use shard_alike in tracing_mode once it is supported.
     sharding = x.sharding
   val = full(fill_shape, _convert_element_type(fill_value, dtype, weak_type),
              sharding=sharding)
+  if use_x_sharding and isinstance(x, pe.DynamicJaxprTracer):
+   val = shard_alike.shard_alike(val, x)[0]
   return val
 
 

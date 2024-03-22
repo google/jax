@@ -294,6 +294,13 @@ class MultiDeviceTest(jtu.JaxTestCase):
     self.assertEqual(y.sharding.device_set, {jax.devices()[1]})
 
 
+  def test_lax_full_like_jitted_preserves_sharding(self):
+    devices = self.get_devices()
+    x = jax.device_put(jnp.ones((100, 100)), devices[1])
+    y = jax.jit(lax.full_like)(x, 1)
+    self.assertEqual(y.sharding, x.sharding)
+    self.assertEqual(y.sharding.device_set, {jax.devices()[1]})
+
   def test_lax_full_like_custom_shape_sharded(self):
     devices = [self.get_devices()]
     mesh = Mesh(devices, axis_names=('i', 'j'))
