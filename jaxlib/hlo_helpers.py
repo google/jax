@@ -22,6 +22,7 @@ from typing import Callable, Union
 
 import jaxlib.mlir.ir as ir
 import jaxlib.mlir.dialects.stablehlo as hlo
+import jaxlib.mlir.dialects.mhlo as mhlo
 import numpy as np
 
 
@@ -192,8 +193,8 @@ def custom_call(
     # use an unregistered attribute mhlo.backend_config to hold the DictAttr.
     # We must also use api_version=1 to ensure that mhlo.backend_config is
     # handled properly.
-    backend_config_attr = ir.StringAttr.get("")
-    api_version = 1
+    backend_config_attr = ir.DictAttr.get(backend_config)
+    api_version = 4
   else:
     raise ValueError("custom_call backend_config unexpected type: " + str(backend_config))
   attributes = dict(
@@ -249,9 +250,10 @@ def custom_call(
             type=ir.IndexType.get()) for l in result_layouts
     ])
 
-  op = hlo.CustomCallOp.build_generic(results=result_types, operands=operands,
-                                      attributes=attributes)
   if isinstance(backend_config, dict):
-    backend_config_attr = ir.DictAttr.get(backend_config)
-    op.operation.attributes["mhlo.backend_config"] = backend_config_attr
+    op = mhlo.CustomCallOp.build_generic(
+        results=result_types, operands=operands, attributes=attributes)
+  else:
+    op = hlo.CustomCallOp.build_generic(
+        results=result_types, operands=operands, attributes=attributes)
   return op
