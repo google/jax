@@ -453,7 +453,7 @@ class BatchTrace(Trace):
     vals_out = call_primitive.bind(f_, *segment_lens, *vals, **params)
     vals_out, dims_out = resolve_ragged_axes(vals_out, dims_out())
     src = source_info_util.current()
-    return [BatchTracer(self, v, d, src) for v, d in zip(vals_out, dims_out)]
+    return [BatchTracer(self, v, d, src) for v, d in zip(vals_out, dims_out())]
 
   def post_process_call(self, call_primitive, out_tracers, params):
     vals, dims, srcs = unzip3((t.val, t.batch_dim, t.source_info)
