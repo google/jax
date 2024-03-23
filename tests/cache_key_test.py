@@ -203,26 +203,27 @@ class CacheKeyTest(jtu.JaxTestCase):
     orig_xla_flags = os.getenv("XLA_FLAGS")
     orig_argv = sys.argv
     try:
-      os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+      os.environ["XLA_FLAGS"] = "--xla_gpu_gemm_and_conv_autotune_level=0"
       key1 = cache_key.get(computation, devices, compile_options, backend)
-      os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=1"
+      os.environ["XLA_FLAGS"] = "--xla_gpu_gemm_and_conv_autotune_level=1"
       key2 = cache_key.get(computation, devices, compile_options, backend)
       self.assertNotEqual(key1, key2)
 
-      os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+      os.environ["XLA_FLAGS"] = "--xla_gpu_gemm_and_conv_autotune_level=0"
       key3 = cache_key.get(computation, devices, compile_options, backend)
       self.assertEqual(key1, key3)
 
       # Test flag in _xla_flags_to_exclude_from_cache_key
       os.environ["XLA_FLAGS"] = (
-          "--xla_gpu_autotune_level=0 --xla_force_host_platform_device_count=8"
+          "--xla_gpu_gemm_and_conv_autotune_level=0"
+          " --xla_force_host_platform_device_count=8"
       )
       key4 = cache_key.get(computation, devices, compile_options, backend)
       self.assertEqual(key1, key4)
 
       # Test flags given on command line
       del os.environ["XLA_FLAGS"]
-      sys.argv.append("--xla_gpu_autotune_level=0")
+      sys.argv.append("--xla_gpu_gemm_and_conv_autotune_level=0")
       key5 = cache_key.get(computation, devices, compile_options, backend)
       self.assertEqual(key1, key5)
       sys.argv.append("--xla_force_host_platform_device_count=8")
