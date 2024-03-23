@@ -42,25 +42,56 @@ _cache: CacheInterface | None = None
 
 _cache_initialized: bool = False
 
+_cache_checked: bool = False
+
 _cache_used: bool = False
 
-# Mutex to protect _cache_initialized and _cache_used.
+# Mutex to protect _cache_initialized, _cache_checked and _cache_used.
 _cache_initialized_mutex = threading.Lock()
 
 
-def set_once_cache_used(f) -> None:
-  """One-time setting of _cache_used.
-
-  If _cache_used is False, set it to True and execute the provided function
-  f. No action if _cache_used is True. This provides a mechanism to execute f
-  once per task. Note that reset_cache() will reset _cache_used also.
+def is_cache_used(backend: xla_client.Client) -> bool:
+  """Check if cache is used and report adoption metrics one-time per task.
+  The cache may be initialized during the first call to this function.
   """
-  global _cache_used
+  # Return _cache_used directly if _cache_checked is True. If _cache_checked is
+  # False, set it to True, report metrics and return if cache is used. This
+  # provides a mechanism to report the metrics once per task. Note that
+  # reset_cache() will reset _cache_checked and _cache_used also.
+  global _cache_checked, _cache_used
   with _cache_initialized_mutex:
-    if not _cache_used:
-      _cache_used = True
-      if f is not None:
-        f()
+    if _cache_checked:
+      return _cache_used
+
+  cache = _get_cache()
+
+  with _cache_initialized_mutex:
+    if not _cache_checked:
+      _cache_checked = True
+
+      # Persistent compilation cache only implemented on TPU and GPU and the
+      # backend that supports serialization of executables.
+      # TODO(skye): add warning when initializing cache on unsupported default
+      # platform
+      supported_platforms = ["tpu", "gpu"]
+      # TODO(b/323256224): Add back support for CPU together with extra fields
+      # in a cache key with underlying hardware features (xla_extension_version
+      # >= 230).
+      is_platform_supported = backend.platform in supported_platforms
+      is_serialization_supported = getattr(
+          backend, "supports_executable_serialization", True
+      )
+
+      if not _is_cache_enabled():
+        monitoring.record_event('/jax/compilation_cache/task_disabled_cache')
+      elif (
+          cache is not None
+          and is_platform_supported
+          and is_serialization_supported
+      ):
+        monitoring.record_event('/jax/compilation_cache/tasks_using_cache')
+        _cache_used = True
+      return _cache_used
 
 
 def get_file_cache(path: str) -> tuple[CacheInterface, str] | None:
@@ -242,12 +273,14 @@ def reset_cache() -> None:
   """Get back to pristine, uninitialized state."""
   global _cache
   global _cache_initialized
+  global _cache_checked
   global _cache_used
   logger.info("Resetting cache at %s.",
                _cache._path if _cache is not None else "<empty>")
   _cache = None
   with _cache_initialized_mutex:
     _cache_initialized = False
+    _cache_checked = False
     _cache_used = False
 
 

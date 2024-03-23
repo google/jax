@@ -249,25 +249,12 @@ def compile_or_get_cached(
   if dumped_to := mlir.dump_module_to_file(computation, "compile"):
     logging.info("Dumped the module to %s.", dumped_to)
 
-  # Persistent compilation cache only implemented on TPU and GPU and the backend
-  # that supports serialization of executables.
-  # TODO(skye): add warning when initializing cache on unsupported default platform
-  supported_platforms = ["tpu", "gpu"]
-  # TODO(b/323256224): Add back support for CPU together with extra fields in a
-  # cache key with underlying hardware features (xla_extension_version >= 230).
-  use_compilation_cache = (
-      config.enable_compilation_cache.value
-      and getattr(backend, "supports_executable_serialization", True)
-      and backend.platform in supported_platforms
-  )
+  use_compilation_cache = compilation_cache.is_cache_used(backend)
 
   if not use_compilation_cache:
     return backend_compile(backend, computation, compile_options,
                            host_callbacks)
 
-  compilation_cache.set_once_cache_used(
-      lambda: monitoring.record_event(
-          "/jax/compilation_cache/tasks_using_cache"))
   monitoring.record_event('/jax/compilation_cache/compile_requests_use_cache')
 
   try:
