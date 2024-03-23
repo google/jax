@@ -145,6 +145,17 @@ class NNFunctionsTest(jtu.JaxTestCase):
       gelu_reference, partial(nn.gelu, approximate=approximate), args_maker,
       check_dtypes=False, tol=1e-3 if approximate else None)
 
+  @parameterized.parameters(False, True)
+  def testGeluGradient(self, approximate):
+    x = jnp.array([5.5, 1.3, -4.2, 0.9, 0.0])
+    jtu.check_grads(
+        partial(nn.gelu, approximate=approximate),
+        (x,),
+        order=2,
+        atol=3e-3,
+        rtol=(0.015 if approximate else 0.002),
+    )
+
   @parameterized.parameters(*itertools.product(
       (jnp.float32, jnp.bfloat16, jnp.float16),
       (partial(nn.gelu, approximate=False),
@@ -279,7 +290,7 @@ class NNFunctionsTest(jtu.JaxTestCase):
     self.assertAllClose(actual, expected, check_dtypes=False)
 
   def testTanhExists(self):
-    nn.tanh  # doesn't crash
+    _ = nn.tanh  # doesn't crash
 
   def testCustomJVPLeak(self):
     # https://github.com/google/jax/issues/8171

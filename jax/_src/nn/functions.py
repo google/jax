@@ -18,11 +18,9 @@ from __future__ import annotations
 
 from functools import partial
 import operator
-import numpy as np
-from typing import Any
+from typing import Any, Tuple
 
 import jax
-import jax.numpy as jnp
 from jax import custom_jvp
 from jax import lax
 from jax._src import config
@@ -31,8 +29,10 @@ from jax._src import dtypes
 from jax._src import util
 from jax._src.core import AxisName
 from jax._src.numpy import util as numpy_util
-from jax._src.typing import Array, ArrayLike
 from jax._src.ops.special import logsumexp as _logsumexp
+from jax._src.typing import Array, ArrayLike
+import jax.numpy as jnp
+import numpy as np
 
 
 # activations
@@ -357,6 +357,36 @@ def selu(x: ArrayLike) -> Array:
   scale = 1.0507009873554804934193349852946
   return scale * elu(x, alpha)
 
+
+@jax.custom_jvp
+def _approximate_normal_cdf_for_gelu(x_arr: Array) -> Array:
+  r"""Approximate version of normal CDF for use in GELU.
+
+  Approximates the normal distribution CDF for use in GELU. This function has a
+  custom gradient since the approximation's computed gradient is complicated and
+  slow to execute, and the real gradient of the function is much simpler.
+
+  Args:
+    x_arr: Input tensor.
+
+  Returns: Approximate version of erf(x).
+  """
+  sqrt_2_over_pi = np.sqrt(2 / np.pi).astype(x_arr.dtype)
+  cdf = 0.5 * (1.0 + jnp.tanh(sqrt_2_over_pi * (x_arr + 0.044715 * (x_arr**3))))
+  return cdf
+
+
+@_approximate_normal_cdf_for_gelu.defjvp
+def _approximate_normal_cdf_for_gelu_jvp(
+    primals: Tuple[Array], tangents: Tuple[Array]
+) -> Tuple[Array, Array]:
+  (x_arr,) = primals
+  (x_arr_dot,) = tangents
+  sqrt_one_over_two_pi = np.sqrt(0.5 / np.pi).astype(x_arr.dtype)
+  deriv = sqrt_one_over_two_pi * jnp.exp(-(x_arr**2) * 0.5) * x_arr_dot
+  return _approximate_normal_cdf_for_gelu(x_arr), deriv
+
+
 # TODO(phawkins): this jit was found to change numerics in a test. Debug this.
 # @partial(jax.jit, static_argnames=("approximate",))
 def gelu(x: ArrayLike, approximate: bool = True) -> Array:
@@ -384,8 +414,7 @@ def gelu(x: ArrayLike, approximate: bool = True) -> Array:
   [x_arr] = numpy_util.promote_args_inexact("gelu", x)
 
   if approximate:
-    sqrt_2_over_pi = np.sqrt(2 / np.pi).astype(x_arr.dtype)
-    cdf = 0.5 * (1.0 + jnp.tanh(sqrt_2_over_pi * (x_arr + 0.044715 * (x_arr ** 3))))
+    cdf = _approximate_normal_cdf_for_gelu(x_arr)
     return x_arr * cdf
   else:
     sqrt_2 = np.sqrt(2).astype(x_arr.dtype)
@@ -469,7 +498,7 @@ def log_softmax(x: ArrayLike,
 
 
 # TODO(phawkins): this jit was found to change numerics in a test. Debug this.
-#@partial(jax.jit, static_argnames=("axis",))
+# @partial(jax.jit, static_argnames=("axis",))
 def softmax(x: ArrayLike,
             axis: int | tuple[int, ...] | None = -1,
             where: ArrayLike | None = None,
