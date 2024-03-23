@@ -440,8 +440,13 @@ safer route of not sending this fake result in case of errors. This means
 that the computation will hang, and no exception will be raised (but any
 exceptions in the callback functions will still appear in the logs).
 
-The current implementation uses the outfeed mechanism provided by XLA. The
-mechanism itself is quite primitive in the sense that a receiver must know
+Depending on the flag `--jax_host_callback_use_outfeed` the implementation
+uses either the XLA outfeed mechanism, or alternatively
+custom calls on CPU and GPU and Send/Recv On TPUs.
+Currently, outfeed is the default on GPUs.
+
+The outfeed mechanism itself is quite primitive in the sense that a receiver
+must know
 exactly the shape of each incoming packet, and how many packets are expected.
 This makes it hard to use for multiple kinds of data in the same computation,
 and it is practically impossible to use it under conditionals or in loops
@@ -556,8 +561,8 @@ _HOST_CALLBACK_OUTFEED = config.DEFINE_bool(
     config.bool_env('JAX_HOST_CALLBACK_OUTFEED', False),
     help=(
         'Use outfeed implementation for host_callback, even on CPU and GPU. '
-        'If false, use the CustomCall implementation. '
-        'Has no effect on TPU, since only the outfeed mechanism is implemented.'
+        'If false, use the CustomCall implementation on CPU and GPU, and '
+        'Send/Recv on TPUs.'
     )
 )
 
@@ -565,7 +570,8 @@ logger = logging.getLogger(__name__)
 
 
 def _use_outfeed(platform: str) -> bool:
-  return (platform in ("tpu", "gpu", "cuda", "rocm") or
+  # The default is outfeed only for GPUs.
+  return (platform in ("gpu", "cuda", "rocm") or
           _HOST_CALLBACK_OUTFEED.value)
 
 
@@ -1199,7 +1205,7 @@ def _outside_call_lowering(ctx: mlir.LoweringRuleContext,
       f"identity = {identity}")
   return list(results) + [next_token, next_itoken]
 
-mlir.register_lowering(outside_call_p, _outside_call_lowering, platform="cpu")
+mlir.register_lowering(outside_call_p, _outside_call_lowering)
 
 def _outside_call_run_callback(
     arrays, device, *,
