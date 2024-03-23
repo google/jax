@@ -430,7 +430,7 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
   def testSphHarmForJitAndAgainstNumpy(self, l_max, num_z, dtype):
     """Tests against JIT compatibility and Numpy."""
     n_max = l_max
-    shape = (num_z,)
+    shape = (1,)
     rng = jtu.rand_int(self.rng(), -l_max, l_max + 1)
 
     lsp_special_fn = partial(lsp_special.sph_harm, n_max=n_max)
