@@ -47,6 +47,10 @@ are instances of such transformations. Others are
 [`pmap`](#spmd-programming-with-pmap) for single-program multiple-data (SPMD)
 parallel programming of multiple accelerators, with more to come.
 
+**Note**: Try `shard_map` (a.k.a. `shmap`) - a new more flexible API that supersedes
+`jax.pmap`. Check out the `jax.experimental.shard_map`
+[JAX Enhancement Proposal (JEP) to learn more](https://jax.readthedocs.io/en/latest/jep/14273-shard-map.html).
+
 This is a research project, not an official Google product. Expect bugs and
 [sharp edges](https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html).
 Please help by trying it out, [reporting
@@ -99,7 +103,8 @@ notebooks](https://github.com/google/jax/tree/main/docs/notebooks).
 
 At its core, JAX is an extensible system for transforming numerical functions.
 Here are four transformations of primary interest: `grad`, `jit`, `vmap`, and
-`pmap`.
+`pmap` (Update: check out a note on `shard_map` - a new more flexible API that supersedes `pmap`
+- above, or simply read the [JEP document](https://jax.readthedocs.io/en/latest/jep/14273-shard-map.html)).
 
 ### Automatic differentiation with `grad`
 
