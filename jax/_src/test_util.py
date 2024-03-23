@@ -1005,10 +1005,14 @@ class JaxTestCase(parameterized.TestCase):
       self._original_config[key] = config._read(key)
       config.update(key, value)
 
+    # We use this formula to avoid including the integer suffix automatically
+    # appended by `parameterized` in the hash. This lets us avoid situations
+    # when adding test cases causes seed changes for existing ones.
+    test_name = getattr(self, self._testMethodName).__func__.__name__
     # We use the adler32 hash for two reasons.
     # a) it is deterministic run to run, unlike hash() which is randomized.
     # b) it returns values in int32 range, which RandomState requires.
-    self._rng = npr.RandomState(zlib.adler32(self._testMethodName.encode()))
+    self._rng = npr.RandomState(zlib.adler32(test_name.encode()))
 
   def tearDown(self):
     for key, value in self._original_config.items():
