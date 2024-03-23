@@ -1476,3 +1476,14 @@ filegroup(
         "//:__subpackages__",
     ],
 )
+
+jax_test(
+    name = "pjrt_gpu_plugin_test",
+    srcs = ["pjrt_gpu_plugin_test.py"],
+    args = ["--jax_platform_name=gpu_plugin"],
+    disable_backends = [
+        "tpu",
+        "cpu",
+    ],
+    deps = ["//learning/brain/tfrc/executor/next:gpu_api_static_initializer"],
+)
