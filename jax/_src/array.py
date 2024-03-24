@@ -61,14 +61,19 @@ def _get_device(a: ArrayImpl) -> Device:
 
 
 class Shard:
-  """A single data shard of an Array.
+  """A data shard of an ``ArrayImpl`` that a specific device has access to.
+
+  See `ArrayImpl` for more details.
+
+  It's fully defined by the ``device`` and the smart-indexing ``index`` into the
+  logical array.
 
   Attributes:
-    device : Which device this shard resides on.
-    index : The index into the global array of this shard.
+    device : The device this shard resides on.
+    index : The index into the global array associated to this shard.
     replica_id : Integer id indicating which replica of the global array this
-      shard is part of. Always 0 for fully sharded data
-      (i.e. when there’s only 1 replica).
+      shard is part of. Always 0 for fully sharded data (i.e. when there’s only
+      1 replica).
     data : The data of this shard. None if ``device`` is non-local.
   """
 
@@ -157,6 +162,40 @@ def _process_has_full_value_in_mcjax(s, shape):
 
 
 class ArrayImpl(basearray.Array):
+  """A jax.Array backed by on-device buffers across one or several processes.
+
+  An instance of this class describes how a logical Array is physically split
+  out (we use the term "sharded") across one or more devices (spanning one or
+  multiple processes).
+
+  - We use the term "logical array" because the array may not be fully
+    materialized anywhere (e.g. because it's too large, or it's not required).
+    Such array is described by its shape, dtype etc.
+
+  - The way this logical array is mapped to devices is better explained from one
+    device perspective (because it's a function): Each device has in its memory
+    a portion of the logical array. In practice, it can be described as some
+    numpy-like smart indexing (see the `Index` type) into the logical array.
+    The slice of the logical array that a given device has access to is called a
+    shard.
+
+  NOTE:
+    - The union of the data across all the devices is sufficient to reconstruct
+      the logical array content.
+    - The way the data is laid out into devices is not necessarily a partition:
+       - Several devices can have access to the same data/shard. In that case,
+         we say that some shards are replicated.
+       - When all devices has access to non-overlapping data, we say the data
+         is fully sharded.
+
+  In practice, the logical array being sharded over some N-dimensional array of
+  devices, the devices can be grouped into sets, such that each set of devices
+  contains a partition of the logical array. The number of sets is called the
+  number of replicas.
+
+  From within a jax process, one can only access the local shards, i.e. the
+  shards that resides on the devices associated to the process.
+  """
   # TODO(yashkatariya): Add __slots__ here.
 
   aval: core.ShapedArray
