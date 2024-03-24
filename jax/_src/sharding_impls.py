@@ -667,6 +667,22 @@ def _positional_sharding_to_xla_hlo_sharding(
 
 
 class PositionalSharding(XLACompatibleSharding):
+  """
+  A sharding strategy that arranges data based on device positions.
+
+  This strategy enables efficient data distribution across devices,
+  making it suitable for parallel processing on different hardware platforms.
+
+  Example:
+    >>> devices = [xc.Device("GPU", 0), xc.Device("GPU", 1)] # doctest: +SKIP
+    >>> sharding = PositionalSharding(devices) # doctest: +SKIP
+    >>> print(sharding.shape)  # Output: (2,) # doctest: +SKIP
+    >>> print(sharding.ndim)   # Output: 1 # doctest: +SKIP
+
+  Initialize a PositionalSharding instance with two GPU devices:
+    >>> devices = [xc.Device("GPU", 0), xc.Device("GPU", 1)] # doctest: +SKIP
+    >>> sharding = PositionalSharding(devices) # doctest: +SKIP
+  """
   _devices: tuple[xc.Device, ...]
   _memory_kind: str | None
   _ids: np.ndarray  # dtype DeviceIdSet
@@ -709,13 +725,64 @@ class PositionalSharding(XLACompatibleSharding):
     return f'{cls_name}({body}{mem}, shape={self.shape})'
 
   def reshape(self, *shape) -> PositionalSharding:
+    """
+    Returns a new PositionalSharding instance with a reshaped data layout.
+
+    Args:
+      *shape: New shape dimensions.
+
+    Returns:
+      PositionalSharding: A new PositionalSharding instance.
+
+    Example:
+      Reshape a PositionalSharding instance:
+        >>> new_sharding = sharding.reshape(2, 1) # doctest: +SKIP
+    """
     return self._remake(self._devices, self._ids.reshape(*shape))
 
   def transpose(self, *axes) -> PositionalSharding:
+    """
+    Create a new PositionalSharding instance with a transposed data layout.
+
+    Transposing a sharding instance involves rearranging the dimensions of the
+    data layout. This method allows you to change the order of dimensions for
+    efficient data processing or compatibility with other operations.
+
+    Args:
+      *axes: Axes permutation for the transpose operation as individual arguments.
+
+    Example:
+      Transpose a PositionalSharding instance, swapping the first and second dimensions:
+        >>> transposed_sharding = sharding.transpose(1, 0) # doctest: +SKIP
+
+    Returns:
+      PositionalSharding: A new PositionalSharding instance with the transposed data layout.
+    """
     return self._remake(self._devices, self._ids.transpose(*axes))
   T = property(transpose)
 
   def replicate(self, axis=None, keepdims=True) -> PositionalSharding:
+    """
+    Create a new PositionalSharding instance with replicated data along a specified axis.
+
+    Replicating a sharding instance involves creating additional copies of the
+    data to distribute it along a specific axis. This method allows you to replicate
+    the data within the sharding strategy, which can be useful for parallel
+    processing or data redundancy.
+
+    Args:
+      axis: The axis along which data replication is performed. If not specified, replication
+        is applied across all dimensions.
+      keepdims: Whether to keep the dimensions of the sharding consistent or not. When set to
+        True, the replicated dimensions are retained; otherwise, they are collapsed.
+
+    Example:
+      Replicate a PositionalSharding instance along the first axis while keeping dimensions:
+        >>> replicated_sharding = sharding.replicate(axis=0, keepdims=True) # doctest: +SKIP
+
+    Returns:
+      PositionalSharding: A new PositionalSharding instance with the data replicated along the specified axis and dimensionality adjustments based on the 'keepdims' parameter.
+    """
     new_ids = self._ids.sum(axis=axis, keepdims=keepdims)  # union
     return self._remake(self._devices, new_ids)
 
@@ -762,6 +829,25 @@ class PositionalSharding(XLACompatibleSharding):
     return self._memory_kind
 
   def with_memory_kind(self, kind: str) -> PositionalSharding:
+    """
+    Create a new PositionalSharding instance with a specified memory kind.
+
+    Memory kind refers to the type of memory or storage associated with the sharding strategy.
+    This method allows you to customize the memory kind used by the sharding for efficient
+    memory management and allocation.
+
+    Args:
+      kind (str): The memory kind to associate with the sharding.
+        Common memory kinds include "HBM" (High-Bandwidth Memory) and "DDR" (Double Data Rate memory).
+
+    Example:
+      Create a new PositionalSharding instance with a specific memory kind,
+      such as "HBM" (High-Bandwidth Memory):
+      >>> sharding_with_mem_kind = sharding.with_memory_kind("HBM") # doctest: +SKIP
+
+    Returns:
+      PositionalSharding: A new PositionalSharding instance with the specified memory kind.
+    """
     return PositionalSharding(self._devices, memory_kind=kind)
 
   @functools.cached_property
