@@ -167,7 +167,7 @@ def mha(
     q,
     k,
     v,
-    segment_ids: jnp.ndarray | None,
+    segment_ids: Optional[jnp.ndarray] = None,
     sm_scale: float = 1.0,
     causal: bool = False,
     block_q: int = 128,
