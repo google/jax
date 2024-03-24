@@ -2377,33 +2377,48 @@ def _emit_tpu_python_callback(
     # op or the callback will never be triggered!
     # TODO(sharadmv,chky): Enable this fix in the runtime as opposed to in
     # MLIR builder.
+    assert not operands
+    assert not operand_shapes
     callback_without_args = _wrapped_callback
     def _wrapped_callback(*args):  # pylint: disable=function-redefined
       del args
       return callback_without_args()
-    send_channel = ctx.module_context.new_channel()
     dummy_send_aval = core.ShapedArray((1,), np.float32)
-    dummy_send_val = ir_constant(np.zeros(1, np.float32))
-    operand_shapes = [*operand_shapes,
-                      xla.aval_to_xla_shapes(dummy_send_aval)[0]]
-    token = send_to_host(send_channel, token, dummy_send_val, dummy_send_aval,
-                         callback.__name__, sharding=sharding)
-    send_channels.append(send_channel)
-  else:
-    for operand, operand_aval in zip(operands, operand_avals):
-      channel = ctx.module_context.new_channel()
-      token = send_to_host(channel, token, operand, operand_aval,
-                           callback.__name__, sharding=sharding)
-      send_channels.append(channel)
+    operand_avals = [dummy_send_aval]
+    operands = [ir_constant(np.zeros(1, np.float32))]
+    operand_shapes = [xla.aval_to_xla_shapes(dummy_send_aval)[0]]
+
+  for operand, operand_aval in zip(operands, operand_avals):
+    channel = ctx.module_context.new_channel()
+    token = send_to_host(channel, token, operand, operand_aval,
+                          callback.__name__, sharding=sharding)
+    send_channels.append(channel)
 
   recv_channels = []
   outputs = []
+  keep_outputs = True
+  if not result_avals:
+    # If there are no results from the callback, we should still insert a
+    # dummy returned value to be received by the device, or else we cannot
+    # ensure that the callbacks has happened, e.g., in presence of ordered
+    # effects or on jax.effects_barrier().
+    assert not result_shapes
+    callback_without_return_values = _wrapped_callback
+    def _wrapped_callback(*args):  # pylint: disable=function-redefined
+      callback_without_return_values(*args)
+      return (np.zeros(1, np.float32),)
+    dummy_recv_aval = core.ShapedArray((1,), np.float32)
+    result_avals = [dummy_recv_aval]
+    result_shapes = [xla.aval_to_xla_shapes(dummy_recv_aval)[0]]
+    keep_outputs = False
+
   for result_aval in result_avals:
     channel = ctx.module_context.new_channel()
     assert isinstance(result_aval, core.ShapedArray)
     token, out = receive_from_host(channel, token, result_aval,
-                                   callback.__name__, sharding=sharding)
-    outputs.append(out)
+                                  callback.__name__, sharding=sharding)
+    if keep_outputs:
+      outputs.append(out)
     recv_channels.append(channel)
   ifrt_callback = backend.make_python_callback_from_host_send_and_recv(
       _wrapped_callback, operand_shapes, result_shapes, send_channels,

@@ -603,8 +603,6 @@ class EffectOrderingTest(jtu.JaxTestCase):
     jax.effects_barrier()
     self.assertListEqual(log, [2., 3.])
 
-  # TODO(b/307211483): Investigate failure
-  @jtu.skip_on_devices("tpu")
   def test_ordered_effect_remains_ordered_across_multiple_devices(self):
     if jax.device_count() < 2:
       raise unittest.SkipTest("Test requires >= 2 devices.")
