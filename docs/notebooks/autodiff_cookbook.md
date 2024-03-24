@@ -85,7 +85,11 @@ inputs = jnp.array([[0.52, 1.12,  0.77],
                    [0.74, -2.49, 1.39]])
 targets = jnp.array([True, True, False, True])
 
-# Training loss is the negative log-likelihood of the training examples.
+# Training loss is the negative log-likelihood of the training examples for binary targets, optimized for fewer FLOPs by applying the log function after probability selection.
+# A kind remind: The following training loss is a simplified form of the general negative log-likelihood, which applies when the targets are binary (boolean).
+# This function calculates the predicted probabilities for the training examples, then selects the relevant probability based on the target value (either preds for a target of 1, or 1-preds for a target of 0).
+# The negative log is then applied to these selected probabilities.
+# This approach reduces the number of floating-point operations (FLOPs) needed, as the log function is only applied after the selection, rather than to both probabilities before selection.
 def loss(W, b):
     preds = predict(W, b, inputs)
     label_probs = preds * targets + (1 - preds) * (1 - targets)
