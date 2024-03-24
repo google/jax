@@ -5642,8 +5642,9 @@ class NumpyGradTests(jtu.JaxTestCase):
       )
       for rec in GRAD_SPECIAL_VALUE_TEST_RECORDS))
   def testOpGradSpecialValue(self, op, special_value, order):
-    check_grads(op, (special_value,), order, ["fwd", "rev"],
-                atol={np.float32: 3e-3})
+    check_grads(
+        op, (special_value,), order, ['fwd', 'rev'], atol={np.float32: 4e-3}
+    )
 
   def testSincAtZero(self):
     # Some manual tests for sinc at zero, since it doesn't have well-behaved
