@@ -1540,11 +1540,12 @@ def _gather_shape_rule(operand, indices, *, dimension_numbers,
     slice_size = slice_sizes[i]
     corresponding_input_size = operand.shape[i]
 
-    if not (slice_size >= 0 and
-            corresponding_input_size >= slice_size):
-      raise TypeError(f"Slice size at index {i} in gather op is out of range, "
-                      f"must be within [0, {corresponding_input_size} + 1), "
-                      f"got {slice_size}.")
+    if core.is_constant_dim(corresponding_input_size):
+      if not (slice_size >= 0 and
+              corresponding_input_size >= slice_size):
+        raise TypeError(f"Slice size at index {i} in gather op is out of range, "
+                        f"must be within [0, {corresponding_input_size} + 1), "
+                        f"got {slice_size}.")
 
   for i in range(len(collapsed_slice_dims)):
     bound = slice_sizes[collapsed_slice_dims[i]]
