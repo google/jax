@@ -1110,6 +1110,9 @@ def vmap(fun: F,
       axis so that parallel collectives can be applied.
     axis_size: Optional, an integer indicating the size of the axis to be
       mapped. If not provided, the mapped axis size is inferred from arguments.
+    spmd_axis_name: If provided, constrains the vmapped axis to spmd_axis_name
+      for operations that takes per-value sharding constraints. For example,
+      jit and with_sharding_constraint.
 
   Returns:
     Batched/vectorized version of ``fun`` with arguments that correspond to
