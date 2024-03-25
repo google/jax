@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import collections
+import contextlib
 import functools
 import logging
 import textwrap
@@ -72,6 +73,7 @@ with_pure_and_io_callbacks = parameterized.named_parameters(
   for flavor in ("io_unordered", "io_ordered", "pure")
 )
 
+
 class PythonCallbackTest(jtu.JaxTestCase):
 
   def setUp(self):
@@ -92,6 +94,34 @@ class PythonCallbackTest(jtu.JaxTestCase):
 
     out = f(0.)
     self.assertEqual(out, 1.)
+
+  @parameterized.named_parameters(
+    dict(testcase_name=f"{flavor}_expect_dtype_{expect_dtype}",
+         callback=dict(io_unordered=io_calback_unordered,
+                       io_ordered=io_callback_ordered,
+                       pure=jax.pure_callback)[flavor],
+         expect_dtype=expect_dtype)
+    for flavor in ("io_unordered", "io_ordered", "pure")
+    for expect_dtype in (np.int32, np.int64, np.float32, np.float64)
+  )
+  def test_callback_returning_python_literal(self, *, callback, expect_dtype):
+    returned_literal = 42 if expect_dtype in (np.int32, np.int64) else 42.
+    @jax.jit
+    def f(x):
+      return callback(lambda x: returned_literal,
+                      core.ShapedArray((), expect_dtype), x)
+
+    if not config.enable_x64.value:
+      ctx = self.assertRaisesRegex(Exception, "Cannot return 64-bit values")
+    elif expect_dtype in (np.int32, np.float32):
+      ctx = self.assertRaisesRegex(Exception, "Incorrect output dtype")
+    else:
+      ctx = contextlib.nullcontext()
+
+    with ctx:
+      out = f(0.)
+      jax.effects_barrier()
+      self.assertEqual(out, returned_literal)
 
   @parameterized.named_parameters(
     dict(testcase_name=f"{flavor}_{dtype}",
