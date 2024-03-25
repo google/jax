@@ -56,7 +56,6 @@ istft_test_shapes = [
     ((65, 24), 24, 7, -2, -1),
 ]
 
-
 default_dtypes = jtu.dtypes.floating + jtu.dtypes.integer + jtu.dtypes.complex
 _TPU_FFT_TOL = 0.15
 
@@ -422,6 +421,19 @@ class LaxBackedScipySignalTests(jtu.JaxTestCase):
     self._CheckAgainstNumpy(osp_fun, jsp_fun, args_maker, rtol=tol, atol=tol,
                             check_dtypes=False)
     self._CompileAndCheck(jsp_fun, args_maker, rtol=tol, atol=tol)
+
+  @jtu.sample_product(
+    shape=onedim_shapes, N=[None, 1, 7, 13, 20], axis=[-1, 0],
+    dtype=jtu.dtypes.floating,
+  )
+  def testHilbert(self, shape, N, axis, dtype):
+    rng = jtu.rand_default(self.rng())
+    args_maker = lambda: (rng(shape, dtype),)
+    jnp_fn = lambda a: jsp_signal.hilbert(a, N=N, axis=axis)
+    osp_fn = lambda a: osp_signal.hilbert(a, N=N, axis=axis)
+    self._CheckAgainstNumpy(osp_fn, jnp_fn, args_maker, check_dtypes=False,
+                            tol=1e-4)
+    self._CompileAndCheck(jnp_fn, args_maker)
 
 if __name__ == "__main__":
     absltest.main(testLoader=jtu.JaxTestLoader())

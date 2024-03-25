@@ -21,9 +21,10 @@ from jax._src.scipy.signal import (
   convolve2d as convolve2d,
   correlate as correlate,
   correlate2d as correlate2d,
-  detrend as detrend,
   csd as csd,
+  detrend as detrend,
   istft as istft,
+  hilbert as hilbert,
   stft as stft,
   welch as welch,
 )
