@@ -1243,6 +1243,19 @@ def _squeeze_lowering_rule(ctx: LoweringRuleContext, x, dimensions):
 lowering_rules[lax.squeeze_p] = _squeeze_lowering_rule
 
 
+def _ceil_lowering_rule(ctx: LoweringRuleContext, x):
+  return math.CeilOp(x).result
+
+
+lowering_rules[lax.ceil_p] = _ceil_lowering_rule
+
+
+def _floor_lowering_rule(ctx: LoweringRuleContext, x):
+  return math.FloorOp(x).result
+
+
+lowering_rules[lax.floor_p] = _floor_lowering_rule
+
 def _concatenate_lowering_rule(ctx: LoweringRuleContext, *xs, dimension):
   return tpu.ConcatenateOp(
       aval_to_ir_type(ctx.avals_out[0]), xs, dimension=dimension
