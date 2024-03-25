@@ -48,7 +48,7 @@ zip, unsafe_zip = safe_zip, zip
 
 program_id_p = jax_core.Primitive("program_id")
 
-def program_id(axis):
+def program_id(axis) -> jax.Array:
   return program_id_p.bind(axis=axis)
 
 def program_id_bind(*, axis: int):
@@ -195,7 +195,7 @@ def _atomic_cas_abstract_eval(ref_aval, cmp_aval, val_aval):
   return jax_core.ShapedArray(val_aval.shape, val_aval.dtype), {state.WriteEffect(0)}
 atomic_cas_p.def_effectful_abstract_eval(_atomic_cas_abstract_eval)
 
-def atomic_cas(ref, cmp, val):
+def atomic_cas(ref, cmp, val) -> jax.Array:
   return atomic_cas_p.bind(ref, cmp, val)
 
 @state_discharge.register_discharge_rule(atomic_cas_p)
@@ -209,7 +209,7 @@ max_contiguous_p = jax_core.Primitive("max_contiguous")
 max_contiguous_p.def_impl(lambda x, **_: x)
 mlir.register_lowering(max_contiguous_p, lambda _, x, **__: [x])
 
-def max_contiguous(x, values):
+def max_contiguous(x, values) -> jax.Array:
   if not isinstance(values, list):
     values = [values]
   return max_contiguous_p.bind(x, values=values)
@@ -223,7 +223,7 @@ multiple_of_p = jax_core.Primitive("multiple_of")
 multiple_of_p.def_impl(lambda x, **_: x)
 mlir.register_lowering(multiple_of_p, lambda _, x, **__: [x])
 
-def multiple_of(x, values):
+def multiple_of(x, values) -> jax.Array:
   if not isinstance(values, list):
     values = [values]
   return multiple_of_p.bind(x, values=values)
