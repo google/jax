@@ -1,10 +1,6 @@
 ############################################################################
 # All default build options below.
 
-# Required by OpenXLA
-# https://github.com/openxla/xla/issues/1323
-build --nocheck_visibility
-
 # Sets the default Apple platform to macOS.
 build --apple_platform_type=macos
 build --macos_minimum_os=10.14
