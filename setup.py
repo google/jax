@@ -60,6 +60,118 @@ def generate_proto(source):
 generate_proto("jax/experimental/australis/executable.proto")
 generate_proto("jax/experimental/australis/petri.proto")
 
+extras_require = {
+    # Minimum jaxlib version; used in testing.
+    'minimum-jaxlib': [f'jaxlib=={_minimum_jaxlib_version}'],
+
+    # CPU-only jaxlib can be installed via:
+    # $ pip install jax[cpu]
+    'cpu': [f'jaxlib=={_current_jaxlib_version}'],
+
+    # Used only for CI builds that install JAX from github HEAD.
+    'ci': [f'jaxlib=={_latest_jaxlib_version_on_pypi}'],
+
+    # Cloud TPU VM jaxlib can be installed via:
+    # $ pip install jax[tpu] -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
+    'tpu': [
+        f'jaxlib=={_current_jaxlib_version}',
+        f'libtpu-nightly=={_libtpu_version}',
+        'requests',  # necessary for jax.distributed.initialize
+    ],
+
+    # $ pip install jax[australis]
+    'australis': ['protobuf>=3.13,<4'],
+
+    # CUDA installations require adding the JAX CUDA releases URL, e.g.,
+    # Cuda installation defaulting to a CUDA and Cudnn version defined above.
+    # $ pip install jax[cuda] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    'cuda': [f"jaxlib=={_current_jaxlib_version}+cuda11.cudnn{_default_cuda11_cudnn_version}"],
+
+    'cuda11_pip': [
+        f"jaxlib=={_current_jaxlib_version}+cuda11.cudnn{_default_cuda11_cudnn_version}",
+        "nvidia-cublas-cu11>=11.11",
+        "nvidia-cuda-cupti-cu11>=11.8",
+        "nvidia-cuda-nvcc-cu11>=11.8",
+        "nvidia-cuda-runtime-cu11>=11.8",
+        "nvidia-cudnn-cu11>=8.8",
+        "nvidia-cufft-cu11>=10.9",
+        "nvidia-cusolver-cu11>=11.4",
+        "nvidia-cusparse-cu11>=11.7",
+        "nvidia-nccl-cu11>=2.18.3",
+    ],
+
+    'cuda12_pip': [
+        f"jaxlib=={_current_jaxlib_version}+cuda12.cudnn{_default_cuda12_cudnn_version}",
+        "nvidia-cublas-cu12>=12.3.4.1",
+        "nvidia-cuda-cupti-cu12>=12.3.101",
+        "nvidia-cuda-nvcc-cu12>=12.3.107",
+        "nvidia-cuda-runtime-cu12>=12.3.101",
+        "nvidia-cudnn-cu12>=8.9.7.29",
+        "nvidia-cufft-cu12>=11.0.12.1",
+        "nvidia-cusolver-cu12>=11.5.4.101",
+        "nvidia-cusparse-cu12>=12.2.0.103",
+        "nvidia-nccl-cu12>=2.19.3",
+        # nvjitlink is not a direct dependency of JAX, but it is a transitive
+        # dependency via, for example, cuSOLVER. NVIDIA's cuSOLVER packages
+        # do not have a version constraint on their dependencies, so the
+        # package doesn't get upgraded even though not doing that can cause
+        # problems (https://github.com/google/jax/issues/18027#issuecomment-1756305196)
+        # Until NVIDIA add version constraints, add an version constraint
+        # here.
+        "nvidia-nvjitlink-cu12>=12.3.101",
+    ],
+
+    'cuda12': [
+        f"jaxlib=={_current_jaxlib_version}",
+        f"jax-cuda12-plugin=={_current_jaxlib_version}",
+        "nvidia-cublas-cu12>=12.3.4.1",
+        "nvidia-cuda-cupti-cu12>=12.3.101",
+        "nvidia-cuda-nvcc-cu12>=12.3.107",
+        "nvidia-cuda-runtime-cu12>=12.3.101",
+        "nvidia-cudnn-cu12>=8.9.7.29",
+        "nvidia-cufft-cu12>=11.0.12.1",
+        "nvidia-cusolver-cu12>=11.5.4.101",
+        "nvidia-cusparse-cu12>=12.2.0.103",
+        "nvidia-nccl-cu12>=2.19.3",
+        # nvjitlink is not a direct dependency of JAX, but it is a transitive
+        # dependency via, for example, cuSOLVER. NVIDIA's cuSOLVER packages
+        # do not have a version constraint on their dependencies, so the
+        # package doesn't get upgraded even though not doing that can cause
+        # problems (https://github.com/google/jax/issues/18027#issuecomment-1756305196)
+        # Until NVIDIA add version constraints, add an version constraint
+        # here.
+        "nvidia-nvjitlink-cu12>=12.3.101",
+    ],
+
+    # Target that does not depend on the CUDA pip wheels, for those who want
+    # to use a preinstalled CUDA.
+    'cuda11_local': [
+        f"jaxlib=={_current_jaxlib_version}+cuda11.cudnn{_default_cuda11_cudnn_version}",
+    ],
+    'cuda12_local': [
+        f"jaxlib=={_current_jaxlib_version}+cuda12.cudnn{_default_cuda12_cudnn_version}",
+    ],
+
+    # CUDA installations require adding jax releases URL; e.g.
+    # $ pip install jax[cuda11_cudnn82] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    # $ pip install jax[cuda11_cudnn86] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    **{f'cuda11_cudnn{cudnn_version}': f"jaxlib=={_current_jaxlib_version}+cuda11.cudnn{cudnn_version}"
+       for cudnn_version in _available_cuda11_cudnn_versions}
+}
+
+
+# Create hyphen aliases of all underscore extras because pip sometimes converts
+# package names with underscores to use hyphens instead.
+# TODO(skye): ideally we would remove the underscore extras altogether, but
+# that requires transitioning existing use.
+extras_require['cuda11-pip'] = extras_require['cuda11_pip']
+extras_require['cuda12-pip'] = extras_require['cuda12_pip']
+extras_require['cuda11-local'] = extras_require['cuda11_local']
+extras_require['cuda12-local'] = extras_require['cuda12_local']
+for cudnn_version in _available_cuda11_cudnn_versions:
+  extras_require[f'cuda11-cudnn{cudnn_version}'] = extras_require[
+      f'cuda11_cudnn{cudnn_version}']
+
 setup(
     name=project_name,
     version=__version__,
@@ -85,104 +197,7 @@ setup(
         # required Python version.
         'importlib_metadata>=4.6;python_version<"3.10"',
     ],
-    extras_require={
-        # Minimum jaxlib version; used in testing.
-        'minimum-jaxlib': [f'jaxlib=={_minimum_jaxlib_version}'],
-
-        # CPU-only jaxlib can be installed via:
-        # $ pip install jax[cpu]
-        'cpu': [f'jaxlib=={_current_jaxlib_version}'],
-
-        # Used only for CI builds that install JAX from github HEAD.
-        'ci': [f'jaxlib=={_latest_jaxlib_version_on_pypi}'],
-
-        # Cloud TPU VM jaxlib can be installed via:
-        # $ pip install jax[tpu] -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
-        'tpu': [
-          f'jaxlib=={_current_jaxlib_version}',
-          f'libtpu-nightly=={_libtpu_version}',
-          'requests',  # necessary for jax.distributed.initialize
-        ],
-
-        # $ pip install jax[australis]
-        'australis': ['protobuf>=3.13,<4'],
-
-        # CUDA installations require adding the JAX CUDA releases URL, e.g.,
-        # Cuda installation defaulting to a CUDA and Cudnn version defined above.
-        # $ pip install jax[cuda] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-        'cuda': [f"jaxlib=={_current_jaxlib_version}+cuda11.cudnn{_default_cuda11_cudnn_version}"],
-
-        'cuda11_pip': [
-          f"jaxlib=={_current_jaxlib_version}+cuda11.cudnn{_default_cuda11_cudnn_version}",
-          "nvidia-cublas-cu11>=11.11",
-          "nvidia-cuda-cupti-cu11>=11.8",
-          "nvidia-cuda-nvcc-cu11>=11.8",
-          "nvidia-cuda-runtime-cu11>=11.8",
-          "nvidia-cudnn-cu11>=8.8",
-          "nvidia-cufft-cu11>=10.9",
-          "nvidia-cusolver-cu11>=11.4",
-          "nvidia-cusparse-cu11>=11.7",
-          "nvidia-nccl-cu11>=2.18.3",
-        ],
-
-        'cuda12_pip': [
-          f"jaxlib=={_current_jaxlib_version}+cuda12.cudnn{_default_cuda12_cudnn_version}",
-          "nvidia-cublas-cu12>=12.3.4.1",
-          "nvidia-cuda-cupti-cu12>=12.3.101",
-          "nvidia-cuda-nvcc-cu12>=12.3.107",
-          "nvidia-cuda-runtime-cu12>=12.3.101",
-          "nvidia-cudnn-cu12>=8.9.7.29",
-          "nvidia-cufft-cu12>=11.0.12.1",
-          "nvidia-cusolver-cu12>=11.5.4.101",
-          "nvidia-cusparse-cu12>=12.2.0.103",
-          "nvidia-nccl-cu12>=2.19.3",
-          # nvjitlink is not a direct dependency of JAX, but it is a transitive
-          # dependency via, for example, cuSOLVER. NVIDIA's cuSOLVER packages
-          # do not have a version constraint on their dependencies, so the
-          # package doesn't get upgraded even though not doing that can cause
-          # problems (https://github.com/google/jax/issues/18027#issuecomment-1756305196)
-          # Until NVIDIA add version constraints, add an version constraint
-          # here.
-          "nvidia-nvjitlink-cu12>=12.3.101",
-        ],
-
-        'cuda12': [
-          f"jaxlib=={_current_jaxlib_version}",
-          f"jax-cuda12-plugin=={_current_jaxlib_version}",
-          "nvidia-cublas-cu12>=12.3.4.1",
-          "nvidia-cuda-cupti-cu12>=12.3.101",
-          "nvidia-cuda-nvcc-cu12>=12.3.107",
-          "nvidia-cuda-runtime-cu12>=12.3.101",
-          "nvidia-cudnn-cu12>=8.9.7.29",
-          "nvidia-cufft-cu12>=11.0.12.1",
-          "nvidia-cusolver-cu12>=11.5.4.101",
-          "nvidia-cusparse-cu12>=12.2.0.103",
-          "nvidia-nccl-cu12>=2.19.3",
-          # nvjitlink is not a direct dependency of JAX, but it is a transitive
-          # dependency via, for example, cuSOLVER. NVIDIA's cuSOLVER packages
-          # do not have a version constraint on their dependencies, so the
-          # package doesn't get upgraded even though not doing that can cause
-          # problems (https://github.com/google/jax/issues/18027#issuecomment-1756305196)
-          # Until NVIDIA add version constraints, add an version constraint
-          # here.
-          "nvidia-nvjitlink-cu12>=12.3.101",
-        ],
-
-        # Target that does not depend on the CUDA pip wheels, for those who want
-        # to use a preinstalled CUDA.
-        'cuda11_local': [
-          f"jaxlib=={_current_jaxlib_version}+cuda11.cudnn{_default_cuda11_cudnn_version}",
-        ],
-        'cuda12_local': [
-          f"jaxlib=={_current_jaxlib_version}+cuda12.cudnn{_default_cuda12_cudnn_version}",
-        ],
-
-        # CUDA installations require adding jax releases URL; e.g.
-        # $ pip install jax[cuda11_cudnn82] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-        # $ pip install jax[cuda11_cudnn86] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-        **{f'cuda11_cudnn{cudnn_version}': f"jaxlib=={_current_jaxlib_version}+cuda11.cudnn{cudnn_version}"
-           for cudnn_version in _available_cuda11_cudnn_versions}
-    },
+    extras_require=extras_require,
     url='https://github.com/google/jax',
     license='Apache-2.0',
     classifiers=[
