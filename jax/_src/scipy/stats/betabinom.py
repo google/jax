@@ -36,7 +36,7 @@ def logpmf(k: ArrayLike, n: ArrayLike, a: ArrayLike, b: ArrayLike,
   log_probs = lax.add(combiln, beta_lns)
   y_cond = jnp.logical_or(lax.lt(y, lax.neg(loc)), lax.gt(y, lax.sub(n, loc)))
   log_probs = jnp.where(y_cond, -jnp.inf, log_probs)
-  n_a_b_cond = jnp.logical_or(jnp.logical_or(lax.lt(n, one), lax.lt(a, zero)), lax.lt(b, zero))
+  n_a_b_cond = jnp.logical_or(jnp.logical_or(lax.lt(n, zero), lax.lt(a, zero)), lax.lt(b, zero))
   return jnp.where(n_a_b_cond, jnp.nan, log_probs)
 
 
