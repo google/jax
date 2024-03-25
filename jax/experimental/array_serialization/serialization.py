@@ -451,7 +451,6 @@ class AsyncManager:
 
   def __init__(self, timeout_secs=300):
     self._timeout_secs = timeout_secs
-    self._timeout_in_ms = self._timeout_secs * 1000
 
     self._commit_futures = None
     self._thread = None
@@ -488,7 +487,7 @@ class AsyncManager:
         key_for_barrier = _get_key(self._count)
         logger.info('Key used for barrier is %s for process %s',
                     key_for_barrier, current_process)
-        self._client.wait_at_barrier(key_for_barrier, self._timeout_in_ms)
+        self._client.wait_at_barrier(key_for_barrier, 24 * 60 * 60 * 1000)  # ∞
         logger.info('Finished waiting at barrier for process %s',
                     current_process)
 
@@ -526,8 +525,10 @@ class AsyncManager:
       raise exception  # pylint: disable=raising-bad-type
 
   def wait_until_finished(self):
+    start_time = time.time()
     if self._thread is not None:
-      self._thread.join()
+      logger.info('Joining thread with timeout %s', self._timeout_secs)
+      self._thread.join(self._timeout_secs)
       self._thread = None
       logger.info('Thread joined successfully')
 
@@ -538,7 +539,9 @@ class AsyncManager:
       # Block until process 0 writes success value to the key value store.
       # If it fails to write it, then `blocking_key_value_get` will time out.
       get_key = _get_key(self._count)
-      self._client.blocking_key_value_get(get_key, self._timeout_in_ms)
+      already_waited = time.time() - start_time
+      self._client.blocking_key_value_get(
+          get_key, int(1000 * (self._timeout_secs - already_waited)))
       logger.info('blocking_key_value_get on key %s was successfully '
                   'completed.', get_key)
 
