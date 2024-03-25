@@ -904,6 +904,9 @@ def shard_sharded_device_array_slow_path(x, devices, indices, sharding):
   return pxla.batched_device_put(x.aval, sharding, bufs, devices)
 
 
+def _identity_fn(x):
+  return x
+
 def _array_shard_arg(x, sharding):
   x._check_if_deleted()
 
@@ -913,8 +916,7 @@ def _array_shard_arg(x, sharding):
     if tuple(x_indices) == tuple(indices):
       return x
     else:
-      raise NotImplementedError(
-          "Cannot reshard an input that is not fully addressable")
+      return api.jit(_identity_fn, out_shardings=sharding)(x)
   else:
     devices = pxla.get_addressable_devices_for_shard_arg(sharding)
     if tuple(x_indices) == tuple(indices):

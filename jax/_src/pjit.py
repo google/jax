@@ -1328,6 +1328,8 @@ def _resolve_in_shardings(
           else:
             raise NotImplementedError('Having uncommitted Array sharded on '
                                       'multiple devices is not supported.')
+    elif is_auto(pjit_in_s):
+      resolved_in_shardings.append(pjit_in_s)
     else:
       if (isinstance(arg, np.ndarray) and
           not pjit_in_s.is_fully_replicated and  # type: ignore
@@ -1385,10 +1387,7 @@ def _pjit_call_impl_python(
       donated_invars, name, keep_unused, inline,
       lowering_parameters=mlir.LoweringParameters()).compile()
   _most_recent_pjit_call_executable.weak_key_dict[jaxpr] = compiled
-  # This check is expensive so only do it if enable_checks is on.
-  if compiled._auto_spmd_lowering and config.enable_checks.value:
-    pxla.check_gda_or_array_xla_sharding_match(args, compiled._in_shardings,
-                                               jaxpr.jaxpr.debug_info)
+
   if config.distributed_debug.value:
     # Defensively only perform fingerprint logic if debug logging is enabled
     # NOTE(skyewm): I didn't benchmark this

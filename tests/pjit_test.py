@@ -1660,6 +1660,27 @@ class AutoShardingPjitTest(jtu.JaxTestCase):
             'compiled object on the inputs.')):
         f(*inputs)
 
+  def test_jit_normal_call(self):
+    mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
+    shape = (8, 2)
+    np_inp = np.arange(math.prod(shape), dtype=np.float32).reshape(shape)
+    arr = jax.device_put(np_inp, NamedSharding(mesh, P('x')))
+
+    def f(x):
+      return x * 2
+
+    auto = AUTO(mesh)
+    f = jax.jit(f, in_shardings=auto, out_shardings=auto)
+    out = f(arr)
+
+    self.assertEqual(f.lower(arr).compile().output_shardings, out.sharding)
+    self.assertArraysEqual(out, np_inp * 2)
+
+    with jtu.count_pjit_cpp_cache_miss() as count:
+      out2 = f(out)
+      _ = f(out2)
+    self.assertEqual(count[0], 1)
+
 
 @jtu.pytest_mark_if_available('multiaccelerator')
 class ArrayPjitTest(jtu.JaxTestCase):
