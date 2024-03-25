@@ -397,7 +397,6 @@ def mha_backward_kernel(
       dv, dk = carry
       q = pl.load(q_ref, (pl.ds(start_q * block_q, block_q), slice(None)))
       qk = pl.dot(q, k.T)
-      qk = qk.astype(q_ref.dtype)
       qk = qk.astype(jnp.float32)
       if sm_scale != 1.0:
         qk *= sm_scale
