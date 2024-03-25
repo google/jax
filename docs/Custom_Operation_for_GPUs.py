@@ -1,6 +1,5 @@
 from functools import partial, reduce
 import math
-from operator import mul
 from typing import Tuple
 
 import jax
