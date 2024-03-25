@@ -150,9 +150,15 @@ LogicalResult checkTiles(MLIRContext *mlir_ctx,
 
 FailureOr<MemRefType> inferMemref(MemRefType memref,
                                   const int hardware_generation) {
-  if (isa<SemaphoreType, DMASemaphoreType>(memref.getElementType())) {
-    const Attribute semaphore_mem = tpu::MemorySpaceAttr::get(
-        memref.getContext(), MemorySpace::kSemaphoreMem);
+  const Attribute semaphore_mem = tpu::MemorySpaceAttr::get(
+      memref.getContext(), MemorySpace::kSemaphoreMem);
+  const Attribute smem =
+      tpu::MemorySpaceAttr::get(memref.getContext(), MemorySpace::smem);
+  const Attribute vmem =
+      tpu::MemorySpaceAttr::get(memref.getContext(), MemorySpace::vmem);
+  const Attribute memory_space =
+      memref.getMemorySpace() == nullptr ? vmem : memref.getMemorySpace();
+  if (memory_space == semaphore_mem || memory_space == smem) {
     SmallVector<int64_t> tile_strides;
     tile_strides.reserve(memref.getRank());
     int64_t stride = 1;
@@ -163,12 +169,8 @@ FailureOr<MemRefType> inferMemref(MemRefType memref,
     std::reverse(tile_strides.begin(), tile_strides.end());
     auto layout = TiledLayoutAttr::get(memref.getContext(), {}, tile_strides);
     return MemRefType::get(memref.getShape(), memref.getElementType(), layout,
-                           semaphore_mem);
+                           memory_space);
   }
-  const Attribute vmem =
-      tpu::MemorySpaceAttr::get(memref.getContext(), MemorySpace::vmem);
-  const Attribute memory_space =
-      memref.getMemorySpace() == nullptr ? vmem : memref.getMemorySpace();
   FAILUREOR_ASSIGN_OR_RETURN(const TiledLayoutAttr layout,
                              inferLayout(memref, hardware_generation));
 
