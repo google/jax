@@ -1,4 +1,5 @@
 from functools import partial, reduce
+import math
 from operator import mul
 from typing import Tuple
 
@@ -81,8 +82,8 @@ def _rms_norm_fwd_cuda_lowering(ctx, x, weight, eps):
         else x_type.element_type
     )
 
-    n2 = reduce(lambda x, y: x * y, w_shape)
-    n1 = reduce(lambda x, y: x * y, x_shape) // n2
+    n2 = math.prod(w_shape)
+    n1 = math.prod(x_shape) // n2
 
     opaque = gpu_ops.create_rms_norm_descriptor(
         n1,
@@ -165,8 +166,8 @@ def _rms_norm_fwd_abstract(x, weight, eps):
     iv_dtype = dtypes.canonicalize_dtype(x.dtype)
     if iv_dtype in [jnp.float16, jnp.bfloat16]:
         iv_dtype = jnp.float32
-    n2 = reduce(mul, weight.shape)
-    n1 = reduce(mul, x.shape) // n2
+    n2 = math.prod(weight.shape)
+    n1 = math.prod(x.shape) // n2
     return (
         ShapedArray(x.shape, w_dtype, named_shape=x.named_shape),  # output
         ShapedArray((n1,), iv_dtype, named_shape=x.named_shape),  # invvar
@@ -191,7 +192,7 @@ def _rms_norm_bwd_abstract(grad_output, invvar, x, weight, eps):
     )
     assert grad_output.named_shape == x.named_shape
     weight_named_shape = (
-        weight_named_shape if weight.named_shape else grad_output.named_shape
+        weight.named_shape if weight.named_shape else grad_output.named_shape
     )
     return (
         ShapedArray(
@@ -461,9 +462,9 @@ custom_p_rms_norm.defvjp(custom_p_rms_norm_fwd, custom_p_rms_norm_bwd)
 
 import jax
 
-per_core_batch_size=4
-seq_len=512
-emb_dim=512
+per_core_batch_size = 4
+seq_len = 512
+emb_dim = 512
 assert jax.local_device_count() > 1, "Only 1 GPU, the example work, but it is this really what you want?"
 x = jax.random.normal(
     jax.random.PRNGKey(0),
