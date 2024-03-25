@@ -361,13 +361,13 @@ class TreeTest(jtu.JaxTestCase):
           {"a": 1},
           {"a": 7, "b": 8},
           re.escape(
-              "Dict key mismatch; expected keys: ['a']; dict: {'a': 7, 'b': 8}."
+              "Dict key mismatch; expected keys: ['a']; \n\n got dict: {'a': 7, 'b': 8}."
           ),
       ),
       (
           {"a": 1},
           {"b": 7},
-          re.escape("Dict key mismatch; expected keys: ['a']; dict: {'b': 7}."),
+          re.escape("Dict key mismatch; expected keys: ['a']; \n\n got dict: {'b': 7}."),
       ),
       ([1], {"a": 7}, re.escape("Expected list, got {'a': 7}.")),
       ([1], (7,), re.escape("Expected list, got (7,).")),
@@ -387,7 +387,7 @@ class TreeTest(jtu.JaxTestCase):
       (
           [{"a": 1}],
           [{"b": 7}],
-          re.escape("Dict key mismatch; expected keys: ['a']; dict: {'b': 7}."),
+          re.escape("Dict key mismatch; expected keys: ['a']; \n\n got dict: {'b': 7}."),
       ),
       (([1],), (7,), re.escape("Expected list, got 7.")),
       (([1],), ((7,),), re.escape("Expected list, got (7,).")),
@@ -401,7 +401,7 @@ class TreeTest(jtu.JaxTestCase):
       (
           ({"a": 1},),
           ({"b": 7},),
-          re.escape("Dict key mismatch; expected keys: ['a']; dict: {'b': 7}."),
+          re.escape("Dict key mismatch; expected keys: ['a']; \n\n got dict: {'b': 7}."),
       ),
       ({"a": [1]}, {"a": 7}, re.escape("Expected list, got 7.")),
       ({"a": [1]}, {"a": (7,)}, re.escape("Expected list, got (7,).")),
@@ -419,7 +419,7 @@ class TreeTest(jtu.JaxTestCase):
       (
           {"a": {"a": 1}},
           {"a": {"b": 7}},
-          re.escape("Dict key mismatch; expected keys: ['a']; dict: {'b': 7}."),
+          re.escape("Dict key mismatch; expected keys: ['a']; \n\n got dict: {'b': 7}."),
       ),
       (
           [ATuple(foo=1, bar=2)],
