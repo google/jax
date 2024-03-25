@@ -869,8 +869,17 @@ def _suggest_missing_backends():
       any(os.path.exists(d) for d in nvidia_gpu_devices)):
     if hasattr(xla_extension, "GpuAllocatorConfig") and "cuda" in _backend_errors:
       err = _backend_errors["cuda"]
-      logger.warning(f"CUDA backend failed to initialize: {err} (Set "
-                     "TF_CPP_MIN_LOG_LEVEL=0 and rerun for more info.)")
+      warning_msg = f"CUDA backend failed to initialize: {err}."
+      if "no supported devices found for platform CUDA." in err:
+        warning_msg += (
+          "This may be due to JAX pre-allocating too much device "
+          "memory, leaving too little for CUDA library initialization. See "
+          "https://jax.readthedocs.io/en/latest/gpu_memory_allocation.html "
+          "for more details and potential workarounds."
+        )
+      warning_msg += "(Set TF_CPP_MIN_LOG_LEVEL=0 and rerun for more info.)"
+
+      logger.warning(warning_msg)
     else:
       logger.warning("An NVIDIA GPU may be present on this machine, but a "
                      "CUDA-enabled jaxlib is not installed. Falling back to "
