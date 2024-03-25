@@ -966,16 +966,26 @@ class VectorLayoutInferer {
                  "Only 32-bit types supported");
     auto offsets = op.getOffsets().getValue();
     auto strides = op.getStrides().getValue();
-    for (auto offset_attr : offsets.take_back(2)) {
-      int off = offset_attr.cast<IntegerAttr>().getInt();
-      TPU_CHECK_OP(off == 0, "Only zero-offset slices supported.");
+    auto rank = offsets.size();
+    LayoutOffsets layout_offsets = input_layout->offsets();
+    if (layout_offsets[0].has_value()) {
+      layout_offsets[0] = (offsets[rank - 2].cast<IntegerAttr>().getInt() +
+                           layout_offsets[0].value()) %
+                          input_layout->tiling()[0];
+    }
+    if (layout_offsets[1].has_value()) {
+      layout_offsets[1] = (offsets[rank - 1].cast<IntegerAttr>().getInt() +
+                           layout_offsets[1].value()) %
+                          input_layout->tiling()[1];
     }
     for (auto stride : strides) {
       TPU_CHECK_OP(stride.cast<IntegerAttr>().getInt() == 1,
                    "Only trivial strides supported.");
     }
 
-    setLayout(op, input_layout, input_layout);
+    setLayout(op, input_layout,
+              VectorLayout(input_layout->bitwidth(), layout_offsets,
+                           input_layout->tiling(), ImplicitDim::kNone));
     return success();
   }
 
