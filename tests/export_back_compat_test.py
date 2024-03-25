@@ -48,6 +48,7 @@ from jax._src.internal_test_util.export_back_compat_test_data import tpu_ApproxT
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_Qr
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_Sharding
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_stablehlo_dynamic_reduce_window
+from jax._src.internal_test_util.export_back_compat_test_data import tpu_Subchannel
 from jax._src.internal_test_util.export_back_compat_test_data import stablehlo_dynamic_rng_bit_generator
 from jax._src.internal_test_util.export_back_compat_test_data import stablehlo_dynamic_top_k
 
@@ -114,6 +115,7 @@ class CompatTest(bctu.CompatTestBase):
         tpu_Eigh.data, tpu_Lu.data_2023_03_21, tpu_Qr.data_2023_03_17,
         tpu_Sharding.data_2023_03_16, tpu_ApproxTopK.data_2023_04_17,
         tpu_ApproxTopK.data_2023_05_16,
+        tpu_Subchannel.data_2024_02_20,
         tpu_stablehlo_dynamic_reduce_window.data_unary_2023_06_17,
         tpu_stablehlo_dynamic_reduce_window.data_variadic_2023_06_17,
         stablehlo_dynamic_rng_bit_generator.data_2023_06_17,
