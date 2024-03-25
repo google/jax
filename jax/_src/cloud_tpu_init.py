@@ -54,11 +54,10 @@ def cloud_tpu_init() -> None:
   """
   global running_in_cloud_tpu_vm
 
-  # We assume we are in a correctly-configured Cloud TPU environment
-  # if the following hold: a) libtpu is installed b) JAX_FORCE_TPU_INIT is set
   # Exit early if we're not running on Cloud TPU.
   libtpu_module = maybe_import_libtpu()
-  if libtpu_module is None and not jax_force_tpu_init():
+  num_tpu_chips = hardware_utils.num_available_tpu_chips_and_device_id()[0]
+  if (libtpu_module is None or num_tpu_chips == 0) and not jax_force_tpu_init():
     return
 
   running_in_cloud_tpu_vm = True
