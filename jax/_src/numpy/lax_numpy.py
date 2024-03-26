@@ -2737,6 +2737,48 @@ def _i0_jvp(primals, tangents):
 
 @util.implements(np.ix_)
 def ix_(*args: ArrayLike) -> tuple[Array, ...]:
+  """Construct an open mesh from multiple sequences.
+
+  LAX-backend implementation of ``numpy.ix_()``.
+    
+  This function takes N 1-D sequences and returns N outputs with N
+  dimensions each, such that the shape is 1 in all but one dimension
+  and the dimension with the non-unit shape value cycles through all
+  N dimensions.
+    
+  Using `ix_` one can quickly construct index arrays that will index
+  the cross product. ``a[np.ix_([1,3],[2,5])]`` returns the array
+  ``[[a[1,2] a[1,5]], [a[3,2] a[3,5]]]``.
+
+  Args:
+  args : 1-D sequences
+      Each sequence should be of integer or boolean type.
+      Boolean sequences will be interpreted as boolean masks for the
+      corresponding dimension (equivalent to passing in
+      ``np.nonzero(boolean_sequence)``).
+
+  Returns:
+  out : `tuple <https://docs.python.org/3/library/stdtypes.html#tuple>` of ndarrays
+      N arrays with N dimensions each, with N the number of input
+      sequences. Together these arrays form an open mesh.
+
+  Examples:
+    >>> import jax.numpy as jnp
+    >>> a = jnp.arange(10).reshape(2, 5)
+    >>> a
+    Array([[0, 1, 2, 3, 4],
+           [5, 6, 7, 8, 9]], dtype=int32)
+    >>> ixgrid = jnp.ix_(jnp.array([0, 1]), jnp.array([2, 4]))
+    >>> ixgrid
+    (Array([[0],
+           [1]], dtype=int32), Array([[2, 4]], dtype=int32))
+    >>> ixgrid[0].shape, ixgrid[1].shape
+    ((2, 1), (1, 2))
+    >>> a[ixgrid]
+    Array([[2, 4],
+           [7, 9]], dtype=int32)  
+  """
+
   util.check_arraylike("ix", *args)
   n = len(args)
   output = []
