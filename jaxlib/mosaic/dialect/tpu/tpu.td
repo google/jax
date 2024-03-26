@@ -31,7 +31,6 @@ def TPU_Dialect : Dialect {
   let cppNamespace = "::mlir::tpu";
   let useDefaultAttributePrinterParser = 1;
   let useDefaultTypePrinterParser = 1;
-  let usePropertiesForAttributes = 0;
 }
 
 class TPU_Attr<string name, string mnemonic_, list<Trait> traits = []>
