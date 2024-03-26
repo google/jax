@@ -165,8 +165,12 @@ def attn_unbatched(
               ),
           ),  # m
       ],
-      num_warps=num_warps_,
-      num_stages=num_stages,
+      compiler_params=dict(
+          triton=dict(
+              num_warps=num_warps_,
+              num_stages=num_stages,
+          )
+      ),
       out_shape=[
           jax.ShapeDtypeStruct(shape=(k_splits, *q.shape), dtype=q.dtype),  # o
           jax.ShapeDtypeStruct(
