@@ -27,7 +27,7 @@ https://github.com/google/jax/pull/11859/.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Protocol, Union
+from typing import Any, Protocol, Union, runtime_checkable
 import numpy as np
 
 from jax._src.basearray import (
@@ -40,6 +40,8 @@ DType = np.dtype
 # TODO(jakevdp, froystig): make ExtendedDType a protocol
 ExtendedDType = Any
 
+
+@runtime_checkable
 class SupportsDType(Protocol):
   @property
   def dtype(self) -> DType: ...
