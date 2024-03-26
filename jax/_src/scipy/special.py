@@ -850,11 +850,17 @@ def _gen_recurrence_mask(
     c1 = m_mat * m_mat
     c2 = 2.0 * l_mat
     c3 = (l_mat - 1.0) * (l_mat - 1.0)
-    d0 = jnp.sqrt((4.0 * c0 - 1.0) / (c0 - c1))
-    d1 = jnp.sqrt(((c2 + 1.0) * (c3 - c1)) / ((c2 - 3.0) * (c0 - c1)))
+    c01_diff = jnp.where((c0 - c1) == 0, 1, c0 - c1)
+    d0_pre_sqrt = (4.0 * c0 - 1.0) / c01_diff
+    d0_pre_sqrt = jnp.where(d0_pre_sqrt < 0, 0, d0_pre_sqrt)
+    d0 = jnp.sqrt(d0_pre_sqrt)
+    d1_pre_sqrt = ((c2 + 1.0) * (c3 - c1)) / ((c2 - 3.0) * c01_diff)
+    d1_pre_sqrt = jnp.where(d1_pre_sqrt < 0, 0, d1_pre_sqrt)
+    d1 = jnp.sqrt(d1_pre_sqrt)
   else:
-    d0 = (2.0 * l_mat - 1.0) / (l_mat - m_mat)
-    d1 = (l_mat + m_mat - 1.0) / (l_mat - m_mat)
+    lm_diff = jnp.where((l_mat - m_mat) == 0, 1, l_mat - m_mat)
+    d0 = (2.0 * l_mat - 1.0) / lm_diff
+    d1 = (l_mat + m_mat - 1.0) / lm_diff
 
   d0_mask_indices = jnp.triu_indices(l_max + 1, 1)
   d1_mask_indices = jnp.triu_indices(l_max + 1, 2)
