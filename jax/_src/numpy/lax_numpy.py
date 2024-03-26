@@ -4867,8 +4867,8 @@ def _index_to_gather(x_shape: Sequence[int], idx: Sequence[Any],
                "with type {} at position {}, indexer value {}")
         raise TypeError(msg.format(abstract_i.dtype.name, idx_pos, i))
 
-      msg = "Indexing mode not yet supported. Open a feature request!\n{}"
-      raise IndexError(msg.format(idx))
+      raise IndexError("Indexing mode not yet supported. Got unsupported indexer "
+                      f"at position {idx_pos}: {i!r}")
 
   if len(gather_indices) == 0:
     gather_indices_array: ArrayLike = np.zeros((0,), dtype=index_dtype)
