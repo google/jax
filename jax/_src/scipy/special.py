@@ -571,9 +571,12 @@ def _ndtri(p: ArrayLike) -> Array:
 
   x = jnp.where(p > dtype(1. - np.exp(-2.)), x, -x)
   infinity = jnp.full(shape, dtype(np.inf))
-  x_nan_replaced = jnp.where(
-      p <= dtype(0.0), -infinity, jnp.where(p >= dtype(1.0), infinity, x))
-  return x_nan_replaced
+  x = jnp.where(
+      p == dtype(0.0), -infinity, jnp.where(p == dtype(1.0), infinity, x))
+  nan = jnp.full(shape, dtype(np.nan))
+  x = jnp.where(
+      p < dtype(0.0), nan, jnp.where(p > dtype(1.0), nan, x))
+  return x
 
 
 @partial(custom_derivatives.custom_jvp, nondiff_argnums=(1,))
