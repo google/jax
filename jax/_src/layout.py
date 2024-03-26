@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from __future__ import annotations
+import re
 
 from jax._src.lib import xla_client as xc
 
@@ -42,6 +43,15 @@ class SpecifiedLayout(Layout):
 
   def _to_xla_layout(self) -> str:
     return self._layout_str
+
+  @property
+  def _minor_to_major(self):
+    m = re.search("{([0-9,]*):", str(self))
+    assert m is not None
+    m2m_str = m.group(1)
+    if m2m_str == '':
+      return ()
+    return tuple(int(x) for x in m2m_str.split(","))
 
 
 class AutoLayout:
