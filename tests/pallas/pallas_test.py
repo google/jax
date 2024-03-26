@@ -133,19 +133,17 @@ class PallasTest(parameterized.TestCase):
   INTERPRET = False
 
   def setUp(self):
-    if jax.config.x64_enabled:
-      self.skipTest("Only works in 32-bit")
-    if not self.INTERPRET:
-      if not jtu.test_device_matches(["gpu"]):
-        self.skipTest("Only works on GPU")
-      try:
-        import triton  # noqa: F401
-      except ImportError:
-        if (
-            _TRITON_COMPILE_VIA_XLA is not None
-            and not _TRITON_COMPILE_VIA_XLA.value
-        ):
-          self.skipTest("Triton is not installed.")
+    # TODO(slebedev): Change this to allow testing on CPU in INTERPRET mode.
+    if jtu.device_under_test() != "gpu":
+      self.skipTest("Only works on GPU")
+    try:
+      import triton  # noqa: F401
+    except ImportError:
+      if (
+          _TRITON_COMPILE_VIA_XLA is not None
+          and not _TRITON_COMPILE_VIA_XLA.value
+      ):
+        self.skipTest("Triton is not installed.")
     super().setUp()
     if compile_jaxpr:
       compile_jaxpr.cache_clear()

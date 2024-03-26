@@ -132,6 +132,12 @@ class AbstractRef(core.AbstractValue):
   def __init__(self, inner_aval: core.AbstractValue):
     self.inner_aval = inner_aval
 
+  @property
+  def weak_type(self) -> bool:
+    if not hasattr(self.inner_aval, "weak_type"):
+      raise AttributeError
+    return self.inner_aval.weak_type
+
   def update(self, inner_aval=None):
     if inner_aval is None:
       return AbstractRef(self.inner_aval)
