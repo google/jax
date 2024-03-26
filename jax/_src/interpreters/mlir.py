@@ -75,6 +75,13 @@ _JAX_DUMP_IR_TO = config.DEFINE_string(
          "Supports the special value 'sponge' to pick the path from the "
          "environment variable TEST_UNDECLARED_OUTPUTS_DIR.")
 
+_JAX_INCLUDE_DEBUG_INFO_IN_DUMPS = config.DEFINE_string(
+  'jax_include_debug_info_in_dumps',
+  os.getenv('JAX_INCLUDE_DEBUG_INFO_IN_DUMPS', "True"),
+  help="Determine whether or not to keep debug symbols and location information "
+       "when dumping IR code. By default, debug information will be preserved in "
+       "the IR dump. To avoid exposing source code and potentially sensitive "
+       "information, set to false")
 lowerable_effects: effects_lib.EffectTypeSet = effects_lib.lowerable_effects
 
 
@@ -474,9 +481,12 @@ def dump_module_message(module: ir.Module, stage_name: str) -> str:
 def _make_string_safe_for_filename(s: str) -> str:
   return re.sub(r'[^\w.)( -]', '', s)
 
-def module_to_string(module: ir.Module) -> str:
+def module_to_string(module: ir.Module, enable_debug_info=None) -> str:
   output = io.StringIO()
-  module.operation.print(file=output, enable_debug_info=True)
+  if enable_debug_info is None:
+    enable_debug_flag = str.lower(_JAX_INCLUDE_DEBUG_INFO_IN_DUMPS.value)
+    enable_debug_info = enable_debug_flag not in ('false', '0')
+  module.operation.print(file=output, enable_debug_info=enable_debug_info)
   return output.getvalue()
 
 def module_to_bytecode(module: ir.Module) -> bytes:
