@@ -132,7 +132,7 @@ Let's go over these, one-by-one. We'll also end up composing these in interestin
 
 +++ {"id": "YrqE32mvE3b7"}
 
-JAX runs transparently on the GPU or TPU (falling back to CPU if you don't have one). However, in the above example, JAX is dispatching kernels to the GPU one operation at a time. If we have a sequence of operations, we can use the `@jit` decorator to compile multiple operations together using [XLA](https://www.tensorflow.org/xla). Let's try that.
+JAX runs transparently on the GPU or TPU (falling back to CPU if you don't have one). However, in the above example, JAX is dispatching kernels to the GPU one operation at a time. If we have a sequence of operations, we can use the `jax.jit` function to compile multiple operations together using [XLA](https://www.tensorflow.org/xla). Let's try that.
 
 ```{code-cell} ipython3
 :id: qLGdCtFKFLOR
@@ -147,7 +147,7 @@ x = random.normal(key, (1000000,))
 
 +++ {"id": "a_V8SruVHrD_"}
 
-We can speed it up with `@jit`, which will jit-compile the first time `selu` is called and will be cached thereafter.
+We can speed it up with `jax.jit`, which will jit-compile the first time `selu` is called and will be cached thereafter.
 
 ```{code-cell} ipython3
 :id: fh4w_3NpFYTp
@@ -254,7 +254,7 @@ print('Naively batched')
 
 +++ {"id": "qHfKaLE9stbA"}
 
-We know how to batch this operation manually. In this case, `jnp.dot` handles extra batch dimensions transparently.
+We know how to batch this operation manually. In this case, `jnp.dot` handles extra batch dimensions transparently. Note that to jit-compile this function, we'll use the `@jit` decoratod (instead of calling `jax.jit`).
 
 ```{code-cell} ipython3
 :id: ipei6l8nvrzH
