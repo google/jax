@@ -4,7 +4,7 @@
 
 # JAX: Autograd and XLA
 
-![Continuous integration](https://github.com/google/jax/actions/workflows/ci-build.yaml/badge.svg)
+[![JAX CI Status](https://tensorflow.github.io/build/jax/JAX%20CI.svg)](https://tensorflow.github.io/build/jax)
 ![PyPI version](https://img.shields.io/pypi/v/jax)
 
 [**Quickstart**](#quickstart-colab-in-the-cloud)
