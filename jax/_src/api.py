@@ -24,16 +24,17 @@ from __future__ import annotations
 
 import collections
 from collections.abc import Generator, Hashable, Iterable, Sequence
+from contextlib import contextmanager, ExitStack
 from functools import partial
 import inspect
 import math
-import typing
-from typing import (Any, Callable, Literal, NamedTuple, TypeVar, overload,
-                    cast)
+from typing import (Any, Callable, Literal, NamedTuple, TypeVar, cast,
+                    overload, TYPE_CHECKING)
 import weakref
 
 import numpy as np
-from contextlib import contextmanager, ExitStack
+if TYPE_CHECKING:
+  from typing_extensions import ParamSpec
 
 from jax._src import linear_util as lu
 from jax._src import stages
@@ -96,6 +97,12 @@ Device = xc.Device
 F = TypeVar("F", bound=Callable)
 T = TypeVar("T")
 U = TypeVar("U")
+V_co = TypeVar("V_co", covariant=True)
+if TYPE_CHECKING:
+  P = ParamSpec("P")
+else:
+  P = TypeVar("P")
+
 
 map, unsafe_map = safe_map, map
 zip, unsafe_zip = safe_zip, zip
@@ -140,7 +147,7 @@ float0 = dtypes.float0
 
 
 def jit(
-  fun: Callable,
+  fun: Callable[P, V_co],
   in_shardings=sharding_impls.UNSPECIFIED,
   out_shardings=sharding_impls.UNSPECIFIED,
   static_argnums: int | Sequence[int] | None = None,
@@ -152,7 +159,7 @@ def jit(
   backend: str | None = None,
   inline: bool = False,
   abstracted_axes: Any | None = None,
-) -> pjit.JitWrapped:
+) -> pjit.JitWrapped[P, V_co]:
   """Sets up ``fun`` for just-in-time compilation with XLA.
 
   Args:
@@ -1796,7 +1803,7 @@ def _cpp_pmap(
     ### Decide whether we can support the C++ fast path
     use_fastpath = False
     if execute is not None and isinstance(execute, pxla.ExecuteReplicated):
-      execute_replicated = typing.cast(pxla.ExecuteReplicated, execute)
+      execute_replicated = cast(pxla.ExecuteReplicated, execute)
       use_fastpath = (
         # TODO(sharadmv): Enable effects in replicated computation
         not execute_replicated.has_unordered_effects
@@ -1806,7 +1813,7 @@ def _cpp_pmap(
 
     ### If we can use the fastpath, we return required info to the caller.
     if use_fastpath:
-      execute_replicated = typing.cast(pxla.ExecuteReplicated, execute)
+      execute_replicated = cast(pxla.ExecuteReplicated, execute)
       out_handler = execute_replicated.out_handler
       in_handler = execute_replicated.in_handler
 

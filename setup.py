@@ -85,6 +85,7 @@ setup(
         'importlib_metadata>=4.6;python_version<"3.10"',
     ],
     extras_require={
+        'dev': ['typing_extensions>=4.8.0'],
         # Minimum jaxlib version; used in testing.
         'minimum-jaxlib': [f'jaxlib=={_minimum_jaxlib_version}'],
 
