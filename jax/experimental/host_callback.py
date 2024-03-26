@@ -530,6 +530,7 @@ from jax._src import source_info_util
 from jax._src import tree_util
 from jax._src import util
 from jax._src import xla_bridge as xb
+from jax._src.lax import lax as lax_internal
 from jax._src.lib import xla_client
 from jax._src.lib import xla_extension
 from jax._src.lib.mlir.dialects import hlo
@@ -954,25 +955,27 @@ outside_call_p.multiple_results = True
 core.outfeed_primitives.add(outside_call_p)
 
 
-def _outside_call_abstract_eval(*args_a: pe.AbstractValue,
-                                identity, **params) -> Sequence[pe.AbstractValue]:
+def _outside_call_abstract_eval(
+    *args_a: pe.AbstractValue, identity, **params
+) -> tuple[Sequence[pe.AbstractValue], set[core.Effect]]:
+  effects = {lax_internal.infeed_effect, lax_internal.outfeed_effect}
   if identity:
     # Do some validation here
     assert "result_treedef" not in params
     assert "flat_results_aval" not in params
-    return args_a
+    return args_a, effects
   assert params["device_index"] is not None
   assert params["result_treedef"] is not None
   assert params["flat_results_aval"] is not None
   flat_results_aval = params["flat_results_aval"]
   if "has_token" in params and params["has_token"]:
     assert len(args_a) >= 2
-    return flat_results_aval + args_a[-2:]
+    return flat_results_aval + args_a[-2:], effects  # or set(), given token?
   else:
-    return flat_results_aval
+    return flat_results_aval, effects
 
 
-outside_call_p.def_abstract_eval(_outside_call_abstract_eval)
+outside_call_p.def_effectful_abstract_eval(_outside_call_abstract_eval)
 
 
 def _outside_call_impl(*args, **params):
