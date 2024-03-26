@@ -126,7 +126,7 @@ cc_library(
     features = ["-use_header_modules"],
     deps = [
         ":kernel_helpers",
-        "@tsl//tsl/python/lib/core:numpy",
+        "@xla//xla/tsl/python/lib/core:numpy",
         "@com_google_absl//absl/base",
         "@nanobind",
     ],
@@ -202,7 +202,7 @@ pybind_extension(
         "@xla//xla/python:py_client_gpu",
         "@xla//xla/tsl/cuda:cublas",
         "@xla//xla/tsl/cuda:cudart",
-        "@tsl//tsl/python/lib/core:numpy",
+        "@xla//xla/tsl/python/lib/core:numpy",
     ],
 )
 

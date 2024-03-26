@@ -26,8 +26,8 @@ limitations under the License.
 #include "xla/pjrt/status_casters.h"
 #include "xla/python/py_client_gpu.h"
 #include "xla/status.h"
+#include "xla/tsl/python/lib/core/numpy.h"
 #include "xla/util.h"
-#include "tsl/python/lib/core/numpy.h"
 
 namespace nb = nanobind;
 
