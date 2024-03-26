@@ -36,7 +36,7 @@ pytype_strict_library(
 
 pytype_strict_library(
     name = "core",
-    srcs = ["core.py"],
+    srcs = glob(["core/**/*.py"]),
     deps = ["//jax:abstract_arrays"],
 )
 
