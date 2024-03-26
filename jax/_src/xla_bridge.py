@@ -1039,6 +1039,18 @@ def backend_pjrt_c_api_version(platform=None) -> tuple[int, int] | None:
   return None
 
 
+def backend_xla_version(platform=None) -> int | None:
+  """Returns the XLA version of the backend.
+
+  Returns None if the backend does not use PJRT C API or does not have
+  xla_version in the plugin attributes.
+  """
+  backend = get_backend(platform)
+  if hasattr(backend, "xla_version"):
+    return backend.xla_version
+  return None
+
+
 @lru_cache
 def local_devices(process_index: int | None = None,
                   backend: str | xla_client.Client | None = None,
