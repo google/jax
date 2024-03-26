@@ -170,7 +170,7 @@ def jax_test(
         shard_count = None,
         deps = [],
         disable_backends = None,  # buildifier: disable=unused-variable
-        backend_variant_args = {},  # buildifier: disable=unused-variable
+        backend_variant_args = {},
         backend_tags = {},  # buildifier: disable=unused-variable
         disable_configs = None,  # buildifier: disable=unused-variable
         enable_configs = None,  # buildifier: disable=unused-variable
@@ -201,7 +201,7 @@ def jax_test(
         native.py_test(
             name = name + "_" + backend,
             srcs = srcs,
-            args = test_args,
+            args = test_args + backend_variant_args.get(backend, []),
             env = env,
             deps = [
                 "//jax",
