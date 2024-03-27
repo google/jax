@@ -8,6 +8,9 @@ Remember to align the itemized text with the first line of an item within a list
 
 ## jax 0.4.26
 
+* New Features
+  * {func}`jax.numpy.astype` supports new `device` keyword argument.
+
 * Deprecations & Removals
   * {func}`jax.tree_map` is deprecated; use `jax.tree.map` instead, or for backward
     compatibility with older JAX versions, use {func}`jax.tree_util.tree_map`.
@@ -36,6 +39,12 @@ Remember to align the itemized text with the first line of an item within a list
     This change could break clients that set a specific
     JAX serialization version lower than 9.
 
+
+* Bug fixes
+  * {func}`jax.numpy.astype` will now always return a copy when `copy=True`.
+    Previously, no copy would be made when the output array would have the same
+    dtype as the input array. This may result in some increased memory usage.
+    To prevent copying when possible, set `copy=False`.
 
 ## jaxlib 0.4.26
 

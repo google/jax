@@ -41,7 +41,7 @@ import numpy as np
 import opt_einsum
 
 import jax
-from jax import jit
+from jax import jit, device_put
 from jax import errors
 from jax import lax
 from jax.sharding import Sharding, SingleDeviceSharding
@@ -2209,19 +2209,44 @@ def _convert_to_array_if_dtype_fails(x: ArrayLike) -> ArrayLike:
   else:
     return x
 
-
 @util.implements(getattr(np, "astype", None), lax_description="""
 This is implemented via :func:`jax.lax.convert_element_type`, which may
 have slightly different behavior than :func:`numpy.astype` in some cases.
 In particular, the details of float-to-int and int-to-float casts are
 implementation dependent.
 """)
-def astype(x: ArrayLike, dtype: DTypeLike | None, /, *, copy: bool = True) -> Array:
-  del copy  # unused in JAX
+def astype(x: ArrayLike, dtype: DTypeLike | None, /, *, copy: bool = True, device: xc.Device | Sharding | None = None) -> Array:
   if dtype is None:
     dtype = dtypes.canonicalize_dtype(float_)
   dtypes.check_user_dtype_supported(dtype, "astype")
-  return lax.convert_element_type(x, dtype)
+  src_dtype = x.dtype if hasattr(x, "dtype") else dtypes.dtype(x)
+  if (
+    src_dtype is not None
+    and dtypes.isdtype(src_dtype, "complex floating")
+    and dtypes.isdtype(dtype, ("integral", "real floating"))
+  ):
+    warnings.warn(
+      "Casting from complex to non-complex dtypes will soon raise a ValueError. "
+      "Please first use jnp.real or jnp.imag to take the real/imaginary "
+      "component of your input.",
+      DeprecationWarning, stacklevel=2
+    )
+  src_devices = (
+    x.devices() if hasattr(x, "devices")
+    and not isinstance(x, core.Tracer) else None
+  )
+  arr = x
+  if device is not None and src_devices != {device}:
+    arr = device_put(x, device)
+  elif copy:
+    arr = _array_copy(x)
+
+  # We offer a more specific warning than the usual ComplexWarning so we prefer
+  # to issue our warning.
+  with warnings.catch_warnings():
+    warnings.simplefilter("ignore", ComplexWarning)
+    return lax.convert_element_type(arr, dtype)
+
 
 
 @util.implements(np.asarray, lax_description=_ARRAY_DOC)

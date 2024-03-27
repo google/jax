@@ -3789,6 +3789,41 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     self._CheckAgainstNumpy(np_op, jnp_op, args_maker)
     self._CompileAndCheck(jnp_op, args_maker)
 
+  @jtu.sample_product(
+    change_dtype=[True, False],
+    copy=[True, False],
+    change_device=[True, False],
+  )
+  def testAstypeCopy(self, change_dtype, copy, change_device):
+    if jax.device_count() == 1 and change_device:
+      raise unittest.SkipTest(
+        "Testing device transfer requires at least two available devices."
+      )
+
+    dtype = 'float32' if change_dtype else 'int32'
+    device = jax.devices()[-1] if change_device else None
+    expect_copy = change_dtype or copy or change_device
+    x = jnp.arange(5, dtype='int32')
+    y = x.astype(dtype, copy=copy, device=device)
+
+    assert y.dtype == dtype
+    if change_device:
+      assert y.devices() == {device}
+    else:
+      y.delete()
+      get_val = lambda: np.array(x)
+      err_msg = "Array has been deleted"
+      if expect_copy:
+        get_val()
+      else:
+        jtu.check_raises(get_val, RuntimeError, err_msg)
+
+  def testAstypeComplexDowncast(self):
+    x = jnp.array(2.0+1.5j, dtype='complex64')
+    msg = "Casting from complex to non-complex dtypes will soon raise "
+    with self.assertWarns(DeprecationWarning, msg=msg):
+      x.astype('float32')
+
   def testAstypeInt4(self):
     # Test converting from int4 to int8
     x = np.array([1, -2, -3, 4, -8, 7], dtype=jnp.int4)
