@@ -608,6 +608,16 @@ class PureCallbackTest(jtu.JaxTestCase):
       return jax.pure_callback(cb, x, x)
     f(jnp.array(2.))
 
+  def test_pure_callback_does_not_deadlock(self):
+
+    def f(x):
+      y = jnp.asarray(x) + 1
+      return np.asarray(2 * jnp.log(y))
+
+    x = jnp.array([1.0, 2.0, 3.0, 4.0])
+    out = jax.pure_callback(f, jax.ShapeDtypeStruct(x.shape, x.dtype), x)
+    np.testing.assert_allclose(out, 2 * jnp.log(x + 1))
+
   def test_can_dce_pure_callback(self):
 
     if jax.default_backend() == "tpu":
