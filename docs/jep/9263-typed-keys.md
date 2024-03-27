@@ -237,15 +237,15 @@ time boils down to this:
 :class: red-background
 # Incorrect
 keys = random.split(random.PRNGKey(0))
-data = jax.vmap(random.uniform, axis=1)(keys)
+data = jax.vmap(random.uniform, in_axes=1)(keys)
 ```
 ```{code-block} python
 :class: green-background
 # Correct
 keys = random.split(random.PRNGKey(0))
-data = jax.vmap(random.uniform, axis=0)(keys)
+data = jax.vmap(random.uniform, in_axes=0)(keys)
 ```
-The bug here is subtle. By mapping over `axis=1`, this code makes new keys by
+The bug here is subtle. By mapping over `in_axes=1`, this code makes new keys by
 combining a single element from each key buffer in the batch. The resulting
 keys are different from one another, but are effectively "derived" in a
 non-standard way. Again, the PRNG is not designed or tested to produce
