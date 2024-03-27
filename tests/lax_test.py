@@ -3554,10 +3554,9 @@ class FunctionAccuracyTest(jtu.JaxTestCase):
       regions_with_inaccuracies_keep('q1', 'q2', 'q3', 'q4', 'ninf', 'pinf', 'ninfj', 'pinfj', 'zero')
 
     elif name == 'log1p':
-      if xla_extension_version < 251:
-        regions_with_inaccuracies_keep('q1', 'q2', 'q3', 'q4', 'neg', 'pos', 'negj', 'posj', 'ninf', 'pinf', 'ninfj', 'pinfj')
-      else:
-        regions_with_inaccuracies_keep('ninf', 'pinf', 'ninfj', 'pinfj')
+      regions_with_inaccuracies_keep('q1', 'q2', 'q3', 'q4', 'neg', 'pos', 'negj', 'posj', 'ninf', 'pinf', 'ninfj', 'pinfj')
+      # TODO(pearu): after landing openxla/xla#10503, switch to
+      #   regions_with_inaccuracies_keep('ninf', 'pinf', 'ninfj', 'pinfj')
 
     elif name == 'exp':
       regions_with_inaccuracies_keep('pos', 'pinf', 'mpos')
