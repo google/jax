@@ -39,7 +39,7 @@ def repo():
     #    python build/build.py --bazel_options=--override_repository=xla=/path/to/xla
     #    or
     # b) by commenting out the http_archive above and uncommenting the following:
-    # local_repository(
+    # native.local_repository(
     #    name = "xla",
     #    path = "/path/to/xla",
     # )
