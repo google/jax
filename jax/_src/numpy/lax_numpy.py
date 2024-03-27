@@ -2442,9 +2442,9 @@ def fromiter(*args, **kwargs):
    is later modified in-place, it may lead to undefined behavior when using
    the associated JAX array.
 """)
-def from_dlpack(x: Any) -> Array:
+def from_dlpack(x: Any, /, *, device: xc.Device | Sharding | None = None, copy: bool | None = None) -> Array:
   from jax.dlpack import from_dlpack  # pylint: disable=g-import-not-at-top
-  return from_dlpack(x)
+  return from_dlpack(x, device=device, copy=copy)
 
 @util.implements(np.fromfunction)
 def fromfunction(function: Callable[..., Array], shape: Any,

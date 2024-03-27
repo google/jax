@@ -174,12 +174,25 @@ class DLPackTest(jtu.JaxTestCase):
   @jtu.sample_product(
     shape=all_shapes,
     dtype=numpy_dtypes,
+    gpu=[False, True],
+    copy=[False, True],
   )
-  def testNumpyToJax(self, shape, dtype):
+  def testNumpyToJax(self, shape, dtype, gpu, copy):
     rng = jtu.rand_default(self.rng())
     x_np = rng(shape, dtype)
-    x_jax = jnp.from_dlpack(x_np)
-    self.assertAllClose(x_np, x_jax)
+    if gpu and jax.default_backend() == "cpu":
+      raise unittest.SkipTest("Skipping GPU test case on CPU")
+    platform = "gpu" if gpu else "cpu"
+    device = jax.devices(platform)[0]
+    _from_dlpack = lambda: jnp.from_dlpack(x_np, device=device, copy=copy)
+    if gpu and not copy:
+      self.assertRaisesRegex(
+        ValueError,
+        r"Specified .* which requires a copy",
+        _from_dlpack
+      )
+    else:
+      self.assertAllClose(x_np, _from_dlpack())
 
   @jtu.sample_product(
     shape=all_shapes,
