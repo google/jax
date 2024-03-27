@@ -714,7 +714,7 @@ def make_xmap_callable(fun: lu.WrappedFun,
     return pxla.lower_sharding_computation(
         core.ClosedJaxpr(jaxpr, consts), 'jit', name,
         (UNSPECIFIED,) * len(in_avals), (UNSPECIFIED,) * len(out_avals),
-        donated_invars, in_avals, keep_unused=True, inline=False,
+        donated_invars, in_avals, keep_unused=True,
         devices_from_context=None, lowering_parameters=lowering_parameters,
         in_layouts=(None,) * len(in_avals), out_layouts=(None,) * len(out_avals))
 
