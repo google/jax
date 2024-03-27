@@ -4186,63 +4186,34 @@ FailureOr<TypedValue<VectorType>> relayout(
         });
     src = dst;
     src_tiles = std::move(src_tiles_retiled);
-  } else if (  // TODO(b/265133506): Generalize retiling to general 16-bit types
-               // (might need to use a different unpacking op).
-               // (8,128) -> (16,128) tiling change for packed 16-bit types.
+  } else if (  // TODO(b/265133506): Generalize retiling.
+               // (8,128) -> (8 * packing,128) tiling change for packed type.
       src.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
       dst.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
-      vty.getElementTypeBitWidth() == 16 && src.offsets() == dst.offsets() &&
-      src.tiling() == std::array<int64_t, 2>{8, 128} &&
-      dst.tiling() == std::array<int64_t, 2>{16, 128}) {
-    const VectorLayout new_src(src.bitwidth(), src.offsets(), dst.tiling());
-    xla::Array<Value> src_tiles_retiled(
-        new_src.tileArrayShape(vty.getShape(), target_shape));
-    src_tiles_retiled.Each([&](absl::Span<const int64_t> idx, Value *tile) {
-      SmallVector<int64_t> src_idx(idx.begin(), idx.end());
-      src_idx[src_idx.size() - 2] *= 2;
-      src_idx[src_idx.size() - 1] /= 2;
-      Value src_row1 = src_tiles(src_idx);
-      if (src_idx[src_idx.size() - 2] + 1 <
-          src_tiles.dim(src_tiles.num_dimensions() - 2)) {
-        ++src_idx[src_idx.size() - 2];
-      }
-      Value src_row2 = src_tiles(src_idx);
-      const int vreg_part = idx[idx.size() - 1] % 2;
-
-      VectorType vreg_x32 =
-          vty.getElementType().isSignlessInteger()
-              ? VectorType::get(target_shape, builder.getI32Type())
-              : VectorType::get(target_shape, builder.getF32Type());
-      auto half_row1 = builder.create<tpu::UnpackSubelementsOp>(
-          v.getLoc(), vreg_x32, src_row1, vreg_part);
-      auto half_row2 = builder.create<tpu::UnpackSubelementsOp>(
-          v.getLoc(), vreg_x32, src_row2, vreg_part);
-      *tile = builder.create<tpu::PackSubelementsOp>(
-          v.getLoc(), src_row1.getType(), ValueRange{half_row1, half_row2});
-    });
-    src = new_src;
-    src_tiles = std::move(src_tiles_retiled);
-  } else if (  // (8,128) -> (32,128) tiling change for packed 8-bit integers.
-      src.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
-      dst.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
-      vty.getElementType() == builder.getI8Type() &&
+      vty.getElementTypeBitWidth() < 32 &&
+      32 % vty.getElementTypeBitWidth() == 0 &&
       src.offsets() == dst.offsets() &&
       src.tiling() == std::array<int64_t, 2>{8, 128} &&
-      dst.tiling() == std::array<int64_t, 2>{32, 128}) {
+      dst.tiling() ==
+          std::array<int64_t, 2>{8 * 32 / vty.getElementTypeBitWidth(), 128}) {
     const VectorLayout new_src(src.bitwidth(), src.offsets(), dst.tiling());
     xla::Array<Value> src_tiles_retiled(
         new_src.tileArrayShape(vty.getShape(), target_shape));
-    VectorType vreg_i32 =
-        getNativeVregType(builder.getI32Type(), target_shape).value();
+    int vty_packing = 32 / vty.getElementTypeBitWidth();
+    VectorType vreg_x32 =
+        vty.getElementType().isSignlessInteger()
+            ? VectorType::get(target_shape, builder.getI32Type())
+            : VectorType::get(target_shape, builder.getF32Type());
     src_tiles_retiled.Each([&](absl::Span<const int64_t> idx, Value *tile) {
-      const int vreg_part = idx.back() % 4;
-      std::array<Value, 4> parts;
+      const int vreg_part = idx.back() % vty_packing;
+      SmallVector<Value> parts;
+      parts.resize(vty_packing);
       SmallVector<int64_t> src_idx(idx.begin(), idx.end());
-      src_idx[src_idx.size() - 2] *= 4;
-      src_idx[src_idx.size() - 1] /= 4;
-      for (int i = 0; i < 4; ++i) {
+      src_idx[src_idx.size() - 2] *= vty_packing;
+      src_idx[src_idx.size() - 1] /= vty_packing;
+      for (int i = 0; i < vty_packing; ++i) {
         parts[i] = builder.create<tpu::UnpackSubelementsOp>(
-            v.getLoc(), vreg_i32, src_tiles(src_idx), vreg_part);
+            v.getLoc(), vreg_x32, src_tiles(src_idx), vreg_part);
         if (src_idx[src_idx.size() - 2] <
             src_tiles.dim(src_tiles.num_dimensions() - 2) - 1) {
           ++src_idx[src_idx.size() - 2];
