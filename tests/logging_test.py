@@ -15,16 +15,12 @@
 import contextlib
 import io
 import logging
+import os
 import platform
 import subprocess
 import sys
 import textwrap
 import unittest
-
-import jax
-from jax import config
-import jax._src.test_util as jtu
-from jax._src import xla_bridge
 
 # Note: importing absltest causes an extra absl root log handler to be
 # registered, which causes extra debug log messages. We don't expect users to
@@ -33,6 +29,11 @@ from jax._src import xla_bridge
 # parsing to work correctly with bazel (otherwise we could avoid importing
 # absltest/absl logging altogether).
 from absl.testing import absltest
+import jax
+from jax import config
+from jax._src import xla_bridge
+import jax._src.test_util as jtu
+
 config.parse_flags_with_absl()
 
 
@@ -58,6 +59,8 @@ class LoggingTest(jtu.JaxTestCase):
       raise self.skipTest(
           "test requires fresh process on Cloud TPU because only one process "
           "can use the TPU at a time")
+    if xla_bridge._backends and not jtu.is_device_cuda():
+      raise self.skipTest("test requires Hermetic CUDA configured")
     if sys.executable is None:
       raise self.skipTest("test requires access to python binary")
 
@@ -72,8 +75,14 @@ class LoggingTest(jtu.JaxTestCase):
     python = sys.executable
     assert "python" in python
     # Make sure C++ logging is at default level for the test process.
-    proc = subprocess.run([python, "-c", program], capture_output=True,
-                          env={"TF_CPP_MIN_LOG_LEVEL": "1"})
+    proc = subprocess.run(
+        [python, "-c", program],
+        capture_output=True,
+        env={
+            "TF_CPP_MIN_LOG_LEVEL": "1",
+            "LD_LIBRARY_PATH": os.getenv("LD_LIBRARY_PATH"),
+        },
+    )
 
     lines = proc.stdout.split(b"\n")
     lines.extend(proc.stderr.split(b"\n"))

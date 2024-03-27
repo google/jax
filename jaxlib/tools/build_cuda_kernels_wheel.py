@@ -92,7 +92,9 @@ def prepare_wheel(
   plugin_dir = sources_path / f"jax_cuda{cuda_version}_plugin"
   copy_runfiles(
       dst_dir=plugin_dir / "nvvm" / "libdevice",
-      src_files=["local_config_cuda/cuda/cuda/nvvm/libdevice/libdevice.10.bc"],
+      src_files=[
+          "cuda_nvcc/nvvm/libdevice/libdevice.10.bc",
+      ],
   )
   copy_runfiles(
       dst_dir=plugin_dir,

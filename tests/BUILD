@@ -1350,13 +1350,10 @@ py_test(
     ],
 )
 
-py_test(
+jax_test(
     name = "logging_test",
     srcs = ["logging_test.py"],
-    deps = [
-        "//jax",
-        "//jax:test_util",
-    ],
+    use_pytest_launcher = True,
 )
 
 jax_test(

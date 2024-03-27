@@ -231,10 +231,8 @@ build:rbe_linux_cuda_base --repo_env=REMOTE_GPU_TESTING=1
 build:rbe_linux_cuda12.3_nvcc_base --config=rbe_linux_cuda_base
 build:rbe_linux_cuda12.3_nvcc_base --config=cuda_clang
 build:rbe_linux_cuda12.3_nvcc_base --action_env=TF_NVCC_CLANG="1"
-build:rbe_linux_cuda12.3_nvcc_base --action_env=TF_CUDA_VERSION=12
+build:rbe_linux_cuda12.3_nvcc_base --action_env=TF_CUDA_VERSION=12.3
 build:rbe_linux_cuda12.3_nvcc_base --action_env=TF_CUDNN_VERSION=8
-build:rbe_linux_cuda12.3_nvcc_base --action_env=CUDA_TOOLKIT_PATH="/usr/local/cuda-12"
-build:rbe_linux_cuda12.3_nvcc_base --action_env=LD_LIBRARY_PATH="/usr/local/cuda:/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:/usr/local/tensorrt/lib"
 build:rbe_linux_cuda12.3_nvcc_base --host_crosstool_top="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn8.9_config_cuda//crosstool:toolchain"
 build:rbe_linux_cuda12.3_nvcc_base --crosstool_top="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn8.9_config_cuda//crosstool:toolchain"
 build:rbe_linux_cuda12.3_nvcc_base --extra_toolchains="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn8.9_config_cuda//crosstool:toolchain-linux-x86_64"
@@ -243,8 +241,6 @@ build:rbe_linux_cuda12.3_nvcc_base --host_platform="@ubuntu20.04-clang_manylinux
 build:rbe_linux_cuda12.3_nvcc_base --platforms="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn8.9_config_platform//:platform"
 build:rbe_linux_cuda12.3_nvcc_base --repo_env=TF_CUDA_CONFIG_REPO="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn8.9_config_cuda"
 build:rbe_linux_cuda12.3_nvcc_base --repo_env=TF_NCCL_CONFIG_REPO="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn8.9_config_nccl"
-# RBE machines have an older CUDA driver version, so we have to enable driver forward compatibility
-build:rbe_linux_cuda12.3_nvcc_base --test_env=LD_LIBRARY_PATH=/usr/local/cuda/compat
 build:rbe_linux_cuda12.3_nvcc_py3.9 --config=rbe_linux_cuda12.3_nvcc_base --repo_env=TF_PYTHON_CONFIG_REPO="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn8.9_config_python3.9"
 build:rbe_linux_cuda12.3_nvcc_py3.9 --python_path="/usr/local/bin/python3.9"
 build:rbe_linux_cuda12.3_nvcc_py3.10 --config=rbe_linux_cuda12.3_nvcc_base --repo_env=TF_PYTHON_CONFIG_REPO="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn8.9_config_python3.10"

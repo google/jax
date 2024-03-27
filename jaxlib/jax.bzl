@@ -161,6 +161,47 @@ def if_building_jaxlib(if_building, if_not_building = []):
         "//conditions:default": if_not_building,
     })
 
+def _py_test_launcher_impl(ctx):
+    ctx.actions.expand_template(
+        template = ctx.file._template,
+        output = ctx.outputs.launcher,
+        substitutions = {"%{test_file}": ctx.attr.src},
+    )
+
+_py_test_launcher = rule(
+    attrs = {
+        "src": attr.string(mandatory = True),
+        "_template": attr.label(
+            default = Label("//jaxlib:py_test_launcher.py.tpl"),
+            allow_single_file = True,
+        ),
+    },
+    outputs = {"launcher": "%{name}.py"},
+    implementation = _py_test_launcher_impl,
+)
+
+ALL_CUDA_LIBS = [
+    "@cuda_cudart//:cudart_lib",
+    "@cuda_nccl//:nccl_lib",
+    "@cuda_cudnn//:cudnn_lib",
+    "@cuda_cudnn//:cudnn_extra_libs",
+    "@cuda_cufft//:cufft_lib",
+    "@cuda_cusolver//:cusolver_lib",
+    "@cuda_cupti//:cupti_lib",
+    "@cuda_cublas//:cublas_lib",
+    "@cuda_cublas//:cublasLt_lib",
+    "@cuda_cusparse//:cusparse_lib",
+    "@cuda_nvjitlink//:nvjitlink_lib",
+]
+
+def _get_cuda_lib_locations():
+    cuda_libs_dict = ""
+    for lib in ALL_CUDA_LIBS:
+        cuda_libs_dict += "{}:{};".format(Label(lib).repo_name, "$(locations " + lib + ")")
+    return cuda_libs_dict
+
+CUDA_LIB_LOCATIONS = _get_cuda_lib_locations()
+
 # buildifier: disable=function-docstring
 def jax_test(
         name,
@@ -177,7 +218,8 @@ def jax_test(
         config_tags_overrides = None,  # buildifier: disable=unused-variable
         tags = [],
         main = None,
-        pjrt_c_api_bypass = False):  # buildifier: disable=unused-variable
+        pjrt_c_api_bypass = False,  # buildifier: disable=unused-variable
+        use_pytest_launcher = False):
     if main == None:
         if len(srcs) == 1:
             main = srcs[0]
@@ -198,23 +240,47 @@ def jax_test(
             test_tags += ["manual"]
         if backend == "gpu":
             test_tags += tf_cuda_tests_tags()
-        native.py_test(
-            name = name + "_" + backend,
-            srcs = srcs,
-            args = test_args,
-            env = env,
-            deps = [
-                "//jax",
-                "//jax:test_util",
-            ] + deps + if_building_jaxlib(["//jaxlib/cuda:gpu_only_test_deps"]) + select({
-                "//jax:enable_build_cuda_plugin_from_source": ["//jax_plugins:gpu_plugin_only_test_deps"],
-                "//conditions:default": [],
-            }),
-            shard_count = test_shards,
-            tags = test_tags,
-            main = main,
-            exec_properties = tf_exec_properties({"tags": test_tags}),
-        )
+        if backend == "gpu" and use_pytest_launcher:
+            for src in srcs:
+                _py_test_launcher(
+                    name = name + "_launcher",
+                    src = src,
+                )
+                native.py_test(
+                    name = name + "_" + backend,
+                    srcs = [name + "_launcher.py"] + [src],
+                    args = test_args,
+                    deps = [
+                        "//jax",
+                        "//jax:test_util",
+                    ] + deps + if_building_jaxlib(["//jaxlib/cuda:gpu_only_test_deps"]) + select({
+                        "//jax:enable_build_cuda_plugin_from_source": ["//jax_plugins:gpu_plugin_only_test_deps"],
+                        "//conditions:default": [],
+                    }),
+                    data = ALL_CUDA_LIBS,
+                    shard_count = test_shards,
+                    tags = test_tags,
+                    main = name + "_launcher.py",
+                    exec_properties = tf_exec_properties({"tags": test_tags}),
+                    env = {"RELATIVE_CUDA_LIB_PATHS": CUDA_LIB_LOCATIONS},
+                )
+        else:
+            native.py_test(
+                name = name + "_" + backend,
+                srcs = srcs,
+                args = test_args,
+                deps = [
+                    "//jax",
+                    "//jax:test_util",
+                ] + deps + if_building_jaxlib(["//jaxlib/cuda:gpu_only_test_deps"]) + select({
+                    "//jax:enable_build_cuda_plugin_from_source": ["//jax_plugins:gpu_plugin_only_test_deps"],
+                    "//conditions:default": [],
+                }),
+                shard_count = test_shards,
+                tags = test_tags,
+                main = main,
+                exec_properties = tf_exec_properties({"tags": test_tags}),
+            )
 
 def jax_generate_backend_suites(backends = []):
     """Generates test suite targets named cpu_tests, gpu_tests, etc.

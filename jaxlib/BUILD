@@ -100,6 +100,7 @@ symlink_files(
 exports_files([
     "README.md",
     "setup.py",
+    "py_test_launcher.py.tpl",
 ])
 
 cc_library(
