@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from enum import Enum
 from functools import partial, reduce
 import operator
 from typing import Optional
@@ -36,6 +37,17 @@ Array = jnp.ndarray
 DType = jnp.dtype
 PRNGKey = jnp.ndarray
 
+class AttentionLayout(Enum):
+  BTNH = 0
+  BNTH = 1
+
+def _normalize_layout(layout_str):
+  layout = layout_str.upper()
+  if layout in ['BSNH', 'BNSH', 'BTNH', 'BNTH']:
+    return AttentionLayout[layout.replace('S', 'T')]
+  else:
+    raise ValueError(f"Unsupported qkv_layout: {layout_str}")
+
 def element_type_to_backend_config_type_mapping(dtype):
   _element_type_to_backend_config_type_mapping = {
     ir.BF16Type.get(): "BF16",
@@ -56,18 +68,18 @@ def create_dot_product_attention_backend_config(batch,
                                                 dropout_rate,
                                                 is_flash_attention,
                                                 is_causal_mask,
+                                                layout,
                                                 is_bwd):
-  # b q_seq num_heads head_dim  -> Q
-  # b kv_seq num_heads head_dim -> K
-  # b kv_seq num_heads head_dim -> V
-  # b num_heads q_seq kv_seq -> P
-  # b q_seq num_heads head_dim -> O
-  # bmm1: Q @ K -> P
-  # bmm2: P @ V -> O
-  # bmm2Grad1: P @ dO -> dV
-  # bmm2Grad2: dO @ V -> dP
-  # bmm1Grad1: dP @ Q -> dK
-  # bmm1Grad2: dP @ K -> dQ
+  # Q, K, V: query, key, value in shape of BT(S)NH or BNT(S)H
+  # P: BMM1 output in shape of BNTS
+  # O: BMM2 output in the same shape with Q
+  # BMM1: Q @ K -> P
+  # BMM2: P @ V -> O
+  # BMM1Grad1: dP @ Q -> dK
+  # BMM1Grad2: dP @ K -> dQ
+  # BMM2Grad1: P @ dO -> dV
+  # BMM2Grad2: dO @ V -> dP
+
   cudnn_fmha_backend_config = {
     "algorithm": {
       "algo_id": "0",
@@ -100,46 +112,47 @@ def create_dot_product_attention_backend_config(batch,
     "is_flash_attention": is_flash_attention,
     "is_causal_mask": is_causal_mask,
   }
-  fwd_dot_number = {
-    "bmm1_dot_dimension_numbers": {
-      "lhs_contracting_dimensions": ["3"],
-      "rhs_contracting_dimensions": ["3"],
-      "lhs_batch_dimensions": ["0", "2"],
-      "rhs_batch_dimensions": ["0", "2"],
-    },
-    "bmm2_dot_dimension_numbers": {
-      "lhs_contracting_dimensions": ["3"],
-      "rhs_contracting_dimensions": ["1"],
-      "lhs_batch_dimensions": ["0", "1"],
-      "rhs_batch_dimensions": ["0", "2"],
-    },
-  }
-  bwd_dot_number = {
-    "bmm1_grad_gemm1_dot_dimension_numbers": {
-      "lhs_contracting_dimensions": ["2"],
-      "rhs_contracting_dimensions": ["1"],
-      "lhs_batch_dimensions": ["0", "1"],
-      "rhs_batch_dimensions": ["0", "2"],
-    },
-    "bmm1_grad_gemm2_dot_dimension_numbers": {
-      "lhs_contracting_dimensions": ["3"],
-      "rhs_contracting_dimensions": ["1"],
-      "lhs_batch_dimensions": ["0", "1"],
-      "rhs_batch_dimensions": ["0", "2"],
-    },
-    "bmm2_grad_gemm1_dot_dimension_numbers": {
-      "lhs_contracting_dimensions": ["2"],
-      "rhs_contracting_dimensions": ["1"],
-      "lhs_batch_dimensions": ["0", "1"],
-      "rhs_batch_dimensions": ["0", "2"],
-    },
-    "bmm2_grad_gemm2_dot_dimension_numbers": {
-      "lhs_contracting_dimensions": ["3"],
-      "rhs_contracting_dimensions": ["3"],
-      "lhs_batch_dimensions": ["0", "2"],
-      "rhs_batch_dimensions": ["0", "2"],
-    },
-  }
+  
+  # We define the contracting and batch dims in the format of
+  # ((lhs_contracting_dims, rhs_contracting_dims), (lhs_batch_dims,
+  # rhs_batch_dims)).
+  if layout == AttentionLayout.BNTH.value:
+    dims = [
+        ((3, 3), ((0, 1), (0, 1))), # BMM1: BNTH,BNSH->BNTS
+        ((3, 2), ((0, 1), (0, 1))), # BMM2: BNTS,BNSH->BNTH
+        ((2, 2), ((0, 1), (0, 1))), # BMM1_grad_1: BNTS,BNTH->BNSH
+        ((3, 2), ((0, 1), (0, 1))), # BMM1_grad_2: BNTS,BNSH->BNTH
+        ((2, 2), ((0, 1), (0, 1))), # BMM2_grad_1: BNTS,BNTH->BNSH
+        ((3, 3), ((0, 1), (0, 1))), # BMM2_grad_2: BNTH,BNSH->BNTS
+    ]
+  else:
+    dims = [
+        ((3, 3), ((0, 2), (0, 2))), # BMM1: BTNH,BSNH->BNTS
+        ((3, 1), ((0, 1), (0, 2))), # BMM2: BNTS,BSNH->BTNH
+        ((2, 1), ((0, 1), (0, 2))), # BMM1_grad_1: BNTS,BTNH->BSNH
+        ((3, 1), ((0, 1), (0, 2))), # BMM1_grad_2: BNTS,BSNH->BTNH
+        ((2, 1), ((0, 1), (0, 2))), # BMM2_grad_1: BNTS,BTNH->BSNH
+        ((3, 3), ((0, 2), (0, 2))), # BMM2_grad_2: BTNH,BSNH->BNTS
+    ]
+  keys = [
+      "bmm1_dot_dimension_numbers",
+      "bmm2_dot_dimension_numbers",
+      "bmm1_grad_gemm1_dot_dimension_numbers",
+      "bmm1_grad_gemm2_dot_dimension_numbers",
+      "bmm2_grad_gemm1_dot_dimension_numbers",
+      "bmm2_grad_gemm2_dot_dimension_numbers",
+  ]
+  fwd_dot_number = {}
+  bwd_dot_number = {}
+  for idx, (key, ((lc, rc), (lb, rb))) in enumerate(zip(keys, dims)):
+    dims_to_write = fwd_dot_number if idx < 2 else bwd_dot_number
+    dims_to_write[key] = {
+        "lhs_contracting_dimensions": [str(lc)],
+        "rhs_contracting_dimensions": [str(rc)],
+        "lhs_batch_dimensions": [str(i) for i in lb],
+        "rhs_batch_dimensions": [str(i) for i in rb],
+    }
+
   if is_bwd:
     cudnn_fmha_backend_config = {**cudnn_fmha_backend_config, **bwd_dot_number}
   else:
@@ -178,46 +191,56 @@ _custom_name_maps = {
 def get_custom_call_name(has_bias, has_mask, has_dropout, is_bwd):
   return _custom_name_maps[(is_bwd, has_dropout, has_mask, has_bias)]
 
-def check_qkv_layout(query, key, value):
-  assert len(query.shape) == len(key.shape) == len(value.shape) == 4, \
-    "query, key and value should have rank 4."
+def check_qkv_layout(query, key, value, layout):
+  def assert_eq(a, b, c, msg):
+    assert a == b == c, msg + f' must be same: {a}, {b}, {c}'
 
-  # Only support fp16 and bf16 here
-  query_dtype = query.dtype
-  key_dtype = key.dtype
-  value_dtype = value.dtype
-  assert query_dtype == key_dtype == value_dtype and query_dtype in [jnp.float16, jnp.bfloat16], \
-    "query, key and value should have same dtype and should be float16 or bfloat16"
+  q_rank, k_rank, v_rank  = len(query.shape), len(key.shape), len(value.shape)
+  assert q_rank == 4, "Q must have a rank of 4"
+  assert_eq(q_rank, k_rank, v_rank, 'QKV rank')
 
-  q_batch, q_seq_len, q_num_heads, q_head_dim = query.shape
-  k_batch, k_seq_len, k_num_heads, k_head_dim = key.shape
-  v_batch, v_seq_len, v_num_heads, v_head_dim = value.shape
-  if not((q_batch == k_batch == v_batch)
-      and (k_seq_len == v_seq_len)
-      and (q_num_heads == k_num_heads == v_num_heads)
-      and (q_head_dim == k_head_dim == v_head_dim)):
-    raise ValueError(
-      "query should have layout [batch, q_seq, num_heads, head_dim], " \
-      "key and value should have layout [batch, kv_seq, num_heads, head_dim].")
+  q_dtype, k_dtype, v_dtype = query.dtype, key.dtype, value.dtype
+  assert q_dtype in [jnp.float16, jnp.bfloat16], "Q must be fp16 or bf16"
+  assert_eq(q_dtype, k_dtype, v_dtype, 'QKV dtype')
 
-def check_is_flash_attention(query, key, cudnn_version, has_bias, is_training):
-  batch, q_seq_len, num_heads, head_dim = query.shape
-  _, kv_seq_len, _, _ = key.shape
+  if layout == AttentionLayout.BNTH:
+    qB, qN,  _, qH = query.shape
+    kB, kN, kS, kH = key.shape
+    vB, vN, vS, vH = value.shape
+  else:
+    assert layout == AttentionLayout.BTNH
+    qB,  _, qN, qH = query.shape
+    kB, kS, kN, kH = key.shape
+    vB, vS, vN, vH = value.shape
 
-  # check if attention pattern is supported by flash attention or fused attention
-  if q_seq_len <= 512 and kv_seq_len <= 512 and head_dim == 64 \
-    and (not is_training or q_seq_len % 64 == 0 and kv_seq_len % 64 == 0):
+  assert_eq(qB, kB, vB, 'QKV batch')
+  assert_eq(qN, kN, vN, 'QKV num_head')
+  assert_eq(qH, kH, vH, 'QKV dim_per_head')
+  assert kS == vS, f'KV must have same seq length: {kS} vs {vS}'
+
+def check_is_flash_attention(
+    query, key, layout, cudnn_version, has_bias, is_training):
+  if layout == AttentionLayout.BNTH:
+    _, N, T, H = query.shape 
+    _, _, S, _ = key.shape
+  else:
+    _, T, N, H = query.shape 
+    _, S, _, _ = key.shape
+
+  # check if attention pattern is supported by flash attention or fused attention.
+  if ((T <= 512 and S <= 512 and H == 64) and
+      (not is_training or T % 64 == 0 and S % 64 == 0)):
     # check if regular fused attention is supported
     # for training, seqlen should be divisible by 64
     is_flash_attention = False
-  elif head_dim <= 128 and head_dim % 8 == 0 \
-    and (not is_training or not has_bias or q_seq_len % 2 == 0 and kv_seq_len % 2 == 0):
+  elif ((H <= 128 and H % 8 == 0) and
+        (not is_training or not has_bias or T % 2 == 0 and S % 2 == 0)):
     # check if flash attention is supported
     # for training, for patterns with bias, seqlen should be divisible by 2
     is_flash_attention = True
   else:
     raise NotImplementedError(
-      f"Unsupported sequence length Q {q_seq_len}, KV {kv_seq_len} and head dim {head_dim}.")
+      f"Unsupported sequence length Q {T}, KV {S} and head dim {H}.")
   # check if minimum cudnn version requirement is satisfied
   if is_flash_attention and cudnn_version < 8904:
     raise RuntimeError("JAX requires cuDNN >= 8.9.4 to use flash cross attention.")
@@ -232,61 +255,78 @@ def check_cudnn_version():
     raise RuntimeError("cuDNN is not detected.")
   return cuda_versions.cudnn_get_version()
 
-def _dot_product_attention_fwd(query, key, value, bias, mask,
-  scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask, is_training):
+def _dot_product_attention_fwd(
+    query, key, value, bias, mask, scale, seed, dropout_rate, variadic_args,
+    is_flash_attention, is_causal_mask, layout, is_training):
   outputs = _dot_product_attention_fwd_p_wrapper.bind(
-    query, key, value, bias, mask, scale=scale, seed=seed, dropout_rate=dropout_rate,
-    variadic_args=variadic_args, is_flash_attention=is_flash_attention,
-    is_causal_mask=is_causal_mask, is_training=is_training)
+      query, key, value, bias, mask, scale=scale, seed=seed,
+      dropout_rate=dropout_rate, variadic_args=variadic_args,
+      is_flash_attention=is_flash_attention, is_causal_mask=is_causal_mask,
+      layout=layout, is_training=is_training)
   output = outputs[0]
   return output
 
-def _dot_product_attention_fwd_rule(query, key, value, bias, mask,
-  scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask, is_training):
+def _dot_product_attention_fwd_rule(
+    query, key, value, bias, mask, scale, seed, dropout_rate, variadic_args,
+    is_flash_attention, is_causal_mask, layout, is_training):
   outputs = _dot_product_attention_fwd_p_wrapper.bind(
-    query, key, value, bias, mask, scale=scale, seed=seed, dropout_rate=dropout_rate,
-    variadic_args=variadic_args, is_flash_attention=is_flash_attention,
-    is_causal_mask=is_causal_mask, is_training=is_training)
+      query, key, value, bias, mask, scale=scale, seed=seed,
+      dropout_rate=dropout_rate, variadic_args=variadic_args,
+      is_flash_attention=is_flash_attention, is_causal_mask=is_causal_mask,
+      layout=layout, is_training=is_training)
   res = (query, key, value, bias, mask, outputs[1], outputs[0]) if is_training else None
   return outputs[0], res
 
-def _dot_product_attention_bwd_rule(scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask, is_training, res, grad_output):
+def _dot_product_attention_bwd_rule(
+    scale, seed, dropout_rate, variadic_args, is_flash_attention,
+    is_causal_mask, layout, is_training, res, grad_output):
   query, key, value, bias, mask, activation, fwd_output = res
   grad_query, grad_key, grad_value = _dot_product_attention_bwd_p_wrapper.bind(
-    query, key, value, bias, mask, activation, fwd_output, grad_output,
-    scale=scale, seed=seed, dropout_rate=dropout_rate,
-    variadic_args=variadic_args, is_flash_attention=is_flash_attention,
-    is_causal_mask=is_causal_mask)
+      query, key, value, bias, mask, activation, fwd_output, grad_output,
+      scale=scale, seed=seed, dropout_rate=dropout_rate,
+      variadic_args=variadic_args, is_flash_attention=is_flash_attention,
+      is_causal_mask=is_causal_mask, layout=layout,
+  )
   grads = (grad_query, grad_key, grad_value, None, None)
   return grads
 
-def _dot_product_attention_fwd_impl(query, key, value, bias, mask,
-  scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask, is_training):
+def _dot_product_attention_fwd_impl(
+    query, key, value, bias, mask, scale, seed, dropout_rate, variadic_args,
+    is_flash_attention, is_causal_mask, layout, is_training):
   # args: {Q, K, V, mask*, bias*}
   outputs = _dot_product_attention_fwd_p.bind(
-    query, key, value, bias, mask, scale=scale, seed=seed, dropout_rate=dropout_rate,
-    variadic_args=variadic_args, is_flash_attention=is_flash_attention,
-    is_causal_mask=is_causal_mask, is_training=is_training)
+      query, key, value, bias, mask, scale=scale, seed=seed,
+      dropout_rate=dropout_rate, variadic_args=variadic_args,
+      is_flash_attention=is_flash_attention, is_causal_mask=is_causal_mask,
+      layout=layout, is_training=is_training)
   return outputs
 
-def _dot_product_attention_bwd_impl(query, key, value, bias, mask, activation, fwd_output, grad_output,
-  scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask):
+def _dot_product_attention_bwd_impl(
+    query, key, value, bias, mask, activation, fwd_output, grad_output, scale,
+    seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask,
+    layout):
   grad_query, grad_key, grad_value = _dot_product_attention_bwd_p.bind(
-    query, key, value, bias, mask, activation, fwd_output, grad_output,
-    scale=scale, seed=seed, dropout_rate=dropout_rate,
-    variadic_args=variadic_args, is_flash_attention=is_flash_attention,
-    is_causal_mask=is_causal_mask)
+      query, key, value, bias, mask, activation, fwd_output, grad_output,
+      scale=scale, seed=seed, dropout_rate=dropout_rate,
+      variadic_args=variadic_args, is_flash_attention=is_flash_attention,
+      is_causal_mask=is_causal_mask, layout=layout,
+  )
   grads = (grad_query, grad_key, grad_value)
   return grads
 
-def _dot_product_attention_fwd_abstract(query, key, value, bias, mask,
-  *, scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask, is_training):
+def _dot_product_attention_fwd_abstract(
+    query, key, value, bias, mask, *, scale, seed, dropout_rate, variadic_args,
+    is_flash_attention, is_causal_mask, layout, is_training):
   query_dtype = dtypes.canonicalize_dtype(query.dtype)
-  batch, q_seq_len, num_heads, head_dim = query.shape
-  _, kv_seq_len, _, _ = key.shape
-  output_shape = (batch, q_seq_len, num_heads, head_dim)
-  activation_shape = (batch, num_heads, q_seq_len, kv_seq_len)
-  softmax_stat_shape = (batch, num_heads, q_seq_len)
+  if layout == AttentionLayout.BNTH.value:
+    B, N, T, _ = query.shape
+    _, _, S, _ = key.shape
+  else:
+    B, T, N, _ = query.shape
+    _, S, _, _ = key.shape
+  output_shape = query.shape
+  activation_shape = (B, N, T, S)
+  softmax_stat_shape = (B, N, T)
 
   if is_flash_attention:
     # is flash attention
@@ -309,8 +349,10 @@ def _dot_product_attention_fwd_abstract(query, key, value, bias, mask,
       core.ShapedArray(output_shape, query_dtype),  # output
     )
 
-def _dot_product_attention_bwd_abstract(query, key, value, bias, mask, activation, fwd_output, grad_output,
-  *, scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask):
+def _dot_product_attention_bwd_abstract(
+    query, key, value, bias, mask, activation, fwd_output, grad_output, *,
+    scale, seed, dropout_rate, variadic_args, is_flash_attention,
+    is_causal_mask, layout):
   query_dtype = dtypes.canonicalize_dtype(query.dtype)
   key_dtype = dtypes.canonicalize_dtype(key.dtype)
   value_dtype = dtypes.canonicalize_dtype(value.dtype)
@@ -327,8 +369,9 @@ def _dot_product_attention_bwd_abstract(query, key, value, bias, mask, activatio
     ),  # part value
   )
 
-def _dot_product_attention_fwd_cuda_lowering(ctx, query, key, value, bias, mask,
-  scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask, is_training):
+def _dot_product_attention_fwd_cuda_lowering(
+    ctx, query, key, value, bias, mask, scale, seed, dropout_rate,
+    variadic_args, is_flash_attention, is_causal_mask, layout, is_training):
   query_type = ir.RankedTensorType(query.type)
   query_shape = query_type.shape
   key_type = ir.RankedTensorType(key.type)
@@ -336,18 +379,26 @@ def _dot_product_attention_fwd_cuda_lowering(ctx, query, key, value, bias, mask,
   value_type = ir.RankedTensorType(value.type)
   value_shape = value_type.shape
 
-  batch, q_seq_len, num_heads, head_dim = query_shape
-  _, kv_seq_len, _, _ = key_shape
+  if layout == AttentionLayout.BNTH.value:
+    B, N, T, H = query_shape
+    _, _, S, _ = key_shape
+    output_layout = (3, 2, 1, 0)
+    output_transpose_perm = mlir.dense_int_array((0, 1, 2, 3))
+  else:
+    B, T, N, H = query_shape
+    _, S, _, _ = key_shape
+    output_layout = (3, 1, 2, 0)
+    output_transpose_perm = mlir.dense_int_array((0, 2, 1, 3))
 
-  output_shape = (batch, num_heads, q_seq_len, head_dim)
-  output_layout = (3, 1, 2, 0)
-  output_transpose_perm = mlir.dense_int_array((0, 2, 1, 3))
-  activation_shape = (batch, num_heads, q_seq_len, kv_seq_len)
-  softmax_stat_shape = (batch, num_heads, q_seq_len)
+  output_shape = (B, N, T, H)
+  activation_shape = (B, N, T, S)
+  softmax_stat_shape = (B, N, T)
   scratch_shape = (0,)
   scratch_type = ir.IntegerType.get_unsigned(8)
-  # get backend config
-  backend_config = create_dot_product_attention_backend_config(batch, num_heads, q_seq_len, kv_seq_len, query_type.element_type, scale, seed, dropout_rate, is_flash_attention, is_causal_mask, False)
+  backend_config = create_dot_product_attention_backend_config(
+      B, N, T, S, query_type.element_type, scale, seed, dropout_rate,
+      is_flash_attention, is_causal_mask, layout, is_bwd=False,
+  )
   # {Q, K, V, mask*, bias*}
   # {output, scratch, activation*}
   has_dropout = dropout_rate > 0
@@ -403,8 +454,10 @@ def _dot_product_attention_fwd_cuda_lowering(ctx, query, key, value, bias, mask,
   else:
     return [hlo.transpose(out.results[0], output_transpose_perm)]
 
-def _dot_product_attention_bwd_cuda_lowering(ctx, query, key, value, bias, mask, activation, fwd_output, grad_output,
-  scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask):
+def _dot_product_attention_bwd_cuda_lowering(
+    ctx, query, key, value, bias, mask, activation, fwd_output, grad_output,
+    scale, seed, dropout_rate, variadic_args, is_flash_attention,
+    is_causal_mask, layout):
   query_type = ir.RankedTensorType(query.type)
   query_shape = query_type.shape
   key_type = ir.RankedTensorType(key.type)
@@ -416,18 +469,28 @@ def _dot_product_attention_bwd_cuda_lowering(ctx, query, key, value, bias, mask,
   grad_output_type = ir.RankedTensorType(grad_output.type)
   grad_output_shape = grad_output_type.shape
 
-  batch, q_seq_len, num_heads, head_dim = query_shape
-  _, kv_seq_len, _, _ = key_shape
+  if layout == AttentionLayout.BNTH.value:
+    B, N, T, H = query_shape
+    _, _, S, _ = key_shape
+    grad_layout = (3, 2, 1, 0)
+    grad_transpose_perm = mlir.dense_int_array((0, 1, 2, 3))
+  else:
+    B, T, N, H = query_shape
+    _, S, _, _ = key_shape
+    grad_layout = (3, 1, 2, 0)
+    grad_transpose_perm = mlir.dense_int_array((0, 2, 1, 3))
+
   scratch_shape = (0,)
   scratch_type = ir.IntegerType.get_unsigned(8)
 
-  grad_query_shape = (batch, num_heads, q_seq_len, head_dim)
-  grad_key_shape = (batch, num_heads, kv_seq_len, head_dim)
-  grad_value_shape = (batch, num_heads, kv_seq_len, head_dim)
-  softmax_sum_shape = (batch, num_heads, q_seq_len)
-  grad_layout = (3, 1, 2, 0)
-  grad_transpose_perm = mlir.dense_int_array((0, 2, 1, 3))
-  backend_config = create_dot_product_attention_backend_config(batch, num_heads, q_seq_len, kv_seq_len, query_type.element_type, scale, seed, dropout_rate, is_flash_attention, is_causal_mask, True)
+  grad_query_shape = (B, N, T, H)
+  grad_key_shape = (B, N, S, H)
+  grad_value_shape = (B, N, S, H)
+  softmax_sum_shape = (B, N, T)
+  backend_config = create_dot_product_attention_backend_config(
+      B, N, T, S, query_type.element_type, scale, seed, dropout_rate,
+      is_flash_attention, is_causal_mask, layout, is_bwd=True,
+  )
   # {Q, K, V, activation, dO, mask*, bias*, O*}
   # {dQ, dK, dV, d_S*, softmax_sum*, d_Q_accum*, scratch, dbias*}
   has_dropout = dropout_rate > 0
@@ -484,7 +547,9 @@ def _check_valid_batch_dims(bdims):
       raise NotImplementedError("Currently only support batch_dim in [0, None], " \
       f"but got {dim=}")
 
-def _dot_product_attention_fwd_batcher(batched_args, batch_dims, *, scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask, is_training):
+def _dot_product_attention_fwd_batcher(
+    batched_args, batch_dims, *, scale, seed, dropout_rate, variadic_args,
+    is_flash_attention, is_causal_mask, layout, is_training):
   _check_valid_batch_dims(batch_dims)
   query, key, value, bias, mask = batched_args
   query_bdim = batch_dims[0]
@@ -493,74 +558,84 @@ def _dot_product_attention_fwd_batcher(batched_args, batch_dims, *, scale, seed,
   else:
     out_bdims = (query_bdim,)
 
-  *batch_tuple, q_seq_len, num_heads, head_dim = query.shape
-  *_, kv_seq_len, _, _ = key.shape
-  new_batch = reduce(operator.mul, batch_tuple)
+  if layout == AttentionLayout.BNTH.value:
+    *Bs, N, T, _ = query.shape
+    *_, _, S, _ = key.shape
+  else:
+    *Bs, T, N, _ = query.shape
+    *_, S, _, _ = key.shape
+  B = reduce(operator.mul, Bs)
   has_bias, has_mask = variadic_args
   # reshape to 4D shape
-  query = jnp.reshape(query, (new_batch, q_seq_len, num_heads, head_dim))
-  key = jnp.reshape(key, (new_batch, kv_seq_len, num_heads, head_dim))
-  value = jnp.reshape(value, (new_batch, kv_seq_len, num_heads, head_dim))
+  query = jnp.reshape(query, (B,) + query.shape[-3:])
+  key = jnp.reshape(key, (B,) + key.shape[-3:])
+  value = jnp.reshape(value, (B,) + key.shape[-3:])
   if has_bias:
-    bias = jnp.reshape(bias, (new_batch, num_heads, q_seq_len, kv_seq_len))
+    bias = jnp.reshape(bias, (B, N, T, S))
   if has_mask:
-    mask = jnp.reshape(mask, (new_batch, num_heads, q_seq_len, kv_seq_len))
+    mask = jnp.reshape(mask, (B, N, T, S))
 
   outputs = _dot_product_attention_fwd_p_wrapper.bind(
-    query, key, value, bias, mask,
-    scale=scale, seed=seed, dropout_rate=dropout_rate,
-    variadic_args=variadic_args, is_flash_attention=is_flash_attention,
-    is_causal_mask=is_causal_mask, is_training=is_training)
+      query, key, value, bias, mask, scale=scale, seed=seed,
+      dropout_rate=dropout_rate, variadic_args=variadic_args,
+      is_flash_attention=is_flash_attention, is_causal_mask=is_causal_mask,
+      layout=layout, is_training=is_training)
 
   # reshape to original shape
   output = outputs[0]
-  output = jnp.reshape(output, (*batch_tuple, q_seq_len, num_heads, head_dim))
+  output = jnp.reshape(output, query.shape)
   if is_training:
     activation = outputs[1]
     if is_flash_attention:
-      activation = jnp.reshape(activation, (*batch_tuple, num_heads, q_seq_len))
+      activation = jnp.reshape(activation, (*Bs, N, T))
     else:
-      activation = jnp.reshape(activation, (*batch_tuple, num_heads, q_seq_len, kv_seq_len))
+      activation = jnp.reshape(activation, (*Bs, N, T, S))
     return (output, activation), out_bdims
   else:
     return (output,), out_bdims
 
-def _dot_product_attention_bwd_batcher(batched_args, batch_dims, *, scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask):
+def _dot_product_attention_bwd_batcher(
+     batched_args, batch_dims, *, scale, seed, dropout_rate, variadic_args,
+     is_flash_attention, is_causal_mask, layout):
   _check_valid_batch_dims(batch_dims)
   query, key, value, bias, mask, activation, fwd_output, grad_output = batched_args
   query_bdim = batch_dims[0]
   out_bdims = query_bdim, query_bdim, query_bdim
 
-  *batch_tuple, q_seq_len, num_heads, head_dim = query.shape
-  *_, kv_seq_len, _, _ = key.shape
-  new_batch = reduce(operator.mul, batch_tuple)
+  if layout == AttentionLayout.BNTH.value:
+    *Bs, N, T, _ = query.shape
+    *_, _, S, _ = key.shape
+  else:
+    *Bs, T, N, _ = query.shape
+    *_, S, _, _ = key.shape
+  B = reduce(operator.mul, Bs)
   has_bias, has_mask = variadic_args
   # reshape to 4D shape
-  query = jnp.reshape(query, (new_batch, q_seq_len, num_heads, head_dim))
-  key = jnp.reshape(key, (new_batch, kv_seq_len, num_heads, head_dim))
-  value = jnp.reshape(value, (new_batch, kv_seq_len, num_heads, head_dim))
+  query = jnp.reshape(query, (B,) + query.shape[-3:])
+  key = jnp.reshape(key, (B,) + key.shape[-3:])
+  value = jnp.reshape(value, (B,) + key.shape[-3:])
   if has_bias:
-    bias = jnp.reshape(bias, (new_batch, num_heads, q_seq_len, kv_seq_len))
+    bias = jnp.reshape(bias, (B, N, T, S))
   if has_mask:
-    mask = jnp.reshape(mask, (new_batch, num_heads, q_seq_len, kv_seq_len))
+    mask = jnp.reshape(mask, (B, N, T, S))
   if is_flash_attention:
-    activation = jnp.reshape(activation, (new_batch, num_heads, q_seq_len))
+    activation = jnp.reshape(activation, (B, N, T))
   else:
-    activation = jnp.reshape(activation, (new_batch, num_heads, q_seq_len, kv_seq_len))
-  fwd_output = jnp.reshape(fwd_output, (new_batch, q_seq_len, num_heads, head_dim))
-  grad_output = jnp.reshape(grad_output, (new_batch, q_seq_len, num_heads, head_dim))
+    activation = jnp.reshape(activation, (B, N, T, S))
+  fwd_output = jnp.reshape(fwd_output, (B,) + query.shape[-3:])
+  grad_output = jnp.reshape(grad_output, (B,) + query.shape[-3:])
 
   grad_query, grad_key, grad_value = _dot_product_attention_bwd_p_wrapper.bind(
-    query, key, value, bias,
-    mask, activation, fwd_output, grad_output,
-    scale=scale, seed=seed, dropout_rate=dropout_rate,
-    variadic_args=variadic_args, is_flash_attention=is_flash_attention,
-    is_causal_mask=is_causal_mask)
+      query, key, value, bias, mask, activation, fwd_output, grad_output,
+      scale=scale, seed=seed, dropout_rate=dropout_rate,
+      variadic_args=variadic_args, is_flash_attention=is_flash_attention,
+      is_causal_mask=is_causal_mask, layout=layout,
+  )
 
   # reshape to original shape
-  grad_query = jnp.reshape(grad_query, (*batch_tuple, q_seq_len, num_heads, head_dim))
-  grad_key = jnp.reshape(grad_key, (*batch_tuple, kv_seq_len, num_heads, head_dim))
-  grad_value = jnp.reshape(grad_value, (*batch_tuple, kv_seq_len, num_heads, head_dim))
+  grad_query = jnp.reshape(grad_query, query.shape)
+  grad_key = jnp.reshape(grad_key, key.shape)
+  grad_value = jnp.reshape(grad_value, value.shape)
   grads = (grad_query, grad_key, grad_value)
   return grads, out_bdims
 
@@ -617,17 +692,25 @@ def _infer_fwd_output_sharding(mesh, arg_shapes, variadic_args, is_training):
     return [out_sharding, activation_sharding]
   return [out_sharding]
 
-_dot_product_attention_fwd_lower = custom_partitioning(_dot_product_attention_fwd_impl, static_argnums=(5,6,7,8,9,10,11))
-def _dot_product_attention_fwd_infer_sharding_from_operands(scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask, is_training, mesh, arg_shapes, result_shape):
+_dot_product_attention_fwd_lower = custom_partitioning(
+    _dot_product_attention_fwd_impl, static_argnums=(5, 6, 7, 8, 9, 10, 11, 12))
+
+def _dot_product_attention_fwd_infer_sharding_from_operands(
+    scale, seed, dropout_rate, variadic_args, is_flash_attention,
+    is_causal_mask, layout, is_training, mesh, arg_shapes, result_shape):
   return _infer_fwd_output_sharding(mesh, arg_shapes, variadic_args, is_training)
 
-def _dot_product_attention_fwd_partition(scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask, is_training, mesh, arg_shapes, result_shape):
+def _dot_product_attention_fwd_partition(
+    scale, seed, dropout_rate, variadic_args, is_flash_attention,
+    is_causal_mask, layout, is_training, mesh, arg_shapes, result_shape):
   # args sharding
   arg_shardings = tuple([arg_i.sharding for arg_i in arg_shapes])
   out_shardings = _infer_fwd_output_sharding(mesh, arg_shapes, variadic_args, is_training)
-  impl = partial(_dot_product_attention_fwd_impl, scale=scale, seed=seed, dropout_rate=dropout_rate,
-                variadic_args=variadic_args, is_flash_attention=is_flash_attention, is_causal_mask=is_causal_mask,
-                is_training=is_training)
+  impl = partial(
+      _dot_product_attention_fwd_impl, scale=scale, seed=seed,
+      dropout_rate=dropout_rate, variadic_args=variadic_args,
+      is_flash_attention=is_flash_attention, is_causal_mask=is_causal_mask,
+      layout=layout, is_training=is_training)
   return mesh, impl, out_shardings, arg_shardings
 
 # bwd custom partition
@@ -648,16 +731,27 @@ def _infer_bwd_output_sharding(mesh, arg_shapes, variadic_args):
   out_shardings = (grad_query_sharding, grad_key_sharding, grad_value_sharding)
   return out_shardings
 
-_dot_product_attention_bwd_lower = custom_partitioning(_dot_product_attention_bwd_impl, static_argnums=(8,9,10,11,12,13))
-def _dot_product_attention_bwd_infer_sharding_from_operands(scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask, mesh, arg_shapes, result_shape):
+_dot_product_attention_bwd_lower = custom_partitioning(
+    _dot_product_attention_bwd_impl, static_argnums=(8, 9, 10, 11, 12, 13, 14)
+)
+
+def _dot_product_attention_bwd_infer_sharding_from_operands(
+    scale, seed, dropout_rate, variadic_args, is_flash_attention,
+    is_causal_mask, layout, mesh, arg_shapes, result_shape):
   return _infer_bwd_output_sharding(mesh, arg_shapes, variadic_args)
 
-def _dot_product_attention_bwd_partition(scale, seed, dropout_rate, variadic_args, is_flash_attention, is_causal_mask, mesh, arg_shapes, result_shape):
+def _dot_product_attention_bwd_partition(
+    scale, seed, dropout_rate, variadic_args, is_flash_attention,
+    is_causal_mask, layout, mesh, arg_shapes, result_shape):
   out_shardings = _infer_bwd_output_sharding(mesh, arg_shapes, variadic_args)
   # args sharding
   arg_shardings = tuple([arg_i.sharding for arg_i in arg_shapes])
-  impl = partial(_dot_product_attention_bwd_impl, scale=scale, seed=seed, dropout_rate=dropout_rate,
-                variadic_args=variadic_args, is_flash_attention=is_flash_attention, is_causal_mask=is_causal_mask)
+  impl = partial(
+      _dot_product_attention_bwd_impl, scale=scale, seed=seed,
+      dropout_rate=dropout_rate, variadic_args=variadic_args,
+      is_flash_attention=is_flash_attention, is_causal_mask=is_causal_mask,
+      layout=layout,
+  )
   return mesh, impl, out_shardings, arg_shardings
 
 # Create dot_product_attention_fwd_p for forward operation.
@@ -717,24 +811,25 @@ dispatch.prim_requires_devices_during_lowering.add(_dot_product_attention_fwd_p_
 dispatch.prim_requires_devices_during_lowering.add(_dot_product_attention_bwd_p)
 dispatch.prim_requires_devices_during_lowering.add(_dot_product_attention_bwd_p_wrapper)
 
-@partial(jax.custom_vjp, nondiff_argnums=(5, 6, 7, 8, 9, 10, 11))
+@partial(jax.custom_vjp, nondiff_argnums=(5, 6, 7, 8, 9, 10, 11, 12))
 def _dot_product_attention(query: Array,
-                            key: Array,
-                            value: Array,
-                            bias: Array,
-                            mask: Array,
-                            scale: float,
-                            seed: int,
-                            dropout_rate: float,
-                            variadic_args: tuple[bool, ...],
-                            is_flash_attention: bool,
-                            is_causal_mask: bool,
-                            is_training: bool):
+                           key: Array,
+                           value: Array,
+                           bias: Array,
+                           mask: Array,
+                           scale: float,
+                           seed: int,
+                           dropout_rate: float,
+                           variadic_args: tuple[bool, ...],
+                           is_flash_attention: bool,
+                           is_causal_mask: bool,
+                           layout: int,
+                           is_training: bool):
   output = _dot_product_attention_fwd(
-    query, key, value, bias, mask,
-    scale=scale, seed=seed, dropout_rate=dropout_rate, variadic_args=variadic_args,
-    is_flash_attention=is_flash_attention, is_causal_mask=is_causal_mask,
-    is_training=is_training)
+      query, key, value, bias, mask, scale=scale, seed=seed,
+      dropout_rate=dropout_rate, variadic_args=variadic_args,
+      is_flash_attention=is_flash_attention, is_causal_mask=is_causal_mask,
+      layout=layout, is_training=is_training)
   return output
 
 # _dot_product_attention_fwd must have the same func signature as _dot_product_attention
@@ -751,40 +846,51 @@ def dot_product_attention(query: Array,
                           is_causal_mask: bool = False,
                           seed: int = 42,
                           dropout_rate: float = 0.,
+                          qkv_layout: str = 'BTNH',
                           is_training = False):
-  """Computes dot-product attention given query, key, and value.
-  This is the core function for applying attention based on
-  https://arxiv.org/abs/1706.03762. It calculates the attention weights given
-  query and key and combines the values using the attention weights.
-  batch seq num_heads, head_dim // but all assume Q, K and V will have same
-  b q_seq num_heads head_dim  -> Q
-  b kv_seq num_heads head_dim -> K
-  b kv_seq num_heads head_dim -> V
+  """Computes dot-product attention given query (Q), key (K), and value (V).
+
+  This function serves as the core operation for applying attention
+  mechanisms as described in the paper [https://arxiv.org/abs/1706.03762].
+  Initially, it determines the attention weights by processing Q and K,
+  subsequently combining the outcomes using K. Throughout this function, we
+  utilize the following uppercase letters to represent specific parameters of
+  JTensor:
+
+    B = batch size
+    S = length of the key/value (source)
+    T = length of the query (target)
+    N = number of attention heads
+    H = dimensions of each attention head.
+  
+  The supported layouts for Q, K, V are either BT(S)NH or BNT(S)H, and they must
+  adhere to the same layout. The output layout remains consistent with Q,
+  defaulting to BT(S)NH.
+
   Args:
-    query: queries for calculating attention with shape of `[batch, q_length,
-    num_heads, qk_depth_per_head]`.
-    key: keys for calculating attention with shape of `[batch, kv_length,
-    num_heads, qk_depth_per_head]`.
-    value: values to be used in attention with shape of `[batch, kv_length,
-    num_heads, v_depth_per_head]`.
-    bias: bias to be added to logits with shape of `[batch, num_heads,
-    q_length, kv_length]`.
-    mask: mask used mask out logits with shape of `[batch, num_heads,
-    q_length, kv_length]`.
-    scale: scale for the query.
-    is_causal_mask: choose to apply a causal mask or not.
-    seed: used for dropout mask generation.
-    dropout_rate: dropout rate.
+    query: Queries for attention calculation with a shape of BTNH or BNTH.
+    key: Keys for attention calculation with a shape of BSNH or BNSH.
+    value: Values to be used in attention with a shape of BSNH or BNSH.
+    bias: Bias to be added to logits with a shape of BNTS.
+    mask: Mask used to filter out logits with a shape of BNTS.
+    scale: Scale for the query.
+    dropout_rate: Dropout rate.
+    qkv_layout: Layout string, with supported formats being BTNH, BNTH, BSNH,
+                BNSH.
     is_training: choose to save activation or not.
+
   Returns:
-    Output of shape `[batch, q_length, num_heads, v_depth_per_head]`.
+    Output of the same shape as the query.
   """
   # check if cuDNN is installed
   cudnn_version = check_cudnn_version()
+
+  layout = _normalize_layout(qkv_layout)
   # check query, key and value shape and data type
-  check_qkv_layout(query, key, value)
+  check_qkv_layout(query, key, value, layout)
   # check if flash attention is supported for this attention pattern
-  is_flash_attention = check_is_flash_attention(query, key, cudnn_version, bias is not None, is_training)
+  is_flash_attention = check_is_flash_attention(
+      query, key, layout, cudnn_version, bias is not None, is_training)
   if mask is not None and is_causal_mask:
     raise ValueError("can not apply a mask and generate a causal_mask at the same time.")
   if not is_flash_attention and is_causal_mask:
@@ -795,7 +901,7 @@ def dot_product_attention(query: Array,
   if mask is None:
     mask = jnp.zeros(0, dtype=query.dtype)
   output = _dot_product_attention(
-    query, key, value, bias, mask,
-    scale, seed, dropout_rate, variadic_args,
-    is_flash_attention, is_causal_mask, is_training)
+      query, key, value, bias, mask, scale, seed, dropout_rate, variadic_args,
+      is_flash_attention, is_causal_mask, layout.value, is_training
+  )
   return output
