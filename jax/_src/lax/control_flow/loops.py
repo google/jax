@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from functools import partial
+from functools import partial, wraps
 import inspect
 import itertools
 import operator
@@ -67,6 +67,7 @@ _map = safe_map
 zip = safe_zip
 
 T = TypeVar('T')
+F = TypeVar('F', bound=Callable[..., Any])
 BooleanNumeric = Any  # A bool, or a Boolean array.
 
 ### Helper functions
@@ -2042,6 +2043,107 @@ def map(f, xs):
   g = lambda _, x: ((), f(x))
   _, ys = scan(g, (), xs)
   return ys
+
+
+def _lax_map(f, *xs):
+  """Like lax.map, but supports multiple arguments like the built-in map."""
+  g = lambda _, x: ((), f(*x))
+  _, ys = jax.lax.scan(g, (), xs)
+  return ys
+
+def _variable_depth_tree_map(f, tree, *rest):
+  def _tree_map_left(x, *rest):
+    f_wrapper = lambda *rest: f(x, *rest)
+    return tree_map(f_wrapper, *rest)
+
+  return tree_map(_tree_map_left, tree, *rest)
+
+
+def batched_vmap(
+  f: F,
+  in_axes: int | None | Sequence[Any] = 0,
+  out_axes: Any = 0,
+  *,
+  batch_size: int,
+) -> F:
+  """Equivalent to jax.vmap but batches the computation to save memory.
+
+  ``batched_vmap`` splits the ``in_axes`` dimension of the input into batches of
+  size ``batch_size`` and applies the function ``vmap(f)`` to each batch inside
+  a ``scan``.
+
+  Example::
+
+    >>> def f(x):
+    ...   assert x.shape == () # x is a scalar
+    ...   return x ** 2
+    >>> x = np.arange(8)
+    >>> y = jax.lax.batched_vmap(f, batch_size=2)(x)
+    >>> y
+    Array([ 0,  1,  4,  9, 16, 25, 36, 49], dtype=int32)
+
+  Wrapping f with jax.remat() is recommended if you want to use batched_vmap
+  inside gradient calculations. Otherwise, you won't realize any memory savings
+  because JAX will save all the forward activations.
+
+  If your code looks like value_and_grad(mean(vmap(...))) then you probably want
+  to use microbatching instead, which is more efficient because you don't need
+  to use remat.
+
+  Args:
+    f: A Python callable
+    in_axes: An integer, a pytree of integers, or None. Specifies the axes
+      that should be batched. If None, all axes are batched.
+    out_axes: An integer or a pytree of integers. Specifies the axes that
+      should be batched in the output. If None, all axes are batched.
+    batch_size: An integer representing the size of the batch.
+  """
+
+  def preprocess(in_axis, x):
+    if x.shape[in_axis] % batch_size != 0:
+      raise ValueError(
+        f"input shape {x.shape} is not divisible by batch_size {batch_size}"
+      )
+
+    batch_count = x.shape[in_axis] // batch_size
+    x = jax.numpy.moveaxis(x, in_axis, 0)
+    x_loop = x.reshape((batch_count, batch_size) + x.shape[1:])
+    return x_loop
+
+  def postprocess(out_axis, x_loop):
+    shape = x_loop.shape
+    x_loop = x_loop.reshape((shape[0] * shape[1],) + shape[2:])
+    return jax.numpy.moveaxis(x_loop, 0, out_axis)
+
+  @wraps(f)
+  def _batch_vmap_wrapper(*args):
+    if isinstance(in_axes, int) or in_axes is None:
+      in_axes_tuple = (in_axes,) * len(args)
+    else:
+      in_axes_tuple = tuple(in_axes)
+
+    broadcasts_args: list[Any] = []
+    batched_args: list[Any] = []
+
+    for i, (arg, in_axis) in enumerate(zip(args, in_axes_tuple)):
+      if in_axis is None:
+        broadcasts_args.append((i, arg))
+      else:
+        loop_arg = _variable_depth_tree_map(preprocess, in_axis, arg)
+        batched_args.append(loop_arg)
+
+    def vmap_f(*args):
+      full_args = list(args)
+      for i, broadcast_arg in broadcasts_args:
+        full_args.insert(i, broadcast_arg)
+      return f(*full_args)
+
+    loop_out = _lax_map(jax.vmap(vmap_f), *batched_args)
+    out = _variable_depth_tree_map(postprocess, out_axes, loop_out)
+    return out
+
+  return _batch_vmap_wrapper  # type: ignore
+
 
 def _rng_bit_generator_batching_rule(batched_args, batch_dims, *, shape, dtype, algorithm):
   keys, = batched_args
