@@ -27,9 +27,11 @@ import numpy as np
 
 import jax
 from jax import numpy as jnp
+from jax._src import array
 from jax._src import config
 from jax._src import dtypes
 from jax._src import test_util as jtu
+from jax._src import sharding
 from jax._src.lax import lax as lax_internal
 
 config.parse_flags_with_absl()
@@ -553,6 +555,74 @@ class DtypesTest(jtu.JaxTestCase):
     scale = jnp.float32(1.)
     _, new_scale = jax.jit(jax.grad(outer, (0, 1)))(jnp.float32(3.14), scale)
     self.assertAllClose(new_scale, jnp.float32(1.0))
+
+class EArrayTest(jtu.JaxTestCase):
+
+  @parameterized.parameters([True, False])
+  def test_extended_dtypes_at_rest(self, jit):
+    # Test a trivial isomorphic-to-float32 extended dtype working with EArray
+    from jax._src import core
+    from jax._src import dispatch
+    from jax._src.interpreters import pxla
+
+    class foo(dtypes.extended): pass
+
+    class FooTyRules:
+
+      @staticmethod
+      def convert_to(foo_dtype, target_dtype):
+        return True
+
+      @staticmethod
+      def physical_element_aval(foo_dtype):
+        return core.ShapedArray((), dtypes.dtype('float32'))
+
+      @staticmethod
+      def replicate_trailing_dims(ctx, val, aval):
+        del ctx, aval
+        return val
+
+      @staticmethod
+      def logical_sharding(aval, phys_sharding):
+        return phys_sharding
+
+      @staticmethod
+      def global_sharded_result_handler(aval, out_sharding, committed):
+        phys_sharding = out_sharding  # unlike KeyTyRules, assume same shape
+        phys_aval = core.physical_aval(aval)
+        phys_handler_maker = pxla.global_result_handlers[core.ShapedArray]
+        phys_handler = phys_handler_maker(phys_aval, phys_sharding, committed)
+        return lambda bufs: array.EArray(aval, phys_handler(bufs))
+
+      @staticmethod
+      def physical_hlo_sharding(aval, hlo_sharding):
+        return hlo_sharding  # unlike KeyTyRules, assume same shape
+
+      @staticmethod
+      def physical_sharding(aval, sharding):
+        return sharding  # unlike KeyTyRules, assume same shape
+
+    @dataclasses.dataclass(frozen=True)
+    class FooTy(dtypes.ExtendedDType):
+      name: str = 'foo'
+      _rules: type = FooTyRules
+      type: type = foo
+
+    # Can we make one?
+    def f(x):
+      return jax.lax.convert_element_type(x, FooTy())
+    if jit:
+      f = jax.jit(f)
+    x = f(jnp.arange(3, dtype='float32'))  # don't crash
+    self.assertIsInstance(x.dtype, FooTy)
+
+    # Can we consume one?
+    def g(x):
+      self.assertIsInstance(x.dtype, FooTy)
+      return x
+    if jit:
+      g = jax.jit(g)
+    g(x)
 
 
 class TestPromotionTables(jtu.JaxTestCase):
