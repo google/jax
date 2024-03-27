@@ -335,7 +335,6 @@ def new_jaxpr_eqn(invars, outvars, primitive, params, effects, source_info=None)
 
 _var_counter = it.count()
 
-@total_ordering
 class Var:
   __slots__ = ["count", "suffix", "aval"]
 
@@ -347,11 +346,6 @@ class Var:
     self.count = next(_var_counter)
     self.suffix = suffix
     self.aval = raise_to_shaped(aval)
-
-  # TODO(phawkins, mattjj): remove ordering of variables. JAX itself does not
-  # care about variable ordering, but the downstream package kfac_jax does.
-  def __lt__(self, other):
-    return self.count < other.count
 
   def __repr__(self):
     return f'Var(id={id(self)}){self.suffix}:{self.aval.str_short()}'
