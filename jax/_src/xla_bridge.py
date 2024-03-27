@@ -186,6 +186,8 @@ class BackendRegistration:
   # a buggy plugin.
   experimental: bool = False
 
+  c_api: Any | None = None
+
 _backend_factories: dict[str, BackendRegistration] = {}
 _default_backend: xla_client.Client | None = None
 _backends : dict[str, xla_client.Client] = {}
@@ -194,6 +196,8 @@ _backend_lock = threading.Lock()
 _plugins_registered: bool = False
 _plugin_lock = threading.Lock()
 _topology_factories: dict[str, TopologyFactory] = {}
+_plugin_callbacks: list[Any] = []
+_plugin_callback_lock = threading.Lock()
 
 # The set of known non-experimental plugins.
 #
@@ -209,12 +213,13 @@ def register_backend_factory(name: str, factory: BackendFactory, *,
                              priority: int = 0,
                              fail_quietly: bool = True,
                              experimental: bool = False,
-                             make_topology: TopologyFactory | None = None) -> None:
+                             make_topology: TopologyFactory | None = None,
+                             c_api: Any | None = None) -> None:
   with _backend_lock:
     if name in _backends:
       raise RuntimeError(f"Backend {name} already initialized")
   _backend_factories[name] = BackendRegistration(
-    factory, priority, fail_quietly, experimental)
+    factory, priority, fail_quietly, experimental, c_api)
   if make_topology is not None:
     _topology_factories[name] = make_topology
 
@@ -681,7 +686,7 @@ def register_plugin(
   experimental = plugin_name not in _nonexperimental_plugins
   register_backend_factory(plugin_name, factory, priority=priority,
                            fail_quietly=False, experimental=experimental,
-                           make_topology=make_topology)
+                           make_topology=make_topology, c_api=c_api)
   return c_api
 
 
@@ -728,6 +733,10 @@ def _discover_and_register_pjrt_plugins():
       # PJRT_NAMES_AND_LIBRARY_PATHS, in the format of 'name1:path1,name2:path2'
       # ('name1;path1,name2;path2' for windows).
       register_pjrt_plugin_factories_from_env()
+      for factory in _backend_factories.values():
+        if factory.c_api is not None:
+          for callback in _plugin_callbacks:
+            callback(c_api=factory.c_api)
       _plugins_registered = True
 
 
@@ -786,6 +795,12 @@ def backends_are_initialized() -> bool:
   "Returns true if backends have already been initialized."
   with _backend_lock:
     return len(_backends) != 0
+
+
+def register_plugin_callbacks(callback):
+  """Registers a callback to be called with c_api after plugins discovery."""
+  with _plugin_callback_lock:
+    _plugin_callbacks.append(callback)
 
 
 def backends() -> dict[str, xla_client.Client]:

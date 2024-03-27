@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 import inspect
 from typing import Optional
 import weakref
@@ -32,6 +33,7 @@ from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.sharding_impls import _op_sharding_to_pos_sharding
 from jax._src import custom_api_util
+from jax._src import xla_bridge as xb
 from jax._src.lib import xla_client as xc
 from jax._src.lib import xla_extension_version
 from jax._src.api_util import flatten_fun_nokwargs, argnums_partial
@@ -546,3 +548,14 @@ xc.register_custom_call_partitioner(  # pytype: disable=module-attr
     _custom_partitioning_propagate_user_sharding,
     _custom_partitioning_partition,
     _custom_partitioning_infer_sharding_from_operands, True)
+if xla_extension_version >= 249:
+  xb.register_plugin_callbacks(
+      partial(
+          xc.register_custom_call_partitioner,
+          name=_CUSTOM_PARTITIONING_CALL_NAME,
+          prop_user_sharding=_custom_partitioning_propagate_user_sharding,
+          partition=_custom_partitioning_partition,
+          infer_sharding_from_operands=_custom_partitioning_infer_sharding_from_operands,
+          can_side_effecting_have_replicated_sharding=True,
+      )
+  )
