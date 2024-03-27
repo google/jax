@@ -21,6 +21,7 @@ from jax._src.scipy.special import (
   betaln as betaln,
   beta as beta,
   bessel_jn as bessel_jn,
+  comb as comb,
   digamma as digamma,
   entr as entr,
   erf as erf,

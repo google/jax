@@ -31,6 +31,7 @@ from jax._src import core
 from jax._src import custom_derivatives
 from jax._src import dtypes
 from jax._src.lax.lax import _const as _lax_const
+from jax._src.numpy.ufuncs import _constant_like
 from jax._src.numpy.util import promote_args_inexact, promote_dtypes_inexact
 from jax._src.numpy.util import implements
 from jax._src.ops import special as ops_special
@@ -1911,3 +1912,22 @@ hyp1f1.defjvps(
   lambda b_dot, primal_out, a, b, x: _hyp1f1_b_derivative(a, b, x) * b_dot,
   lambda x_dot, primal_out, a, b, x: _hyp1f1_x_derivative(a, b, x) * x_dot
 )
+
+@_wraps(osp_special.comb, module='scipy.special')
+def comb(N: Array, k: Array, exact: bool =False, repetition: bool =False):
+  #  Calculates N choose k, the number of ways to choose k items from N items, with and without repetition.
+  if repetition:
+    return comb(N + k - 1, k, exact=exact, repetition=False)
+  
+  if exact:
+    raise NotImplementedError("exact=True is not yet supported.")
+    # The below implementation is not compatible with jit. 
+    # max_divisor = lax.max(k, N - k)
+    # min_divisor = lax.min(k, N - k)
+    # N_factorial_over_max_factorial = np.prod(np.arange(N, max_divisor, -1))
+    # return lax.div(N_factorial_over_max_factorial, np.prod(np.arange(1, min_divisor + 1)))
+
+  one = _constant_like(N, 1)
+  N_plus_1 = lax.add(N,one)
+  k_plus_1 = lax.add(k,one)
+  return lax.exp(lax.sub(gammaln(N_plus_1),lax.add(gammaln(k_plus_1), gammaln(lax.sub(N_plus_1,k)))))
