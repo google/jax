@@ -781,11 +781,11 @@ _register_keypaths(
 _register_keypaths(dict, lambda xs: tuple(DictKey(k) for k in sorted(xs)))
 
 _register_keypaths(
-    collections.defaultdict, lambda x: tuple(DictKey(k) for k in x.keys())
+    collections.defaultdict, lambda xs: tuple(DictKey(k) for k in sorted(xs))
 )
 
 _register_keypaths(
-    collections.OrderedDict, lambda x: tuple(DictKey(k) for k in x.keys())
+    collections.OrderedDict, lambda xs: tuple(DictKey(k) for k in xs)
 )
 
 
