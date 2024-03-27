@@ -15,12 +15,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-import logging
 import functools
+import logging
 from typing import Any, Callable
 
-import numpy as np
-
+import jax
 from jax._src import core
 from jax._src import dispatch
 from jax._src import dtypes
@@ -31,9 +30,11 @@ from jax._src import util
 from jax._src.interpreters import ad
 from jax._src.interpreters import batching
 from jax._src.interpreters import mlir
-from jax._src.lib import xla_client as xc
 from jax._src.lax.control_flow.loops import map as lax_map
+from jax._src.lib import xla_client as xc
 from jax._src.sharding_impls import SingleDeviceSharding
+import jax.numpy as jnp
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +55,15 @@ def pure_callback_impl(
     vectorized: bool,
 ):
   del sharding, vectorized, result_avals
-  try:
-    return callback(*args)
-  except BaseException:
-    logger.exception("jax.pure_callback failed")
-    raise
+  cpu_device, *_ = jax.local_devices(backend="cpu")
+  with jax.default_device(cpu_device):
+    try:
+      return tree_util.tree_map(
+          np.asarray, callback(*tree_util.tree_map(jnp.asarray, args))
+      )
+    except BaseException:
+      logger.exception("jax.pure_callback failed")
+      raise
 
 
 pure_callback_p.def_impl(functools.partial(dispatch.apply_primitive,
@@ -383,11 +388,15 @@ def io_callback_impl(
     ordered: bool,
 ):
   del result_avals, sharding, ordered
-  try:
-    return callback(*args)
-  except BaseException:
-    logger.exception("jax.io_callback failed")
-    raise
+  cpu_device, *_ = jax.local_devices(backend="cpu")
+  with jax.default_device(cpu_device):
+    try:
+      return tree_util.tree_map(
+          np.asarray, callback(*tree_util.tree_map(jnp.asarray, args))
+      )
+    except BaseException:
+      logger.exception("jax.io_callback failed")
+      raise
 
 
 io_callback_p.def_impl(functools.partial(dispatch.apply_primitive,
