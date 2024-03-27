@@ -21,10 +21,14 @@ import warnings
 from jax import numpy as jnp
 from jax._src import array
 from jax._src import xla_bridge
+from jax._src.lax.lax import _array_copy
 from jax._src.lib import xla_client
 from jax._src.lib import xla_extension_version
 from jax._src.typing import Array
+from jax._src.api import device_put
 
+DLPACK_VERSION = (0, 8)
+MIN_DLPACK_VERSION = (0, 5)
 
 # A set of dtypes that dlpack supports.
 # Note: Make sure to use a "type", not a dtype instance, when looking up this set
@@ -48,9 +52,34 @@ class DLDeviceType(enum.IntEnum):
   kDLCUDA = 2
   kDLROCM = 10
 
+def _to_dlpack(x: Array, stream: int | Any | None,
+               src_device: xla_client.Device | None = None,
+               device: xla_client.Device | None = None,
+               copy: bool | None = None):
+
+  if src_device is None:
+    src_device, = x.devices()
+  if device and (src_device is None or device != src_device):
+    if copy is not None and not copy:
+      raise ValueError(
+        f"Specified {device=} which requires a copy since the source device "
+        f"is {repr(src_device)}, however copy=False. Set copy=True or "
+        "copy=None to perform the requested operation."
+      )
+    else:
+      arr = device_put(x, device)
+  else:
+    arr = _array_copy(x) if copy else x
+  return xla_client._xla.buffer_to_dlpack_managed_tensor(
+    arr.addressable_data(0), stream=stream
+  )
 
 def to_dlpack(x: Array, take_ownership: bool = False,
-              stream: int | Any | None = None):
+              stream: int | Any | None = None,
+              src_device: xla_client.Device | None = None,
+              dl_device: tuple[DLDeviceType, int] | None = None,
+              max_version: tuple[int, int] | None = None,
+              copy : bool | None = None):
   """Returns a DLPack tensor that encapsulates a :class:`~jax.Array` ``x``.
 
   Args:
@@ -60,27 +89,82 @@ def to_dlpack(x: Array, take_ownership: bool = False,
     stream: optional platform-dependent stream to wait on until the buffer is
       ready. This corresponds to the `stream` argument to ``__dlpack__``
       documented in https://dmlc.github.io/dlpack/latest/python_spec.html.
+    src_device: either a CPU or GPU :class:`~jax.Device`.
+    dl_device: a tuple of ``(dl_device_type, local_hardware_id)`` in DLPack
+      format e.g. as produced by ``__dlpack_device__``.
+    max_version: the maximum DLPack version that the consumer (i.e. caller of
+      ``__dlpack__``) supports in the form of a 2-tuple of ``(major, minor)``.
+      This function is not guaranteed to return a capsule of version
+      ``max_version``.
+    copy: a boolean indicating whether or not to copy the input. If
+      ``copy=True`` then the function must always copy. When
+      ``copy=False`` then the function must never copy, and must raise an error
+      when a copy is deemed necessary. If ``copy=None`` then the function must
+      avoid a copy if possible but may copy if needed.
 
   Returns:
-    A dlpack PyCapsule object.
+    A DLPack PyCapsule object.
 
   Note:
-    While JAX arrays are always immutable, dlpack buffers cannot be marked as
-    immutable, and it is possible for processes external to JAX to mutate them
-    in-place. If a dlpack buffer derived from a JAX array is mutated, it may
-    lead to undefined behavior when using the associated JAX array.
+    While JAX arrays are always immutable, ``DLPackManagedTensor`` buffers
+    cannot be marked as immutable, and it is possible for processes external
+    to JAX to mutate them in-place. If a DLPack buffer derived from a JAX array
+    is mutated, it may lead to undefined behavior when using the associated JAX
+    array. When JAX eventually supports ``DLManagedTensorVersioned``
+    (DLPack 1.0), it will be possible to specify that a buffer is read-only.
   """
   if not isinstance(x, array.ArrayImpl):
     raise TypeError("Argument to to_dlpack must be a jax.Array, "
                     f"got {type(x)}")
-  assert len(x.devices()) == 1
   if take_ownership:
     warnings.warn(
         "take_ownership in to_dlpack is deprecated and it is a no-op."
     )
-  return xla_client._xla.buffer_to_dlpack_managed_tensor(
-      x.addressable_data(0), stream=stream
-  )  # type: ignore
+
+  device = None
+  dl_device_type, local_hardware_id = dl_device if dl_device else (None, None)
+  if dl_device_type:
+    try:
+      dl_device_platform = {
+          DLDeviceType.kDLCPU: "cpu",
+          DLDeviceType.kDLCUDA: "cuda",
+          DLDeviceType.kDLROCM: "rocm",
+      }[dl_device_type]
+      backend = xla_bridge.get_backend(dl_device_platform)
+      device = backend.device_from_local_hardware_id(local_hardware_id)
+    except TypeError:
+      # https://data-apis.org/array-api/latest/API_specification/generated/array_api.array.__dlpack__.html
+      # recommends using BufferError.
+      raise BufferError(
+          "The device specification passed to to_dlpack contains an unsupported "
+          f"device type (DLDeviceType: {dl_device_type})")
+
+  # As new versions are adopted over time, we can maintain some legacy paths
+  # for compatability mediated through the max_version parameter.
+  # TODO(micky774): Deprecate default usage of DLPackManagedTensor when XLA
+  # supports DLManagedTensorVersioned (DLPack version 1.0) and repurpose the
+  # current _to_dlpack as a legacy path for (0,5) <= max_version < (1,0).
+  if max_version is None or max_version >= DLPACK_VERSION:
+    # Latest
+    return _to_dlpack(
+      x, stream=stream,
+      src_device=src_device,
+      device=device,
+      copy=copy
+    )
+  elif max_version >= MIN_DLPACK_VERSION:
+    # Oldest supported
+    return _to_dlpack(
+      x, stream=stream,
+      src_device=src_device,
+      device=device,
+      copy=copy
+    )
+  else:
+    raise BufferError(
+      f"JAX does not support any version below {MIN_DLPACK_VERSION} but "
+      f"version ({max_version}) was requested."
+    )
 
 
 def from_dlpack(external_array):
@@ -110,12 +194,12 @@ def from_dlpack(external_array):
           DLDeviceType.kDLCUDA: "cuda",
           DLDeviceType.kDLROCM: "rocm",
       }[dl_device_type]
-    except TypeError:
+    except TypeError as err:
       # https://dmlc.github.io/dlpack/latest/python_spec.html recommends using
       # TypeError.
-      raise TypeError(
+      raise BufferError(
           "Array passed to from_dlpack is on unsupported device type "
-          f"(DLDeviceType: {dl_device_type}, array: {external_array}")
+          f"(DLDeviceType: {dl_device_type}, array: {external_array}") from err
 
     backend = xla_bridge.get_backend(device_platform)
     device = backend.device_from_local_hardware_id(device_id)

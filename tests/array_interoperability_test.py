@@ -74,24 +74,49 @@ class DLPackTest(jtu.JaxTestCase):
     shape=all_shapes,
     dtype=dlpack_dtypes,
     gpu=[False, True],
+    copy=[False, True, None]
   )
-  def testJaxRoundTrip(self, shape, dtype, gpu):
+  def testJaxRoundTrip(self, shape, dtype, gpu, copy):
     if xb.using_pjrt_c_api():
       self.skipTest("DLPack support is incomplete in the PJRT C API")  # TODO(skyewm)
     rng = jtu.rand_default(self.rng())
     np = rng(shape, dtype)
-    if gpu and jtu.test_device_matches(["cpu"]):
-      raise unittest.SkipTest("Skipping GPU test case on CPU")
-    device = jax.devices("gpu" if gpu else "cpu")[0]
-    x = jax.device_put(np, device)
-    dlpack = jax.dlpack.to_dlpack(x)
-    y = jax.dlpack.from_dlpack(dlpack)
-    self.assertEqual(y.devices(), {device})
-    self.assertAllClose(np.astype(x.dtype), y)
+    if gpu and not jtu.test_device_matches(["gpu"]):
+      raise unittest.SkipTest("Skipping GPU test case on CPU/TPU")
 
+    def _check_copy(x, y, expect_copy):
+      is_copy = x.unsafe_buffer_pointer() != y.unsafe_buffer_pointer()
+      assert is_copy == expect_copy
+
+    # Check if the source device is preserved
+    x = jax.device_put(np, jax.devices("cpu")[0])
+    device = jax.devices("gpu" if gpu else "cpu")[0]
+    y = jax.device_put(x, device)
+    dlpack = jax.dlpack.to_dlpack(y, copy=copy)
+    z = jax.dlpack.from_dlpack(dlpack)
+
+    self.assertEqual(z.devices(), {device})
+    self.assertAllClose(np.astype(x.dtype), z)
     self.assertRaisesRegex(RuntimeError,
-                           "DLPack tensor may be consumed at most once",
-                           lambda: jax.dlpack.from_dlpack(dlpack))
+                          "DLPack tensor may be consumed at most once",
+                          lambda: jax.dlpack.from_dlpack(dlpack))
+
+    if shape in nonempty_array_shapes:
+      _check_copy(y, z, bool(copy))
+
+    # Check if the destination device can be specified
+    dl_device = y.__dlpack_device__()
+    make_dlpack = lambda: x.__dlpack__(dl_device=dl_device, copy=copy)
+    if gpu and copy == False:
+      self.assertRaisesRegex(ValueError, "copy=False", make_dlpack)
+      return
+
+    z = jax.dlpack.from_dlpack(make_dlpack())
+    self.assertEqual(z.devices(), {device})
+    self.assertAllClose(np.astype(x.dtype), z)
+
+    if shape in nonempty_array_shapes:
+      _check_copy(x, z, bool(copy) or gpu)
 
   @jtu.sample_product(
     shape=all_shapes,
