@@ -15,7 +15,7 @@ import importlib
 
 from jaxlib import xla_client
 
-for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
+for cuda_module_name in [".cuda", "jax_cuda12_plugin", "jax_cuda11_plugin"]:
   try:
     _cuda_triton = importlib.import_module(
         f"{cuda_module_name}._triton", package="jaxlib"

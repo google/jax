@@ -27,7 +27,7 @@ from jaxlib import xla_client
 
 from .hlo_helpers import custom_call, mk_result_types_and_shapes
 
-for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
+for cuda_module_name in [".cuda", "jax_cuda12_plugin", "jax_cuda11_plugin"]:
   try:
     _cusparse = importlib.import_module(
         f"{cuda_module_name}._sparse", package="jaxlib"

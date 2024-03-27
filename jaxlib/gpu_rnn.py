@@ -22,7 +22,7 @@ import numpy as np
 from jaxlib import xla_client
 from .gpu_common_utils import GpuLibNotLinkedError
 
-for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
+for cuda_module_name in [".cuda", "jax_cuda12_plugin", "jax_cuda11_plugin"]:
   try:
     _rnn = importlib.import_module(f"{cuda_module_name}._rnn", package="jaxlib")
   except ImportError:

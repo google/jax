@@ -27,7 +27,7 @@ from jaxlib import xla_client
 from .hlo_helpers import custom_call
 from .gpu_common_utils import GpuLibNotLinkedError
 
-for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
+for cuda_module_name in [".cuda", "jax_cuda12_plugin", "jax_cuda11_plugin"]:
   try:
     _cuda_prng = importlib.import_module(
         f"{cuda_module_name}._prng", package="jaxlib"

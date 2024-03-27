@@ -32,10 +32,6 @@ Remember to align the itemized text with the first line of an item within a list
 
 ## jaxlib 0.4.26
 
-* Changes
-  * JAX now supports CUDA 12.1 or newer only. Support for CUDA 11.8 has been
-    dropped.
-
 ## jax 0.4.25 (Feb 26, 2024)
 
 * New Features

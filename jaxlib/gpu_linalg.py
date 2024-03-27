@@ -24,7 +24,7 @@ from .gpu_common_utils import GpuLibNotLinkedError
 
 from jaxlib import xla_client
 
-for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
+for cuda_module_name in [".cuda", "jax_cuda12_plugin", "jax_cuda11_plugin"]:
   try:
     _cuda_linalg = importlib.import_module(
         f"{cuda_module_name}._linalg", package="jaxlib"

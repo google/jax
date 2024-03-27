@@ -61,7 +61,7 @@ NVIDIA has dropped support for Kepler GPUs in its software.
 
 You must first install the NVIDIA driver. We
 recommend installing the newest driver available from NVIDIA, but the driver
-must be version >= 525.60.13 for CUDA 12 on Linux.
+must be version >= 525.60.13 for CUDA 12 and >= 450.80.02 for CUDA 11 on Linux.
 If you need to use a newer CUDA toolkit with an older driver, for example
 on a cluster where you cannot update the NVIDIA driver easily, you may be
 able to use the
@@ -82,6 +82,10 @@ pip install --upgrade pip
 # CUDA 12 installation
 # Note: wheels only available on linux.
 pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+# CUDA 11 installation
+# Note: wheels only available on linux.
+pip install --upgrade "jax[cuda11_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
 
 If JAX detects the wrong version of the CUDA libraries, there are several things
@@ -109,19 +113,14 @@ able to use the
 [CUDA forward compatibility packages](https://docs.nvidia.com/deploy/cuda-compatibility/)
 that NVIDIA provides for this purpose.
 
-JAX currently ships one CUDA wheel variant:
+JAX currently ships two CUDA wheel variants:
+* CUDA 12.3, cuDNN 8.9, NCCL 2.16
+* CUDA 11.8, cuDNN 8.6, NCCL 2.16
 
-| Built with | Compatible with |
-|------------|-----------------|
-| CUDA 12.3  | CUDA 12.1+      |
-| cuDNN 8.9  | cuDNN 8.9+      |
-| NCCL 2.19  | NCCL 2.18+      |
-
+You may use a JAX wheel provided the major version of your CUDA, cuDNN, and NCCL
+installations match, and the minor versions are the same or newer.
 JAX checks the versions of your libraries, and will report an error if they are
 not sufficiently new.
-Setting the `JAX_SKIP_CUDA_CONSTRAINTS_CHECK` environment variable will disable
-the check, but using older versions of CUDA may lead to errors, or incorrect
-results.
 
 NCCL is an optional dependency, required only if you are performing multi-GPU
 computations.
@@ -135,6 +134,9 @@ pip install --upgrade pip
 # Note: wheels only available on linux.
 pip install --upgrade "jax[cuda12_local]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
+# Installs the wheel compatible with CUDA 11 and cuDNN 8.6 or newer.
+# Note: wheels only available on linux.
+pip install --upgrade "jax[cuda11_local]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 ```
 
 **These `pip` installations do not work with Windows, and may fail silently; see
@@ -184,6 +186,11 @@ pip install -U --pre libtpu-nightly -f https://storage.googleapis.com/jax-releas
 * Jaxlib GPU (Cuda 12):
 ```bash
 pip install -U --pre jaxlib -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_cuda12_releases.html
+```
+
+* Jaxlib GPU (Cuda 11):
+```bash
+pip install -U --pre jaxlib -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_cuda_releases.html
 ```
 
 ## Google TPU

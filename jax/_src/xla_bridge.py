@@ -31,7 +31,6 @@ import logging
 import os
 import pkgutil
 import platform as py_platform
-import traceback
 import sys
 import threading
 from typing import Any, Callable, Union
@@ -262,101 +261,33 @@ def _check_cuda_compute_capability(devices_to_check):
         RuntimeWarning
       )
 
-
-def _check_cuda_versions(raise_on_first_error: bool = False,
-                         debug: bool = False):
+def _check_cuda_versions():
   assert cuda_versions is not None
-  results: list[dict[str, Any]] = []
 
-  def _make_msg(name: str,
-                runtime_version: int,
-                build_version: int,
-                min_supported: int,
-                debug_msg: bool = False):
-    if debug_msg:
-      return (f"Package: {name}\n"
-              f"Version JAX was built against: {build_version}\n"
-              f"Minimum supported: {min_supported}\n"
-              f"Installed version: {runtime_version}")
-    if min_supported:
-      req_str = (f"The local installation version must be no lower than "
-                 f"{min_supported}.")
-    else:
-      req_str = ("The local installation must be the same version as "
-                 "the version against which JAX was built.")
-    msg = (f"Outdated {name} installation found.\n"
-           f"Version JAX was built against: {build_version}\n"
-           f"Minimum supported: {min_supported}\n"
-           f"Installed version: {runtime_version}\n"
-           f"{req_str}")
-    return msg
-
-  def _version_check(name: str,
-                     get_version,
-                     get_build_version,
-                     scale_for_comparison: int = 1,
-                     min_supported_version: int = 0):
-    """Checks the runtime CUDA component version against the JAX one.
-
-    Args:
-      name: Of the CUDA component.
-      get_version: A function to get the local runtime version of the component.
-      get_build_version: A function to get the build version of the component.
-      scale_for_comparison: For rounding down a version to ignore patch/minor.
-      min_supported_version: An absolute minimum version required. Must be
-        passed without rounding down.
-
-    Raises:
-      RuntimeError: If the component is not found, or is of unsupported version,
-        and if raising the error is not deferred till later.
-    """
-
+  def _version_check(name, get_version, get_build_version,
+                     scale_for_comparison=1):
     build_version = get_build_version()
     try:
       version = get_version()
     except Exception as e:
-      err_msg = f"Unable to load {name}. Is it installed?"
-      if raise_on_first_error:
-        raise RuntimeError(err_msg) from e
-      err_msg += f"\n{traceback.format_exc()}"
-      results.append({"name": name, "installed": False, "msg": err_msg})
-      return
-
-    if not min_supported_version:
-      min_supported_version = build_version // scale_for_comparison
-    passed = min_supported_version <= version
-
-    if not passed or debug:
-      msg = _make_msg(name=name,
-                      runtime_version=version,
-                      build_version=build_version,
-                      min_supported=min_supported_version,
-                      debug_msg=passed)
-      if not passed and raise_on_first_error:
-        raise RuntimeError(msg)
-      else:
-        record = {"name": name,
-                  "installed": True,
-                  "msg": msg,
-                  "passed": passed,
-                  "build_version": build_version,
-                  "version": version,
-                  "minimum_supported": min_supported_version}
-        results.append(record)
+      raise RuntimeError(f"Unable to load {name}. Is it installed?") from e
+    if build_version // scale_for_comparison > version // scale_for_comparison:
+      raise RuntimeError(
+          f"Found {name} version {version}, but JAX was built against version "
+          f"{build_version}, which is newer. The copy of {name} that is "
+          "installed must be at least as new as the version against which JAX "
+          "was built."
+      )
 
   _version_check("CUDA", cuda_versions.cuda_runtime_get_version,
-                 cuda_versions.cuda_runtime_build_version,
-                 scale_for_comparison=10,
-                 min_supported_version=12010)
+                 cuda_versions.cuda_runtime_build_version)
   _version_check(
       "cuDNN",
       cuda_versions.cudnn_get_version,
       cuda_versions.cudnn_build_version,
       # NVIDIA promise both backwards and forwards compatibility for cuDNN patch
-      # versions:
-      # https://docs.nvidia.com/deeplearning/cudnn/developer-guide/index.html#api-compat
+      # versions: https://docs.nvidia.com/deeplearning/cudnn/developer-guide/index.html#api-compat
       scale_for_comparison=100,
-      min_supported_version=8900
   )
   _version_check("cuFFT", cuda_versions.cufft_get_version,
                  cuda_versions.cufft_build_version,
@@ -365,42 +296,20 @@ def _check_cuda_versions(raise_on_first_error: bool = False,
   _version_check("cuSOLVER", cuda_versions.cusolver_get_version,
                  cuda_versions.cusolver_build_version,
                  # Ignore patch versions.
-                 scale_for_comparison=100,
-                 min_supported_version=11400)
+                 scale_for_comparison=100)
   _version_check("cuPTI", cuda_versions.cupti_get_version,
-                 cuda_versions.cupti_build_version,
-                 min_supported_version=18)
+                 cuda_versions.cupti_build_version)
   # TODO(jakevdp) remove these checks when minimum jaxlib is v0.4.21
   if hasattr(cuda_versions, "cublas_get_version"):
     _version_check("cuBLAS", cuda_versions.cublas_get_version,
                    cuda_versions.cublas_build_version,
                    # Ignore patch versions.
-                   scale_for_comparison=100,
-                   min_supported_version=120100)
+                   scale_for_comparison=100)
   if hasattr(cuda_versions, "cusparse_get_version"):
     _version_check("cuSPARSE", cuda_versions.cusparse_get_version,
                    cuda_versions.cusparse_build_version,
                    # Ignore patch versions.
-                   scale_for_comparison=100,
-                   min_supported_version=12100)
-
-  errors = []
-  debug_results = []
-  for result in results:
-    message: str = result['msg']
-    if not result['installed'] or not result['passed']:
-      errors.append(message)
-    else:
-      debug_results.append(message)
-
-  join_str = f'\n{"-" * 50}\n'
-  if debug_results:
-    print(f'CUDA components status (debug):\n'
-          f'{join_str.join(debug_results)}')
-  if errors:
-    raise RuntimeError(f'Unable to use CUDA because of the '
-                       f'following issues with CUDA components:\n'
-                       f'{join_str.join(errors)}')
+                   scale_for_comparison=100)
 
 
 def make_gpu_client(
@@ -420,10 +329,6 @@ def make_gpu_client(
   if platform_name == "cuda":
     if not os.getenv("JAX_SKIP_CUDA_CONSTRAINTS_CHECK"):
       _check_cuda_versions()
-    else:
-      print('Skipped CUDA versions constraints check due to the '
-            'JAX_SKIP_CUDA_CONSTRAINTS_CHECK env var being set.')
-
     # TODO(micky774): remove this check when minimum jaxlib is v0.4.26
     if jaxlib.version.__version_info__ >= (0, 4, 26):
       devices_to_check = (allowed_devices if allowed_devices else

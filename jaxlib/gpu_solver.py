@@ -33,7 +33,7 @@ from .hlo_helpers import (
 try:
   from .cuda import _blas as _cublas  # pytype: disable=import-error
 except ImportError:
-  for cuda_module_name in ["jax_cuda12_plugin"]:
+  for cuda_module_name in ["jax_cuda12_plugin", "jax_cuda11_plugin"]:
     try:
       _cublas = importlib.import_module(f"{cuda_module_name}._blas")
     except ImportError:
@@ -45,7 +45,7 @@ if _cublas:
   for _name, _value in _cublas.registrations().items():
     xla_client.register_custom_call_target(_name, _value, platform="CUDA")
 
-for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
+for cuda_module_name in [".cuda", "jax_cuda12_plugin", "jax_cuda11_plugin"]:
   try:
     _cusolver = importlib.import_module(
         f"{cuda_module_name}._solver", package="jaxlib"
