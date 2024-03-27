@@ -2424,8 +2424,9 @@ def make_jaxpr(fun: Callable,
     closed_jaxpr = core.ClosedJaxpr(jaxpr, consts)
     if return_shape:
       out_avals, _ = unzip2(out_type)
+      named_shape = lambda a: a.named_shape if hasattr(a, "named_shape") else {}
       out_shapes_flat = [
-          ShapeDtypeStruct(a.shape, a.dtype, a.named_shape) for a in out_avals]
+          ShapeDtypeStruct(a.shape, a.dtype, named_shape(a)) for a in out_avals]
       return closed_jaxpr, tree_unflatten(out_tree(), out_shapes_flat)
     return closed_jaxpr
 
