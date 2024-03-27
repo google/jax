@@ -7737,14 +7737,14 @@ class CustomJVPTest(jtu.JaxTestCase):
     shape = grad(lambda x: jnp.sum(f(x)))(jnp.array(1.)).shape
     self.assertEqual(shape, ())
 
-  def test_maybe_perturbed_internal_helper_function(self):
+  def test_hoisting_internal_helper_function(self):
     # This is a unit test for an internal API. We include it so as not to
     # regress https://github.com/google/jax/issues/9567. For an explanation of
     # this helper function, see https://github.com/google/jax/issues/6415.
     def f(x):
       def g(y, _):
         z = y * x
-        self.assertTrue(custom_derivatives._maybe_perturbed(z))
+        self.assertTrue(custom_derivatives.hoistworthy(z))
         return y, None
       g(1, None)
       return lax.scan(g, 1, xs=None, length=1)[0]
@@ -8887,6 +8887,46 @@ class CustomVJPTest(jtu.JaxTestCase):
     expected = jnp.cos(dist(c, s, x))
     self.assertAllClose(solve(c, s, x), expected, check_dtypes=False)
     g_c, g_x = api.grad(solve, argnums=(0, 2))(c, s, x)
+    self.assertAllClose(g_c, 42. * c, check_dtypes=False)
+    self.assertAllClose(g_x, 17. * x, check_dtypes=False)
+
+  def test_closure_convert_mixed_consts_jitted(self):
+    def cos_after(fn, x):
+      converted_fn, aux_args = jax.closure_convert(fn, x)
+      return _cos_after(converted_fn, x, *aux_args)
+
+    @partial(jax.custom_vjp, nondiff_argnums=(0,))
+    def _cos_after(fn, x, *args):
+      return jnp.cos(fn(x, *args))
+
+    def fwd(fn, x, *args):
+      y = _cos_after(fn, x, *args)
+      return y, (x, args)
+
+    def rev(fn, res, g):
+      x, args = res
+      x_bar = 17. * x
+      args_bars = [42. * a.astype(x.dtype) for a in args]
+      return (x_bar, *args_bars)
+
+    _cos_after.defvjp(fwd, rev)
+
+    def dist(c, s, i, x):
+      return jnp.sum(i.astype(x.dtype) * s * (x - c) ** 2.)
+
+    @jax.jit
+    def solve(c, s, i, x):
+      def closure(x):
+        return dist(c, s, i, x)
+      return cos_after(closure, x)
+
+    c = 2. * jnp.ones(2)
+    s = 3. * jnp.ones(2)
+    i = jnp.ones(2, 'int32')
+    x = jnp.ones(2)
+    expected = jnp.cos(dist(c, s, i, x))
+    self.assertAllClose(solve(c, s, i, x), expected, check_dtypes=False)
+    g_c, g_x = api.grad(solve, argnums=(0, 3))(c, s, i, x)
     self.assertAllClose(g_c, 42. * c, check_dtypes=False)
     self.assertAllClose(g_x, 17. * x, check_dtypes=False)
 

@@ -24,7 +24,6 @@ from jax._src import config
 from jax._src import core
 from jax._src import custom_api_util
 from jax._src.custom_transpose import custom_transpose
-from jax._src import dtypes
 from jax._src import effects
 from jax._src import linear_util as lu
 from jax._src import traceback_util
@@ -1115,7 +1114,7 @@ def closure_convert(fun: Callable, *example_args) -> tuple[Callable, list[Any]]:
   else:
     return _closure_convert_for_avals(fun, in_tree, in_avals)
 
-def _maybe_perturbed(x: Any) -> bool:
+def hoistworthy(x: Any) -> bool:
   # False if x can't represent an AD-perturbed value (i.e. a value
   # with a nontrivial tangent attached), up to heuristics, and True otherwise.
   # See https://github.com/google/jax/issues/6415 for motivation.
@@ -1124,14 +1123,12 @@ def _maybe_perturbed(x: Any) -> bool:
     # If x is not a Tracer, it can't be perturbed.
     return False
   elif isinstance(x, pe.DynamicJaxprTracer):
-    # If x is a DynamicJaxprTracer then we're staging out; differentiation could
-    # happen later, but some types always have trivial tangents.
-    vspace = x.aval.at_least_vspace()
-    return not (vspace is core.abstract_token or
-                getattr(vspace, 'dtype', None) == dtypes.float0)
+    # If x is a DynamicJaxprTracer then we're actively staging out. We can't
+    # keep the tracers involved in staging in closure. That'd be a tracer leak!
+    return True
   elif not isinstance(x, ad.JVPTracer):
     # If x is not a JVPTracer, recursively check its contents.
-    return any(_maybe_perturbed(attr) for name, attr in x._contents())
+    return any(hoistworthy(attr) for name, attr in x._contents())
   else:
     return True  # We can't be sure!
 
@@ -1141,7 +1138,7 @@ def _closure_convert_for_avals(fun, in_tree, in_avals):
   jaxpr, out_pvals, consts, () = pe.trace_to_jaxpr_dynamic(wrapped_fun, in_avals)
   out_tree = out_tree()
 
-  (closure_consts, hoisted_consts), merge = partition_list(_maybe_perturbed, consts)
+  (closure_consts, hoisted_consts), merge = partition_list(hoistworthy, consts)
   num_consts = len(hoisted_consts)
 
   def converted_fun(*args_hconsts):
