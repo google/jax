@@ -693,6 +693,14 @@ class LaxControlFlowTest(jtu.JaxTestCase):
     with jax.disable_jit():
       self.assertRaises(ValueError, should_raise_wo_jit)
 
+  def testForiEmpty(self):
+    # https://github.com/google/jax/issues/20399
+    def foo(j, carry):
+      return carry.at[j].set(j)
+
+    myarray = jnp.array([])
+    _ = jax.lax.fori_loop(0, 0, foo, myarray)  # doesn't crash
+
   def testCond(self):
     def fun(x):
       if x < 3:
