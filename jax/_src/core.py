@@ -13,7 +13,6 @@
 # limitations under the License.
 from __future__ import annotations
 
-import collections  # noqa: F401
 from collections import Counter, defaultdict, deque, namedtuple
 from collections.abc import (Collection, Generator, Hashable, Iterable,
                              Iterator, Set, Sequence, MutableSet,
@@ -30,7 +29,7 @@ import operator
 import threading
 import types
 from typing import (Any, Callable, ClassVar, Generic, NamedTuple, TypeVar,
-                    cast, overload, Union)
+                    Optional, cast, overload, Union)
 import warnings
 from weakref import ref
 
@@ -1959,18 +1958,26 @@ def raise_to_shaped(aval: AbstractValue, weak_type=None):
   if weak_type is None:
     weak_type = getattr(aval, 'weak_type', False)
   for typ in aval_type.__mro__:
-    handler = raise_to_shaped_mappings.get(typ)
-    if handler: return handler(aval, weak_type)
+    if handler := raise_to_shaped_mappings.get(typ):
+      return handler(aval, weak_type)
   raise TypeError(type(aval))
 
-raise_to_shaped_mappings : dict[type, Callable] = {
-  AbstractToken: lambda aval, _: aval,
-  Bot: lambda aval, _: aval,
-  UnshapedArray: lambda aval, _: aval,
-  ShapedArray: lambda aval, weak_type: ShapedArray(
-      aval.shape, aval.dtype, weak_type, aval.named_shape),
-  DConcreteArray: lambda aval, weak_type: DShapedArray(
-      aval.shape, aval.dtype, weak_type),
+
+raise_to_shaped_mappings: dict[type, Callable] = {
+    AbstractToken: lambda aval, _: aval,
+    Bot: lambda aval, _: aval,
+    UnshapedArray: lambda aval, _: aval,
+    ShapedArray: lambda aval, weak_type: ShapedArray(
+        aval.shape,
+        aval.dtype,
+        aval.weak_type if weak_type is None else weak_type,
+        aval.named_shape,
+    ),
+    DConcreteArray: lambda aval, weak_type: DShapedArray(
+        aval.shape,
+        aval.dtype,
+        aval.weak_type if weak_type is None else weak_type,
+    ),
 }
 
 ### Operations on shapes and dimension sizes.

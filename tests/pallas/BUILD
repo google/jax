@@ -45,11 +45,6 @@ jax_test(
         "cpu",
         "tpu",
     ],
-    disable_configs = [
-        "gpu",
-        "gpu_a100",
-        "gpu_h100",
-    ],
     enable_configs = [
         "gpu_x32",
         "gpu_a100_x32",
@@ -78,12 +73,6 @@ jax_test(
     disable_backends = [
         "cpu",
         "tpu",
-    ],
-    disable_configs = [
-        "gpu",
-        "gpu_p100",
-        "gpu_a100",
-        "gpu_h100",
     ],
     enable_configs = [
         "gpu_x32",
@@ -114,12 +103,6 @@ jax_test(
     disable_backends = [
         "cpu",
         "tpu",
-    ],
-    disable_configs = [
-        "gpu",
-        "gpu_p100",
-        "gpu_a100",
-        "gpu_h100",
     ],
     enable_configs = [
         "gpu_x32",
