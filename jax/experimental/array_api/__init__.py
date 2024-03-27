@@ -204,6 +204,7 @@ from jax.experimental.array_api._statistical_functions import (
 )
 
 from jax.experimental.array_api._utility_functions import (
+    __array_namespace_info__ as __array_namespace_info__,
     all as all,
     any as any,
 )
