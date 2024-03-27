@@ -883,7 +883,28 @@ def _load_lowering_rule(ctx: LoweringRuleContext, *args_flat, args_tree, **_):
     return load_val
   vec_type = ir.VectorType.get(aval_out.shape,
                                _dtype_to_ir_type(aval_out.dtype))
-  return vector.ShapeCastOp(vec_type, load_val).result
+  if aval_out.dtype.itemsize == 4:
+    return vector.ShapeCastOp(vec_type, load_val).result
+  # TODO(b/331501079): handle packed type shapecast in Mosaic.
+  if jnp.issubdtype(aval_out.dtype, jnp.integer):
+    x32_mlir_ty = _dtype_to_ir_type(jnp.dtype(jnp.int32))
+    x32_ext_op = arith.ExtSIOp
+    x32_trunc_op = arith.TruncIOp
+  else:
+    x32_mlir_ty = _dtype_to_ir_type(jnp.dtype(jnp.float32))
+    x32_ext_op = arith.ExtFOp
+    x32_trunc_op = arith.TruncFOp
+  return x32_trunc_op(
+      ir.VectorType.get(aval_out.shape,
+                             _dtype_to_ir_type(aval_out.dtype)),
+      vector.ShapeCastOp(
+          ir.VectorType.get(aval_out.shape, x32_mlir_ty),
+          x32_ext_op(
+              ir.VectorType.get(load_val.type.shape, x32_mlir_ty),
+              load_val,
+          ),
+      ).result,
+  ).result
 
 
 lowering_rules[primitives.load_p] = _load_lowering_rule
