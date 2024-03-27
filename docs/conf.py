@@ -123,6 +123,8 @@ exclude_patterns = [
     'notebooks/*.md',
     'pallas/quickstart.md',
     'pallas/tpu/pipelining.md',
+    'pallas/tpu/matmul.md',
+    'pallas/tpu/flash1.md',
     'jep/9407-type-promotion.md',
     'jax-101/*.md',
     'autodidax.md',
@@ -213,6 +215,8 @@ nb_execution_excludepatterns = [
     # Requires accelerators
     'pallas/quickstart.*',
     'pallas/tpu/pipelining.*',
+    'pallas/tpu/matmul.*',
+    'pallas/tpu/flash1.*',
 ]
 
 # -- Options for HTMLHelp output ---------------------------------------------
