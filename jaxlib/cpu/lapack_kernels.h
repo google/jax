@@ -61,6 +61,30 @@ struct Geqrf {
 };
 
 template <typename T>
+struct RealGeqp3 {
+  using FnType = void(lapack_int* m, lapack_int* n, T* a, lapack_int* lda,
+                      lapack_int* jpvt, T* tau, T* work, lapack_int* lwork,
+                      lapack_int* info);
+  static FnType* fn;
+  static void Kernel(void* out, void** data, XlaCustomCallStatus*);
+
+  static int64_t Workspace(lapack_int m, lapack_int n);
+};
+
+lapack_int ComplexGeqp3RworkSize(int64_t n);
+
+template <typename T>
+struct ComplexGeqp3 {
+  using FnType = void(lapack_int* m, lapack_int* n, T* a, lapack_int* lda,
+                      lapack_int* jpvt, T* tau, T* work, lapack_int* lwork,
+                      typename T::value_type* rwork, lapack_int* info);
+  static FnType* fn;
+  static void Kernel(void* out, void** data, XlaCustomCallStatus*);
+
+  static int64_t Workspace(lapack_int m, lapack_int n);
+};
+
+template <typename T>
 struct Orgqr {
   using FnType = void(lapack_int* m, lapack_int* n, lapack_int* k, T* a,
                       lapack_int* lda, T* tau, T* work, lapack_int* lwork,

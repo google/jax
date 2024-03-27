@@ -17,10 +17,12 @@ limitations under the License.
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 
 #include "absl/base/dynamic_annotations.h"
+#include "lapack_kernels.h"
 
 namespace {
 
@@ -172,6 +174,103 @@ template struct Geqrf<float>;
 template struct Geqrf<double>;
 template struct Geqrf<std::complex<float>>;
 template struct Geqrf<std::complex<double>>;
+
+// Geqp3
+
+template <typename T>
+typename RealGeqp3<T>::FnType* RealGeqp3<T>::fn = nullptr;
+
+template <typename T>
+void RealGeqp3<T>::Kernel(void* out_tuple, void** data, XlaCustomCallStatus*) {
+  int b = *(reinterpret_cast<int32_t*>(data[0]));
+  int m = *(reinterpret_cast<int32_t*>(data[1]));
+  int n = *(reinterpret_cast<int32_t*>(data[2]));
+  int lwork = *(reinterpret_cast<int32_t*>(data[3]));
+  const T* a_in = reinterpret_cast<T*>(data[4]);
+
+  void** out = reinterpret_cast<void**>(out_tuple);
+  T* a_out = reinterpret_cast<T*>(out[0]);
+  int* jpvt = reinterpret_cast<int*>(out[1]);
+  T* tau = reinterpret_cast<T*>(out[2]);
+  int* info = reinterpret_cast<int*>(out[3]);
+  T* work = reinterpret_cast<T*>(out[4]);
+
+  if (a_out != a_in) {
+    std::memcpy(a_out, a_in,
+                static_cast<int64_t>(b) * static_cast<int64_t>(m) *
+                    static_cast<int64_t>(n) * sizeof(T));
+  }
+  
+  for (int i = 0; i < b; ++i) {
+    fn(&m, &n, a_out, &m, jpvt, tau, work, &lwork, info);
+    a_out += static_cast<int64_t>(m) * static_cast<int64_t>(n);
+    jpvt += static_cast<int64_t>(n);
+    tau += std::min(m, n);
+    ++info;
+  }
+}
+
+template <typename T>
+int64_t RealGeqp3<T>::Workspace(lapack_int m, lapack_int n) {
+  T work = 0;
+  lapack_int lwork = -1;
+  lapack_int info = 0;
+  fn(&m, &n, nullptr, &m, nullptr, nullptr, &work, &lwork, &info);
+  return info == 0 ? static_cast<int64_t>(std::real(work)) : -1;
+}
+
+lapack_int ComplexGeqp3RworkSize(int64_t n) {
+  return catch_lapack_int_overflow("complex geqp3 rwork", 2 * n);
+}
+
+template <typename T>
+typename ComplexGeqp3<T>::FnType* ComplexGeqp3<T>::fn = nullptr;
+
+template <typename T>
+void ComplexGeqp3<T>::Kernel(void* out_tuple, void** data, XlaCustomCallStatus*) {
+  int b = *(reinterpret_cast<int32_t*>(data[0]));
+  int m = *(reinterpret_cast<int32_t*>(data[1]));
+  int n = *(reinterpret_cast<int32_t*>(data[2]));
+  int lwork = *(reinterpret_cast<int32_t*>(data[3]));
+  const T* a_in = reinterpret_cast<T*>(data[4]);
+
+  void** out = reinterpret_cast<void**>(out_tuple);
+  T* a_out = reinterpret_cast<T*>(out[0]);
+  int* jpvt = reinterpret_cast<int*>(out[1]);
+  T* tau = reinterpret_cast<T*>(out[2]);
+  int* info = reinterpret_cast<int*>(out[3]);
+  T* work = reinterpret_cast<T*>(out[4]);
+  typename T::value_type* rwork =
+      reinterpret_cast<typename T::value_type*>(out[5]);
+
+  if (a_out != a_in) {
+    std::memcpy(a_out, a_in,
+                static_cast<int64_t>(b) * static_cast<int64_t>(m) *
+                    static_cast<int64_t>(n) * sizeof(T));
+  }
+  
+  for (int i = 0; i < b; ++i) {
+    fn(&m, &n, a_out, &m, jpvt, tau, work, &lwork, rwork, info);
+    a_out += static_cast<int64_t>(m) * static_cast<int64_t>(n);
+    jpvt += static_cast<int64_t>(n);
+    tau += std::min(m, n);
+    ++info;
+  }
+}
+
+template <typename T>
+int64_t ComplexGeqp3<T>::Workspace(lapack_int m, lapack_int n) {
+  T work = 0;
+  lapack_int lwork = -1;
+  lapack_int info = 0;
+  fn(&m, &n, nullptr, &m, nullptr, nullptr, &work, &lwork, nullptr, &info);
+  return info == 0 ? static_cast<int64_t>(std::real(work)) : -1;
+}
+
+template struct RealGeqp3<float>;
+template struct RealGeqp3<double>;
+template struct ComplexGeqp3<std::complex<float>>;
+template struct ComplexGeqp3<std::complex<double>>;
 
 // Orgqr
 

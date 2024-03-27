@@ -195,6 +195,84 @@ def geqrf_hlo(dtype, a: ir.Value, *,
   return out[:3]
 
 
+def geqp3_hlo(dtype, a: ir.Value, jpvt: ir.Value, *,
+              a_shape_vals: tuple[DimensionSize, ...]):
+  _lapack.initialize()
+  a_type = ir.RankedTensorType(a.type)
+  assert len(a_shape_vals) >= 2
+  m, n = a_shape_vals[-2:]
+  assert type(m) is int
+  assert type(n) is int
+
+  jpvt_type = ir.RankedTensorType(jpvt.type)
+
+  batch_dims_vals = a_shape_vals[:-2]
+  num_bd = len(batch_dims_vals)
+
+  if dtype == np.float32:
+    fn = "lapack_sgeqp3"
+    lwork = _lapack.lapack_sgeqp3_workspace(m, n)
+    workspace = [([lwork], a_type.element_type)]
+    workspace_layout = [[0]]
+  elif dtype == np.float64:
+    fn = "lapack_dgeqp3"
+    lwork = _lapack.lapack_dgeqp3_workspace(m, n)
+    workspace = [([lwork], a_type.element_type)]
+    workspace_layout = [[0]]
+  elif dtype == np.complex64:
+    fn = "lapack_cgeqp3"
+    lwork = _lapack.lapack_cgeqp3_workspace(m, n)
+    rwork = _lapack.cgeqp3_rwork_size(n)
+    workspace = [
+      ([lwork], a_type.element_type),
+      ([rwork], ir.F32Type.get())
+    ]
+    workspace_layout = [[0], [0]]
+  elif dtype == np.complex128:
+    fn = "lapack_zgeqp3"
+    lwork = _lapack.lapack_zgeqp3_workspace(m, n)
+    rwork = _lapack.cgeqp3_rwork_size(n)
+    workspace = [
+      ([lwork], a_type.element_type),
+      ([rwork], ir.F64Type.get())
+    ]
+    workspace_layout = [[0], [0]]
+  else:
+    raise NotImplementedError(f"Unsupported dtype {dtype}")
+
+  scalar_layout = []
+  input_layout = [
+    (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1)),
+    tuple(range(num_bd, -1, -1))
+  ]
+  i32_type = ir.IntegerType.get_signless(32)
+
+  batch_size_val = hlo_s32(1)
+  for b_v in batch_dims_vals:
+    batch_size_val = hlo.multiply(batch_size_val, ensure_hlo_s32(b_v))
+  shape_type_pairs: Sequence[ShapeTypePair] = [
+      (a_shape_vals, a_type.element_type),
+      (batch_dims_vals + (n,), jpvt_type.element_type),
+      (batch_dims_vals + (min(m, n),), a_type.element_type),
+      (batch_dims_vals, i32_type),
+  ] + workspace
+
+  result_types, result_shapes = mk_result_types_and_shapes(shape_type_pairs)
+  result_layouts = input_layout + [
+    tuple(range(num_bd, -1, -1)),
+    tuple(range(num_bd - 1, -1, -1)),
+  ] + workspace_layout
+  out = custom_call(
+      fn,
+      result_types=result_types,
+      operands=[batch_size_val, hlo_s32(m), hlo_s32(n), hlo_s32(lwork), a, jpvt],
+      operand_layouts=[scalar_layout] * 4 + input_layout,
+      result_layouts=result_layouts,
+      operand_output_aliases={4: 0, 5: 1},
+      result_shapes=result_shapes,
+  ).results
+  return out[:4]
+
 # # ?orgqr: product of elementary Householder reflectors:
 def orgqr_hlo(dtype, a: ir.Value, tau, *,
               a_shape_vals: tuple[DimensionSize, ...],

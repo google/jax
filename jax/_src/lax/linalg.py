@@ -268,7 +268,8 @@ def lu(x: ArrayLike) -> tuple[Array, Array, Array]:
   return lu, pivots, permutation
 
 @_warn_on_positional_kwargs
-def qr(x: ArrayLike, *, full_matrices: bool = True) -> tuple[Array, Array]:
+def qr(x: ArrayLike, *,
+       pivoting: bool = False, full_matrices: bool = True) -> tuple[Array, Array] | tuple[Array, Array, Array]:
   """QR decomposition.
 
   Computes the QR decomposition
@@ -295,7 +296,9 @@ def qr(x: ArrayLike, *, full_matrices: bool = True) -> tuple[Array, Array]:
     ``full_matrices=True``, or ``[..., min(m, n), n]`` if
     ``full_matrices=False``.
   """
-  q, r = qr_p.bind(x, full_matrices=full_matrices)
+  q, r, *p = qr_p.bind(x, pivoting=pivoting, full_matrices=full_matrices)
+  if pivoting:
+    return q, r, p[0]
   return q, r
 
 
@@ -1591,6 +1594,76 @@ mlir.register_lowering(
             platform='rocm'),
     platform='rocm')
 
+def geqp3(a: ArrayLike, jpvt: ArrayLike) -> tuple[Array, Array, Array]:
+  a_out, jpvt_out, taus = geqp3_p.bind(a, jpvt)
+  return a_out, jpvt_out, taus
+
+def _geqp3_abstract_eval(a, jpvt):
+  if not isinstance(a, ShapedArray) or not isinstance(jpvt, ShapedArray):
+    raise NotImplementedError("Unsupported aval in geqp3_abstract_eval: "
+                              f"{a.aval}, {jpvt.aval}")
+  if a.ndim < 2:
+    raise ValueError("Argument to pivoted QR decomposition must have ndims >= 2")
+  *batch_dims, m, n = a.shape
+  *jpvt_batch_dims, jpvt_n = jpvt.shape
+  if batch_dims != jpvt_batch_dims or jpvt_n != n:
+    raise ValueError(f"Type mismatch for pivoted QR decomposition: {a=} {jpvt=}")
+  taus = a.update(shape=(*batch_dims, min(m, n)))
+  return a, jpvt, taus
+
+def _geqp3_batching_rule(batched_args, batch_dims):
+  a, jpvt = batched_args
+  bd, = batch_dims
+  return geqp3(batching.moveaxis(a, bd, 0), batching.moveaxis(jpvt, bd, 0)), (0, 0, 0)
+
+# TODO: reduce repeated code between here and geqrf?
+def _geqp3_cpu_lowering(ctx, a, jpvt):
+  a_aval, jpvt_aval, taus_aval = ctx.avals_out
+  *batch_dims, m, n = a_aval.shape
+  # It should be possible to support fully-dynamic shapes, but since
+  # the last two dimensions (m, n) are used in more involved ways, we only
+  # support dynamic dimensions for the batch size for now.
+  if not is_constant_shape([m, n]):
+    raise NotImplementedError(
+      "Shape polymorphism for native serialization for qr on CPU and GPU is "
+      f"implemented only for the batch dimensions: {a_aval.shape}")
+  batch = math.prod(batch_dims)
+
+  if batch == 0 or m == 0 or n == 0:
+    return (
+      mlir.full_like_aval(ctx, 0, a_aval),
+      mlir.full_like_aval(ctx, 0, jpvt_aval),
+      mlir.full_like_aval(ctx, 0, taus_aval)
+    )
+
+  a_shape_vals = mlir.eval_dynamic_shape_as_ivals(ctx, a_aval.shape)
+  a_out, jpvt_out, taus, info_geqrf = lapack.geqp3_hlo(a_aval.dtype, a, jpvt,
+                                             a_shape_vals=a_shape_vals)
+  # Subtract 1 from the pivots to get 0-based indices
+  jpvt_out = hlo.subtract(jpvt_out, mlir.full_like_aval(ctx, 1, jpvt_aval))
+  zeros = mlir.full_like_aval(ctx, 0, ShapedArray(batch_dims, np.dtype(np.int32)))
+  ok = mlir.compare_hlo(info_geqrf, zeros, "EQ", "SIGNED")
+  select_ok_a_aval = ShapedArray(batch_dims + [1, 1], np.dtype(np.bool_))
+  ok_a = mlir.broadcast_in_dim(ctx, ok, select_ok_a_aval,
+                               broadcast_dimensions=range(len(batch_dims)))
+  a_out = _broadcasting_select_hlo(ctx, ok_a, select_ok_a_aval, a_out, a_aval, _nan_like_hlo(ctx, a_aval), a_aval)
+  select_ok_jpvt_aval = ShapedArray(batch_dims + [1], np.dtype(np.bool_))
+  ok_jpvt = mlir.broadcast_in_dim(ctx, ok, select_ok_jpvt_aval,
+                                  broadcast_dimensions=range(len(batch_dims)))
+  jpvt_out = _broadcasting_select_hlo(ctx, ok_jpvt, select_ok_jpvt_aval, jpvt_out, jpvt_aval, mlir.full_like_aval(ctx, 0, jpvt_aval), jpvt_aval)
+  select_ok_taus_aval = ShapedArray(batch_dims + [1], np.dtype(np.bool_))
+  ok_taus = mlir.broadcast_in_dim(ctx, ok, select_ok_taus_aval,
+                                  broadcast_dimensions=range(len(batch_dims)))
+  taus = _broadcasting_select_hlo(ctx, ok_taus, select_ok_taus_aval, taus, taus_aval, _nan_like_hlo(ctx, taus_aval), taus_aval)
+  return a_out, jpvt_out, taus
+
+
+geqp3_p = Primitive('geqp3')
+geqp3_p.multiple_results = True
+geqp3_p.def_impl(partial(dispatch.apply_primitive, geqp3))
+geqp3_p.def_abstract_eval(_geqp3_abstract_eval)
+batching.primitive_batchers[geqp3_p] = _geqp3_batching_rule
+mlir.register_lowering(geqp3_p, _geqp3_cpu_lowering, platform='cpu')
 
 # householder_product: product of elementary Householder reflectors
 
@@ -1703,11 +1776,13 @@ mlir.register_lowering(
     platform='rocm')
 
 
-def _qr_impl(operand, *, full_matrices):
-  q, r = dispatch.apply_primitive(qr_p, operand, full_matrices=full_matrices)
+def _qr_impl(operand, *, pivoting, full_matrices):
+  q, r, *p = dispatch.apply_primitive(qr_p, operand, pivoting=pivoting, full_matrices=full_matrices)
+  if pivoting:
+    return q, r, p[0]
   return q, r
 
-def _qr_abstract_eval(operand, *, full_matrices):
+def _qr_abstract_eval(operand, *, pivoting, full_matrices):
   if isinstance(operand, ShapedArray):
     if operand.ndim < 2:
       raise ValueError("Argument to QR decomposition must have ndims >= 2")
@@ -1715,16 +1790,20 @@ def _qr_abstract_eval(operand, *, full_matrices):
     k = m if full_matrices else min(m, n)
     q = operand.update(shape=(*batch_dims, m, k))
     r = operand.update(shape=(*batch_dims, k, n))
+    p = operand.update(shape=(*batch_dims, n), dtype=jnp.int32)
   else:
     q = operand
     r = operand
+    p = operand.update(dtype=jnp.int32)
+  if pivoting:
+    return q, r, p
   return q, r
 
-def qr_jvp_rule(primals, tangents, *, full_matrices):
+def qr_jvp_rule(primals, tangents, *, pivoting, full_matrices):
   # See j-towns.github.io/papers/qr-derivative.pdf for a terse derivation.
   x, = primals
   dx, = tangents
-  q, r = qr_p.bind(x, full_matrices=False)
+  q, r, *p = qr_p.bind(x, pivoting=pivoting, full_matrices=False)
   *_, m, n = x.shape
   if m < n or (full_matrices and m != n):
     raise NotImplementedError(
@@ -1738,23 +1817,36 @@ def qr_jvp_rule(primals, tangents, *, full_matrices):
   do = do + I * (qt_dx_rinv - qt_dx_rinv.real.astype(qt_dx_rinv.dtype))
   dq = jnp.matmul(q, do - qt_dx_rinv) + dx_rinv
   dr = jnp.matmul(qt_dx_rinv - do, r)
+  if pivoting:
+    dp = ad_util.Zero.from_value(p[0])
+    return (q, r, p), (dq, dr, dp)
   return (q, r), (dq, dr)
 
-def _qr_batching_rule(batched_args, batch_dims, *, full_matrices):
+def _qr_batching_rule(batched_args, batch_dims, *, pivoting, full_matrices):
   x, = batched_args
   bd, = batch_dims
   x = batching.moveaxis(x, bd, 0)
-  return qr_p.bind(x, full_matrices=full_matrices), (0, 0)
+  if pivoting:
+    out_axes = (0, 0, 0)
+  else:
+    out_axes = (0, 0)
+  return qr_p.bind(x, pivoting=pivoting, full_matrices=full_matrices), out_axes
 
-def _qr_lowering(a, *, full_matrices):
+def _qr_lowering(a, *, pivoting, full_matrices):
   *batch_dims, m, n = a.shape
   if m == 0 or n == 0:
     k = m if full_matrices else min(m, n)
     q = jnp.broadcast_to(jnp.eye(m, k, dtype=a.dtype), (*batch_dims, m, k))
     r = jnp.empty((*batch_dims, k, n), dtype=a.dtype)
+    if pivoting:
+      p = jnp.empty((*batch_dims, n), dtype=jnp.int32)
+      return q, r, p
     return q, r
-
-  r, taus = geqrf(a)
+  if pivoting:
+    jpvt = jnp.zeros((*batch_dims, n), dtype=jnp.int32)
+    r, p, taus = geqp3(a, jpvt)
+  else:
+    r, taus = geqrf(a)
   if m < n:
     q = householder_product(r[..., :m, :m], taus)
   elif full_matrices:
@@ -1765,6 +1857,8 @@ def _qr_lowering(a, *, full_matrices):
     q = householder_product(r, taus)
     r = r[..., :n, :n]
   r = jnp.triu(r)
+  if pivoting:
+    return q, r, p
   return q, r
 
 

@@ -68,6 +68,16 @@ void GetLapackKernelsFromScipy() {
   Geqrf<std::complex<double>>::fn =
       reinterpret_cast<Geqrf<std::complex<double>>::FnType*>(
           lapack_ptr("zgeqrf"));
+  RealGeqp3<float>::fn =
+      reinterpret_cast<RealGeqp3<float>::FnType*>(lapack_ptr("sgeqp3"));
+  RealGeqp3<double>::fn =
+      reinterpret_cast<RealGeqp3<double>::FnType*>(lapack_ptr("dgeqp3"));
+  ComplexGeqp3<std::complex<float>>::fn =
+      reinterpret_cast<ComplexGeqp3<std::complex<float>>::FnType*>(
+          lapack_ptr("cgeqp3"));
+  ComplexGeqp3<std::complex<double>>::fn =
+      reinterpret_cast<ComplexGeqp3<std::complex<double>>::FnType*>(
+          lapack_ptr("zgeqp3"));
   Orgqr<float>::fn =
       reinterpret_cast<Orgqr<float>::FnType*>(lapack_ptr("sorgqr"));
   Orgqr<double>::fn =
@@ -170,6 +180,12 @@ nb::dict Registrations() {
       EncapsulateFunction(Geqrf<std::complex<float>>::Kernel);
   dict["lapack_zgeqrf"] =
       EncapsulateFunction(Geqrf<std::complex<double>>::Kernel);
+  dict["lapack_sgeqp3"] = EncapsulateFunction(RealGeqp3<float>::Kernel);
+  dict["lapack_dgeqp3"] = EncapsulateFunction(RealGeqp3<double>::Kernel);
+  dict["lapack_cgeqp3"] = 
+      EncapsulateFunction(ComplexGeqp3<std::complex<float>>::Kernel);
+  dict["lapack_zgeqp3"] = 
+      EncapsulateFunction(ComplexGeqp3<std::complex<double>>::Kernel);
   dict["lapack_sorgqr"] = EncapsulateFunction(Orgqr<float>::Kernel);
   dict["lapack_dorgqr"] = EncapsulateFunction(Orgqr<double>::Kernel);
   dict["lapack_cungqr"] =
@@ -238,6 +254,14 @@ NB_MODULE(_lapack, m) {
         nb::arg("m"), nb::arg("n"));
   m.def("lapack_zgeqrf_workspace", &Geqrf<std::complex<double>>::Workspace,
         nb::arg("m"), nb::arg("n"));
+  m.def("lapack_sgeqp3_workspace", &RealGeqp3<float>::Workspace, nb::arg("m"),
+        nb::arg("n"));
+  m.def("lapack_dgeqp3_workspace", &RealGeqp3<double>::Workspace, nb::arg("m"),
+        nb::arg("n"));
+  m.def("lapack_cgeqp3_workspace", &ComplexGeqp3<std::complex<float>>::Workspace,
+        nb::arg("m"), nb::arg("n"));
+  m.def("lapack_zgeqp3_workspace", &ComplexGeqp3<std::complex<double>>::Workspace,
+        nb::arg("m"), nb::arg("n"));
   m.def("lapack_sorgqr_workspace", &Orgqr<float>::Workspace, nb::arg("m"),
         nb::arg("n"), nb::arg("k"));
   m.def("lapack_dorgqr_workspace", &Orgqr<double>::Workspace, nb::arg("m"),
@@ -253,6 +277,7 @@ NB_MODULE(_lapack, m) {
   m.def("dgesdd_work_size", &RealGesdd<double>::Workspace, nb::arg("m"),
         nb::arg("n"), nb::arg("job_opt_compute_uv"),
         nb::arg("job_opt_full_matrices"));
+  m.def("cgeqp3_rwork_size", &ComplexGeqp3RworkSize, nb::arg("n"));
   m.def("cgesdd_rwork_size", &ComplexGesddRworkSize, nb::arg("m"), nb::arg("n"),
         nb::arg("compute_uv"));
   m.def("cgesdd_work_size", &ComplexGesdd<std::complex<float>>::Workspace,

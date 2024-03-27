@@ -36,6 +36,11 @@ jax::Geqrf<double>::FnType dgeqrf_;
 jax::Geqrf<std::complex<float>>::FnType cgeqrf_;
 jax::Geqrf<std::complex<double>>::FnType zgeqrf_;
 
+jax::RealGeqp3<float>::FnType sgeqp3_;
+jax::RealGeqp3<double>::FnType dgeqp3_;
+jax::ComplexGeqp3<std::complex<float>>::FnType cgeqp3_;
+jax::ComplexGeqp3<std::complex<double>>::FnType zgeqp3_;
+
 jax::Orgqr<float>::FnType sorgqr_;
 jax::Orgqr<double>::FnType dorgqr_;
 jax::Orgqr<std::complex<float>>::FnType cungqr_;

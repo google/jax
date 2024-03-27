@@ -278,19 +278,16 @@ def lu(a: ArrayLike, permute_l: bool = False, overwrite_a: bool = False,
   return _lu(a, permute_l)
 
 @overload
-def _qr(a: ArrayLike, mode: Literal["r"], pivoting: bool) -> tuple[Array]: ...
+def _qr(a: ArrayLike, mode: Literal["r"], pivoting: bool) -> tuple[Array] | tuple[Array, Array]: ...
 
 @overload
-def _qr(a: ArrayLike, mode: Literal["full", "economic"], pivoting: bool) -> tuple[Array, Array]: ...
+def _qr(a: ArrayLike, mode: Literal["full", "economic"], pivoting: bool) -> tuple[Array, Array] | tuple[Array, Array, Array]: ...
 
 @overload
-def _qr(a: ArrayLike, mode: str, pivoting: bool) -> tuple[Array] | tuple[Array, Array]: ...
+def _qr(a: ArrayLike, mode: str, pivoting: bool) -> tuple[Array] | tuple[Array, Array] | tuple[Array, Array, Array]: ...
 
 @partial(jit, static_argnames=('mode', 'pivoting'))
-def _qr(a: ArrayLike, mode: str, pivoting: bool) -> tuple[Array] | tuple[Array, Array]:
-  if pivoting:
-    raise NotImplementedError(
-        "The pivoting=True case of qr is not implemented.")
+def _qr(a: ArrayLike, mode: str, pivoting: bool) -> tuple[Array] | tuple[Array, Array] | tuple[Array, Array, Array]:
   if mode in ("full", "r"):
     full_matrices = True
   elif mode == "economic":
@@ -298,9 +295,13 @@ def _qr(a: ArrayLike, mode: str, pivoting: bool) -> tuple[Array] | tuple[Array, 
   else:
     raise ValueError(f"Unsupported QR decomposition mode '{mode}'")
   a, = promote_dtypes_inexact(jnp.asarray(a))
-  q, r = lax_linalg.qr(a, full_matrices=full_matrices)
+  q, r, *p = lax_linalg.qr(a, pivoting=pivoting, full_matrices=full_matrices)
   if mode == "r":
+    if pivoting:
+      return r, p[0]
     return (r,)
+  if pivoting:
+    return q, r, p[0]
   return q, r
 
 
@@ -323,7 +324,7 @@ def qr(a: ArrayLike, overwrite_a: bool = False, lwork: Any = None, mode: str = "
 @implements(scipy.linalg.qr,
         lax_description=_no_overwrite_and_chkfinite_doc, skip_params=('overwrite_a', 'check_finite', 'lwork'))
 def qr(a: ArrayLike, overwrite_a: bool = False, lwork: Any = None, mode: str = "full",
-       pivoting: bool = False, check_finite: bool = True) -> tuple[Array] | tuple[Array, Array]:
+       pivoting: bool = False, check_finite: bool = True) -> tuple[Array] | tuple[Array, Array] | tuple[Array, Array, Array]:
   del overwrite_a, lwork, check_finite  # unused
   return _qr(a, mode, pivoting)
 
