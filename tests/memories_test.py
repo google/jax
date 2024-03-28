@@ -950,6 +950,14 @@ class DevicePutTest(jtu.JaxTestCase):
     self._check_device_put_addressable_shards(
         out_on_hbm, np_inp, s_hbm, "device")
 
+    @jax.jit
+    def f(x, y):
+      return x * 2 + y
+
+    compiled_f = f.lower(out_on_hbm, out_on_hbm).compile()
+    print("parameter memory kinds: ", compiled_f.runtime_executable().get_parameter_memory_kinds())
+    print("output memory kinds: ", compiled_f.runtime_executable().get_output_memory_kinds())
+
   def test_device_put_hbm_to_host(self):
     mesh = jtu.create_global_mesh((4, 2), ("x", "y"))
     s_host = NamedSharding(mesh, P("y"), memory_kind="unpinned_host")
