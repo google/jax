@@ -440,8 +440,10 @@ safer route of not sending this fake result in case of errors. This means
 that the computation will hang, and no exception will be raised (but any
 exceptions in the callback functions will still appear in the logs).
 
-The current implementation uses the outfeed mechanism provided by XLA. The
-mechanism itself is quite primitive in the sense that a receiver must know
+The current implementation uses the outfeed mechanism provided by XLA on TPUs,
+and custom calls on CPU and GPU.
+The outfeed mechanism itself is quite primitive in the sense that a receiver
+must know
 exactly the shape of each incoming packet, and how many packets are expected.
 This makes it hard to use for multiple kinds of data in the same computation,
 and it is practically impossible to use it under conditionals or in loops
@@ -555,9 +557,10 @@ _HOST_CALLBACK_OUTFEED = config.DEFINE_bool(
     'jax_host_callback_outfeed',
     config.bool_env('JAX_HOST_CALLBACK_OUTFEED', False),
     help=(
-        'Use outfeed implementation for host_callback, even on CPU and GPU. '
-        'If false, use the CustomCall implementation. '
-        'Has no effect on TPU, since only the outfeed mechanism is implemented.'
+        'Use outfeed implementation for host_callback. '
+        'If false, use the CustomCall implementation on CPU and GPU. '
+        'Has no effect on TPU because for now only the outfeed mechanism is '
+        'supported.'
     )
 )
 
@@ -565,8 +568,7 @@ logger = logging.getLogger(__name__)
 
 
 def _use_outfeed(platform: str) -> bool:
-  return (platform in ("tpu", "gpu", "cuda", "rocm") or
-          _HOST_CALLBACK_OUTFEED.value)
+  return platform == "tpu" or _HOST_CALLBACK_OUTFEED.value
 
 
 def _raise_if_using_outfeed_with_pjrt_c_api(backend: xb.XlaBackend):
@@ -1199,7 +1201,7 @@ def _outside_call_lowering(ctx: mlir.LoweringRuleContext,
       f"identity = {identity}")
   return list(results) + [next_token, next_itoken]
 
-mlir.register_lowering(outside_call_p, _outside_call_lowering, platform="cpu")
+mlir.register_lowering(outside_call_p, _outside_call_lowering)
 
 def _outside_call_run_callback(
     arrays, device, *,

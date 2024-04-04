@@ -540,7 +540,8 @@ class HostCallbackTapTest(jtu.JaxTestCase):
   @jtu.sample_product(concurrent=[True, False])
   def test_tap_multiple(self, concurrent=False):
     """Call id_tap multiple times, concurrently or in sequence. """
-    if concurrent and jtu.test_device_matches(["cpu", "gpu"]):
+    dut = jtu.device_under_test()
+    if concurrent and dut in ["cpu", "gpu"] and hcb._use_outfeed(dut):
       # TODO(necula): if there is device side concurrency, outfeeds from
       # different computations can be interleaved. For example, it seems that
       # on GPU if multiple host threads run a jit computation, the multiple
@@ -818,11 +819,11 @@ class HostCallbackTapTest(jtu.JaxTestCase):
     self.assertEqual(100, count)
 
   def test_tap_jit_tap_exception(self):
-    if not hcb._HOST_CALLBACK_OUTFEED.value:
-      raise SkipTest("TODO: implement error handling for customcall")
+    dut = jtu.device_under_test()
+    use_outfeed = hcb._use_outfeed(dut)
     # Simulate a tap error
     def tap_err(*args, **kwargs):
-      raise NotImplementedError
+      raise NotImplementedError("special message")
 
     def func(x):
       x1 = hcb.id_print(x + 1, what="x1", output_stream=testing_stream)
@@ -830,19 +831,35 @@ class HostCallbackTapTest(jtu.JaxTestCase):
       x3 = hcb.id_print(x2 + 1, what="x3", output_stream=testing_stream)
       return x3
 
-    res = jax.jit(func)(0)  # No error yet
-    with self.assertRaises(hcb.CallbackException):
-      hcb.barrier_wait()
-
-    # Even though the receiver thread raised, the main thread should still
-    # return 3.
-    self.assertEqual(3, res)
-    # We should have received all others
-    assertMultiLineStrippedEqual(self, """
-        what: x1
-        1
-        what: x3
-        3""", testing_stream.output)
+    if use_outfeed:
+      res = jax.jit(func)(0)  # No error yet
+      with self.assertRaisesRegex(hcb.CallbackException, ".*special message.*"):
+        hcb.barrier_wait()
+      # Even though the receiver thread raised, the main thread should still
+      # return 3.
+      self.assertEqual(3, res)
+      # We should have received all others
+      assertMultiLineStrippedEqual(
+          self,
+          """
+          what: x1
+          1
+          what: x3
+          3""",
+          testing_stream.output,
+      )
+    else:
+      with self.assertRaisesRegex(RuntimeError, ".*special message.*"):
+        _ = jax.jit(func)(0)
+      hcb.barrier_wait()  # No error on barrier_wait()
+      # We receive only up to the error
+      assertMultiLineStrippedEqual(
+          self,
+          """
+          what: x1
+          1""",
+          testing_stream.output,
+      )
 
   def test_tap_while(self):
     """Executing while, even without JIT uses compiled code"""
@@ -2229,30 +2246,39 @@ class HostCallbackCallTest(jtu.JaxTestCase):
 
   def helper_check_callback_errors(self, thunk: Callable,
                                    expected_exc_txt: str):
-    """Calls thunk() and checks for expected exceptions.
-    """
-    if jtu.test_device_matches(["cpu"]):
-      # On CPU the runtime crashes, and the tests are all aborted
-      raise SkipTest("TODO: CPU runtime crashes on unexpected infeed")
-    elif jtu.test_device_matches(["gpu"]):
-      # On GPU we get a nice error back to Python
-      with self.assertRaisesRegex(
-          RuntimeError,
-          "(.* Mismatch between infeed source buffer shape s8.12345."
-          "|.*The destination shape does not match the source shape.)"):
-        thunk()
-    elif jtu.test_device_matches(["tpu"]):
-      # On TPU we get no error!!!
-      raise SkipTest("TODO: TPU runtime does not check infeed, and just computes with garbage")
+    """Calls thunk() and checks for expected exceptions."""
+    dut = jtu.device_under_test()
 
-    # Both on GPU and TPU we also get an error during the barrier_wait at the
-    # end of the test. Run a barrier_wait now, to consume that error.
-    with self.assertRaisesRegex(
-        hcb.CallbackException,
-        re.compile(
-            "There were exceptions during callback processing.*Last one was:.*" +
-            expected_exc_txt,
-            re.DOTALL)):
+    if hcb._use_outfeed(dut):
+      if dut == "cpu":
+        # On CPU the runtime crashes, and the tests are all aborted
+        raise SkipTest("TODO: CPU runtime crashes on unexpected infeed")
+      elif dut == "gpu":
+        # # On GPU we get a nice error back to Python
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "(.* Mismatch between infeed source buffer shape s8.12345."
+            "|.*The destination shape does not match the source shape.)"):
+          thunk()
+        # with self.assertRaisesRegex(RuntimeError, expected_exc_txt):
+        #   thunk()
+      elif dut == "tpu":
+        # On TPU we get no error!!!
+        raise SkipTest("TODO: TPU runtime does not check infeed, and just computes with garbage")
+
+      # We also get an error during the barrier_wait at the
+      # end of the test. Run a barrier_wait now, to consume that error.
+      with self.assertRaisesRegex(
+          hcb.CallbackException,
+          re.compile(
+              "There were exceptions during callback processing.*Last one was:.*" +
+              expected_exc_txt,
+              re.DOTALL)):
+        hcb.barrier_wait("Waiting for error")
+    else:
+      with self.assertRaisesRegex(RuntimeError, expected_exc_txt):
+        thunk()
+      # No error on barrier_wait if we don't use outfeed
       hcb.barrier_wait("Waiting for error")
 
   def test_call_error_callback_throws_exception(self):
