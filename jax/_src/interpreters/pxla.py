@@ -2039,7 +2039,6 @@ def lower_sharding_computation(
     global_in_avals: Sequence[core.ShapedArray],
     *,
     keep_unused: bool,
-    inline: bool,
     devices_from_context: Sequence[xc.Device] | None = None,
     lowering_parameters: mlir.LoweringParameters,
     in_layouts: MaybeLayout,
@@ -2118,20 +2117,6 @@ def lower_sharding_computation(
   all_default_mem_kind = are_all_shardings_default_mem_kind(
       da_object,
       it.chain(in_shardings, out_shardings, [js for js, _ in jaxpr_sharding]))  # type: ignore
-
-  if not da_object.is_fully_addressable:  # type: ignore
-    if inline and config.spmd_mode.value != 'allow_all':
-      raise RuntimeError(
-          "Running operations on `Array`s that are not fully addressable by this "
-          "process (i.e. `Array`s with data sharded across multiple devices and "
-          "processes.) is dangerous. It’s very important that all processes run "
-          "the same cross-process computations in the same order otherwise it "
-          "can lead to hangs. "
-          "If you’re not already familiar with JAX’s multi-process "
-          "programming model, please read "
-          "https://jax.readthedocs.io/en/latest/multi_process.html. "
-          "To fix this error, run your `jitted` computation inside "
-          "`with jax.spmd_mode('allow_all'):` context manager.")
 
   # 2. Build up the HLO
   semantic_in_shardings = SemanticallyEqualShardings(
