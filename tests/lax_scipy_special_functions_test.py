@@ -260,6 +260,26 @@ class LaxScipySpcialFunctionsTest(jtu.JaxTestCase):
       with self.assertRaises(TypeError), self.assertWarns(DeprecationWarning):
         lsp_special.beta(b=1, y=1)
 
+  def testGammaIncBoundaryValues(self):
+    dtype = jax.numpy.zeros(0).dtype  # default float dtype.
+    nan = float('nan')
+    inf = float('inf')
+    args_maker = lambda: [np.array([0, 0, 0, 1, nan,   1, nan,   0,   1, nan]).astype(dtype),
+                          np.array([0, 1, 2, 0,   1, nan, nan, inf, inf, inf]).astype(dtype)]
+    rtol = 1E-3 if jtu.test_device_matches(["tpu"]) else 1e-5
+    self._CheckAgainstNumpy(osp_special.gammainc, lsp_special.gammainc, args_maker, rtol=rtol)
+    self._CompileAndCheck(lsp_special.gammainc, args_maker, rtol=rtol)
+
+  def testGammaIncCBoundaryValues(self):
+    dtype = jax.numpy.zeros(0).dtype  # default float dtype.
+    nan = float('nan')
+    inf = float('inf')
+    args_maker = lambda: [np.array([0, 0, 0, 1, nan,   1, nan,   0,   1, nan,  1]).astype(dtype),
+                          np.array([0, 1, 2, 0,   1, nan, nan, inf, inf, inf, -1]).astype(dtype)]
+    rtol = 1E-3 if jtu.test_device_matches(["tpu"]) else 1e-5
+    self._CheckAgainstNumpy(osp_special.gammaincc, lsp_special.gammaincc, args_maker, rtol=rtol)
+    self._CompileAndCheck(lsp_special.gammaincc, args_maker, rtol=rtol)
+
 
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())

@@ -303,15 +303,16 @@ def _igamma_series(ax, x, a, enabled, dtype, mode):
 
 def igamma_impl(a, x, *, dtype):
   is_nan = bitwise_or(_isnan(a), _isnan(x))
-  x_is_zero = eq(x, _const(x, 0))
   x_is_infinity = eq(x, _const(x, float('inf')))
-  domain_error = bitwise_or(lt(x, _const(x, 0)), le(a, _const(a, 0)))
-  use_igammac = bitwise_and(gt(x, _const(x, 1)), gt(x, a))
+  a_is_zero = eq(a, _const(a, 0))
+  x_is_zero = eq(x, _const(x, 0))
+  domain_error = _reduce(bitwise_or, [lt(x, _const(x, 0)), lt(a, _const(a, 0)), bitwise_and(a_is_zero, x_is_zero)])
+
+  use_igammac = bitwise_and(ge(x, _const(x, 1)), gt(x, a))
   ax = a * log(x) - x - lgamma(a)
   underflow = lt(ax, -log(dtypes.finfo(dtype).max))
   ax = exp(ax)
-  enabled = bitwise_not(
-      _reduce(bitwise_or,[x_is_zero, domain_error, underflow, is_nan]))
+  enabled = bitwise_not(_reduce(bitwise_or, [x_is_zero, domain_error, underflow, is_nan, x_is_infinity]))
 
   output = select(
     use_igammac,
@@ -323,8 +324,7 @@ def igamma_impl(a, x, *, dtype):
   )
   output = select(x_is_zero, full_like(a, 0), output)
   output = select(x_is_infinity, full_like(a, 1), output)
-  output = select(bitwise_or(domain_error, is_nan),
-                  full_like(a, float('nan')), output)
+  output = select(domain_error, full_like(a, float('nan')), output)
   return output
 
 def _igammac_continued_fraction(ax, x, a, enabled, dtype, mode):
@@ -433,11 +433,15 @@ def _igammac_continued_fraction(ax, x, a, enabled, dtype, mode):
     raise ValueError(f"Invalid mode: {mode}")
 
 def igammac_impl(a, x, *, dtype):
-  out_of_range = bitwise_or(le(x, _const(x, 0)), le(a, _const(a, 0)))
+  is_nan = bitwise_or(_isnan(a), _isnan(x))
+  a_is_zero = eq(a, _const(a, 0))
+  x_is_zero = eq(x, _const(x, 0))
+  x_is_infinity = eq(x, _const(x, float('inf')))
+  domain_error = _reduce(bitwise_or, [lt(x, _const(x, 0)), lt(a, _const(a, 0)), bitwise_and(a_is_zero, x_is_zero)])
   use_igamma = bitwise_or(lt(x, _const(x, 1)), lt(x, a))
   ax = a * log(x) - x - lgamma(a)
   underflow = lt(ax, -log(dtypes.finfo(dtype).max))
-  enabled = bitwise_not(bitwise_or(out_of_range, underflow))
+  enabled = bitwise_not(_reduce(bitwise_or, [domain_error, underflow, is_nan, x_is_infinity, a_is_zero]))
   ax = exp(ax)
 
   igamma_call = _igamma_series(ax, x, a, bitwise_and(enabled, use_igamma),
@@ -445,10 +449,10 @@ def igammac_impl(a, x, *, dtype):
   igammac_cf_call = _igammac_continued_fraction(ax, x, a,
     bitwise_and(enabled, bitwise_not(use_igamma)), dtype, IgammaMode.VALUE)
 
-  result = select(use_igamma, _const(a, 1) - igamma_call, igammac_cf_call)
-  x_is_infinity = eq(x, _const(x, float('inf')))
-  result = select(x_is_infinity, full_like(result, 0), result)
-  return select(out_of_range, full_like(a, 1), result)
+  output = select(use_igamma, _const(a, 1) - igamma_call, igammac_cf_call)
+  output = select(bitwise_or(x_is_infinity, a_is_zero), full_like(output, 0), output)
+  output = select(domain_error, full_like(a, float('nan')), output)
+  return output
 
 def igamma_grad_a_impl(a, x, *, dtype):
   is_nan = bitwise_or(_isnan(a), _isnan(x))
