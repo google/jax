@@ -814,6 +814,36 @@ computation at runtime. For example:
 For more information on runtime callbacks and examples of their use,
 see `External callbacks in JAX`_.
 
+How can I turn JAX deprecation warnings into errors?
+----------------------------------------------------
+
+When developing with JAX, deprecation warnings serve as a heads-up for upcoming
+changes or removals of features. To proactively address these deprecations, you
+may wish to turn these warnings into errors during your development or testing
+processes. This "strict mode" can help you catch deprecated features through
+regular testing mechanisms, ensuring your code remains up-to-date with the
+latest practices and API changes in JAX.
+
+In Python, you can achieve this by utilizing the ``warnings`` standard library
+module to modify the handling of ``DeprecationWarning``\s, making them raise
+exceptions instead of logging warnings. You just need to add this code at the
+beginning of your script::
+
+  import warnings
+  warnings.filterwarnings('error', category=DeprecationWarning)
+
+By doing so, any ``DeprecationWarning`` raised by JAX (or any other library)
+will be turned into an ``DeprecationWarning`` exception.
+
+Remember, this approach is recommended during development and testing phases to
+catch and update deprecated uses early. It's generally not advisable to leave
+this enabled in production code, as it might lead to unexpected crashes due to
+deprecations in libraries you depend on.
+
+For more details on Python's warning system, see `Python documentation on the
+warnings filter
+<https://docs.python.org/3/library/warnings.html#the-warnings-filter>`_.
+
 
 .. _JIT mechanics: https://jax.readthedocs.io/en/latest/notebooks/thinking_in_jax.html#jit-mechanics-tracing-and-static-variables
 .. _External callbacks in JAX: https://jax.readthedocs.io/en/latest/notebooks/external_callbacks.html
