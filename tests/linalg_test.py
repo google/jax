@@ -944,6 +944,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     with self.assertRaisesRegex(err, msg):
       jnp.linalg.qr(arr)
 
+  # TODO: decide how best to test the batched case and jvp of the pivots
   @jtu.sample_product(
     shape=[(10, 4, 5), (5, 3, 3), (7, 6, 4)],
     dtype=float_types + complex_types,
@@ -951,7 +952,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   def testQrBatching(self, shape, dtype):
     rng = jtu.rand_default(self.rng())
     args = rng(shape, jnp.float32)
-    qs, rs = vmap(jsp.linalg.qr)(args)
+    qs, rs, *p = vmap(jsp.linalg.qr)(args)
     self.assertTrue(np.all(np.linalg.norm(args - np.matmul(qs, rs)) < 1e-3))
 
   @jtu.sample_product(
@@ -1582,11 +1583,12 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     shape=[(3, 4), (3, 3), (4, 3)],
     dtype=[np.float32],
     mode=["full", "r", "economic"],
+    pivoting=[False, True]
   )
-  def testScipyQrModes(self, shape, dtype, mode):
+  def testScipyQrModes(self, shape, dtype, mode, pivoting):
     rng = jtu.rand_default(self.rng())
-    jsp_func = partial(jax.scipy.linalg.qr, mode=mode)
-    sp_func = partial(scipy.linalg.qr, mode=mode)
+    jsp_func = partial(jax.scipy.linalg.qr, mode=mode, pivoting=pivoting)
+    sp_func = partial(scipy.linalg.qr, mode=mode, pivoting=pivoting)
     args_maker = lambda: [rng(shape, dtype)]
     self._CheckAgainstNumpy(sp_func, jsp_func, args_maker, rtol=1E-5, atol=1E-5)
     self._CompileAndCheck(jsp_func, args_maker)
