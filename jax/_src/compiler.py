@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from functools import reduce
 import logging
+import operator
 import os
 import tempfile
 import time
@@ -35,6 +37,7 @@ from jax._src.interpreters import mlir
 from jax._src.lib import xla_client as xc
 from jax._src.lib import xla_extension_version
 from jax._src.lib.mlir import ir
+from jax._src.lib.mlir.dialects import func, _stablehlo_ops_gen
 from jax._src.xla_bridge import process_count
 import numpy as np
 
@@ -237,6 +240,28 @@ def backend_compile(
   # to take in `host_callbacks`
   return backend.compile(built_c, compile_options=options)
 
+def _total_graph_constant_size(operation: func.FuncOp) -> float:
+  # Return the cumulative size of constants in the graph defined by
+  # operation in megabytes
+  const_op_list = []
+  def get_constant_ops(op: func.FuncOp, const_op_list: list):
+    for i in range(len(op.regions)):
+      region = op.regions[i]
+      for j in range(len(region.blocks)):
+        block = region.blocks[j]
+        for k in range(len(block.operations)):
+          child_op = block.operations[k]
+          if isinstance(child_op, _stablehlo_ops_gen.ConstantOp):
+            const_op_list.append(child_op)
+          else:
+            get_constant_ops(child_op, const_op_list)
+  
+  get_constant_ops(operation, const_op_list)
+  constant_size_mbytes = sum([reduce(operator.mul, const_op.value.type.shape, 1) * const_op.value.type.element_type.width 
+                              for const_op in const_op_list]) / (8 * (1024 ** 2))
+  
+  return constant_size_mbytes
+
 def compile_or_get_cached(
     backend: xc.Client,
     computation: ir.Module,
@@ -305,6 +330,8 @@ def compile_or_get_cached(
       # Host callbacks are currently baked into the HLO module so we cant share
       # them.
       and len(host_callbacks) == 0
+      and (config.share_binary_between_hosts_size_threshold > 0 and 
+           _total_graph_constant_size(computation.operation) <= config.share_binary_between_hosts_size_threshold)
   ):
     return _compile_and_share_module(
         backend,

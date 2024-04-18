@@ -23,6 +23,7 @@ import jaxlib.mlir.dialects.func as func
 import jaxlib.mlir.dialects.scf as scf
 import jaxlib.mlir.dialects.sparse_tensor as sparse_tensor
 import jaxlib.mlir.dialects.vector as vector
+import jaxlib.mlir.dialects._stablehlo_ops_gen as _stablehlo_ops_gen
 
 from jax._src import lib
 
