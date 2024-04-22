@@ -19,6 +19,7 @@ import jax
 import jax.numpy as jnp
 
 
+from jax.dtypes import canonicalize_dtype
 from jax.experimental.array_api._dtypes import (
   bool, int8, int16, int32, int64, uint8, uint16, uint32, uint64,
   float32, float64, complex64, complex128
@@ -206,8 +207,8 @@ def _promote_to_default_dtype(x):
   elif x.dtype.kind == 'u':
     return x.astype(jnp.uint)
   elif x.dtype.kind == 'f':
-    return x.astype(jnp.float_)
+    return x.astype(canonicalize_dtype(float))
   elif x.dtype.kind == 'c':
-    return x.astype(jnp.complex_)
+    return x.astype(canonicalize_dtype(complex))
   else:
     raise ValueError(f"Unrecognized {x.dtype=}")
