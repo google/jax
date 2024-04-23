@@ -66,7 +66,10 @@ preferred_type_combinations = [
   (np.complex64, np.complex64), (np.complex64, np.complex128), (np.complex128, np.complex128),
   (np.int8, np.float16), (np.int8, dtypes.bfloat16), (np.int8, np.float32), (np.int8, np.float64),
   (np.int16, np.float16), (np.int16, dtypes.bfloat16), (np.int16, np.float32), (np.int16, np.float64),
-  (np.int32, np.float32), (np.int32, np.float64), (np.int64, np.float64)]
+  (np.int32, np.float32), (np.int32, np.float64), (np.int64, np.float64),
+  (dtypes.float8_e4m3fnuz, dtypes.float8_e4m3fnuz), (dtypes.float8_e5m2fnuz, dtypes.float8_e5m2fnuz)
+  (dtypes.float8_e4m3fnuz, dtypes.float8_e5m2fnuz), (dtypes.float8_e5m2fnuz, dtypes.float8_e4m3fnuz)
+  ]
 
 
 class LaxTest(jtu.JaxTestCase):
@@ -304,6 +307,11 @@ class LaxTest(jtu.JaxTestCase):
     if jtu.test_device_matches(["gpu"]) and np.issubdtype(dtype, np.integer):
       # TODO(b/183565702): Support integer convolutions on CPU/GPU.
       raise SkipTest("Integer convolution not yet supported on GPU")
+    if ((dtype == dtypes.float8_e4m3fnuz) or
+        (dtype == dtypes.float8_e5m2fnuz) or
+        (preferred_element_type == dtypes.float8_e4m3fnuz) or
+        (preferred_element_type == dtypes.float8_e5m2fnuz)):
+        raise SkipTest("Float8 types are skipped")
     # x64 implementation is only accurate to ~float32 precision for this case.
     if dtype == np.complex64 and preferred_element_type == np.complex128:
       tol = 1e-5
@@ -1041,9 +1049,14 @@ class LaxTest(jtu.JaxTestCase):
        (dtype == np.complex128 or preferred_element_type == np.complex128)):
       raise SkipTest("np.complex128 is not yet supported on TPU")
     if jtu.test_device_matches(["gpu"]):
-      # TODO(b/189287598)
-      raise SkipTest("dot_general with preferred_element_type returns NaN "
-                     "non-deterministically on GPU")
+      if not (jtu.is_device_rocm() and 
+        ((dtype == dtypes.float8_e4m3fnuz) or
+        (dtype == dtypes.float8_e5m2fnuz) or
+        (preferred_element_type == dtypes.float8_e4m3fnuz) or
+        (preferred_element_type == dtypes.float8_e5m2fnuz))):
+        # TODO(b/189287598)
+        raise SkipTest("dot_general with preferred_element_type returns NaN "
+                      "non-deterministically on GPU")
     rng = jtu.rand_default(self.rng())
     x = rng(lhs_shape, dtype)
     y = rng(rhs_shape, dtype)
