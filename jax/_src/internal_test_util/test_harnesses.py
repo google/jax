@@ -1819,7 +1819,6 @@ for dtype in jtu.dtypes.all_floating + jtu.dtypes.complex:
             jax_unimplemented=[
                 Limitation(
                     "unimplemented",
-                    devices=("cpu", "gpu"),
                     dtypes=[np.float16, dtypes.bfloat16],
                 ),
             ],

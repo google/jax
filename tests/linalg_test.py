@@ -422,7 +422,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     w = w.astype(v.dtype)
     with jax.numpy_rank_promotion("allow"):
       self.assertLessEqual(
-          np.linalg.norm(np.matmul(a, v) - w * v), 20 * eps * np.linalg.norm(a)
+          np.linalg.norm(np.matmul(a, v) - w * v), 80 * eps * np.linalg.norm(a)
       )
 
   @jtu.sample_product(

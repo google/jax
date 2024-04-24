@@ -71,19 +71,17 @@ def _use_qr(u, m, n, params):
   m, n: the dynamic shape of the matrix, where m <= M and n <= N.
   params: the QDWH parameters.
   """
-  a, b, c = params
+  a_minus_e_by_sqrt_c, sqrt_c, e = params
   M, N = u.shape
 
-  y = _dynamic_concat(jnp.sqrt(c) * u, jnp.eye(N, dtype=jnp.dtype(u)), m)
+  y = _dynamic_concat(sqrt_c * u, jnp.eye(N, dtype=jnp.dtype(u)), m)
   q, _ = lax_linalg.qr(y, full_matrices=False)
   # q1 = q[:m, :]
   q1 = _mask(lax.slice(q, (0, 0), (M, N)), (m, n))
   # q2 = (q[m:, :]).T.conj()
   q2 = lax.dynamic_slice_in_dim(q, m, N, axis=0)
   q2 = _mask(q2, (n, n)).T.conj()
-  e = b / c
-  u = (e * u + (a - e) / jnp.sqrt(c) * jnp.einsum('ij,jk->ik', q1, q2))
-  return u
+  return e * u + a_minus_e_by_sqrt_c * (q1 @ q2)
 
 
 def _use_cholesky(u, m, n, params):
@@ -94,26 +92,20 @@ def _use_cholesky(u, m, n, params):
   m, n: the dynamic shape of the matrix, where m <= M and n <= N.
   params: the QDWH parameters.
   """
-  a, b, c = params
+  a_minus_e, c, e = params
   _, N = u.shape
-  x = c * (u.T.conj() @ u) + jnp.eye(N, dtype=jnp.dtype(u))
+  I = jnp.eye(N, dtype=jnp.dtype(u))
+  x = c * (u.T.conj() @ u) + I
   # Pads the lower-right corner with the identity matrix to prevent the Cholesky
   # decomposition from failing due to the matrix not being PSD if padded with
   # zeros.
-  x = _mask(x, (n, n), jnp.eye(N, dtype=x.dtype))
+  x = _mask(x, (n, n), I)
 
-  # `y` is lower triangular.
-  y = lax_linalg.cholesky(x, symmetrize_input=False)
+  l = lax_linalg.cholesky(x, symmetrize_input=False)  # L Lᴴ = X
+  l_inverse = lax_linalg.triangular_solve(l, I, left_side=True, lower=True)
+  z = (u @ l_inverse.T.conj()) @ l_inverse  # Z = (U L⁻ᴴ) L⁻¹ = U X⁻¹
 
-  z = lax_linalg.triangular_solve(
-      y, u.T, left_side=True, lower=True, conjugate_a=True).conj()
-
-  z = lax_linalg.triangular_solve(y, z, left_side=True, lower=True,
-                                  transpose_a=True, conjugate_a=True).T.conj()
-
-  e = b / c
-  u = e * u + (a - e) * z
-  return u
+  return e * u + a_minus_e * z
 
 def _qdwh(x, m, n, is_hermitian, max_iterations, eps):
   """QR-based dynamically weighted Halley iteration for polar decomposition."""
@@ -123,81 +115,125 @@ def _qdwh(x, m, n, is_hermitian, max_iterations, eps):
   # the smallest singular value of x.
   if eps is None:
     eps = float(jnp.finfo(x.dtype).eps)
-  alpha = (jnp.sqrt(jnp.linalg.norm(x, ord=1)) *
-           jnp.sqrt(jnp.linalg.norm(x, ord=jnp.inf))).astype(x.dtype)
+  alpha_inverse = (lax.rsqrt(jnp.linalg.norm(x, ord=1)) *
+                   lax.rsqrt(jnp.linalg.norm(x, ord=jnp.inf))).astype(x.dtype)
   l = eps
 
-  u = x / alpha
+  u = x * alpha_inverse
 
   # Iteration tolerances.
   tol_l = 10.0 * eps / 2.0
   tol_norm = jnp.cbrt(tol_l)
 
-  def cond_fun(state):
-    _, _, _, is_unconverged, is_not_max_iteration = state
-    return jnp.logical_and(is_unconverged, is_not_max_iteration)
+  def get_qr_params(a, b, c):
+    e = b / c
+    a_minus_e = a - e
+    sqrt_c = c ** (1 / 2)
+    return (a_minus_e / sqrt_c, sqrt_c, e)
 
-  def body_fun(state):
-    u, l, iter_idx, _, _ = state
+  def get_chol_params(a, b, c):
+    e = b / c
+    a_minus_e = a - e
+    return (a_minus_e, c, e)
+
+  CHOLESKY_CUTOFF = 100
+
+  qr_coefs = []
+  chol_coefs = []
+  k = 0
+  while l + tol_l < 1 and k < max_iterations:
+    k += 1
+    l2 = l * l
+    dd = (4 * (1 / l2 - 1) / l2) ** (1 / 3)
+    sqd = (1.0 + dd) ** (1 / 2)
+    a = sqd + (2 - dd + 2 * (2 - l2) / (l2 * sqd)) ** (1 / 2)
+    b = (a - 1) ** 2 / 4
+    c = a + b - 1
+    l = l * (a + b * l2) / (1 + c * l2)
+    if c > CHOLESKY_CUTOFF:
+      qr_coefs.append(get_qr_params(a, b, c))
+    else:
+      chol_coefs.append(get_chol_params(a, b, c))
+
+  def iteration(k, state, update_fn, coefs, test_convergence):
+    u, _ = state
+
+    if coefs is None:
+      # As l → 1, the coefficients a, b, c → 3, 1, 3, which is Halley's method.
+      params = get_chol_params(3, 1, 3)
+    else:
+      params = lax.dynamic_index_in_dim(coefs, k, keepdims=False)
 
     u_prev = u
-
-    # Computes parameters.
-    l2 = l**2
-    dd = jnp.cbrt(4.0 * (1.0 / l2 - 1.0) / l2)
-    sqd = jnp.sqrt(1.0 + dd)
-    a = (sqd + jnp.sqrt(8.0 - 4.0 * dd + 8.0 * (2.0 - l2) / (l2 * sqd)) / 2)
-    a = jnp.real(a)
-    b = (a - 1.0)**2 / 4.0
-    c = a + b - 1.0
-
-    # Updates l.
-    l = l * (a + b * l2) / (1.0 + c * l2)
-
-    # Uses QR or Cholesky decomposition.
-    def true_fn(u):
-      return _use_qr(u, m, n, params=(a, b, c))
-
-    def false_fn(u):
-      return _use_cholesky(u, m, n, params=(a, b, c))
-
-    u = jax.lax.cond(c > 100, true_fn, false_fn, operand=(u))
-
+    u = update_fn(u, m, n, params)
     if is_hermitian:
       u = (u + u.T.conj()) / 2.0
 
-    # Checks convergence.
-    iterating_l = jnp.abs(1.0 - l) > tol_l
-    iterating_u = jnp.linalg.norm(u-u_prev) > tol_norm
-    is_unconverged = jnp.logical_or(iterating_l, iterating_u)
+    is_not_converged = True
+    if test_convergence:
+      is_not_converged = jnp.linalg.norm(u - u_prev) > tol_norm
+    return u, is_not_converged
 
-    is_not_max_iteration = iter_idx < max_iterations
+  def iterate(u, coefs, **kwargs):
+    if not coefs:
+      return u, True
+    coefs = jnp.array(coefs).astype(x.dtype)
+    body = functools.partial(iteration, coefs=coefs, **kwargs)
+    return lax.fori_loop(0, len(coefs), body, (u, True))
 
-    return u, l, iter_idx + 1, is_unconverged, is_not_max_iteration
+  u, _ = iterate(
+      u, coefs=qr_coefs, update_fn=_use_qr, test_convergence=False
+  )
+  u, is_not_converged = iterate(
+      u, coefs=chol_coefs, update_fn=_use_cholesky, test_convergence=True
+  )
 
-  iter_idx = 1
-  is_unconverged = True
-  is_not_max_iteration = True
-  u, _, num_iters, is_unconverged, _ = jax.lax.while_loop(
-      cond_fun=cond_fun, body_fun=body_fun,
-      init_val=(u, l, iter_idx, is_unconverged, is_not_max_iteration))
+  # If l has converged but u still has not, continue with Halley's method
+  # (coef = None) until convergence.
+  def cond_fun(state):
+    k, _, is_not_converged = state
+    return jnp.logical_and(is_not_converged, k < max_iterations)
+
+  def body_fun(state):
+    k, u, is_not_converged = state
+    u, is_not_converged = iteration(
+        k,
+        (u, is_not_converged),
+        coefs=None,
+        update_fn=_use_cholesky,
+        test_convergence=True,
+    )
+    return k + 1, u, is_not_converged
+
+  k = len(qr_coefs) + len(chol_coefs)
+  num_iters, u, is_not_converged = lax.while_loop(
+      cond_fun, body_fun, (k, u, is_not_converged)
+  )
 
   # Applies Newton-Schulz refinement for better accuracy.
   u = 1.5 * u - 0.5 * u @ (u.T.conj() @ u)
 
   h = u.T.conj() @ x
-  h = (h + h.T.conj()) / 2.0
+  h = (h + h.T.conj()) / 2
 
   # Converged within the maximum number of iterations.
-  is_converged = jnp.logical_not(is_unconverged)
+  is_converged = jnp.logical_not(is_not_converged)
 
-  return u, h, num_iters - 1, is_converged
+  return u, h, num_iters, is_converged
 
 
 # TODO: Add pivoting.
-@functools.partial(jax.jit, static_argnames=('is_hermitian',))
-def qdwh(x, *, is_hermitian=False, max_iterations=None, eps=None,
-         dynamic_shape: tuple[int, int] | None = None):
+@functools.partial(
+    jax.jit, static_argnames=('is_hermitian', 'max_iterations', 'eps')
+)
+def qdwh(
+    x,
+    *,
+    is_hermitian: bool = False,
+    max_iterations: int | None = None,
+    eps: float | None = None,
+    dynamic_shape: tuple[int, int] | None = None,
+):
   """QR-based dynamically weighted Halley iteration for polar decomposition.
 
   Args:
@@ -222,6 +258,10 @@ def qdwh(x, *, is_hermitian=False, max_iterations=None, eps=None,
 
   if max_iterations is None:
     max_iterations = 10
+  else:
+    max_iterations = core.concrete_or_error(
+        int, max_iterations, 'The `max_iterations` argument must be statically '
+        'specified to use `qdwh` within JAX transformations.')
 
   M, N = x.shape
   if M < N:
@@ -235,6 +275,5 @@ def qdwh(x, *, is_hermitian=False, max_iterations=None, eps=None,
   with jax.default_matmul_precision('float32'):
     u, h, num_iters, is_converged = _qdwh(x, m, n, is_hermitian, max_iterations,
                                           eps)
-
 
   return u, h, num_iters, is_converged

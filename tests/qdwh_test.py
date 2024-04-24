@@ -166,27 +166,22 @@ class QdwhTest(jtu.JaxTestCase):
                               rtol=rtol, atol=1E-3)
 
   @jtu.sample_product(
-    [dict(m=m, n=n) for m, n in [(10, 10), (8, 8)]],
+    [dict(m=m, n=n, r=r) for m, n, r in [(10, 10, 8), (8, 8, 7), (12, 8, 5)]],
     log_cond=np.linspace(1, 4, 4),
   )
-  def testQdwhWithOnRankDeficientInput(self, m, n, log_cond):
-    """Tests qdwh with rank-deficient input."""
+  def testQdwhOnRankDeficientInput(self, m, n, r, log_cond):
+    """Tests qdwh on rank-deficient input."""
     a = np.triu(np.ones((m, n))).astype(_QDWH_TEST_DTYPE)
 
     # Generates a rank-deficient input.
-    u, s, v = np.linalg.svd(a, full_matrices=False)
-    cond = 10**log_cond
-    s = jnp.linspace(cond, 1, min(m, n))
-    s = jnp.expand_dims(s.at[-1].set(0), range(u.ndim - 1))
-    a = (u * s) @ v
+    u, _, vh = np.linalg.svd(a, full_matrices=False)
+    s = 10**jnp.linspace(log_cond, 0, min(m, n))
+    s = jnp.expand_dims(s.at[r:].set(0), range(u.ndim - 1))
+    a = (u * s) @ vh
 
-    is_hermitian = _check_symmetry(a)
-    max_iterations = 15
-    actual_u, actual_h, _, _ = qdwh.qdwh(a, is_hermitian=is_hermitian,
-                                         max_iterations=max_iterations)
+    actual_u, actual_h, _, _ = qdwh.qdwh(a, is_hermitian=_check_symmetry(a))
     _, expected_h = osp_linalg.polar(a)
 
-    # For rank-deficient matrix, `u` is not unique.
     with self.subTest('Test h.'):
       relative_diff_h = _compute_relative_diff(actual_h, expected_h)
       np.testing.assert_almost_equal(relative_diff_h, 1E-6, decimal=5)
@@ -196,9 +191,18 @@ class QdwhTest(jtu.JaxTestCase):
       relative_diff_a = _compute_relative_diff(a_round_trip, a)
       np.testing.assert_almost_equal(relative_diff_a, 1E-6, decimal=5)
 
+    # QDWH gives U_p = U Σₖ V* for input A with SVD A = U Σ V*. For full rank
+    # input, we expect convergence Σₖ → I, giving the correct polar factor
+    # U_p = U V*. Zero singular values stay at 0 in exact arithmetic, but can
+    # end up anywhere in [0, 1] as a result of rounding errors---in particular,
+    # we do not generally expect convergence to 1. As a result, we can only
+    # expect (U_p V_r) to be orthogonal, where V_r are the columns of V
+    # corresponding to nonzero singular values.
     with self.subTest('Test orthogonality.'):
-      actual_results = _dot(actual_u.T.conj(), actual_u)
-      expected_results = np.eye(n)
+      vr = vh.conj().T[:, :r]
+      uvr = _dot(actual_u, vr)
+      actual_results = _dot(uvr.T.conj(), uvr)
+      expected_results = np.eye(r)
       self.assertAllClose(
           actual_results, expected_results, rtol=_QDWH_TEST_EPS, atol=1e-6
       )
