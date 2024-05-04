@@ -739,21 +739,14 @@ def _allreduce_impl(pos_reducer, *args, axes, axis_index_groups):
   return [pos_reducer(arg, axes) for arg in args]
 
 def _allreduce_effectful_abstract_eval(*args, axes, axis_index_groups):
-  # TODO(frostig,mattjj,jekbradbury): maybe check aval names here
   pos_axes = tuple(axis for axis in axes if isinstance(axis, int))
-  named_shapes = [arg.named_shape for arg in args]
-  named_axes = {axis for axis in axes if not isinstance(axis, int)}
-  if axis_index_groups is None:
-    named_shapes = [{name: size for name, size in arg.named_shape.items()
-                     if name not in named_axes} for arg in args]
-  else:
+  if axis_index_groups is not None:
     if len(pos_axes) != 0:
       raise ValueError(f"axis_index_groups can only be used with reductions over "
                        f"named axes, but got: {axes}")
   out_avals = [
       ShapedArray(lax._reduce_op_shape_rule(raise_to_shaped(arg), axes=pos_axes),
-                  arg.dtype, named_shape=named_shape)
-      for arg, named_shape in zip(args, named_shapes)]
+                  arg.dtype) for arg in args]
   return out_avals, {core.NamedAxisEffect(axis) for axis in named_axes}
 
 def _allreduce_lowering(prim, pos_fn, ctx, *args, axes, axis_index_groups):
@@ -1303,12 +1296,7 @@ def _all_gather_effectful_abstract_eval(
     new_shape[all_gather_dimension] *= axis_size
   else:
     new_shape.insert(all_gather_dimension, axis_size)
-  new_named_shape = {name: size for name, size in x_aval.named_shape.items()
-                     if name not in axis_name}
-  out_aval = x_aval.update(shape=new_shape, named_shape=new_named_shape)
-  effects = {*map(core.NamedAxisEffect, axis_name)}
-  return out_aval, effects
-
+  return x_aval.update(shape=new_shape), {*map(core.NamedAxisEffect, axis_name)}
 
 def _all_gather_transpose_rule(cts, x, *, all_gather_dimension, axis_name, axis_index_groups, axis_size, tiled):
   return (psum_scatter(cts, axis_name=axis_name,
@@ -1440,15 +1428,7 @@ def _reduce_scatter_effectful_abstract_eval(
                        f"{scatter_dim_input_size} must match shard count "
                        f"{axis_size}")
     del new_shape[scatter_dimension]
-
-  new_named_shape = {
-      name: size
-      for name, size in x_aval.named_shape.items()
-      if name not in axis_name
-  }
-  out_aval = x_aval.update(shape=new_shape, named_shape=new_named_shape)
-  effects = {*map(core.NamedAxisEffect, axis_name)}
-  return out_aval, effects
+  return x_aval.update(shape=new_shape), {*map(core.NamedAxisEffect, axis_name)}
 
 
 def _reduce_scatter_transpose_rule(cts, x, *, axis_name, scatter_dimension,
@@ -1636,9 +1616,7 @@ def _axis_index_lowering(ctx, *, axis_name):
 
 def _axis_index_effectful_abstract_eval(*, axis_name):
   frame = core.axis_frame(axis_name)
-  out_aval = ShapedArray((), np.int32, named_shape={axis_name: frame.size})
-  return out_aval, {core.NamedAxisEffect(axis_name)}
-
+  return ShapedArray((), np.int32), {core.NamedAxisEffect(axis_name)}
 
 axis_index_p = core.Primitive('axis_index')
 mlir.register_lowering(axis_index_p, _axis_index_lowering)
@@ -1694,14 +1672,7 @@ def _pdot_effectful_abstract_eval(
   pos_aval = lax.dot_general_p.abstract_eval(
       x, y, dimension_numbers=[pos_contract, pos_batch],
       precision=precision, preferred_element_type=None)[0]
-  common_named_shape = core.join_named_shapes(x.named_shape, y.named_shape)
-  named_shape = {name: size
-                 for name, size in common_named_shape.items()
-                 if name not in axis_name}
-  out_aval = pos_aval.update(named_shape=named_shape)
-  effects = {*map(core.NamedAxisEffect, axis_name)}
-  return out_aval, effects
-
+  return pos_aval, {*map(core.NamedAxisEffect, axis_name)}
 
 def _pdot_vmap_collective_rule(axis_size, frame_name, _, vals_in, dims_in, *, axis_name,
                                pos_contract, pos_batch, precision):

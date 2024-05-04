@@ -570,15 +570,13 @@ def _shaped_abstractify_slow(x):
     pass
 
   weak_type = getattr(x, 'weak_type', False)
-  named_shape = getattr(x, 'named_shape', {})
   if hasattr(x, 'dtype'):
     dtype = dtypes.canonicalize_dtype(x.dtype, allow_extended_dtype=True)
   else:
     raise TypeError(
         f"Cannot interpret value of type {type(x)} as an abstract array; it "
         "does not have a dtype attribute")
-  return core.ShapedArray(np.shape(x), dtype, weak_type=weak_type,
-                          named_shape=named_shape)
+  return core.ShapedArray(np.shape(x), dtype, weak_type=weak_type)
 
 # TODO(mattjj,yashkatariya): replace xla.abstractify with this, same behavior
 def shaped_abstractify(x):

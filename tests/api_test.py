@@ -2625,6 +2625,8 @@ class APITest(jtu.JaxTestCase):
     self.assertEqual(out_shape.shape, (3,))
 
   def test_eval_shape_names(self):
+    raise unittest.SkipTest("named shape are deprecated")
+
     def fun(x, y):
       return lax.psum(x, 'i') + y
 
@@ -6356,6 +6358,7 @@ class JaxprTest(jtu.JaxTestCase):
     self.assertIn('psum', str(jaxpr))
 
   def test_make_jaxpr_named(self):
+    raise unittest.SkipTest("named shape are deprecated")
     def f(x):
       return x - lax.psum(x, 'i')
 

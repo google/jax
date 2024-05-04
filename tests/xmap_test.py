@@ -45,7 +45,6 @@ from jax._src import core
 from jax._src import maps
 from jax._src.maps import xmap, serial_loop, SerialLoop
 from jax._src import xla_bridge
-from jax._src.core import NamedShape
 from jax._src.lax import parallel as lax_parallel
 from jax._src.lax.parallel import pgather
 from jax._src.lib import xla_client
@@ -640,6 +639,7 @@ class XMapTest(XMapTestCase):
 
   @jtu.with_and_without_mesh
   def testNamedShape(self, mesh, axis_resources):
+    raise SkipTest("NamedShape is deprecated")
     x = np.arange(4,)
     y = 2
     f = xmap(lambda x, y: (x + y, y * lax.axis_index('i')),
@@ -1019,6 +1019,7 @@ class NamedRandomTest(XMapTestCase):
 
   @parameterized.parameters(*SAMPLERS)
   def testSamplerSharding(self, distr_name, distr_sample):
+    raise SkipTest("NamedShape is deprecated")
     def sample(shape, map_size):
       return xmap(lambda: distr_sample(jax.random.PRNGKey(0), shape=shape),
                   in_axes=(), out_axes=[None, 'i', ...], axis_sizes={'i': map_size})()
@@ -1039,6 +1040,7 @@ class NamedRandomTest(XMapTestCase):
   @jtu.with_mesh_from_kwargs
   def testSamplerResourceIndependence(self, distr_name, distr_sample,
                                       axis_resources, mesh):
+    raise SkipTest("NamedShape is deprecated")
     def sample(axis_resources):
       return xmap(lambda: distr_sample(jax.random.PRNGKey(0), shape=NamedShape(3, i=4, j=6)),
                   in_axes=(), out_axes=['i', 'j', ...], axis_sizes={'i': 4, 'j': 6},
@@ -1075,6 +1077,7 @@ class NamedNNTest(XMapTestCase):
     distr=['uniform', 'normal', 'truncated_normal'],
   )
   def testVarianceScaling(self, map_in, map_out, fan, distr):
+    raise SkipTest("NamedShape is deprecated")
     shape = (80, 50, 7)
     fan_in, fan_out = nn_initializers._compute_fans(NamedShape(*shape), 0, 1)
     key = jax.random.PRNGKey(1)

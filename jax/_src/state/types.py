@@ -212,8 +212,7 @@ def get_ref_state_effects(
            if isinstance(eff, (ReadEffect, WriteEffect, AccumEffect))
            and eff.input_index == i} for i, _ in enumerate(avals)]
 
-def shaped_array_ref(shape: tuple[int, ...], dtype,
-                     weak_type: bool = False,
-                     named_shape = None) -> AbstractRef:
-  return AbstractRef(core.ShapedArray(shape, dtype, weak_type=weak_type,
-                                      named_shape=named_shape))
+def shaped_array_ref(
+    shape: tuple[int, ...], dtype, weak_type: bool = False
+) -> AbstractRef:
+  return AbstractRef(core.ShapedArray(shape, dtype, weak_type=weak_type,))

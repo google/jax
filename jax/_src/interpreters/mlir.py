@@ -1021,7 +1021,7 @@ def _set_up_aliases(input_output_aliases, avals_in, avals_out, donated_args,
     input_output_aliases = list(input_output_aliases)
   # To match-up in-avals to out-avals we only care about the number of
   # bytes, so we strip off unrelated aval metadata (eg. the named shape)
-  strip_metadata = lambda a: a.strip_named_shape().strip_weak_type()
+  strip_metadata = lambda a: a.strip_weak_type()
   avals_in = map(strip_metadata, avals_in)
   avals_out = map(strip_metadata, avals_out)
 

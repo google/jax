@@ -486,7 +486,7 @@ def _make_jit_wrapper(jit_info: PjitInfo):
     _, _, params, _, out_tree, _, _, _ = _infer_params(jit_info, args, kwargs)
     out_s = [None if is_unspecified(s) else s for s in params['out_shardings']]
     # TODO(yashkatariya): Add `Layout` to SDS.
-    out = [api.ShapeDtypeStruct(x.shape, x.dtype, x.named_shape, sharding=s)
+    out = [api.ShapeDtypeStruct(x.shape, x.dtype, sharding=s)
            for x, s in zip(params['jaxpr'].out_avals, out_s)]
     return tree_unflatten(out_tree, out)
 
@@ -2157,20 +2157,6 @@ def dce_jaxpr_pjit_rule(used_outputs: list[bool], eqn: core.JaxprEqn
 pe.dce_rules[pjit_p] = dce_jaxpr_pjit_rule
 
 
-def _check_resources_against_named_axes(what, aval, pos_axis_resources, named_axis_resources):
-  pjit_resources = set(
-      it.chain.from_iterable([d for d in pos_axis_resources if d is not None]))
-  aval_resources = set(it.chain.from_iterable(
-    named_axis_resources[a] for a in aval.named_shape))
-  overlap = pjit_resources & aval_resources
-  if overlap:
-    raise JAXTypeError(
-        f"{what} has an axis resources specification of "
-        f"{pos_axis_resources.unsynced_user_spec(SpecSync.DIM_PERMUTE)} "
-        f"that uses one or more mesh axes already used by xmap to partition "
-        f"a named axis appearing in its named_shape (both use mesh axes "
-        f"{mesh_lib.show_axes(overlap)})")
-
 def _resource_typing_pjit(avals, params, source_info, resource_env, named_axis_resources):
   jaxpr = params["jaxpr"]
   what = "pjit input"
@@ -2189,9 +2175,6 @@ def _resource_typing_pjit(avals, params, source_info, resource_env, named_axis_r
             s._to_xla_hlo_sharding(aval.ndim), resource_env.physical_mesh)[0]
       else:
         parsed_pspec = None
-    if parsed_pspec is not None:
-      _check_resources_against_named_axes(what, aval, parsed_pspec,
-                                          named_axis_resources)
 
   pxla.resource_typecheck(
       jaxpr.jaxpr, resource_env, named_axis_resources,
@@ -2210,9 +2193,6 @@ def _resource_typing_pjit(avals, params, source_info, resource_env, named_axis_r
             s._to_xla_hlo_sharding(aval.ndim), resource_env.physical_mesh)[0]
       else:
         parsed_pspec = None
-    if parsed_pspec is not None:
-      _check_resources_against_named_axes(what, aval, parsed_pspec,
-                                          named_axis_resources)
 
 pxla.custom_resource_typing_rules[pjit_p] = _resource_typing_pjit
 
@@ -2400,9 +2380,6 @@ def _resource_typing_sharding_constraint(avals, params, source_info,
       parsed_pspec = parse_flatten_op_sharding(
           params['sharding']._to_xla_hlo_sharding(aval.ndim),
           resource_env.physical_mesh)[0]
-  if parsed_pspec is not None:
-    _check_resources_against_named_axes(
-      "with_sharding_constraint input", aval, parsed_pspec, named_axis_resources)
 
 pxla.custom_resource_typing_rules[sharding_constraint_p] = \
     _resource_typing_sharding_constraint
