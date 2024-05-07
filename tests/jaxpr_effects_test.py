@@ -32,6 +32,7 @@ from jax._src.interpreters import ad
 from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.lib import xla_extension_version
+from jax._src.lib import mlir_api_version
 from jax._src.maps import xmap
 import numpy as np
 
@@ -389,7 +390,8 @@ class EffectfulJaxprLoweringTest(jtu.JaxTestCase):
     module = f.lower(2.).compiler_ir()
     main = module.body.operations[0]
     first_op = main.body.blocks[0].operations[0]
-    self.assertIn('hlo.create_token', first_op.operation.name)
+    expected = 'hlo.create_token' if mlir_api_version < 57 else 'hlo.after_all'
+    self.assertIn(expected, first_op.operation.name)
 
     @jax.jit
     def f(x):
@@ -399,9 +401,10 @@ class EffectfulJaxprLoweringTest(jtu.JaxTestCase):
     module = f.lower(2.).compiler_ir()
     main = module.body.operations[0]
     first_op = main.body.blocks[0].operations[0]
-    self.assertIn('hlo.create_token', first_op.operation.name)
+    expected = 'hlo.create_token' if mlir_api_version < 57 else 'hlo.after_all'
+    self.assertIn(expected, first_op.operation.name)
     second_op = main.body.blocks[0].operations[1]
-    self.assertIn('hlo.create_token', second_op.operation.name)
+    self.assertIn(expected, second_op.operation.name)
 
     @jax.jit
     def f(x):
@@ -410,7 +413,8 @@ class EffectfulJaxprLoweringTest(jtu.JaxTestCase):
     module = f.lower(2.).compiler_ir()
     main = module.body.operations[0]
     first_op = main.body.blocks[0].operations[0]
-    self.assertIn('hlo.create_token', first_op.operation.name)
+    expected = 'hlo.create_token' if mlir_api_version < 57 else 'hlo.after_all'
+    self.assertIn(expected, first_op.operation.name)
 
     @jax.jit
     def f(x):
@@ -420,9 +424,10 @@ class EffectfulJaxprLoweringTest(jtu.JaxTestCase):
     module = f.lower(2.).compiler_ir()
     main = module.body.operations[0]
     first_op = main.body.blocks[0].operations[0]
-    self.assertIn('hlo.create_token', first_op.operation.name)
+    expected = 'hlo.create_token' if mlir_api_version < 57 else 'hlo.after_all'
+    self.assertIn(expected, first_op.operation.name)
     second_op = main.body.blocks[0].operations[1]
-    self.assertIn('hlo.create_token', second_op.operation.name)
+    self.assertIn(expected, second_op.operation.name)
 
   def test_nontrivial_lowering_with_ordered_effect_should_consume_token(self):
 
@@ -437,7 +442,8 @@ class EffectfulJaxprLoweringTest(jtu.JaxTestCase):
 
     if xla_extension_version < 260:
       first_op = main.body.blocks[0].operations[0]
-      self.assertIn('hlo.create_token', first_op.operation.name)
+      expected = 'hlo.create_token' if mlir_api_version < 57 else 'hlo.after_all'
+      self.assertIn(expected, first_op.operation.name)
       call_op = main.body.blocks[0].operations[1]
     else:
       call_op = main.body.blocks[0].operations[0]

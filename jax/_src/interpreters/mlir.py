@@ -341,8 +341,14 @@ def _python_scalar_handler(dtype, val):
 for ptype, dtype in dtypes.python_scalar_dtypes.items():
   register_constant_handler(ptype, partial(_python_scalar_handler, dtype))
 
+def create_hlo_token():
+  if xc.mlir_api_version < 57:
+    return hlo.create_token()
+  return hlo.after_all([])
+
 def _token_constant_handler(val):
-  return [hlo.create_token()]
+  return [create_hlo_token()]
+
 register_constant_handler(core.Token, _token_constant_handler)
 
 # Source locations
@@ -1061,7 +1067,7 @@ def token_type() -> Sequence[ir.Type]:
   return [hlo.TokenType.get()]
 
 def create_token() -> Token:
-  return wrap_singleton_ir_values(hlo.create_token())
+  return wrap_singleton_ir_values(create_hlo_token())
 
 class TokenSet:
   """An immutable container of tokens to be used to lower effectful jaxprs. When lowering
@@ -1433,7 +1439,7 @@ def lower_jaxpr_to_fun(
     args: list[list[ir.Value]] = []
     for aval, arg in zip(jaxpr.in_avals, unflattened_args):
       if replace_tokens_with_dummy and aval is core.abstract_token:
-        args.append([hlo.create_token()])
+        args.append([create_hlo_token()])
       else:
         args.append(arg)
     callee_name_stack = name_stack.extend(util.wrap_name(name, api_name))
@@ -2389,7 +2395,7 @@ def _emit_tpu_python_callback(
     *,
     sharding: xc.OpSharding | None = None
 ) -> tuple[Sequence[ir.Value], Any]:
-  token = token or hlo.create_token()
+  token = token or create_hlo_token()
   _wrapped_callback = callback
 
   send_channels = []

@@ -4380,7 +4380,7 @@ create_token_p.def_abstract_eval(lambda *_: abstract_token)
 
 def _create_token_lowering(ctx, *operands):
   aval_out, = ctx.avals_out
-  return [hlo.create_token()]
+  return [mlir.create_hlo_token()]
 mlir.register_lowering(create_token_p, _create_token_lowering)
 
 
