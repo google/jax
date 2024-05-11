@@ -1,4 +1,3 @@
-from collections.abc import Callable
 # Copyright 2024 The JAX Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,9 +13,11 @@ from collections.abc import Callable
 # limitations under the License.
 # ==============================================================================
 
+from collections.abc import Callable
 import contextlib
 import ctypes
 import dataclasses
+import functools
 import os
 import pathlib
 import subprocess
@@ -426,7 +427,7 @@ class LaunchContext:
     # nvgpu TMA instructions expect reversed indices...
     rev_dyn_based_indices = reversed(dyn_base_indices)
 
-    uniform_ctx = mgpu.once if uniform else contextlib.nullcontext
+    uniform_ctx = functools.partial(mgpu.once, per_block=False) if uniform else contextlib.nullcontext
 
     if gmem_ref is src_ref:
       with uniform_ctx():

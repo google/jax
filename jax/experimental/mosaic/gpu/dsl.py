@@ -39,6 +39,9 @@ from .utils import (
     memref_unsqueeze,
     once,
     tile_shape,
+    thread_idx,
+    warp_idx,
+    warpgroup_idx,
 )
 from .wgmma import (
     WGMMAAccumulator,

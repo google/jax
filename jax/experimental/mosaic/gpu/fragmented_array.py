@@ -65,7 +65,15 @@ class WGStridedFragLayout:
     memref_type = ir.MemRefType(memref_ty)
     bw = mgpu.bytewidth(memref_type.element_type)
     assert 8 % bw == 0 and 8 // bw != 0, bw
-    return cls(shape=memref_type.shape, vec_size=8 // bw)
+    if np.prod(memref_type.shape) % WARPGROUP_SIZE != 0:
+      raise ValueError(
+          "Ref must have a number of elements that is a multiple of"
+          f" {WARPGROUP_SIZE}"
+      )
+    max_vec_size = np.prod(memref_type.shape) // WARPGROUP_SIZE
+    return cls(
+        shape=tuple(memref_type.shape), vec_size=min(8 // bw, max_vec_size)
+    )
 
   def thread_vec_idxs(self):
     """The indexes to be used for vector load/store WGStridedFragLayout.
@@ -73,10 +81,11 @@ class WGStridedFragLayout:
     Yields:
       The indices of the vector that correspond to the current thread.
     """
+    index = ir.IndexType.get()
     cardinality = np.prod(self.shape)
     assert cardinality % (WARPGROUP_SIZE * self.vec_size) == 0
     reg_num = cardinality // (WARPGROUP_SIZE * self.vec_size)
-    tidx = gpu.thread_id(gpu.Dimension.x)
+    tidx = arith.remui(gpu.thread_id(gpu.Dimension.x), c(WARPGROUP_SIZE, index))
     off = arith.muli(tidx, c(self.vec_size, tidx.type))
     for i in range(reg_num):
       yield [arith.addi(off, c(i * WARPGROUP_SIZE * self.vec_size, tidx.type))]
@@ -194,23 +203,39 @@ class FragmentedArray:
     return FragmentedArray(_registers=new_regs, _layout=self.layout)
 
   def __add__(self, other):
-    return self._pointwise(arith.addf, other)
+    if ir.FloatType.isinstance(self.mlir_dtype):
+      return self._pointwise(arith.addf, other)
+    elif ir.IntegerType.isinstance(self.mlir_dtype):
+      return self._pointwise(arith.addi, other)
 
   def __mul__(self, other):
-    return self._pointwise(arith.mulf, other)
+    if ir.FloatType.isinstance(self.mlir_dtype):
+      return self._pointwise(arith.mulf, other)
+    elif ir.IntegerType.isinstance(self.mlir_dtype):
+      return self._pointwise(arith.muli, other)
 
   def __sub__(self, other):
+    if not ir.FloatType.isinstance(self.mlir_dtype):
+      raise NotImplementedError
     return self._pointwise(arith.subf, other)
 
   def __truediv__(self, other):
+    if not ir.FloatType.isinstance(self.mlir_dtype):
+      raise NotImplementedError
     return self._pointwise(arith.divf, other)
 
   def max(self, other):
+    if not ir.FloatType.isinstance(self.mlir_dtype):
+      raise NotImplementedError
     return self._pointwise(arith.maximumf, other)
 
   def exp(self, approx: bool = False):
+    if not ir.FloatType.isinstance(self.mlir_dtype):
+      raise NotImplementedError
     def fast_exp(x):
       f32 = ir.F32Type.get()
+      if self.mlir_dtype != f32:
+        raise NotImplementedError
       log2e = arith.constant(f32, ir.FloatAttr.get(f32, 1.4426950408889634))
       if x.type == f32:
         scaled = arith.mulf(x, log2e)
@@ -372,8 +397,9 @@ class FragmentedArray:
 
   def _store_untiled_wg_strided(self, ref: ir.Value):
     ref_ty = ir.MemRefType(ref.type)
-    if ref_ty.shape != self.shape:
-      raise ValueError((ref_ty.shape, self.shape))
+    ref_shape = tuple(ref_ty.shape)
+    if ref_shape != self.shape:
+      raise ValueError((ref_shape, self.shape))
     smem_1d = mgpu.memref_fold(ref, 0, len(ref_ty.shape))
     for idx, reg in zip(self.layout.thread_vec_idxs(), self.registers.flat):
       vector.store(reg, smem_1d, idx)
@@ -390,7 +416,7 @@ class FragmentedArray:
     def c(x):
       return arith.ConstantOp(index, ir.IntegerAttr.get(index, x))
 
-    tidx = gpu.thread_id(gpu.Dimension.x)
+    tidx = arith.remui(gpu.thread_id(gpu.Dimension.x), c(WARPGROUP_SIZE))
     lane_id = arith.remui(tidx, c(32))  # {0, 1, ..., 31}
     warp_id = arith.divui(tidx, c(32))  # {0, 1, 2, 3}
     row_base = arith.addi(
@@ -454,7 +480,7 @@ class FragmentedArray:
     def c(x):
       return arith.ConstantOp(index, ir.IntegerAttr.get(index, x))
 
-    tidx = gpu.thread_id(gpu.Dimension.x)
+    tidx = arith.remui(gpu.thread_id(gpu.Dimension.x), c(WARPGROUP_SIZE))
     lane_id = arith.remui(tidx, c(32))  # {0, 1, ..., 31}
     warp_id = arith.divui(tidx, c(32))  # {0, 1, 2, 3}
     sub_row_base = arith.divui(lane_id, c(4))  # {0, 1, ..., 7}

@@ -14,6 +14,7 @@
 # ==============================================================================
 """Utilities for code generator."""
 
+import functools
 import contextlib
 import dataclasses
 from typing import Any, Literal, Sequence
@@ -122,10 +123,8 @@ def debug_print(fmt, *args, uniform=True):
       ty_format = "%llu"
     if ir.IntegerType.isinstance(arg.type):
       width = ir.IntegerType(arg.type).width
-      if width == 64:
-        ty_format = "%llu"
-      elif width == 1:
-        ty_format = "%llu"
+      ty_format = "%llu"
+      if width < 64:
         arg = arith.extui(ir.IntegerType.get_signless(64), arg)
     if ir.F32Type.isinstance(arg.type):
       ty_format = "%f"
@@ -136,7 +135,7 @@ def debug_print(fmt, *args, uniform=True):
       raise NotImplementedError(arg.type)
     type_formats.append(ty_format)
     new_args.append(arg)
-  ctx = once if uniform else contextlib.nullcontext
+  ctx = functools.partial(once, per_block=False) if uniform else contextlib.nullcontext
   with ctx():
     gpu.printf(fmt.format(*type_formats) + "\n", new_args)
 
@@ -185,13 +184,34 @@ def fori(bound, carrys):
   return wrapper
 
 
-def get_warp_idx():
+def thread_idx():
   i32 = ir.IntegerType.get_signless(32)
-  tidx = arith.index_cast(i32, gpu.thread_id(gpu.Dimension.x))
-  warp_idx = arith.shrui(tidx, c(5, tidx.type))
+  as_i32 = lambda x: arith.index_cast(i32, x)
+  tidx = as_i32(gpu.thread_id(gpu.Dimension.x))
+  stride = as_i32(gpu.block_dim(gpu.Dimension.x))
+  for dim in (gpu.Dimension.y, gpu.Dimension.z):
+    tidx = arith.addi(tidx, arith.muli(as_i32(gpu.thread_id(dim)), stride))
+    stride = arith.muli(stride, as_i32(gpu.block_dim(dim)))
+  return tidx
+
+def warp_idx(sync=True):
+  i32 = ir.IntegerType.get_signless(32)
+  warp_idx = arith.shrui(thread_idx(), c(5, i32))
+  if not sync:
+    return warp_idx
   mask = c(0xFFFFFFFF, i32)
   return nvvm.shfl_sync(
       warp_idx.type, mask, warp_idx, c(0, i32), c(0x1F, i32), nvvm.ShflKind.idx
+  )
+
+def warpgroup_idx(sync=True):
+  i32 = ir.IntegerType.get_signless(32)
+  wg_idx = arith.shrui(thread_idx(), c(7, i32))
+  if not sync:
+    return wg_idx
+  mask = c(0xFFFFFFFF, i32)
+  return nvvm.shfl_sync(
+      wg_idx.type, mask, wg_idx, c(0, i32), c(0x1F, i32), nvvm.ShflKind.idx
   )
 
 
@@ -200,7 +220,7 @@ _ONCE_REGION_ACTIVE = False
 
 
 @contextlib.contextmanager
-def once():
+def once(per_block=True):
   """Runs the context only from a single thread from the first warp.
 
   The block is assumed to have a size of 1 in both y and z dimensions.
@@ -211,7 +231,9 @@ def once():
     yield
     return
 
-  warp = get_warp_idx()
+  warp = warp_idx()
+  if not per_block:
+    warp = arith.remui(warp, c(4, warp.type))
   first_warp = arith.cmpi(arith.CmpIPredicate.eq, warp, c(0, warp.type))
   elected = nvvm.elect_sync(ir.IntegerType.get_signless(1))
   should_run = arith.andi(first_warp, elected)
@@ -314,7 +336,9 @@ def memref_fold(ref: ir.Value, dim, fold_rank) -> ir.Value:
   new_shape = list(ref_ty.shape)
   new_shape[dim : dim + fold_rank] = [np.prod(new_shape[dim : dim + fold_rank])]
   identity = ir.AffineMapAttr.get(ir.AffineMap.get_identity(ref_ty.rank))
-  if ref_ty.layout == identity:
+  contig_strided_1d = ir.Attribute.parse("strided<[1]>")
+  # Not sure why but MLIR expects the strided 1D layout to disappear in this op.
+  if ref_ty.layout == identity or ref_ty.layout == contig_strided_1d:
     new_layout = ir.AffineMapAttr.get(
         ir.AffineMap.get_identity(ref_ty.rank - fold_rank + 1)
     )
@@ -418,6 +442,12 @@ def memref_transpose(ref: ir.Value, permutation: Sequence[int]) -> ir.Value:
   )
 
 
+def _has_identity_layout(ref_ty: ir.Type):
+  ref_ty = ir.MemRefType(ref_ty)
+  strides, offset = ref_ty.get_strides_and_offset()
+  return offset == 0 and strides == get_contiguous_strides(ref_ty.shape)
+
+
 def parse_indices(
     index, shape: tuple[int, ...]
 ) -> tuple[list[ir.Value | int], list[int], list[bool]]:
@@ -466,22 +496,23 @@ def commit_shared():
 
 class BarrierArray:
 
-  def __init__(self, num_barriers):
+  def __init__(self, num_barriers: int, arrival_count: int = 1):
     barrier_group_ty = ir.Type.parse(
         "!nvgpu.mbarrier.group<memorySpace=#gpu.address_space<workgroup>,"
         f" num_barriers={num_barriers}>"
     )
 
     self.value = nvgpu.mbarrier_create(barrier_group_ty)
+    self.num_barriers = num_barriers
     index = ir.IndexType.get()
     if num_barriers > 32:
       raise NotImplementedError("Only up to 32 barriers per group supported")
     i32 = ir.IntegerType.get_signless(32)
     self.phases = memref.alloca(ir.MemRefType.get((), i32), [], [])
     memref.store(c(0, i32), self.phases, [])
-    with once():
+    with once(per_block=True):
       for i in range(num_barriers):
-        nvgpu.mbarrier_init(self.value, c(1, index), c(i, index))
+        nvgpu.mbarrier_init(self.value, c(arrival_count, index), c(i, index))
 
   def __getitem__(self, offset: ir.Value | int):
     if isinstance(offset, int):
@@ -511,6 +542,10 @@ class Barrier:
     new_parities = arith.xori(parities, bitmask)
     memref.store(new_parities, self.barrier_array.phases, [])
     self.wait_parity(parity)
+
+  def arrive(self):
+    token_ty = ir.Type.parse("!nvgpu.mbarrier.token")
+    nvgpu.mbarrier_arrive(token_ty, self.barrier_array.value, self.offset)
 
 
 class Partition:

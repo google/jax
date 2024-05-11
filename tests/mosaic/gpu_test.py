@@ -616,6 +616,49 @@ class WGMMATest(TestCase):
     np.testing.assert_allclose(z, ref, rtol=rtol, atol=0)
 
 
+class BarrierTest(TestCase):
+
+  def test_wg_communication(self):
+    i32 = ir.IntegerType.get_signless(32)
+    def kernel(ctx, dst, tmp):
+      del ctx  # Unused.
+      barriers = BarrierArray(3, arrival_count=128)
+      gpu.barrier()  # Make sure the barriers are initialized.
+      wg_idx = arith.divui(mgpu.warp_idx(), c(4, i32))
+      is_first_wg = arith.cmpi(arith.CmpIPredicate.eq, wg_idx, c(0, i32))
+      is_second_wg = arith.cmpi(arith.CmpIPredicate.eq, wg_idx, c(1, i32))
+      arr = mgpu.FragmentedArray.splat(
+          arith.addi(wg_idx, c(1, i32)),
+          (128,),
+          mgpu.WGStridedFragLayout((128,), 1),
+      )
+      with ir.InsertionPoint(scf.IfOp(is_first_wg).then_block):
+        arr.store_untiled(tmp)
+        barriers[0].arrive()  # Signal that tmp is ready.
+        barriers[1].wait()  # Wait for the other warp to produce tmp.
+        final_arr = arr + mgpu.FragmentedArray.load_strided(tmp)
+        final_arr.store_untiled(memref_slice(dst, 0))
+        scf.yield_([])
+      with ir.InsertionPoint(scf.IfOp(is_second_wg).then_block):
+        barriers[0].wait()
+        final_arr = arr + mgpu.FragmentedArray.load_strided(tmp)
+        barriers[2].arrive()
+        barriers[2].wait()  # Synchronize this warpgroup before we overwrite tmp.
+        arr.store_untiled(tmp)
+        barriers[1].arrive()  # Signal that tmp is ready.
+        final_arr.store_untiled(memref_slice(dst, 1))
+        scf.yield_([])
+    out_shape = jax.ShapeDtypeStruct((2, 128), jnp.int32)
+    y = mosaic_gpu.as_gpu_kernel(
+        kernel,
+        (1, 1, 1),
+        (2 * 128, 1, 1),
+        (),
+        out_shape,
+        jax.ShapeDtypeStruct((128,), jnp.int32),
+    )()
+    np.testing.assert_array_equal(y, np.full_like(y, 3, dtype=np.int32))
+
 class TMATest(TestCase):
 
   @parameterized.product(
