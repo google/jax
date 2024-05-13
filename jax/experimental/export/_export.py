@@ -344,7 +344,6 @@ def args_specs(
   return _shape_poly.symbolic_args_specs(args, polymorphic_shapes)
 
 
-
 def _keep_main_tokens(serialization_version: int) -> bool:
   return serialization_version >= _VERSION_START_SUPPORT_EFFECTS_WITH_REAL_TOKENS
 
@@ -830,6 +829,8 @@ _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
     "LuDecomposition",
     # ApproxTopK on TPU
     "ApproxTopK",
+    # Subchannel Quantization
+    "Subchannel",
     "tf.call_tf_function",  # From jax2tf.call_tf(func, call_tf_graph=True)
     "tpu_custom_call",  # Pallas/TPU kernels
     # TODO(burmako): maintain backwards compatibility for these, until they
