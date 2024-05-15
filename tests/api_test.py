@@ -10472,6 +10472,58 @@ class CustomVmapTest(jtu.JaxTestCase):
 
     self.assertEqual(str(jaxpr), str(jaxpr_ref))
 
+  @parameterized.named_parameters(
+    ("1", 1),
+    ("8", 4),
+    ("12", 8),
+    ("16", 16),
+  )
+  def test_batch_map_basic(self, batch_size: int):
+    def f(x):
+      self.assertEqual(x.shape, ())
+      return x**2
+
+    x = np.arange(16)
+    y = jax.lax.map(f, x, batch_size=batch_size)
+
+    np.testing.assert_array_equal(y, x**2)
+
+  @parameterized.named_parameters(
+    ("1", 1),
+    ("8", 4),
+    ("12", 8),
+    ("16", 16),
+  )
+  def test_batch_map_pytrees(self, batch_size: int):
+    f = lambda x: {'b': x['a'] ** 2}
+    inputs = {'a': np.arange(16)}
+    expected = np.arange(16) ** 2
+
+    outputs = jax.lax.map(f, inputs, batch_size=batch_size)
+    self.assertAllClose(outputs['b'], expected)
+
+    outputs = jax.lax.map(
+      f, inputs, batch_size=batch_size
+    )
+    self.assertAllClose(outputs['b'], expected)
+
+
+  def test_batch_divides_axis(self):
+    def f(t):
+      x, a = t
+      self.assertEqual(x.shape, (4,))
+      return (x + a)**2
+
+    x = jax.random.randint(jax.random.key(0), (16, 4), -10, 10)
+    a = jax.random.randint(jax.random.key(1), (16, 4), -10, 10)
+
+    @jax.jit
+    def g(x, a):
+      return jax.lax.map(f, (x, a), batch_size=8)
+
+    y = g(x, a)
+
+    self.assertAllClose(y, (x + a)**2)
 
 class CustomApiTest(jtu.JaxTestCase):
   """Test interactions among the custom_{vmap,jvp,vjp,transpose,*} APIs"""

@@ -2082,8 +2082,29 @@ def fori_loop(lower, upper, body_fun, init_val,
 
 ### map and miscellaneous rules
 
+def _batch_and_remainder(x, batch_size: int):
+  leaves, treedef = tree_flatten(x)
+
+  scan_leaves = []
+  remainder_leaves = []
+
+  for leaf in leaves:
+    num_batches, _ = divmod(leaf.shape[0], batch_size)
+    total_batch_elems = num_batches * batch_size
+    scan_leaves.append(leaf[:total_batch_elems].reshape(num_batches, batch_size, *leaf.shape[1:]))
+    remainder_leaves.append(leaf[total_batch_elems:])
+
+  scan_tree = treedef.unflatten(scan_leaves)
+  remainder_tree = treedef.unflatten(remainder_leaves)
+  return scan_tree, remainder_tree
+
 @api_boundary
-def map(f, xs):
+def map(
+  f,
+  xs,
+  *,
+  batch_size: int | None = None,
+):
   """Map a function over leading array axes.
 
   Like Python's builtin map, except inputs and outputs are in the form of
@@ -2102,16 +2123,48 @@ def map(f, xs):
   arbitrary nested pytree type, and the mapped computation is compiled only
   once.
 
+  If ``batch_size`` is provided, the computation is executed in batches of that size
+  and parallelized using :func:`~jax.vmap`. This can be used as either a more performant
+  version of ``map`` or as a memory-efficient version of ``vmap``. If the axis is not
+  divisible by the batch size, the remainder is processed in a separate ``vmap`` and
+  concatenated to the result.
+
+    >>> x = jnp.ones((10, 3, 4))
+    >>> def f(x):
+    ...   print('inner shape:', x.shape)
+    ...   return x + 1
+    >>> y = lax.map(f, x, batch_size=3)
+    inner shape: (3, 4)
+    inner shape: (3, 4)
+    >>> y.shape
+    (10, 3, 4)
+
+  In the example above, "inner shape" is printed twice, once while tracing the batched
+  computation and once while tracing the remainder computation.
+
   Args:
     f: a Python function to apply element-wise over the first axis or axes of
       ``xs``.
     xs: values over which to map along the leading axis.
+    batch_size: (optional) integer specifying the size of the batch for each step to execute
+      in parallel.
 
   Returns:
     Mapped values.
   """
-  g = lambda _, x: ((), f(x))
-  _, ys = scan(g, (), xs)
+  if batch_size is not None:
+    scan_xs, remainder_xs = _batch_and_remainder(xs, batch_size)
+    g = lambda _, x: ((), jax.vmap(f)(x))
+    _, scan_ys = scan(g, (), scan_xs)
+    remainder_ys = jax.vmap(f)(remainder_xs)
+    # flatten = lambda x: x.reshape(-1, *x.shape[2:])
+    flatten = lambda x: x.reshape(-1, *x.shape[2:])
+    ys = tree_map(
+      lambda x, y: jax.numpy.concatenate([flatten(x), y], axis=0), scan_ys, remainder_ys,
+    )
+  else:
+    g = lambda _, x: ((), f(x))
+    _, ys = scan(g, (), xs)
   return ys
 
 def _rng_bit_generator_batching_rule(batched_args, batch_dims, *, shape, dtype, algorithm):
