@@ -1397,6 +1397,22 @@ triton_lowering_rules[lax.convert_element_type_p] = (
 )
 
 
+def _bitcast(ctx: LoweringRuleContext, x, *, new_dtype):
+  dst_type = _dtype_to_ir_type(new_dtype)
+  if ir.RankedTensorType.isinstance(
+      x.type
+  ) and not ir.RankedTensorType.isinstance(dst_type):
+    src_type = ir.RankedTensorType(x.type)
+    dst_type = ir.RankedTensorType.get(
+        src_type.shape,
+        dst_type,
+        src_type.encoding,
+    )
+  return tt_dialect.bitcast(dst_type, x)
+
+triton_lowering_rules[lax.bitcast_convert_type_p] = _bitcast
+
+
 def select_n_lowering_rule(ctx: LoweringRuleContext, pred, x, y):
   pred_aval, a_aval, b_aval = ctx.avals_in
   [out_aval] = ctx.avals_out
@@ -2000,6 +2016,88 @@ def _reduction_lowering(body, ctx: LoweringRuleContext, a, axes):
     tt_dialect.reduce_return(results)
   reduce_op.verify()
   return list(reduce_op.result)
+
+
+# sort_p helpers
+
+def _compare_and_swap(x, flip, i, n_dims):
+  n_outer = x.size >> n_dims
+  shape = [n_outer * 2**i, 2, 2**(n_dims - i - 1)]
+  y = jnp.reshape(x, shape)
+  # slice left/right with 'stride' 2**(n_dims - i - 1)
+  mask = jnp.arange(0, 2).reshape(1, 2, 1)
+  left = jnp.broadcast_to(jnp.sum(y * (1 - mask), axis=1, keepdims=True), shape)
+  right = jnp.broadcast_to(jnp.sum(y * mask, axis=1, keepdims=True), shape)
+  left = jnp.reshape(left, x.shape)
+  right = jnp.reshape(right, x.shape)
+  # actual compare-and-swap
+  idtype = jnp.dtype(f'int{jnp.dtype(x.dtype).itemsize * 8}')
+  ileft = left.view(idtype)
+  iright = right.view(idtype)
+  ix = x.view(idtype)
+  ret = ix ^ jnp.where((left > right) ^ flip,
+                       ileft ^ iright,
+                       jnp.zeros_like(ix))
+  return ret.view(x.dtype)
+
+
+def _bitonic_merge(x, stage, order, n_dims):
+  """
+  order_type 0 == ascending
+  order_type 1 == descending
+  order_type 2 == alternating
+  """
+  n_outer = x.size >> n_dims
+  # flip denotes whether to re-arrange sub-sequences of elements in ascending or
+  # descending order.
+  # if flip = 00000000... then all elements will be re-arranged ascendingly at
+  #   this stage.
+  # if flip = 00110011... then all the elements will be re-arranged
+  #   alternatingly (with a stride of 2) at this stage
+  if order == 2:
+    shape = [n_outer * 2**(n_dims - 1 - stage), 2, 2**stage]
+    flip = jnp.reshape(
+        jnp.broadcast_to(jnp.arange(0, 2).reshape(1, 2, 1), shape),
+        x.shape)
+  else:
+    flip = order
+  # perform `stage` rounds of `compare-and-swap`
+  for i in range(stage):
+    x = _compare_and_swap(x, flip, i + (n_dims - stage), n_dims)
+  return x
+
+
+def _log2(i):
+  log2 = 0
+  n = i
+  while n > 1:
+    n >>= 1
+    log2 += 1
+  return log2
+
+
+def _sort(x, axis=-1, descending=False):
+  # iteratively run bitonic merge-sort steps
+  assert axis == x.ndim - 1
+  n_dims = _log2(x.shape[axis])
+  for i in range(1, n_dims + 1):
+    x = _bitonic_merge(x, i, 2 if i < n_dims else descending, n_dims)
+  return (x,)
+
+
+def _sort_lowering(ctx: LoweringRuleContext,
+                   *operands,
+                   dimension,
+                   is_stable,
+                   num_keys):
+  assert dimension == ctx.avals_in[0].ndim - 1
+  assert num_keys == 1
+  assert not is_stable
+  assert len(operands) == 1
+  return lower_fun(_sort, multiple_results=True)(ctx, *operands, axis=dimension)
+
+
+triton_lowering_rules[lax.sort_p] = _sort_lowering
 
 
 def _reduce_lowering(body, ctx: LoweringRuleContext, a, *, axes):
