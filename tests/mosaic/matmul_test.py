@@ -55,7 +55,8 @@ class MatmulTestCase(jtu.JaxTestCase):
         n,
         stages,
         tile_m=tile_m,
-        in_dtype=in_dtype,
+        lhs_dtype=in_dtype,
+        rhs_dtype=in_dtype,
         rhs_transpose=True,
     )
 
@@ -77,13 +78,40 @@ class MatmulTestCase(jtu.JaxTestCase):
         n,
         stages,
         tile_m=tile_m,
-        in_dtype=jnp.float32,
+        lhs_dtype=jnp.float32,
+        rhs_dtype=jnp.float32,
         rhs_transpose=True,
         precision=(
             matmul.F32Precision.TF32_X3
             if high_precision
             else matmul.F32Precision.DEFAULT
         ),
+    )
+
+  # These shapes are chosen so that they are large and they either
+  # cause XLA to fallback to cublas or triton
+  @parameterized.parameters(
+      # cublas
+      dict(m=55 * 128, n=95 * 128, k=48 * 128, stages=4, tile_m=128),
+      dict(m=55 * 128, n=45 * 128, k=48 * 128, stages=4, tile_m=128),
+      # triton
+      dict(m=64, n=95 * 128, k=48 * 128, stages=4, tile_m=64),
+      dict(m=64, n=45 * 128, k=48 * 128, stages=4, tile_m=64),
+  )
+  def test_mixed_matmul(self, m, k, n, stages, tile_m):
+    # RHS.element_size==1b so k_tile=128
+    if stages * 128 > k:
+      self.skipTest("Too many stages.")
+
+    matmul.verify(
+        m,
+        k,
+        n,
+        stages,
+        tile_m=tile_m,
+        rhs_transpose=False,
+        lhs_dtype=jnp.bfloat16,
+        rhs_dtype=jnp.int8,
     )
 
 

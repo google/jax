@@ -50,7 +50,7 @@ class WGMMAAccumulator:
       raise ValueError("Only WGMMA layouts supported in WGMMAAccumulator")
     self.value = _value
     if _sync:
-      nvvm.wgmma_fence_aligned()
+      self.value = wgmma_fence(_value)
 
   @classmethod
   def zero(cls, m, n):
@@ -221,7 +221,7 @@ def wgmma_m64k128B(
       f"wgmma.mma_async.sync.aligned.m64n{n}k{k_instr}.f32.{el_ty}.{el_ty} "
       f"{acc_reg_vector}, {a_regs}, {b_desc_reg}, p, {imm_regs};"
   )
-  ptx = f"{{ .reg .pred p; setp.ne.b32 p, {use_out_reg}, 0; {wgmma_instr} }}\n"
+  ptx = f"{{ .reg .pred p; setp.ne.b32 p, {use_out_reg}, 0; {wgmma_instr}}}\n"
 
   def lc(x):
     return llvm.ConstantOp(i32, ir.IntegerAttr.get(i32, x)).result
@@ -410,3 +410,48 @@ def wgmma(
       ),
       _sync=False,
   )
+
+
+def wgmma_fence(acc: mgpu.FragmentedArray):
+  i32 = ir.IntegerType.get_signless(32)
+  index = ir.IndexType.get()
+  f32 = ir.F32Type.get()
+  acc_regs = [  # pylint: disable=g-complex-comprehension
+      vector.extractelement(reg, position=c(pos, index))
+      for reg in acc.registers.flat
+      for pos in range(2)
+  ]
+
+  def lc(x):
+    return llvm.ConstantOp(i32, ir.IntegerAttr.get(i32, x)).result
+
+  reg_constraints_list = ["=f"] * len(acc_regs) + ["f"] * len(acc_regs)
+  reg_constraints = ",".join(reg_constraints_list)
+  ptx_lines = [
+      f"mov.f32 ${i}, ${len(acc_regs)+i}"
+      for i in range(len(acc_regs))
+  ]
+  ptx_lines.append("wgmma.fence.sync.aligned")
+  ptx = ";\n".join(ptx_lines) + ";\n"
+  acc_struct_type = ir.Type.parse(
+      f"!llvm.struct<({','.join('f32' for _ in acc_regs)})>"
+  )
+  acc_struct = llvm.inline_asm(
+      acc_struct_type,
+      acc_regs,
+      ptx,
+      reg_constraints,
+      asm_dialect=0,
+      has_side_effects=True,
+  )
+  acc_regs = [
+      llvm.extractvalue(f32, acc_struct, [i]) for i in range(len(acc_regs))
+  ]
+  acc_vec_regs = []
+  for first, second in zip(acc_regs[::2], acc_regs[1::2]):
+    vec = llvm.mlir_undef(ir.VectorType.get((2,), f32))
+    vec = llvm.insertelement(vec, first, position=lc(0))
+    vec = llvm.insertelement(vec, second, position=lc(1))
+    acc_vec_regs.append(vec)
+  new_regs = np.asarray(acc_vec_regs, dtype=object).reshape(acc.registers.shape)
+  return mgpu.FragmentedArray(_registers=new_regs, _layout=acc.layout)
