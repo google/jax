@@ -15,7 +15,7 @@ from jax import numpy as jnp # type: ignore
 
 import numpy as np # type: ignore
 import os
-import requests # type: ignore
+from security import safe_requests
 
 def download_dataset(dir_path, nb_classes):
 
@@ -39,7 +39,7 @@ def download_dataset(dir_path, nb_classes):
       continue
     with open(cls_file_path, "wb") as save_file:
       try:
-        response = requests.get(url + cls_filename.replace('_', ' '))
+        response = safe_requests.get(url + cls_filename.replace('_', ' '), timeout=60)
         save_file.write(response.content)
         print(f'Successfully fetched {cls_filename}')
       except:

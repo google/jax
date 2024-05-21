@@ -21,6 +21,7 @@ import socket
 import time
 from jax._src import clusters
 from jax._src.cloud_tpu_init import running_in_cloud_tpu_vm
+from security import safe_requests
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,6 @@ coordinator_port = '8476'
 metadata_response_code_success = 200
 
 def get_metadata(key):
-  import requests  # pytype: disable=import-error
   import time  # pytype: disable=import-error
   # Based on https://github.com/tensorflow/tensorflow/pull/40317
   gce_metadata_endpoint = 'http://' + os.environ.get(
@@ -42,9 +42,8 @@ def get_metadata(key):
   api_resp = None
 
   while retry_count < 6:
-    api_resp = requests.get(
-        f'{gce_metadata_endpoint}/computeMetadata/v1/instance/attributes/{key}',
-        headers={'Metadata-Flavor': 'Google'})
+    api_resp = safe_requests.get(f'{gce_metadata_endpoint}/computeMetadata/v1/instance/attributes/{key}',
+        headers={'Metadata-Flavor': 'Google'}, timeout=60)
     if api_resp.status_code == 200:
       break
     retry_count += 1

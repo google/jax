@@ -92,7 +92,7 @@ def serving_call_mnist(images):
     # You can see the name of the input ("inputs") in the SavedModel dump.
     data = f'{{"inputs": {images_json}}}'
     predict_url = f"http://{_PREDICTION_SERVICE_ADDR.value}/v1/models/{_MODEL_SPEC_NAME.value}:predict"
-    response = requests.post(predict_url, data=data)
+    response = requests.post(predict_url, data=data, timeout=60)
     if response.status_code != 200:
       msg = (f"Received error response {response.status_code} from model "
              f"server: {response.text}")
