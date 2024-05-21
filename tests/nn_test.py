@@ -28,6 +28,7 @@ from jax._src import config
 from jax._src import core
 from jax._src import test_util as jtu
 from jax._src import ad_checkpoint
+from jax._src.nn.functions import _causal_mask
 from jax.test_util import check_grads
 from jax import nn
 from jax import random
@@ -37,7 +38,131 @@ import jax.numpy as jnp
 config.parse_flags_with_absl()
 
 
+@jtu.with_config(jax_legacy_prng_key="allow")
 class NNFunctionsTest(jtu.JaxTestCase):
+  @parameterized.parameters(False, True)
+  @jtu.skip_on_flag("jax_skip_slow_tests", True)
+  def testSdpa(self, use_bias):
+    if not jtu.test_device_matches(["gpu"]):
+      raise unittest.SkipTest("Test fails on GPU")
+
+    sdpa = nn.scaled_dot_product_attention
+    B, S, T, N, H = 4, 128, 128, 8, 32
+    keys = random.split(random.PRNGKey(0), 4)
+    Q = random.normal(keys[0], (B, T, N, H), dtype=jnp.bfloat16)
+    K = random.normal(keys[1], (B, S, N, H), dtype=jnp.bfloat16)
+    V = random.normal(keys[2], (B, S, N, H), dtype=jnp.bfloat16)
+    if use_bias:
+      bias = random.normal(keys[3], (1, N, T, S), dtype=jnp.bfloat16)
+    else:
+      bias = None
+
+    # Use a dummy lambda for mask_fn to disable flash attention.
+    out_ref, _ = sdpa(Q, K, V, bias, mask_fn=lambda x, mask: x)
+    out, _ = sdpa(Q, K, V, bias)
+    self.assertAllClose(out_ref, out)
+
+  @parameterized.parameters(False, True)
+  @jtu.skip_on_flag("jax_skip_slow_tests", True)
+  def testSdpaGrad(self, use_bias):
+    if not jtu.test_device_matches(["gpu"]):
+      raise unittest.SkipTest("Test fails on GPU")
+
+    sdpa = nn.scaled_dot_product_attention
+    B, S, T, N, H = 4, 128, 128, 8, 32
+    zeros = jnp.zeros((B, N, T, S), dtype=jnp.bfloat16)
+    keys = random.split(random.PRNGKey(0), 5)
+    Q = random.normal(keys[0], (B, T, N, H), dtype=jnp.bfloat16)
+    K = random.normal(keys[1], (B, S, N, H), dtype=jnp.bfloat16)
+    V = random.normal(keys[2], (B, S, N, H), dtype=jnp.bfloat16)
+    grad = random.normal(keys[3], (B, T, N, H), dtype=jnp.bfloat16)
+    if use_bias:
+      bias = random.normal(keys[4], (1, N, T, S), dtype=jnp.bfloat16)
+    else:
+      bias = None
+
+    sdpa_fn = partial(sdpa, mask_fn=lambda x, mask: x)
+    out_ref, sdpa_vjp_fn = jax.vjp(sdpa_fn, Q, K, V, bias)
+    Q_grad_ref, K_grad_ref, V_grad_ref, bias_grad_ref = sdpa_vjp_fn(
+                                                            (grad, zeros))
+
+    out, sdpa_vjp_fn = jax.vjp(sdpa, Q, K, V, bias)
+    Q_grad, K_grad, V_grad, bias_grad = sdpa_vjp_fn((grad, None))
+    self.assertAllClose(Q_grad_ref, Q_grad, rtol=.02 if use_bias else .01)
+    self.assertAllClose(K_grad_ref, K_grad)
+    self.assertAllClose(V_grad_ref, V_grad, rtol=.04 if use_bias else .01)
+    self.assertAllClose(bias_grad_ref, bias_grad)
+
+  @parameterized.parameters(False, True)
+  @jtu.skip_on_flag("jax_skip_slow_tests", True)
+  def testSdpaMask(self, use_bias):
+    if not jtu.test_device_matches(["gpu"]):
+      raise unittest.SkipTest("Test fails on GPU")
+
+    sdpa = nn.scaled_dot_product_attention
+    B, S, T, N, H = 4, 128, 128, 8, 32
+    keys = random.split(random.PRNGKey(0), 4)
+    Q = random.normal(keys[0], (B, T, N, H), dtype=jnp.bfloat16)
+    K = random.normal(keys[1], (B, S, N, H), dtype=jnp.bfloat16)
+    V = random.normal(keys[2], (B, S, N, H), dtype=jnp.bfloat16)
+    if use_bias:
+      bias = random.normal(keys[3], (1, N, T, S), dtype=jnp.bfloat16)
+      atol = .02
+    else:
+      bias = None
+      atol = .01
+
+    # For the reference, use the causal mask explicitly and a dummy lambda for
+    # dropout_fn to disable flash attention.
+    causal_mask = _causal_mask(T, jnp.bfloat16)
+    out_ref, _ = sdpa(Q, K, V, bias, causal_mask, dropout_fn=lambda x: x)
+
+    # Test runtime generated causal mask
+    out, _ = sdpa(Q, K, V, bias, mask_fn=nn.SdpaCausalMask())
+    self.assertAllClose(out_ref, out, atol=atol)
+    # Test user-given causal mask
+    out, _ = sdpa(Q, K, V, bias, causal_mask)
+    self.assertAllClose(out_ref, out, atol=atol)
+
+  @parameterized.parameters(False, True)
+  @jtu.skip_on_flag("jax_skip_slow_tests", True)
+  def testSdpaMaskGrad(self, use_bias):
+    if not jtu.test_device_matches(["gpu"]):
+      raise unittest.SkipTest("Test fails on GPU")
+
+    sdpa = nn.scaled_dot_product_attention
+    B, S, T, N, H = 4, 128, 128, 8, 32
+    zeros = jnp.zeros((B, N, T, S), dtype=jnp.bfloat16)
+    keys = random.split(random.PRNGKey(0), 5)
+    Q = random.normal(keys[0], (B, T, N, H), dtype=jnp.bfloat16)
+    K = random.normal(keys[1], (B, S, N, H), dtype=jnp.bfloat16)
+    V = random.normal(keys[2], (B, S, N, H), dtype=jnp.bfloat16)
+    grad = random.normal(keys[3], (B, T, N, H), dtype=jnp.bfloat16)
+    if use_bias:
+      bias = random.normal(keys[4], (1, N, T, S), dtype=jnp.bfloat16)
+    else:
+      bias = None
+
+    causal_mask = _causal_mask(T, jnp.bfloat16)
+    sdpa_fn = partial(sdpa, dropout_fn=lambda x: x)
+    out_ref, sdpa_vjp_fn = jax.vjp(sdpa_fn, Q, K, V, bias, causal_mask)
+    Q_grad_ref, K_grad_ref, V_grad_ref, bias_grad_ref, _ = sdpa_vjp_fn(
+                                                               (grad, zeros))
+
+    # Test runtime generated causal mask
+    sdpa_fn = partial(sdpa, mask_fn=nn.SdpaCausalMask())
+    _, sdpa_vjp_fn0 = jax.vjp(sdpa_fn, Q, K, V, bias, None)
+    # Test user-given causal mask
+    _, sdpa_vjp_fn1 = jax.vjp(sdpa, Q, K, V, bias, causal_mask)
+
+    sdpa_fns = [sdpa_vjp_fn0, sdpa_vjp_fn1]
+    for sdpa_fn in sdpa_fns:
+      Q_grad, K_grad, V_grad, bias_grad, _ = sdpa_fn((grad, None))
+      self.assertAllClose(Q_grad_ref, Q_grad, atol=.02, rtol=.02)
+      self.assertAllClose(K_grad_ref, K_grad, atol=.02, rtol=.02)
+      self.assertAllClose(V_grad_ref, V_grad, atol=.02, rtol=.02)
+      self.assertAllClose(bias_grad_ref, bias_grad)
+
   @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def testSoftplusGrad(self):
     check_grads(nn.softplus, (1e-8,), order=4,
