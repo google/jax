@@ -489,6 +489,15 @@ def glu(x: ArrayLike, axis: int = -1) -> Array:
 logsumexp = _logsumexp
 
 
+def _axis_is_empty(x: Array, axis: int | tuple[int, ...] | None) -> bool:
+  if axis is None:
+    return core.is_empty_shape(x.shape)
+  elif isinstance(axis, (tuple, list, np.ndarray)):
+    return core.is_empty_shape(tuple(x.shape[a] for a in axis))
+  else:
+    return core.definitely_equal(x.shape[axis], 0)
+
+
 @partial(jax.jit, static_argnames=("axis",))
 def log_softmax(x: ArrayLike,
                 axis: int | tuple[int, ...] | None = -1,
@@ -522,15 +531,15 @@ def log_softmax(x: ArrayLike,
   del initial
   numpy_util.check_arraylike("log_softmax", x)
   x_arr = jnp.asarray(x)
-  x_max = jnp.max(x_arr, axis, where=where, initial=-jnp.inf, keepdims=True)
+  needs_initial = (where is not None or _axis_is_empty(x_arr, axis))
+  x_max = jnp.max(x_arr, axis, where=where, keepdims=True,
+                  initial=-jnp.inf if needs_initial else None)
   x_safe = x_arr if where is None else jnp.where(where, x_arr, -jnp.inf)
   shifted = x_safe - lax.stop_gradient(x_max)
   shifted_logsumexp = jnp.log(
       jnp.sum(jnp.exp(shifted), axis, where=where, keepdims=True))
   result = shifted - shifted_logsumexp
-  if where is not None:
-    return jnp.where(where, result, -jnp.inf)
-  return result
+  return result if where is None else jnp.where(where, result, -jnp.inf)
 
 
 # TODO(phawkins): this jit was found to change numerics in a test. Debug this.
@@ -565,47 +574,47 @@ def softmax(x: ArrayLike,
     warnings.warn("The initial argument to softmax is deprecated, and no longer has any effect.",
                   DeprecationWarning, stacklevel=2)
   del initial
+  numpy_util.check_arraylike("softmax", x)
+  x_arr = jnp.asarray(x)
   if config.softmax_custom_jvp.value:
     # mypy is confused by the `functools.partial` application in the definition
     # of `_softmax` and incorrectly concludes that `_softmax` returns
     # `ReturnValue` -- the unsubstituted type parameter of `custom_jvp`.
-    return _softmax(x, axis, where)  # type: ignore[return-value]
+    return _softmax(x_arr, axis, where)  # type: ignore[return-value]
   else:
-    return _softmax_deprecated(x, axis, where)
+    return _softmax_deprecated(x_arr, axis, where)
 
 # TODO(mattjj): replace softmax with _softmax when deprecation flag is removed
 @partial(jax.custom_jvp, nondiff_argnums=(1,))
 def _softmax(
-    x: ArrayLike,
+    x: Array,
     axis: int | tuple[int, ...] | None = -1,
-    where: ArrayLike | None = None,
-    initial: ArrayLike | None = -jnp.inf) -> Array:
-  x_max = jnp.max(x, axis, where=where, initial=initial, keepdims=True)
-  x_safe = x if where is None else jnp.where(where, x, initial)
+    where: ArrayLike | None = None) -> Array:
+  needs_initial = (where is not None or _axis_is_empty(x, axis))
+  x_max = jnp.max(x, axis, where=where, keepdims=True,
+                  initial=-jnp.inf if needs_initial else None)
+  x_safe = x if where is None else jnp.where(where, x, -jnp.inf)
   unnormalized = jnp.exp(x_safe - x_max)
   result = unnormalized / jnp.sum(unnormalized, axis, where=where, keepdims=True)
-  if where is not None:
-    result = jnp.where(where, result, 0)
-  return result
+  return result if where is None else jnp.where(where, result, 0)
 
 @_softmax.defjvp
 def _softmax_jvp(axis, primals, tangents):
-  (x, where, initial), (x_dot, _, _) = primals, tangents
-  y = _softmax(x, axis, where, initial)
+  (x, where), (x_dot, _) = primals, tangents
+  y = _softmax(x, axis, where)
   return y, y * (x_dot - (y * x_dot).sum(axis, where=where, keepdims=True))
 
 def _softmax_deprecated(
-    x: ArrayLike,
+    x: Array,
     axis: int | tuple[int, ...] | None = -1,
-    where: ArrayLike | None = None,
-    initial: ArrayLike | None = -jnp.inf) -> Array:
-  x_max = jnp.max(x, axis, where=where, initial=initial, keepdims=True)
-  x_safe = x if where is None else jnp.where(where, x, initial)
+    where: ArrayLike | None = None) -> Array:
+  needs_initial = (where is not None or _axis_is_empty(x, axis))
+  x_max = jnp.max(x, axis, where=where, keepdims=True,
+                  initial=-jnp.inf if needs_initial else None)
+  x_safe = x if where is None else jnp.where(where, x, -jnp.inf)
   unnormalized = jnp.exp(x_safe - lax.stop_gradient(x_max))
   result = unnormalized / jnp.sum(unnormalized, axis, where=where, keepdims=True)
-  if where is not None:
-    result = jnp.where(where, result, 0)
-  return result
+  return result if where is None else jnp.where(where, result, 0)
 
 
 @partial(jax.jit, static_argnames=("axis",))
