@@ -787,12 +787,15 @@ for _platform, _alias in _platform_aliases.items():
   _alias_to_platforms.setdefault(_alias, []).append(_platform)
 
 
+def known_platforms() -> set[str]:
+  return set(_backend_factories.keys()) | set(_platform_aliases.values())
+
+
 def is_known_platform(platform: str) -> bool:
   # A platform is valid if there is a registered factory for it. It does not
   # matter if we were unable to initialize that platform; we only care that
   # we've heard of it and it isn't, e.g., a typo.
-  return (platform in _backend_factories.keys() or
-          platform in _platform_aliases.keys())
+  return platform in known_platforms()
 
 
 def canonicalize_platform(platform: str) -> str:
