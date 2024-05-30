@@ -138,6 +138,7 @@ class MatmulTestCase(jtu.JaxTestCase):
         rhs_transpose=False,
         lhs_dtype=jnp.bfloat16,
         rhs_dtype=jnp.int8,
+        out_dtype=jnp.float16,
     )
 
 

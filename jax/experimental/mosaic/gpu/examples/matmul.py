@@ -73,14 +73,15 @@ class WGMMADefaultImpl:
   """Default WGMMA implementation."""
 
   @staticmethod
-  def zero_accs(tile_m: int, tile_n: int) -> WGMMAAccumulator:
-    return WGMMAAccumulator.zero(tile_m, tile_n)
+  def zero_accs(tile_m: int, tile_n: int, dtype) -> WGMMAAccumulator:
+    return WGMMAAccumulator.zero(tile_m, tile_n, dtype)
 
   @staticmethod
   def smem_shape_extra(
       block_tiling: Tiling,
       tma_tiling: Tiling,
       lhs_dtype: jnp.dtype, rhs_dtype: jnp.dtype,
+      out_dtype: jnp.dtype,
       rhs_transpose: WGMMALayout,
   ) -> dict[str, jax.ShapeDtypeStruct]:
     del block_tiling, tma_tiling, lhs_dtype, rhs_dtype, rhs_transpose
@@ -97,8 +98,9 @@ class WGMMADefaultImpl:
       b_order: WGMMALayout,
       a_slice: SmemRef,
       b_slice: SmemRef,
+      mlir_out_type: ir.Value,
   ) -> dict[str, WGMMAAccumulator]:
-    acc = wgmma(acc, a_slice, b_slice, b_order=b_order)
+    acc = wgmma(acc, a_slice, b_slice, mlir_out_type=mlir_out_type, b_order=b_order)
     nvvm.wgmma_commit_group_sync_aligned()
     nvvm.wgmma_wait_group_sync_aligned(1)
     return acc
@@ -108,8 +110,8 @@ class WGMMATF32x3Impl:
   """WGMMA implementation for 3xTF32 precision."""
 
   @staticmethod
-  def zero_accs(tile_m, tile_n) -> dict[str, WGMMAAccumulator]:
-    zero_acc = WGMMADefaultImpl.zero_accs(tile_m, tile_n)
+  def zero_accs(tile_m, tile_n, dtype) -> dict[str, WGMMAAccumulator]:
+    zero_acc = WGMMADefaultImpl.zero_accs(tile_m, tile_n, dtype)
     return {"main": zero_acc, "errs": zero_acc}
 
   @staticmethod
@@ -117,6 +119,7 @@ class WGMMATF32x3Impl:
       block_tiling: Tiling,
       tma_tiling: Tiling,
       lhs_dtype: jnp.dtype, rhs_dtype: jnp.dtype,
+      out_dtype: jnp.dtype,
       rhs_transpose: bool,
   ) -> dict[str, jax.ShapeDtypeStruct]:
     del rhs_transpose
@@ -145,7 +148,9 @@ class WGMMATF32x3Impl:
       b_order: WGMMALayout,
       a_slice: SmemRef,
       b_slice: SmemRef,
+      mlir_out_type: ir.Value,
   ) -> dict[str, WGMMAAccumulator]:
+    assert ir.F32Type.isinstance(mlir_out_type)
     acc = wgmma(accs["main"], a_slice, b_slice, b_order=b_order)
     nvvm.wgmma_commit_group_sync_aligned()
     # Note: we assert that only the slice_ab and err_b mmas are still running
@@ -171,14 +176,15 @@ class WGMMACvtRhsImpl:
   """Mixed WGMMA implementation where B is converted to A."""
 
   @staticmethod
-  def zero_accs(tile_m: int, tile_n: int) -> WGMMAAccumulator:
-    return WGMMADefaultImpl.zero_accs(tile_m, tile_n)
+  def zero_accs(tile_m: int, tile_n: int, dtype) -> WGMMAAccumulator:
+    return WGMMADefaultImpl.zero_accs(tile_m, tile_n, dtype)
 
   @staticmethod
   def smem_shape_extra(
       block_tiling: Tiling,
       tma_tiling: Tiling,
       lhs_dtype: jnp.dtype, rhs_dtype: jnp.dtype,
+      out_dtype: jnp.dtype,
       rhs_transpose: bool,
   ) -> dict[str, jax.ShapeDtypeStruct]:
     del rhs_dtype
@@ -191,8 +197,12 @@ class WGMMACvtRhsImpl:
     # The second dim needs to be tma_tiling.k so it is 128b wide and
     # the first dim needs to line up with the lhs dimension. That's
     # why we have a strange (k, k) here.
-    cvt_shape = tile_shape(block_tiling.kn, (tma_tiling.k, tma_tiling.k))
-    return {"cvt": jax.ShapeDtypeStruct(shape=cvt_shape, dtype=lhs_dtype)}
+    lhs_cvt_shape = tile_shape(block_tiling.kn, (tma_tiling.k, tma_tiling.k))
+    rhs_cvt_shape = tile_shape(block_tiling.mk, (tma_tiling.m, tma_tiling.k))
+    return {
+        "lhs_cvt": jax.ShapeDtypeStruct(shape=lhs_cvt_shape, dtype=out_dtype),
+        "rhs_cvt": jax.ShapeDtypeStruct(shape=rhs_cvt_shape, dtype=out_dtype)
+    }
 
   @staticmethod
   def get_result_tile(acc: WGMMAAccumulator) -> FragmentedArray:
@@ -205,6 +215,7 @@ class WGMMACvtRhsImpl:
       b_order: WGMMALayout,
       a_slice: SmemRef,
       b_slice: SmemRef,
+      mlir_out_type: ir.Value,
   ) -> dict[str, WGMMAAccumulator]:
     # Convert the load
     arr = FragmentedArray.load_tiled(b_slice, swizzle=128)
@@ -217,8 +228,7 @@ class WGMMACvtRhsImpl:
     arr.store_tiled(smem_scratch["cvt"], swizzle=128)
     commit_shared()
     nvvm.wgmma_fence_aligned()
-    return wgmma(acc, a_slice, smem_scratch["cvt"], b_order=b_order)
-
+    return wgmma(acc, a_slice, smem_scratch["cvt"], b_order=b_order, mlir_out_type=mlir_out_type)
 
 
 def mlir_context(f):
@@ -235,13 +245,14 @@ def build_kernel(
     stages: int = 2,
     tile_m: int = 128,
     tile_n: int = 128,
+    out_dtype: jnp.dtype = jnp.float32,
     rhs_transpose: bool = False,
     wgmma_impl=WGMMADefaultImpl,
     profiler_spec: profiler.ProfilerSpec | None = None,
 ):
-  out_128b_elems = 128 // bytewidth(ir.F32Type.get())
+  out_128b_elems = 128 // jnp.dtype(out_dtype).itemsize
   out_tiling = (64, out_128b_elems)
-  out_tile = jax.ShapeDtypeStruct(tile_shape((tile_m, tile_n), out_tiling), jnp.float32)
+  out_tile = jax.ShapeDtypeStruct(tile_shape((tile_m, tile_n), out_tiling), jnp.dtype(out_dtype))
   if tile_m % 64 != 0:
     raise ValueError(f"{tile_m=} must be divisible by 64")
   if m % tile_m != 0:
@@ -271,8 +282,6 @@ def build_kernel(
   block_tiling = Tiling(m=tile_m, n=tile_n, k=tile_k)
   tma_tiling = Tiling(m=64, n=rhs_128b_elems, k=lhs_128b_elems)
   k_steps = k // block_tiling.k
-
-  f32 = ir.F32Type.get()
   index = ir.IndexType.get()
 
   def safe_div(x, y):
@@ -289,7 +298,7 @@ def build_kernel(
       "lhs": jax.ShapeDtypeStruct((stages, *tile_shape(block_tiling.mk, tma_tiling.mk)), lhs_dtype),
       "rhs": jax.ShapeDtypeStruct((stages, *tile_shape(block_tiling.kn, tma_tiling.kn)), rhs_dtype),
   }
-  compute_scratch_shapes |= wgmma_impl.smem_shape_extra(block_tiling, tma_tiling, lhs_dtype, rhs_dtype, rhs_transpose)
+  compute_scratch_shapes |= wgmma_impl.smem_shape_extra(block_tiling, tma_tiling, lhs_dtype, rhs_dtype, out_dtype, rhs_transpose)
 
   epilogue_scratch_shapes = {
       "acc": jax.ShapeDtypeStruct(out_tile.shape, out_tile.dtype),
@@ -301,6 +310,8 @@ def build_kernel(
   def _main(ctx, a_device, b_device, c_device,
             smem_union: mosaic_gpu.Union[mosaic_gpu.RefTree]):
     compute_smem, epilogue_smem = smem_union.members
+    mlir_out_type = mlir.dtype_to_ir_type(out_tile.dtype)
+
 
     memref.assume_alignment(c_device, 16)
 
@@ -340,8 +351,7 @@ def build_kernel(
             **common_copy_args,
         )
 
-    accs = wgmma_impl.zero_accs(block_tiling.m, block_tiling.n)
-
+    accs = wgmma_impl.zero_accs(block_tiling.m, block_tiling.n, mlir_out_type)
     with ctx.named_region("TMA warmup"):
       for i in range(stages):
         fetch(c(i), c(i))
@@ -360,7 +370,7 @@ def build_kernel(
             WGMMALayout.COL_MAJOR if rhs_transpose else WGMMALayout.ROW_MAJOR
         )
         accs = wgmma_impl.wgmma(
-            compute_smem, accs, rhs_smem_order, a_slice, b_slice)
+            compute_smem, accs, rhs_smem_order, a_slice, b_slice, mlir_out_type=mlir_out_type)
 
       with ctx.named_region("TMA start"):
         tma_ki = arith.addi(ki, c(stages - 1))
@@ -426,7 +436,7 @@ def build_kernel(
           swizzle_source = arith.shli(arith.remui(m_row_idx, c(8)), c(2))
           n_acc = arith.xori(n_load, swizzle_source)
           acc_part = vector.load(
-              ir.VectorType.get((vector_len,), f32),
+              ir.VectorType.get((vector_len,), mlir_out_type),
               acc_smem,
               [m_tile, col_group, m_within_tile, n_acc],
           )
@@ -446,7 +456,7 @@ def build_kernel(
           jax.ShapeDtypeStruct((m, k), lhs_dtype),
           jax.ShapeDtypeStruct((n, k) if rhs_transpose else (k, n), rhs_dtype),
       ),
-      jax.ShapeDtypeStruct((m, n), jnp.float32),
+      jax.ShapeDtypeStruct((m, n), out_dtype),
       smem_shape,
       profiler_spec,
   )
@@ -470,6 +480,7 @@ def verify(
     profile=False,
     lhs_dtype=jnp.float16,
     rhs_dtype=jnp.float16,
+    out_dtype=jnp.float32,
     rhs_transpose=False,
     precision: F32Precision = F32Precision.DEFAULT,
 ):
@@ -499,6 +510,7 @@ def verify(
   f = build_kernel(
       m, n, k,
       jnp.dtype(lhs_dtype), jnp.dtype(rhs_dtype),
+      out_dtype=jnp.dtype(out_dtype),
       stages=stages,
       tile_m=tile_m,
       tile_n=tile_n,
@@ -520,7 +532,7 @@ def verify(
     )
   ref = jax.lax.dot_general(
       x, y, dimension_numbers,
-      preferred_element_type=jnp.float32,
+      preferred_element_type=out_dtype,
   )
   np.testing.assert_allclose(z, ref, atol=1e-3, rtol=1e-3)
   return runtime
