@@ -488,6 +488,7 @@ class WGMMATest(TestCase):
       n=(32, 64, 128, 192),
       k_steps=(1, 2),
       tma_inputs=(False, True),
+      out_dtype_cls=(ir.F16Type, ir.F32Type),
   )
   def test_wgmma(
       self,
@@ -498,7 +499,11 @@ class WGMMATest(TestCase):
       lhs_transpose,
       rhs_transpose,
       tma_inputs,
+      out_dtype_cls,
   ):
+    if out_dtype_cls is ir.F16Type and mlir_dtype_cls is ir.F32Type:
+      raise self.skipTest("Incompatible types")
+
     mlir_dtype = mlir_dtype_cls.get()
     if ir.F32Type.isinstance(mlir_dtype):  # We actually use tf32 instead
       jax_dtype = jnp.float32
@@ -580,7 +585,7 @@ class WGMMATest(TestCase):
                 dst=memref_slice(rhs_smem, (ki, ni)),
                 swizzle=128,
             )
-      init_acc = mgpu.WGMMAAccumulator.zero(m=m, n=n)
+      init_acc = mgpu.WGMMAAccumulator.zero(m=m, n=n, dtype=out_dtype_cls.get())
       acc = mgpu.wgmma(
           init_acc, lhs_smem, rhs_smem,
           a_order=lhs_order, b_order=rhs_order,

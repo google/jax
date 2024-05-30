@@ -570,7 +570,7 @@ class FragmentedArray:
     cols_per_tile = 128 // bw
     expected_shape = [m // 64, n // cols_per_tile, 64, cols_per_tile]
     if ir.MemRefType(ref.type).shape != expected_shape:
-      raise ValueError(ref.type, (m, n))
+      raise ValueError(ref.type, (m, n), expected_shape)
     for get, _, idxs in self.transfer_tiled(self.shape, dtype, swizzle):
       vector.store(get(self.registers), ref, idxs)
 

@@ -53,11 +53,11 @@ class WGMMAAccumulator:
       nvvm.wgmma_fence_aligned()
 
   @classmethod
-  def zero(cls, m, n):
+  def zero(cls, m, n, dtype=None):
     if m % 64 or n % 8:
       raise ValueError
     f32 = ir.F32Type.get()
-    zero = arith.constant(f32, ir.FloatAttr.get(f32, 0.0))
+    zero = arith.constant(dtype, ir.FloatAttr.get(dtype or f32, 0.0))
     return cls(
         _value=mgpu.FragmentedArray.splat(zero, (m, n), mgpu.WGMMA_LAYOUT)
     )
@@ -155,8 +155,8 @@ def wgmma_m64k128B(
     b_k_stride: int,
     n: int,
     element_type: ir.Type,
+    out_ty: ir.Type,
 ):
-  f32 = ir.F32Type.get()
   i32 = ir.IntegerType.get_signless(32)
   i64 = ir.IntegerType.get_signless(64)
   index = ir.IndexType.get()
@@ -218,7 +218,7 @@ def wgmma_m64k128B(
   el_ty = element_type
   k_instr = 32 // bytewidth(element_type)
   wgmma_instr = (
-      f"wgmma.mma_async.sync.aligned.m64n{n}k{k_instr}.f32.{el_ty}.{el_ty} "
+      f"wgmma.mma_async.sync.aligned.m64n{n}k{k_instr}.{out_ty}.{el_ty}.{el_ty} "
       f"{acc_reg_vector}, {a_regs}, {b_desc_reg}, p, {imm_regs};"
   )
   ptx = f"{{ .reg .pred p; setp.ne.b32 p, {use_out_reg}, 0; {wgmma_instr} }}\n"
@@ -245,7 +245,7 @@ def wgmma_m64k128B(
       for pos in range(2)
   ]
   acc_struct_type = ir.Type.parse(
-      f"!llvm.struct<({','.join('f32' for _ in acc_regs)})>"
+      f"!llvm.struct<({','.join(f'{out_ty}' for _ in acc_regs)})>"
   )
   for i in range(4):
     # Slice out the relevant part of A or advance the A descriptor.
@@ -275,11 +275,11 @@ def wgmma_m64k128B(
         has_side_effects=True,
     )
     acc_regs = [
-        llvm.extractvalue(f32, acc_struct, [i]) for i in range(len(acc_regs))
+        llvm.extractvalue(out_ty, acc_struct, [i]) for i in range(len(acc_regs))
     ]
   acc_vec_regs = []
   for first, second in zip(acc_regs[::2], acc_regs[1::2]):
-    vec = llvm.mlir_undef(ir.VectorType.get((2,), f32))
+    vec = llvm.mlir_undef(ir.VectorType.get((2,), out_ty))
     vec = llvm.insertelement(vec, first, position=lc(0))
     vec = llvm.insertelement(vec, second, position=lc(1))
     acc_vec_regs.append(vec)
@@ -299,6 +299,7 @@ def wgmma(
     b,
     *,
     # Order only applies within each tile!
+    mlir_out_type: ir.Type | None = None,
     a_order: WGMMALayout | None = None,
     b_order: WGMMALayout = WGMMALayout.ROW_MAJOR,
 ):
@@ -368,6 +369,7 @@ def wgmma(
       element_type=ir.FloatTF32Type.get()
       if ir.F32Type.isinstance(element_type)
       else element_type,
+      out_ty=mlir_out_type or ir.F32Type.get(),
   )
   if a_in_regs:
     wgmma_params["a_k_stride"] = wgmma_params["a_transpose"] = None
