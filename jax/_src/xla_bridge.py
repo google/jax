@@ -791,9 +791,9 @@ for _platform, _alias in _platform_aliases.items():
 
 
 def known_platforms() -> set[str]:
-  platforms = set()
-  platforms |= _nonexperimental_plugins
-  platforms |= _experimental_plugins
+  platforms  = set()
+  platforms |= set(_nonexperimental_plugins)
+  platforms |= set(_experimental_plugins)
   platforms |= set(_backend_factories.keys())
   platforms |= set(_platform_aliases.values())
   return platforms
