@@ -58,8 +58,10 @@ class NNFunctionsTest(jtu.JaxTestCase):
       bias = None
 
     # Use a dummy lambda for mask_fn to disable flash attention.
-    out_ref, _ = sdpa(Q, K, V, bias, mask_fn=lambda x, mask: x)
-    out, _ = sdpa(Q, K, V, bias)
+    out_ref, probs_ref = sdpa(Q, K, V, bias, mask_fn=lambda x, mask: x)
+    out, probs = sdpa(Q, K, V, bias)
+    self.assertIsNotNone(probs_ref)
+    self.assertIsNone(probs)
     self.assertAllClose(out_ref, out)
 
   @parameterized.parameters(False, True)
@@ -115,13 +117,18 @@ class NNFunctionsTest(jtu.JaxTestCase):
     # For the reference, use the causal mask explicitly and a dummy lambda for
     # dropout_fn to disable flash attention.
     causal_mask = _causal_mask(T, jnp.bfloat16)
-    out_ref, _ = sdpa(Q, K, V, bias, causal_mask, dropout_fn=lambda x: x)
+    out_ref, probs_ref = sdpa(
+        Q, K, V, bias, causal_mask, dropout_fn=lambda x: x
+    )
+    self.assertIsNotNone(probs_ref)
 
     # Test runtime generated causal mask
-    out, _ = sdpa(Q, K, V, bias, mask_fn=nn.SdpaCausalMask())
+    out, probs = sdpa(Q, K, V, bias, mask_fn=nn.SdpaCausalMask())
+    self.assertIsNone(probs)
     self.assertAllClose(out_ref, out, atol=atol)
     # Test user-given causal mask
-    out, _ = sdpa(Q, K, V, bias, causal_mask)
+    out, probs = sdpa(Q, K, V, bias, causal_mask)
+    self.assertIsNone(probs)
     self.assertAllClose(out_ref, out, atol=atol)
 
   @parameterized.parameters(False, True)

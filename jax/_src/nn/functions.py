@@ -918,11 +918,10 @@ def scaled_dot_product_attention(
       elif mask is not None:
         bias = mask
 
-      # TODO(kaixih@nvidia): We set is_training to True for now. This argument
-      # will be removed later and then we should remove it as well.
       encoded = dot_product_attention(
           query, key, value, bias, None, scale=scale_val, mask_type=mask_type,
-          seed=seed, dropout_rate=rate, is_training=True)
+          seed=seed, dropout_rate=rate
+      )
       return encoded, None
     else:
       warnings.warn("The flash attention cannot be used because unsupported"
