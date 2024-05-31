@@ -74,6 +74,13 @@ if RUNTIME_PATH.exists():
   os.environ["MOSAIC_GPU_RUNTIME_LIB_PATH"] = str(RUNTIME_PATH)
 
 
+mosaic_gpu_ptx_log = config.define_bool_state(
+    name="mosaic_gpu_ptx_log",
+    default=config.bool_env("MOSAIC_GPU_PTX_LOG", False),
+    help="Enables ptxas related logging.",
+)
+
+
 mosaic_gpu_p = jax.core.Primitive("mosaic_gpu_p")
 mosaic_gpu_p.multiple_results = True
 
@@ -617,6 +624,9 @@ def as_gpu_kernel(
     smem_scratch_shape: ShapeTree | Union[ShapeTree],
     prof_spec: profiler.ProfilerSpec | None = None,
 ):
+  if mosaic_gpu_ptx_log.value:
+    mosaic_gpu_lib._mosaic_gpu_ext._enable_ptx_log()
+
   if isinstance(in_shape, list):
     in_shape = tuple(in_shape)
   elif not isinstance(in_shape, tuple):

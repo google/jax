@@ -27,7 +27,16 @@ limitations under the License.
 #include "llvm/include/llvm/ADT/SmallVector.h"
 #include "llvm/include/llvm/Support/CodeGen.h"
 #include "llvm/include/llvm/Support/TargetSelect.h"
+#include "mlir/include/mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/include/mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/include/mlir/Conversion/ComplexToLLVM/ComplexToLLVM.h"
+#include "mlir/include/mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
+#include "mlir/include/mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
+#include "mlir/include/mlir/Conversion/MathToLLVM/MathToLLVM.h"
+#include "mlir/include/mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
+#include "mlir/include/mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/include/mlir/Conversion/Passes.h"
+#include "mlir/include/mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/include/mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/include/mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -72,6 +81,15 @@ void InitContext(mlir::MLIRContext* context) {
                   mlir::gpu::GPUDialect, mlir::nvgpu::NVGPUDialect,
                   mlir::NVVM::NVVMDialect, mlir::LLVM::LLVMDialect>();
   mlir::gpu::registerOffloadingLLVMTranslationInterfaceExternalModels(registry);
+  mlir::registerConvertNVVMToLLVMInterface(registry);
+  registerConvertComplexToLLVMInterface(registry);
+  mlir::registerConvertMemRefToLLVMInterface(registry);
+  mlir::registerConvertMathToLLVMInterface(registry);
+  mlir::registerConvertFuncToLLVMInterface(registry);
+  mlir::index::registerConvertIndexToLLVMInterface(registry);
+  mlir::cf::registerConvertControlFlowToLLVMInterface(registry);
+  mlir::ub::registerConvertUBToLLVMInterface(registry);  // Arith needs this
+  mlir::arith::registerConvertArithToLLVMInterface(registry);
   mlir::NVVM::registerNVVMTargetInterfaceExternalModels(registry);
   mlir::registerBuiltinDialectTranslation(registry);
   mlir::registerGPUDialectTranslation(registry);

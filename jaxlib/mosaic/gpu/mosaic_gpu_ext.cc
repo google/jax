@@ -18,10 +18,11 @@ limitations under the License.
 #include "nanobind/nanobind.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/synchronization/mutex.h"
+#include "llvm/include/llvm/Support/Debug.h"
+#include "llvm/include/llvm/Support/Error.h"
 #include "jaxlib/gpu/vendor.h"
 #include "jaxlib/kernel_nanobind_helpers.h"
 #include "xla/service/custom_call_status.h"
-
 namespace jax::cuda {
 namespace {
 
@@ -57,6 +58,15 @@ NB_MODULE(_mosaic_gpu_ext, m) {
   });
   m.def("_record_event_capsule",
         []() { return EncapsulateFunction(EventRecordCall); });
+
+  m.def("_enable_ptx_log", [] () {
+#ifdef NDEBUG
+    llvm::report_fatal_error("Built without NDEBUG, can't enable ptx logging.");
+#else
+    llvm::DebugFlag = true;
+    llvm::setCurrentDebugType("serialize-to-llvm");
+#endif
+  });
 }
 
 }  // namespace
