@@ -1707,7 +1707,8 @@ class DynamicJaxprTracer(core.Tracer):
     origin = ("The error occurred while tracing the function "
               f"{dbg.func_src_info or '<unknown>'} for {dbg.traced_for}. ")
     arg_info = arg_info_all(dbg)
-    if invar_pos and arg_info:
+    # TODO(mattjj): figure out when not (invar_pos < len(arg_info))
+    if invar_pos and arg_info and all(i < len(arg_info) for i in invar_pos):
       arg_info = [arg_info[i] for i in invar_pos]
       arg_names = [f'{name}{keystr(path)}' for name, path in arg_info]
       if len(arg_names) == 1:
