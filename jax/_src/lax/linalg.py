@@ -59,6 +59,10 @@ xops = xla_client.ops
 
 TFun = TypeVar('TFun', bound=Callable[..., Any])
 
+# TODO: Remove this, once the minimum supported version of jaxlib
+#       is updated to higher than 0.4.28
+has_xla_ffi_support = jaxlib_version > (0, 4, 28)
+
 # traceables
 
 def cholesky(x: Array, *, symmetrize_input: bool = True) -> Array:
@@ -2303,32 +2307,47 @@ def _schur_cpu_lowering(ctx, operand, *, compute_schur_vectors, sort_eig_vals,
                                 sort=sort_eig_vals,
                                 select=select_callable,
                                 a_shape_vals=a_shape_vals)
-
-  # Number of return values depends on value of sort_eig_vals.
-  T, vs, *_, info = gees_result
+  if has_xla_ffi_support:
+    schur_form, _eig_vals, schur_vectors, _selected_eig_vals, info = gees_result
+  else:
+    # Number of return values depends on value of sort_eig_vals.
+    schur_form, schur_vectors, *_, info = gees_result
 
   ok = mlir.compare_hlo(
       info, mlir.full_like_aval(ctx, 0, ShapedArray(batch_dims, np.dtype(np.int32))),
       "EQ", "SIGNED")
 
-  select_T_aval = ShapedArray(batch_dims + (1, 1), np.dtype(np.bool_))
-  T = _broadcasting_select_hlo(
+  select_schur_form_aval = ShapedArray(batch_dims + (1, 1), np.dtype(np.bool_))
+  schur_form = _broadcasting_select_hlo(
       ctx,
-      mlir.broadcast_in_dim(ctx, ok, select_T_aval,
-                            broadcast_dimensions=range(len(batch_dims))),
-      select_T_aval,
-      T, ctx.avals_out[0],_nan_like_hlo(ctx, ctx.avals_out[0]), ctx.avals_out[0])
-  output = [T]
+      mlir.broadcast_in_dim(
+          ctx,
+          ok,
+          select_schur_form_aval,
+          broadcast_dimensions=range(len(batch_dims)),
+      ),
+      select_schur_form_aval,
+      schur_form,
+      ctx.avals_out[0],
+      _nan_like_hlo(ctx, ctx.avals_out[0]),
+      ctx.avals_out[0],
+  )
+  output = [schur_form]
   if compute_schur_vectors:
     select_vs_aval = ShapedArray(batch_dims + (1, 1), np.dtype(np.bool_))
-    vs = _broadcasting_select_hlo(
+    schur_vectors = _broadcasting_select_hlo(
         ctx,
-        mlir.broadcast_in_dim(ctx, ok, select_vs_aval,
-                              broadcast_dimensions=range(len(batch_dims))),
+        mlir.broadcast_in_dim(
+            ctx, ok, select_vs_aval, broadcast_dimensions=range(len(batch_dims))
+        ),
         select_vs_aval,
-        vs, ctx.avals_out[1], _nan_like_hlo(ctx, ctx.avals_out[1]), ctx.avals_out[1])
+        schur_vectors,
+        ctx.avals_out[1],
+        _nan_like_hlo(ctx, ctx.avals_out[1]),
+        ctx.avals_out[1],
+    )
 
-    output.append(vs)
+    output.append(schur_vectors)
 
   return output
 
