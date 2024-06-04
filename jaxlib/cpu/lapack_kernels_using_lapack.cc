@@ -15,116 +15,367 @@ limitations under the License.
 
 #include "jaxlib/cpu/lapack_kernels.h"
 
+#include <type_traits>
+
 // From a Python binary, JAX obtains its LAPACK/BLAS kernels from Scipy, but
 // a C++ user should link against LAPACK directly. This is needed when using
 // JAX-generated HLO from C++.
 
+namespace ffi = xla::ffi;
+
 extern "C" {
 
-jax::Trsm<float>::FnType strsm_;
-jax::Trsm<double>::FnType dtrsm_;
-jax::Trsm<std::complex<float>>::FnType ctrsm_;
-jax::Trsm<std::complex<double>>::FnType ztrsm_;
+jax::TriMatrixEquationSolver<ffi::DataType::F32>::FnType strsm_;
+jax::TriMatrixEquationSolver<ffi::DataType::F64>::FnType dtrsm_;
+jax::TriMatrixEquationSolver<ffi::DataType::C64>::FnType ctrsm_;
+jax::TriMatrixEquationSolver<ffi::DataType::C128>::FnType ztrsm_;
 
-jax::Getrf<float>::FnType sgetrf_;
-jax::Getrf<double>::FnType dgetrf_;
-jax::Getrf<std::complex<float>>::FnType cgetrf_;
-jax::Getrf<std::complex<double>>::FnType zgetrf_;
+jax::LuDecomposition<ffi::DataType::F32>::FnType sgetrf_;
+jax::LuDecomposition<ffi::DataType::F64>::FnType dgetrf_;
+jax::LuDecomposition<ffi::DataType::C64>::FnType cgetrf_;
+jax::LuDecomposition<ffi::DataType::C128>::FnType zgetrf_;
 
-jax::Geqrf<float>::FnType sgeqrf_;
-jax::Geqrf<double>::FnType dgeqrf_;
-jax::Geqrf<std::complex<float>>::FnType cgeqrf_;
-jax::Geqrf<std::complex<double>>::FnType zgeqrf_;
+jax::QrFactorization<ffi::DataType::F32>::FnType sgeqrf_;
+jax::QrFactorization<ffi::DataType::F64>::FnType dgeqrf_;
+jax::QrFactorization<ffi::DataType::C64>::FnType cgeqrf_;
+jax::QrFactorization<ffi::DataType::C128>::FnType zgeqrf_;
 
-jax::Orgqr<float>::FnType sorgqr_;
-jax::Orgqr<double>::FnType dorgqr_;
-jax::Orgqr<std::complex<float>>::FnType cungqr_;
-jax::Orgqr<std::complex<double>>::FnType zungqr_;
+jax::OrthogonalQr<ffi::DataType::F32>::FnType sorgqr_;
+jax::OrthogonalQr<ffi::DataType::F64>::FnType dorgqr_;
+jax::OrthogonalQr<ffi::DataType::C64>::FnType cungqr_;
+jax::OrthogonalQr<ffi::DataType::C128>::FnType zungqr_;
 
-jax::Potrf<float>::FnType spotrf_;
-jax::Potrf<double>::FnType dpotrf_;
-jax::Potrf<std::complex<float>>::FnType cpotrf_;
-jax::Potrf<std::complex<double>>::FnType zpotrf_;
+jax::CholeskyFactorization<ffi::DataType::F32>::FnType spotrf_;
+jax::CholeskyFactorization<ffi::DataType::F64>::FnType dpotrf_;
+jax::CholeskyFactorization<ffi::DataType::C64>::FnType cpotrf_;
+jax::CholeskyFactorization<ffi::DataType::C128>::FnType zpotrf_;
 
-jax::RealGesdd<float>::FnType sgesdd_;
-jax::RealGesdd<double>::FnType dgesdd_;
-jax::ComplexGesdd<std::complex<float>>::FnType cgesdd_;
-jax::ComplexGesdd<std::complex<double>>::FnType zgesdd_;
+jax::SingularValueDecomposition<ffi::DataType::F32>::FnType sgesdd_;
+jax::SingularValueDecomposition<ffi::DataType::F64>::FnType dgesdd_;
+jax::SingularValueDecompositionComplex<ffi::DataType::C64>::FnType cgesdd_;
+jax::SingularValueDecompositionComplex<ffi::DataType::C128>::FnType zgesdd_;
 
-jax::RealSyevd<float>::FnType ssyevd_;
-jax::RealSyevd<double>::FnType dsyevd_;
-jax::ComplexHeevd<std::complex<float>>::FnType cheevd_;
-jax::ComplexHeevd<std::complex<double>>::FnType zheevd_;
+jax::EigenvalueDecompositionSymmetric<ffi::DataType::F32>::FnType ssyevd_;
+jax::EigenvalueDecompositionSymmetric<ffi::DataType::F64>::FnType dsyevd_;
+jax::EigenvalueDecompositionHermitian<ffi::DataType::C64>::FnType cheevd_;
+jax::EigenvalueDecompositionHermitian<ffi::DataType::C128>::FnType zheevd_;
 
-jax::RealGeev<float>::FnType sgeev_;
-jax::RealGeev<double>::FnType dgeev_;
-jax::ComplexGeev<std::complex<float>>::FnType cgeev_;
-jax::ComplexGeev<std::complex<double>>::FnType zgeev_;
+jax::EigenvalueDecomposition<ffi::DataType::F32>::FnType sgeev_;
+jax::EigenvalueDecomposition<ffi::DataType::F64>::FnType dgeev_;
+jax::EigenvalueDecompositionComplex<ffi::DataType::C64>::FnType cgeev_;
+jax::EigenvalueDecompositionComplex<ffi::DataType::C128>::FnType zgeev_;
 
-jax::RealGees<float>::FnType sgees_;
-jax::RealGees<double>::FnType dgees_;
-jax::ComplexGees<std::complex<float>>::FnType cgees_;
-jax::ComplexGees<std::complex<double>>::FnType zgees_;
+jax::SchurDecomposition<ffi::DataType::F32>::FnType sgees_;
+jax::SchurDecomposition<ffi::DataType::F64>::FnType dgees_;
+jax::SchurDecompositionComplex<ffi::DataType::C64>::FnType cgees_;
+jax::SchurDecompositionComplex<ffi::DataType::C128>::FnType zgees_;
 
-jax::Gehrd<float>::FnType sgehrd_;
-jax::Gehrd<double>::FnType dgehrd_;
-jax::Gehrd<std::complex<float>>::FnType cgehrd_;
-jax::Gehrd<std::complex<double>>::FnType zgehrd_;
+jax::HessenbergDecomposition<ffi::DataType::F32>::FnType sgehrd_;
+jax::HessenbergDecomposition<ffi::DataType::F64>::FnType dgehrd_;
+jax::HessenbergDecomposition<ffi::DataType::C64>::FnType cgehrd_;
+jax::HessenbergDecomposition<ffi::DataType::C128>::FnType zgehrd_;
 
-jax::Sytrd<float>::FnType ssytrd_;
-jax::Sytrd<double>::FnType dsytrd_;
-jax::Sytrd<std::complex<float>>::FnType chetrd_;
-jax::Sytrd<std::complex<double>>::FnType zhetrd_;
+jax::TridiagonalReduction<ffi::DataType::F32>::FnType ssytrd_;
+jax::TridiagonalReduction<ffi::DataType::F64>::FnType dsytrd_;
+jax::TridiagonalReduction<ffi::DataType::C64>::FnType chetrd_;
+jax::TridiagonalReduction<ffi::DataType::C128>::FnType zhetrd_;
 
 }  // extern "C"
 
 namespace jax {
 
+#define JAX_KERNEL_FNTYPE_MISMATCH_MSG "FFI Kernel FnType mismatch"
+
+static_assert(
+    std::is_same_v<jax::TriMatrixEquationSolver<ffi::DataType::F32>::FnType,
+                   jax::Trsm<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TriMatrixEquationSolver<ffi::DataType::F64>::FnType,
+                   jax::Trsm<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TriMatrixEquationSolver<ffi::DataType::C64>::FnType,
+                   jax::Trsm<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TriMatrixEquationSolver<ffi::DataType::C128>::FnType,
+                   jax::Trsm<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::LuDecomposition<ffi::DataType::F32>::FnType,
+                             jax::Getrf<float>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::LuDecomposition<ffi::DataType::F64>::FnType,
+                             jax::Getrf<double>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::LuDecomposition<ffi::DataType::C64>::FnType,
+                             jax::Getrf<std::complex<float>>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::LuDecomposition<ffi::DataType::C128>::FnType,
+                             jax::Getrf<std::complex<double>>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::QrFactorization<ffi::DataType::F32>::FnType,
+                             jax::Geqrf<float>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::QrFactorization<ffi::DataType::F64>::FnType,
+                             jax::Geqrf<double>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::QrFactorization<ffi::DataType::C64>::FnType,
+                             jax::Geqrf<std::complex<float>>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::QrFactorization<ffi::DataType::C128>::FnType,
+                             jax::Geqrf<std::complex<double>>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::OrthogonalQr<ffi::DataType::F32>::FnType,
+                             jax::Orgqr<float>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::OrthogonalQr<ffi::DataType::F64>::FnType,
+                             jax::Orgqr<double>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::OrthogonalQr<ffi::DataType::C64>::FnType,
+                             jax::Orgqr<std::complex<float>>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::OrthogonalQr<ffi::DataType::C128>::FnType,
+                             jax::Orgqr<std::complex<double>>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::CholeskyFactorization<ffi::DataType::F32>::FnType,
+                   jax::Potrf<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::CholeskyFactorization<ffi::DataType::F64>::FnType,
+                   jax::Potrf<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::CholeskyFactorization<ffi::DataType::C64>::FnType,
+                   jax::Potrf<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::CholeskyFactorization<ffi::DataType::C128>::FnType,
+                   jax::Potrf<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SingularValueDecomposition<ffi::DataType::F32>::FnType,
+                   jax::RealGesdd<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SingularValueDecomposition<ffi::DataType::F64>::FnType,
+                   jax::RealGesdd<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::SingularValueDecompositionComplex<ffi::DataType::C64>::FnType,
+        jax::ComplexGesdd<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::SingularValueDecompositionComplex<ffi::DataType::C128>::FnType,
+        jax::ComplexGesdd<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionSymmetric<ffi::DataType::F32>::FnType,
+        jax::RealSyevd<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionSymmetric<ffi::DataType::F64>::FnType,
+        jax::RealSyevd<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionHermitian<ffi::DataType::C64>::FnType,
+        jax::ComplexHeevd<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionHermitian<ffi::DataType::C128>::FnType,
+        jax::ComplexHeevd<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::EigenvalueDecomposition<ffi::DataType::F32>::FnType,
+                   jax::RealGeev<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::EigenvalueDecomposition<ffi::DataType::F64>::FnType,
+                   jax::RealGeev<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionComplex<ffi::DataType::C64>::FnType,
+        jax::ComplexGeev<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionComplex<ffi::DataType::C128>::FnType,
+        jax::ComplexGeev<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SchurDecomposition<ffi::DataType::F32>::FnType,
+                   jax::RealGees<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SchurDecomposition<ffi::DataType::F64>::FnType,
+                   jax::RealGees<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SchurDecompositionComplex<ffi::DataType::C64>::FnType,
+                   jax::ComplexGees<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SchurDecompositionComplex<ffi::DataType::C128>::FnType,
+                   jax::ComplexGees<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::HessenbergDecomposition<ffi::DataType::F32>::FnType,
+                   jax::Gehrd<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::HessenbergDecomposition<ffi::DataType::F64>::FnType,
+                   jax::Gehrd<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::HessenbergDecomposition<ffi::DataType::C64>::FnType,
+                   jax::Gehrd<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::HessenbergDecomposition<ffi::DataType::C128>::FnType,
+                   jax::Gehrd<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::F32>::FnType,
+                   jax::Sytrd<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::F64>::FnType,
+                   jax::Sytrd<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::C64>::FnType,
+                   jax::Sytrd<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::C128>::FnType,
+                   jax::Sytrd<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+
+#undef JAX_KERNEL_FNTYPE_MISMATCH_MSG
+
 static auto init = []() -> int {
-  Trsm<float>::fn = strsm_;
-  Trsm<double>::fn = dtrsm_;
-  Trsm<std::complex<float>>::fn = ctrsm_;
-  Trsm<std::complex<double>>::fn = ztrsm_;
-  Getrf<float>::fn = sgetrf_;
-  Getrf<double>::fn = dgetrf_;
-  Getrf<std::complex<float>>::fn = cgetrf_;
-  Getrf<std::complex<double>>::fn = zgetrf_;
-  Geqrf<float>::fn = sgeqrf_;
-  Geqrf<double>::fn = dgeqrf_;
-  Geqrf<std::complex<float>>::fn = cgeqrf_;
-  Geqrf<std::complex<double>>::fn = zgeqrf_;
-  Orgqr<float>::fn = sorgqr_;
-  Orgqr<double>::fn = dorgqr_;
-  Orgqr<std::complex<float>>::fn = cungqr_;
-  Orgqr<std::complex<double>>::fn = zungqr_;
-  Potrf<float>::fn = spotrf_;
-  Potrf<double>::fn = dpotrf_;
-  Potrf<std::complex<float>>::fn = cpotrf_;
-  Potrf<std::complex<double>>::fn = zpotrf_;
-  RealGesdd<float>::fn = sgesdd_;
-  RealGesdd<double>::fn = dgesdd_;
-  ComplexGesdd<std::complex<float>>::fn = cgesdd_;
-  ComplexGesdd<std::complex<double>>::fn = zgesdd_;
-  RealSyevd<float>::fn = ssyevd_;
-  RealSyevd<double>::fn = dsyevd_;
-  ComplexHeevd<std::complex<float>>::fn = cheevd_;
-  ComplexHeevd<std::complex<double>>::fn = zheevd_;
-  RealGeev<float>::fn = sgeev_;
-  RealGeev<double>::fn = dgeev_;
-  ComplexGeev<std::complex<float>>::fn = cgeev_;
-  ComplexGeev<std::complex<double>>::fn = zgeev_;
-  RealGees<float>::fn = sgees_;
-  RealGees<double>::fn = dgees_;
-  ComplexGees<std::complex<float>>::fn = cgees_;
-  ComplexGees<std::complex<double>>::fn = zgees_;
-  Gehrd<float>::fn = sgehrd_;
-  Gehrd<double>::fn = dgehrd_;
-  Gehrd<std::complex<float>>::fn = cgehrd_;
-  Gehrd<std::complex<double>>::fn = zgehrd_;
-  Sytrd<float>::fn = ssytrd_;
-  Sytrd<double>::fn = dsytrd_;
-  Sytrd<std::complex<float>>::fn = chetrd_;
-  Sytrd<std::complex<double>>::fn = zhetrd_;
+  AssignKernelFn<Trsm<float>>(strsm_);
+  AssignKernelFn<Trsm<double>>(dtrsm_);
+  AssignKernelFn<Trsm<std::complex<float>>>(ctrsm_);
+  AssignKernelFn<Trsm<std::complex<double>>>(ztrsm_);
+
+  AssignKernelFn<Getrf<float>>(sgetrf_);
+  AssignKernelFn<Getrf<double>>(dgetrf_);
+  AssignKernelFn<Getrf<std::complex<float>>>(cgetrf_);
+  AssignKernelFn<Getrf<std::complex<double>>>(zgetrf_);
+
+  AssignKernelFn<Geqrf<float>>(sgeqrf_);
+  AssignKernelFn<Geqrf<double>>(dgeqrf_);
+  AssignKernelFn<Geqrf<std::complex<float>>>(cgeqrf_);
+  AssignKernelFn<Geqrf<std::complex<double>>>(zgeqrf_);
+
+  AssignKernelFn<Orgqr<float>>(sorgqr_);
+  AssignKernelFn<Orgqr<double>>(dorgqr_);
+  AssignKernelFn<Orgqr<std::complex<float>>>(cungqr_);
+  AssignKernelFn<Orgqr<std::complex<double>>>(zungqr_);
+
+  AssignKernelFn<Potrf<float>>(spotrf_);
+  AssignKernelFn<Potrf<double>>(dpotrf_);
+  AssignKernelFn<Potrf<std::complex<float>>>(cpotrf_);
+  AssignKernelFn<Potrf<std::complex<double>>>(zpotrf_);
+
+  AssignKernelFn<RealGesdd<float>>(sgesdd_);
+  AssignKernelFn<RealGesdd<double>>(dgesdd_);
+  AssignKernelFn<ComplexGesdd<std::complex<float>>>(cgesdd_);
+  AssignKernelFn<ComplexGesdd<std::complex<double>>>(zgesdd_);
+
+  AssignKernelFn<RealSyevd<float>>(ssyevd_);
+  AssignKernelFn<RealSyevd<double>>(dsyevd_);
+  AssignKernelFn<ComplexHeevd<std::complex<float>>>(cheevd_);
+  AssignKernelFn<ComplexHeevd<std::complex<double>>>(zheevd_);
+
+  AssignKernelFn<RealGeev<float>>(sgeev_);
+  AssignKernelFn<RealGeev<double>>(dgeev_);
+  AssignKernelFn<ComplexGeev<std::complex<float>>>(cgeev_);
+  AssignKernelFn<ComplexGeev<std::complex<double>>>(zgeev_);
+
+  AssignKernelFn<RealGees<float>>(sgees_);
+  AssignKernelFn<RealGees<double>>(dgees_);
+  AssignKernelFn<ComplexGees<std::complex<float>>>(cgees_);
+  AssignKernelFn<ComplexGees<std::complex<double>>>(zgees_);
+
+  AssignKernelFn<Gehrd<float>>(sgehrd_);
+  AssignKernelFn<Gehrd<double>>(dgehrd_);
+  AssignKernelFn<Gehrd<std::complex<float>>>(cgehrd_);
+  AssignKernelFn<Gehrd<std::complex<double>>>(zgehrd_);
+
+  AssignKernelFn<Sytrd<float>>(ssytrd_);
+  AssignKernelFn<Sytrd<double>>(dsytrd_);
+  AssignKernelFn<Sytrd<std::complex<float>>>(chetrd_);
+  AssignKernelFn<Sytrd<std::complex<double>>>(zhetrd_);
+
+  // FFI Kernels
+
+  AssignKernelFn<TriMatrixEquationSolver<ffi::DataType::F32>>(strsm_);
+  AssignKernelFn<TriMatrixEquationSolver<ffi::DataType::F64>>(dtrsm_);
+  AssignKernelFn<TriMatrixEquationSolver<ffi::DataType::C64>>(ctrsm_);
+  AssignKernelFn<TriMatrixEquationSolver<ffi::DataType::C128>>(ztrsm_);
+
+  AssignKernelFn<LuDecomposition<ffi::DataType::F32>>(sgetrf_);
+  AssignKernelFn<LuDecomposition<ffi::DataType::F64>>(dgetrf_);
+  AssignKernelFn<LuDecomposition<ffi::DataType::C64>>(cgetrf_);
+  AssignKernelFn<LuDecomposition<ffi::DataType::C128>>(zgetrf_);
+
+  AssignKernelFn<QrFactorization<ffi::DataType::F32>>(sgeqrf_);
+  AssignKernelFn<QrFactorization<ffi::DataType::F64>>(dgeqrf_);
+  AssignKernelFn<QrFactorization<ffi::DataType::C64>>(cgeqrf_);
+  AssignKernelFn<QrFactorization<ffi::DataType::C128>>(zgeqrf_);
+
+  AssignKernelFn<OrthogonalQr<ffi::DataType::F32>>(sorgqr_);
+  AssignKernelFn<OrthogonalQr<ffi::DataType::F64>>(dorgqr_);
+  AssignKernelFn<OrthogonalQr<ffi::DataType::C64>>(cungqr_);
+  AssignKernelFn<OrthogonalQr<ffi::DataType::C128>>(zungqr_);
+
+  AssignKernelFn<CholeskyFactorization<ffi::DataType::F32>>(spotrf_);
+  AssignKernelFn<CholeskyFactorization<ffi::DataType::F64>>(dpotrf_);
+  AssignKernelFn<CholeskyFactorization<ffi::DataType::C64>>(cpotrf_);
+  AssignKernelFn<CholeskyFactorization<ffi::DataType::C128>>(zpotrf_);
+
+  AssignKernelFn<SingularValueDecomposition<ffi::DataType::F32>>(sgesdd_);
+  AssignKernelFn<SingularValueDecomposition<ffi::DataType::F64>>(dgesdd_);
+  AssignKernelFn<SingularValueDecompositionComplex<ffi::DataType::C64>>(
+      cgesdd_);
+  AssignKernelFn<SingularValueDecompositionComplex<ffi::DataType::C128>>(
+      zgesdd_);
+
+  AssignKernelFn<EigenvalueDecompositionSymmetric<ffi::DataType::F32>>(ssyevd_);
+  AssignKernelFn<EigenvalueDecompositionSymmetric<ffi::DataType::F64>>(dsyevd_);
+  AssignKernelFn<EigenvalueDecompositionHermitian<ffi::DataType::C64>>(cheevd_);
+  AssignKernelFn<EigenvalueDecompositionHermitian<ffi::DataType::C128>>(
+      zheevd_);
+
+  AssignKernelFn<EigenvalueDecomposition<ffi::DataType::F32>>(sgeev_);
+  AssignKernelFn<EigenvalueDecomposition<ffi::DataType::F64>>(dgeev_);
+  AssignKernelFn<EigenvalueDecompositionComplex<ffi::DataType::C64>>(cgeev_);
+  AssignKernelFn<EigenvalueDecompositionComplex<ffi::DataType::C128>>(zgeev_);
+
+  AssignKernelFn<SchurDecomposition<ffi::DataType::F32>>(sgees_);
+  AssignKernelFn<SchurDecomposition<ffi::DataType::F64>>(dgees_);
+  AssignKernelFn<SchurDecompositionComplex<ffi::DataType::C64>>(cgees_);
+  AssignKernelFn<SchurDecompositionComplex<ffi::DataType::C128>>(zgees_);
+
+  AssignKernelFn<HessenbergDecomposition<ffi::DataType::F32>>(sgehrd_);
+  AssignKernelFn<HessenbergDecomposition<ffi::DataType::F64>>(dgehrd_);
+  AssignKernelFn<HessenbergDecomposition<ffi::DataType::C64>>(cgehrd_);
+  AssignKernelFn<HessenbergDecomposition<ffi::DataType::C128>>(zgehrd_);
+
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::F32>>(ssytrd_);
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::F64>>(dsytrd_);
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::C64>>(chetrd_);
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::C128>>(zhetrd_);
 
   return 0;
 }();
