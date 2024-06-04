@@ -61,8 +61,13 @@ from jax.sharding import PartitionSpec as P
 from jax._src import config
 from jax._src import test_util as jtu
 from jax._src.lib import cuda_versions
+from jax._src.lib import version as jaxlib_version
 
 config.parse_flags_with_absl()
+
+# TODO: Remove this, once the minimum supported version of jaxlib
+#       is updated to higher than 0.4.28
+has_xla_ffi_support = jaxlib_version > (0, 4, 28)
 
 def _is_required_cusolver_version_satisfied(required_version):
   if cuda_versions is None:
@@ -104,9 +109,17 @@ class CompatTest(bctu.CompatTestBase):
   def test_custom_call_coverage(self):
     """Tests that the back compat tests cover all the targets declared stable."""
     targets_to_cover = set(_export._CUSTOM_CALL_TARGETS_GUARANTEED_STABLE)
+    cpu_ffi_testdatas = [
+        cpu_cholesky_lapack_potrf.data_2024_05_31,
+        cpu_qr_lapack_geqrf.data_2024_05_31,
+        cpu_lu_lapack_getrf.data_2024_05_31,
+        cpu_svd_lapack_gesdd.data_2024_05_31,
+        cpu_triangular_solve_blas_trsm.data_2024_05_31,
+    ] if has_xla_ffi_support else []
     # Add here all the testdatas that should cover the targets guaranteed
     # stable
     covering_testdatas = [
+        *cpu_ffi_testdatas,
         cpu_cholesky_lapack_potrf.data_2023_06_19,
         cpu_eig_lapack_geev.data_2023_06_19,
         cpu_eigh_lapack_syev.data_2023_03_17,
@@ -166,7 +179,13 @@ class CompatTest(bctu.CompatTestBase):
     atol = dict(f32=1e-4, f64=1e-12, c64=1e-4, c128=1e-12)[dtype_name]
 
     data = self.load_testdata(cpu_cholesky_lapack_potrf.data_2023_06_19[dtype_name])
-    self.run_one_test(func, data, rtol=rtol, atol=atol)
+    expect_calls = [data.custom_call_targets[0] + "_ffi"] if has_xla_ffi_support else None
+    self.run_one_test(func, data, rtol=rtol, atol=atol,
+                      expect_current_custom_calls=expect_calls)
+    if has_xla_ffi_support:
+      # FFI Kernel test
+      data = self.load_testdata(cpu_cholesky_lapack_potrf.data_2024_05_31[dtype_name])
+      self.run_one_test(func, data, rtol=rtol, atol=atol)
 
   @parameterized.named_parameters(
       dict(testcase_name=f"_dtype={dtype_name}", dtype_name=dtype_name)
@@ -335,7 +354,17 @@ class CompatTest(bctu.CompatTestBase):
     func = lambda: CompatTest.qr_harness((3, 3), dtype)
     data = self.load_testdata(cpu_qr_lapack_geqrf.data_2023_03_17[dtype_name])
     rtol = dict(f32=1e-3, f64=1e-5, c64=1e-3, c128=1e-5)[dtype_name]
-    self.run_one_test(func, data, rtol=rtol)
+    expected_calls = (
+        [target + "_ffi" for target in data.custom_call_targets]
+        if has_xla_ffi_support
+        else None
+    )
+    self.run_one_test(func, data, rtol=rtol,
+                      expect_current_custom_calls=expected_calls)
+    if has_xla_ffi_support:
+      # FFI Kernel test
+      data = self.load_testdata(cpu_qr_lapack_geqrf.data_2024_05_31[dtype_name])
+      self.run_one_test(func, data, rtol=rtol)
 
   @parameterized.named_parameters(
       dict(testcase_name=f"_dtype={dtype_name}_{batched}",
@@ -405,9 +434,17 @@ class CompatTest(bctu.CompatTestBase):
     operand = np.reshape(np.arange(math.prod(shape), dtype=dtype), shape)
     rtol = dict(f32=1e-3, f64=1e-5, c64=1e-3, c128=1e-5)[dtype_name]
     atol = dict(f32=1e-4, f64=1e-12, c64=1e-4, c128=1e-12)[dtype_name]
+    expected_calls = [data.custom_call_targets[0] + "_ffi"] if has_xla_ffi_support else None
     self.run_one_test(func, data, rtol=rtol, atol=atol,
                       check_results=partial(self.check_lu_results, operand,
-                                            dtype=dtype))
+                                            dtype=dtype),
+                      expect_current_custom_calls=expected_calls)
+    if has_xla_ffi_support:
+      # FFI Kernel test
+      data = self.load_testdata(cpu_lu_lapack_getrf.data_2024_05_31[dtype_name])
+      self.run_one_test(func, data, rtol=rtol, atol=atol,
+                        check_results=partial(self.check_lu_results, operand,
+                                              dtype=dtype))
 
   def check_svd_results(self, input, res_run, res_exp,
                         rtol=None, atol=None):
@@ -524,9 +561,17 @@ class CompatTest(bctu.CompatTestBase):
     atol = dict(f32=1e-4, f64=1e-12, c64=1e-4, c128=1e-12)[dtype_name]
 
     data = self.load_testdata(cpu_svd_lapack_gesdd.data_2023_06_19[dtype_name])
+    expected_calls = [data.custom_call_targets[0] + "_ffi"] if has_xla_ffi_support else None
     self.run_one_test(func, data, rtol=rtol, atol=atol,
                       check_results=partial(self.check_svd_results,
-                                            input))
+                                            input),
+                      expect_current_custom_calls=expected_calls)
+    if has_xla_ffi_support:
+      # FFI Kernel test
+      data = self.load_testdata(cpu_svd_lapack_gesdd.data_2024_05_31[dtype_name])
+      self.run_one_test(func, data, rtol=rtol, atol=atol,
+                        check_results=partial(self.check_svd_results,
+                                              input))
 
   @jtu.parameterized_filterable(
     kwargs=[
@@ -562,8 +607,15 @@ class CompatTest(bctu.CompatTestBase):
       y = matmul(a, x) if left_side else matmul(x, a)
       self.assertArraysAllClose(y, jnp.broadcast_to(b, y.shape), rtol=rtol, atol=atol)
 
+    expected_calls = [data.custom_call_targets[0] + "_ffi"] if has_xla_ffi_support else None
     self.run_one_test(func, data, rtol=rtol, atol=atol,
-                      check_results=check_triangular_solve_results)
+                      check_results=check_triangular_solve_results,
+                      expect_current_custom_calls=expected_calls)
+    if has_xla_ffi_support:
+      # FFI Kernel test
+      data = self.load_testdata(cpu_triangular_solve_blas_trsm.data_2024_05_31[dtype_name])
+      self.run_one_test(func, data, rtol=rtol, atol=atol,
+                        check_results=check_triangular_solve_results)
 
   def test_approx_top_k(self):
     def func():
@@ -584,7 +636,7 @@ class CompatTest(bctu.CompatTestBase):
   def test_sharding(self):
     # Tests "Sharding", "SPMDShardToFullShape", "SPMDFullToShardShape" on TPU
     if not jtu.test_device_matches(["tpu"]) or len(jax.devices()) < 2:
-     self.skipTest("Test runs only on TPU with at least 2 devices")
+      self.skipTest("Test runs only on TPU with at least 2 devices")
 
     # Must use exactly 2 devices for expected outputs from ppermute
     devices = jax.devices()[:2]

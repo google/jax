@@ -16,23 +16,75 @@
 # via CustomCallWithLayout.
 
 from collections.abc import Sequence
+from enum import Enum
+from typing import Optional
 
-import numpy as np
-
-import jaxlib.mlir.ir as ir
 import jaxlib.mlir.dialects.stablehlo as hlo
+import jaxlib.mlir.ir as ir  # pylint: disable=consider-using-from-import
+import numpy as np
 
 from jaxlib import xla_client
 
+from .cpu import _lapack
+from .cpu._lapack import svd
 from .hlo_helpers import (
     custom_call, hlo_u8, hlo_s32,
     ensure_hlo_s32, hlo_add, hlo_min,
     DimensionSize, ShapeTypePair, mk_result_types_and_shapes,
 )
-from .cpu import _lapack
 
 for _name, _value in _lapack.registrations().items():
-  xla_client.register_custom_call_target(_name, _value, platform="cpu")
+  xla_client.register_custom_call_target(
+      _name,
+      _value,
+      platform="cpu",
+      api_version=(1 if _name.endswith("_ffi") else 0),
+  )
+
+
+def char_attr(c):
+  return ir.IntegerAttr.get(ir.IntegerType.get_unsigned(8), ord(c))
+
+
+def lapack_int_attr(value):
+  return ir.IntegerAttr.get(ir.IntegerType.get_signless(32), value)
+
+
+def enum_to_char_attr(e: Enum):
+  return ir.IntegerAttr.get(ir.IntegerType.get_unsigned(8), e.value)
+
+
+def matrix_side_attr(*, left_side: bool):
+  return char_attr("L" if left_side else "R")
+
+
+def matrix_uplo_attr(*, lower: bool):
+  return char_attr("L" if lower else "U")
+
+
+def matrix_transpose_attr(*, transpose: bool, conjugate: bool):
+  return char_attr(("C" if conjugate else "T") if transpose else "N")
+
+
+def matrix_diagonal_attr(*, unit_diag: bool):
+  return char_attr("U" if unit_diag else "N")
+
+
+def svd_computation_attr(
+    *, compute_uv: bool, full_matrices: Optional[bool] = True
+):
+  mode = "A"
+  if full_matrices is None:
+    full_matrices = True
+  if not compute_uv:
+    # We should assert that `full_matrices` is never True here.
+    # This should never happen because `full_matrices` can only be computed when
+    # `compute_uv` is True. However, at this point there are too many tests that
+    # rely on this behavior.
+    mode = "N"
+  elif not full_matrices:
+    mode = "S"
+  return char_attr(mode)
 
 
 # TODO(phawkins): it would be nice to avoid duplicating code for each type.
@@ -46,21 +98,17 @@ def trsm_hlo(dtype, alpha, a, b,
   _lapack.initialize()
   b_type = ir.RankedTensorType(b.type)
 
-  m, n = b_shape_vals[-2:]
   batch_dims_vals = b_shape_vals[:-2]
   num_bd = len(batch_dims_vals)
-  batch_size_val = hlo_s32(1)
-  for b_v in batch_dims_vals:
-    batch_size_val = hlo.multiply(batch_size_val, ensure_hlo_s32(b_v))
 
   if dtype == np.float32:
-    fn = "blas_strsm"
+    fn = "blas_strsm_ffi"
   elif dtype == np.float64:
-    fn = "blas_dtrsm"
+    fn = "blas_dtrsm_ffi"
   elif dtype == np.complex64:
-    fn = "blas_ctrsm"
+    fn = "blas_ctrsm_ffi"
   elif dtype == np.complex128:
-    fn = "blas_ztrsm"
+    fn = "blas_ztrsm_ffi"
   else:
     raise NotImplementedError(f"Unsupported dtype {dtype}")
 
@@ -73,14 +121,18 @@ def trsm_hlo(dtype, alpha, a, b,
   return custom_call(
       fn,
       result_types=result_types,
-      operands=[hlo_s32(int(left_side)), hlo_s32(int(lower)),
-       hlo_s32((2 if conj_a else 1) if trans_a else 0), hlo_s32(int(diag)),
-       ensure_hlo_s32(m), ensure_hlo_s32(n), batch_size_val,
-       alpha, a, b],
-      operand_layouts=[scalar_layout] * 8 + [layout] * 2,
+      operands=[a, b, alpha],
+      operand_layouts=[layout] * 2 + [scalar_layout],
       result_layouts=[layout],
-      operand_output_aliases={9: 0},
+      operand_output_aliases={1: 0},
       result_shapes=result_shapes,
+      backend_config={
+          "side": matrix_side_attr(left_side=left_side),
+          "uplo": matrix_uplo_attr(lower=lower),
+          "trans_x": matrix_transpose_attr(transpose=trans_a, conjugate=conj_a),
+          "diag": matrix_diagonal_attr(unit_diag=diag),
+      },
+      api_version=4,
   ).results
 
 
@@ -96,17 +148,16 @@ def getrf_hlo(dtype, a: ir.Value, *,
   m, n = a_shape_vals[-2:]
 
   if dtype == np.float32:
-    fn = "lapack_sgetrf"
+    fn = "lapack_sgetrf_ffi"
   elif dtype == np.float64:
-    fn = "lapack_dgetrf"
+    fn = "lapack_dgetrf_ffi"
   elif dtype == np.complex64:
-    fn = "lapack_cgetrf"
+    fn = "lapack_cgetrf_ffi"
   elif dtype == np.complex128:
-    fn = "lapack_zgetrf"
+    fn = "lapack_zgetrf_ffi"
   else:
     raise NotImplementedError(f"Unsupported dtype {dtype}")
 
-  scalar_layout = []
   layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
 
   i32_type = ir.IntegerType.get_signless(32)
@@ -117,22 +168,20 @@ def getrf_hlo(dtype, a: ir.Value, *,
   ]
   result_types, result_shapes = mk_result_types_and_shapes(shape_type_pairs)
 
-  batch_size_val = hlo_s32(1)
-  for b_v in batch_dims_vals:
-    batch_size_val = hlo.multiply(batch_size_val, ensure_hlo_s32(b_v))
-
   return custom_call(
       fn,
       result_types=result_types,
-      operands=[batch_size_val, ensure_hlo_s32(m), ensure_hlo_s32(n), a],
-      operand_layouts=[scalar_layout] * 3 + [layout],
+      operands=[a],
+      operand_layouts=[layout],
       result_layouts=[
         layout,
         tuple(range(num_bd, -1, -1)),
         tuple(range(num_bd - 1, -1, -1)),
       ],
-      operand_output_aliases={3: 0},
+      operand_output_aliases={0: 0},
       result_shapes=result_shapes,
+      backend_config={},
+      api_version=4,
   ).results
 
 # # ?geqrf: QR decomposition
@@ -150,27 +199,23 @@ def geqrf_hlo(dtype, a: ir.Value, *,
   num_bd = len(batch_dims_vals)
 
   if dtype == np.float32:
-    fn = "lapack_sgeqrf"
-    lwork = _lapack.lapack_sgeqrf_workspace(m, n)
+    fn = "lapack_sgeqrf_ffi"
+    lwork = _lapack.lapack_sgeqrf_workspace_ffi(m, n)
   elif dtype == np.float64:
-    fn = "lapack_dgeqrf"
-    lwork = _lapack.lapack_dgeqrf_workspace(m, n)
+    fn = "lapack_dgeqrf_ffi"
+    lwork = _lapack.lapack_dgeqrf_workspace_ffi(m, n)
   elif dtype == np.complex64:
-    fn = "lapack_cgeqrf"
-    lwork = _lapack.lapack_cgeqrf_workspace(m, n)
+    fn = "lapack_cgeqrf_ffi"
+    lwork = _lapack.lapack_cgeqrf_workspace_ffi(m, n)
   elif dtype == np.complex128:
-    fn = "lapack_zgeqrf"
-    lwork = _lapack.lapack_zgeqrf_workspace(m, n)
+    fn = "lapack_zgeqrf_ffi"
+    lwork = _lapack.lapack_zgeqrf_workspace_ffi(m, n)
   else:
     raise NotImplementedError(f"Unsupported dtype {dtype}")
 
-  scalar_layout = []
   layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
   i32_type = ir.IntegerType.get_signless(32)
 
-  batch_size_val = hlo_s32(1)
-  for b_v in batch_dims_vals:
-    batch_size_val = hlo.multiply(batch_size_val, ensure_hlo_s32(b_v))
   shape_type_pairs: Sequence[ShapeTypePair] = [
       (a_shape_vals, a_type.element_type),
       (batch_dims_vals + (min(m, n),), a_type.element_type),
@@ -181,16 +226,18 @@ def geqrf_hlo(dtype, a: ir.Value, *,
   out = custom_call(
       fn,
       result_types=result_types,
-      operands=[batch_size_val, hlo_s32(m), hlo_s32(n), hlo_s32(lwork), a],
-      operand_layouts=[scalar_layout] * 4 + [layout],
+      operands=[a],
+      operand_layouts=[layout],
       result_layouts=[
-        layout,
-        tuple(range(num_bd, -1, -1)),
-        tuple(range(num_bd - 1, -1, -1)),
-        [0],
+          layout,
+          tuple(range(num_bd, -1, -1)),
+          tuple(range(num_bd - 1, -1, -1)),
+          [0],
       ],
-      operand_output_aliases={4: 0},
+      operand_output_aliases={0: 0},
       result_shapes=result_shapes,
+      backend_config={},
+      api_version=4,
   ).results
   return out[:3]
 
@@ -209,29 +256,25 @@ def orgqr_hlo(dtype, a: ir.Value, tau, *,
   assert n != ir.ShapedType.get_dynamic_size()
   batch_dims_vals = dims_vals[:-2]
   num_bd = len(batch_dims_vals)
-  batch_size_val = hlo_s32(1)
-  for b_v in batch_dims_vals:
-    batch_size_val = hlo.multiply(batch_size_val, ensure_hlo_s32(b_v))
 
   k = tau_shape_vals[-1]
   assert type(k) is int
 
   if dtype == np.float32:
-    fn = "lapack_sorgqr"
-    lwork = _lapack.lapack_sorgqr_workspace(m, n, k)
+    fn = "lapack_sorgqr_ffi"
+    lwork = _lapack.lapack_sorgqr_workspace_ffi(m, n, k)
   elif dtype == np.float64:
-    fn = "lapack_dorgqr"
-    lwork = _lapack.lapack_dorgqr_workspace(m, n, k)
+    fn = "lapack_dorgqr_ffi"
+    lwork = _lapack.lapack_dorgqr_workspace_ffi(m, n, k)
   elif dtype == np.complex64:
-    fn = "lapack_cungqr"
-    lwork = _lapack.lapack_cungqr_workspace(m, n, k)
+    fn = "lapack_cungqr_ffi"
+    lwork = _lapack.lapack_cungqr_workspace_ffi(m, n, k)
   elif dtype == np.complex128:
-    fn = "lapack_zungqr"
-    lwork = _lapack.lapack_zungqr_workspace(m, n, k)
+    fn = "lapack_zungqr_ffi"
+    lwork = _lapack.lapack_zungqr_workspace_ffi(m, n, k)
   else:
     raise NotImplementedError(f"Unsupported dtype {dtype}")
 
-  scalar_layout = []
   layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
   i32_type = ir.IntegerType.get_signless(32)
   shape_type_pairs: Sequence[ShapeTypePair] = [
@@ -243,9 +286,10 @@ def orgqr_hlo(dtype, a: ir.Value, tau, *,
   out = custom_call(
       fn,
       result_types=result_types,
-      operands=[batch_size_val, hlo_s32(m), hlo_s32(n), hlo_s32(k),
-       hlo_s32(lwork), a, tau],
-      operand_layouts=[scalar_layout] * 5 + [
+      operands=[
+       a, tau
+      ],
+      operand_layouts=[
         layout,
         tuple(range(num_bd, -1, -1)),
       ],
@@ -254,8 +298,10 @@ def orgqr_hlo(dtype, a: ir.Value, tau, *,
         tuple(range(num_bd - 1, -1, -1)),
         [0],
       ],
-      operand_output_aliases={5: 0},
+      operand_output_aliases={0: 0},
       result_shapes=result_shapes,
+      backend_config={},
+      api_version=4,
   ).results
   return out[:2]
 
@@ -268,22 +314,18 @@ def potrf_hlo(dtype, a: ir.Value, *, lower=False,
   a_type = ir.RankedTensorType(a.type)
   n = a_shape_vals[-1]
   if dtype == np.float32:
-    fn = "lapack_spotrf"
+    fn = "lapack_spotrf_ffi"
   elif dtype == np.float64:
-    fn = "lapack_dpotrf"
+    fn = "lapack_dpotrf_ffi"
   elif dtype == np.complex64:
-    fn = "lapack_cpotrf"
+    fn = "lapack_cpotrf_ffi"
   elif dtype == np.complex128:
-    fn = "lapack_zpotrf"
+    fn = "lapack_zpotrf_ffi"
   else:
     raise NotImplementedError(f"Unsupported dtype {dtype}")
   batch_dims_vals = a_shape_vals[:-2]
   num_bd = len(batch_dims_vals)
-  batch_size_val = hlo_s32(1)
-  for b_v in batch_dims_vals:
-    batch_size_val = hlo.multiply(batch_size_val, ensure_hlo_s32(b_v))
 
-  scalar_layout = []
   layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
   info_layout = tuple(range(num_bd - 1, -1, -1))
 
@@ -295,11 +337,15 @@ def potrf_hlo(dtype, a: ir.Value, *, lower=False,
   out = custom_call(
       fn,
       result_types=result_types,
-      operands=[hlo_s32(int(lower)), batch_size_val, ensure_hlo_s32(n), a],
-      operand_layouts=[scalar_layout] * 3 + [layout],
+      operands=[a],
+      operand_layouts=[layout],
       result_layouts=[layout, info_layout],
-      operand_output_aliases={3: 0},
+      operand_output_aliases={0: 0},
       result_shapes=result_shapes,
+      backend_config={
+          "uplo": matrix_uplo_attr(lower=lower),
+      },
+      api_version=4,
   ).results
   return out[:2]
 
@@ -316,79 +362,81 @@ def gesdd_hlo(dtype, a: ir.Value, *, full_matrices=True, compute_uv=True,
   assert type(n) is int
   batch_dims_vals = a_shape_vals[:-2]
   num_bd = len(batch_dims_vals)
-  batch_size_val = hlo_s32(1)
-  for b_v in batch_dims_vals:
-    batch_size_val = hlo.multiply(batch_size_val, ensure_hlo_s32(b_v))
 
+  mode_attr = svd_computation_attr(
+      compute_uv=compute_uv, full_matrices=full_matrices
+  )
+  mode_value = svd.ComputationMode(mode_attr.value)
   i32_type = ir.IntegerType.get_signless(32)
   workspace: list[ShapeTypePair]
   if dtype == np.float32:
-    fn = "lapack_sgesdd"
+    fn = "lapack_sgesdd_ffi"
     singular_vals_type = ir.F32Type.get()
-    lwork = _lapack.sgesdd_work_size(m, n, compute_uv, full_matrices)
+    lwork = _lapack.sgesdd_work_size_ffi(m, n, mode_value)
     workspace = [
-        ([_lapack.gesdd_iwork_size(m, n)], i32_type),
+        ([_lapack.gesdd_iwork_size_ffi(m, n)], i32_type),
         ([lwork], a_type.element_type),
     ]
-    workspace_layouts = [[0], [0]]
   elif dtype == np.float64:
-    fn = "lapack_dgesdd"
+    fn = "lapack_dgesdd_ffi"
     singular_vals_type = ir.F64Type.get()
-    lwork = _lapack.dgesdd_work_size(m, n, compute_uv, full_matrices)
+    lwork = _lapack.dgesdd_work_size_ffi(m, n, mode_value)
     workspace = [
-        ([_lapack.gesdd_iwork_size(m, n)], i32_type),
+        ([_lapack.gesdd_iwork_size_ffi(m, n)], i32_type),
         ([lwork], a_type.element_type),
     ]
-    workspace_layouts = [[0], [0]]
   elif dtype == np.complex64:
-    fn = "lapack_cgesdd"
+    fn = "lapack_cgesdd_ffi"
     singular_vals_type = ir.F32Type.get()
-    lwork = _lapack.cgesdd_work_size(m, n, compute_uv, full_matrices)
+    lwork = _lapack.cgesdd_work_size_ffi(m, n, mode_value)
     workspace = [
-        ([_lapack.gesdd_iwork_size(m, n)], i32_type),
-        ([_lapack.cgesdd_rwork_size(m, n, int(compute_uv))], ir.F32Type.get()),
+        ([_lapack.gesdd_rwork_size_ffi(m, n, mode_value)], ir.F32Type.get()),
+        ([_lapack.gesdd_iwork_size_ffi(m, n)], i32_type),
         ([lwork], a_type.element_type),
     ]
-    workspace_layouts = [[0], [0], [0]]
   elif dtype == np.complex128:
-    fn = "lapack_zgesdd"
+    fn = "lapack_zgesdd_ffi"
     singular_vals_type = ir.F64Type.get()
-    lwork = _lapack.zgesdd_work_size(m, n, compute_uv, full_matrices)
+    lwork = _lapack.zgesdd_work_size_ffi(m, n, mode_value)
     workspace = [
-        ([_lapack.gesdd_iwork_size(m, n)], i32_type),
-        ([_lapack.cgesdd_rwork_size(m, n, int(compute_uv))], ir.F64Type.get()),
+        ([_lapack.gesdd_rwork_size_ffi(m, n, mode_value)], ir.F64Type.get()),
+        ([_lapack.gesdd_iwork_size_ffi(m, n)], i32_type),
         ([lwork], a_type.element_type),
     ]
-    workspace_layouts = [[0], [0], [0]]
   else:
     raise NotImplementedError(f"Unsupported dtype {dtype}")
 
-  scalar_layout = []
   layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
-
+  a_elem_type = a_type.element_type
   shape_type_pairs: Sequence[ShapeTypePair] = [
-    (a_shape_vals, a_type.element_type),
-    (batch_dims_vals + (min(m, n),), singular_vals_type),
-    (batch_dims_vals + (m, m if full_matrices else min(m, n)), a_type.element_type),
-    (batch_dims_vals + (n if full_matrices else min(m, n), n), a_type.element_type),
-    (batch_dims_vals, i32_type),
-  ] + workspace
+      (a_shape_vals, a_elem_type),
+      (batch_dims_vals + (min(m, n),), singular_vals_type),
+      (batch_dims_vals + (m, m if full_matrices else min(m, n)), a_elem_type),
+      (batch_dims_vals + (n if full_matrices else min(m, n), n), a_elem_type),
+      (batch_dims_vals, i32_type),
+      *workspace,
+  ]
+  workspace_layout = [[0]] * len(workspace)
   result_types, result_shapes = mk_result_types_and_shapes(shape_type_pairs)
   out = custom_call(
       fn,
       result_types=result_types,
-      operands=[hlo_s32(int(full_matrices)), hlo_s32(int(compute_uv)), batch_size_val,
-       hlo_s32(m), hlo_s32(n), hlo_s32(lwork), a],
-      operand_layouts=[scalar_layout] * 6 + [layout],
+      operands=[a],
+      operand_layouts=[layout],
       result_layouts=[
           layout,
           (num_bd,) + tuple(range(num_bd - 1, -1, -1)),
           layout,
           layout,
           tuple(range(num_bd - 1, -1, -1)),
-      ] + workspace_layouts,
-      operand_output_aliases={6: 0},
-      result_shapes=result_shapes
+          *workspace_layout,
+      ],
+      operand_output_aliases={0: 0},
+      result_shapes=result_shapes,
+      backend_config={
+          "mode": mode_attr,
+      },
+      api_version=4,
   ).results
   return out[1:5]
 
