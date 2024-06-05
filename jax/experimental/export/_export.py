@@ -41,6 +41,7 @@ from jax._src import effects
 from jax._src.interpreters import mlir
 from jax._src.interpreters import pxla
 from jax._src.lib import xla_client
+from jax._src.lib import version as jaxlib_version
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
 from jax._src.lib.mlir.dialects import func as func_dialect
@@ -840,9 +841,24 @@ def _check_lowering(lowering) -> None:
         "serialization error, unimplemented lowered.compile_args:\n" +
         "\n".join(not_implemented_msgs))
 
+# TODO: Remove this, once the minimum supported version of jaxlib
+#       is updated to higher than 0.4.28
+has_xla_ffi_support = jaxlib_version > (0, 4, 28)
+cpu_ffi_kernels = [
+    "lapack_spotrf_ffi", "lapack_dpotrf_ffi", "lapack_cpotrf_ffi", "lapack_zpotrf_ffi",
+    "lapack_ssyevd_ffi", "lapack_dsyevd_ffi", "lapack_cheevd_ffi", "lapack_zheevd_ffi",
+    "lapack_sgeev_ffi", "lapack_dgeev_ffi", "lapack_cgeev_ffi", "lapack_zgeev_ffi",
+    "lapack_sgeqrf_ffi", "lapack_dgeqrf_ffi", "lapack_cgeqrf_ffi", "lapack_zgeqrf_ffi",
+    "lapack_sorgqr_ffi", "lapack_dorgqr_ffi", "lapack_cungqr_ffi", "lapack_zungqr_ffi",
+    "lapack_sgesdd_ffi", "lapack_dgesdd_ffi", "lapack_cgesdd_ffi", "lapack_zgesdd_ffi",
+    "blas_strsm_ffi", "blas_dtrsm_ffi", "blas_ctrsm_ffi", "blas_ztrsm_ffi",
+    "lapack_sgetrf_ffi", "lapack_dgetrf_ffi", "lapack_cgetrf_ffi", "lapack_zgetrf_ffi",
+    "lapack_sgees_ffi", "lapack_dgees_ffi", "lapack_cgees_ffi", "lapack_zgees_ffi",
+] if has_xla_ffi_support else []
 # These are the JAX custom call target names that are guaranteed to be stable.
 # Their backwards compatibility is tested by back_compat_test.py.
 _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
+    *cpu_ffi_kernels,
     "Sharding", "SPMDFullToShardShape", "SPMDShardToFullShape",
     "cu_threefry2x32",
     "__gpu$xla.gpu.triton",  # Pallas call on GPU
@@ -870,7 +886,7 @@ _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
     # triangular_solve on CPU
     "blas_strsm", "blas_dtrsm", "blas_ctrsm", "blas_ztrsm",
     # TODO(atondwal, necula): add back_compat tests for lu on CPU/GPU
-    # # lu on CPU
+    # lu on CPU
     "lapack_sgetrf",  "lapack_dgetrf", "lapack_cgetrf", "lapack_zgetrf",
     # schur on CPU
     "lapack_sgees", "lapack_dgees", "lapack_cgees", "lapack_zgees",
