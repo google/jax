@@ -13,11 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import argparse
 import os
-import re
-import subprocess
+import json
+import argparse
 import threading
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 GPU_LOCK = threading.Lock()
@@ -40,7 +40,7 @@ def generate_final_report(shell=False, env_vars={}):
   if result.returncode != 0:
     print("FAILED - {}".format(" ".join(cmd)))
     print(result.stderr.decode())
-    # sys.exit(result.returncode)
+
   return result.returncode, result.stderr.decode(), result.stdout.decode()
 
 
@@ -54,31 +54,39 @@ def run_shell_command(cmd, shell=False, env_vars={}):
   if result.returncode != 0:
     print("FAILED - {}".format(" ".join(cmd)))
     print(result.stderr.decode())
-    # sys.exit(result.returncode)
+
   return result.returncode, result.stderr.decode(), result.stdout.decode()
 
 
+def parse_test_log(log_file):
+  """Parses the test module log file to extract test modules and functions."""
+  test_files = set()
+  with open(log_file, "r") as f:
+    for line in f:
+      report = json.loads(line)
+      if "nodeid" in report:
+        module = report["nodeid"].split("::")[0]
+        if module:
+          test_files.add(os.path.abspath(module))
+  return test_files
+
+
 def collect_testmodules():
-  all_test_files = []
+  log_file = f"{base_dir}/collect_module_log.jsonl"
   return_code, stderr, stdout = run_shell_command(
-      ["python3", "-m", "pytest", "--collect-only", "tests"])
+      ["python3", "-m", "pytest", "--collect-only", "tests", f"--report-log={log_file}"])
   if return_code != 0:
-    print(stdout)
-    print(stderr)
     print("Test module discovery failed.")
+    print("STDOUT:", stdout)
+    print("STDERR:", stderr)
     exit(return_code)
-  for line in stdout.split("\n"):
-    match = re.match("<Module (.*)>", line.strip())
-    if match:
-      test_file = match.group(1)
-      if "/" not in test_file:
-        test_file = os.path.join("tests",test_file)
-      all_test_files.append(test_file)
   print("---------- collected test modules ----------")
-  print("Found %d test modules." % (len(all_test_files)))
-  print("\n".join(all_test_files))
+  test_files = parse_test_log(log_file)
+  print("Found %d test modules." % (len(test_files)))
   print("--------------------------------------------")
-  return all_test_files
+  print("\n".join(test_files))
+  
+  return test_files
 
 
 def run_test(testmodule, gpu_tokens, continue_on_fail):
@@ -105,19 +113,17 @@ def run_test(testmodule, gpu_tokens, continue_on_fail):
       print(stderr)
       if continue_on_fail == False:
           LAST_CODE = return_code
-  return
 
 
 def run_parallel(all_testmodules, p, c):
   print(f"Running tests with parallelism=", p)
   available_gpu_tokens = list(range(p))
   executor = ThreadPoolExecutor(max_workers=p)
-  # walking through test modules
+  # walking through test modules.
   for testmodule in all_testmodules:
     executor.submit(run_test, testmodule, available_gpu_tokens, c)
-  # waiting for all modules to finish
-  executor.shutdown(wait=True)  # wait for all jobs to finish
-  return
+  # waiting for all modules to finish.
+  executor.shutdown(wait=True)
 
 
 def find_num_gpus():
