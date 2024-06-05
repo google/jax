@@ -68,6 +68,8 @@ std::unique_ptr<OperationPass<func::FuncOp>> createLinalgVectorizationPass(
 
 std::unique_ptr<OperationPass<func::FuncOp>> createDebugAssertInsertionPass();
 
+std::unique_ptr<OperationPass<func::FuncOp>> createTypeConvertInsertionPass();
+
 #define GEN_PASS_DECL_MOSAICSERDEPASS
 #include "jaxlib/mosaic/dialect/tpu/tpu_passes.h.inc"
 

@@ -636,6 +636,17 @@ def DebugAssertInsertionPass : Pass<"debug-assert-insertion", "::mlir::func::Fun
   let constructor = "::mlir::tpu::createDebugAssertInsertionPass()";
 }
 
+def TypeConvertInsertionPass : Pass<"type-convert-insertion", "::mlir::func::FuncOp"> {
+  let dependentDialects = [
+    "::mlir::func::FuncDialect",
+    "::mlir::arith::ArithDialect",
+    "::mlir::cf::ControlFlowDialect",
+    "::mlir::vector::VectorDialect",
+    "::mlir::tpu::TPUDialect",
+  ];
+  let constructor = "::mlir::tpu::createTypeConvertInsertionPass()";
+}
+
 def MosaicSerdePass : Pass<"mosaic-serde", "::mlir::ModuleOp"> {
   let options = [Option<"serialize", "serialize", "bool", "", "">];
 }

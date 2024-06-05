@@ -1344,9 +1344,20 @@ class VectorLayoutInferer {
       if (res_rank >= 2 && layout.tiling()[1] == target_shape_[1] &&
           src_ty.getDimSize(src_ty.getRank() - 1) ==
               res_shape[res_shape.size() - 1] &&
-          src_ty.getDimSize(src_ty.getRank() - 2) % layout.tiling()[0] == 0 &&
+          (src_ty.getDimSize(src_ty.getRank() - 2) == 1 ||
+           src_ty.getDimSize(src_ty.getRank() - 2) % layout.tiling()[0] == 0) &&
           res_shape[res_shape.size() - 2] % layout.tiling()[0] == 0) {
-        layout = VectorLayout(layout.bitwidth(), {0, 0}, layout.tiling(),
+        std::array<int64_t, 2> tiling = layout.tiling();
+        if (src_ty.getDimSize(src_ty.getRank() - 2) == 1) {
+          if (src_ty.getElementTypeBitWidth() < kNativeBitwidth) {
+            op.emitOpError(
+                "Expect 32-bit dtype when sublane dimsize is 1 in shape cast");
+            return failure();
+          }
+          tiling[0] = 1;
+          tiling[1] = target_shape_[1];
+        }
+        layout = VectorLayout(layout.bitwidth(), {0, 0}, tiling,
                               layout.implicit_dim());
         setLayout(op, layout, layout);
         return success();
