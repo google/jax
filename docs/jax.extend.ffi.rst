@@ -6,5 +6,6 @@
 .. autosummary::
   :toctree: _autosummary
 
+  ffi_call
   ffi_lowering
   pycapsule

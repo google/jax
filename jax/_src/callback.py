@@ -124,14 +124,14 @@ def pure_callback_transpose_rule(*args, **kwargs):
 ad.primitive_transposes[pure_callback_p] = pure_callback_transpose_rule
 
 
-def pure_callback_batching_rule(
+def callback_batching_rule(
+    prim,
     args,
     dims,
     *,
-    callback: _FlatCallback,
-    sharding: SingleDeviceSharding | None,
     vectorized: bool,
     result_avals: Sequence[core.ShapedArray],
+    **kwargs: Any,
 ):
   axis_size = next(a.shape[d] for a, d in zip(args, dims)
                    if d is not batching.not_mapped)
@@ -141,30 +141,30 @@ def pure_callback_batching_rule(
     result_avals = tuple(
         core.unmapped_aval(axis_size, core.no_axis_name, 0, aval)  # type: ignore
         for aval in result_avals)
-    outvals = pure_callback_p.bind(
+    outvals = prim.bind(
         *new_args,
-        callback=callback,
-        sharding=sharding,
         vectorized=vectorized,
         result_avals=result_avals,
+        **kwargs,
     )
   else:
     is_batched = [d is not batching.not_mapped for d in dims]
     unbatched_args, batched_args = util.partition_list(is_batched, new_args)
     def _batch_fun(batched_args):
       merged_args = util.merge_lists(is_batched, unbatched_args, batched_args)
-      return pure_callback_p.bind(
+      return prim.bind(
           *merged_args,
-          callback=callback,
-          sharding=sharding,
           result_avals=result_avals,
           vectorized=vectorized,
+          **kwargs,
       )
     outvals = lax_map(_batch_fun, batched_args)
   return tuple(outvals), (0,) * len(outvals)
 
 
-batching.primitive_batchers[pure_callback_p] = pure_callback_batching_rule
+batching.primitive_batchers[pure_callback_p] = functools.partial(
+    callback_batching_rule, pure_callback_p
+)
 
 
 def _callback_op_sharding(axis_context, sharding: SingleDeviceSharding | None):
