@@ -15,12 +15,18 @@ limitations under the License.
 
 // This file is not used by JAX itself, but exists to assist with running
 // JAX-generated HLO code from outside of JAX.
-#include <complex>
-#include "jaxlib/cpu/lapack_kernels.h"
+
+#include "jaxlib/cpu/lapack.h"
 #include "xla/service/custom_call_target_registry.h"
+
+#define JAX_CPU_REGISTER_HANDLER(name) \
+  XLA_FFI_REGISTER_HANDLER(XLA_FFI_GetApi(), #name, "Host", name);
 
 namespace jax {
 namespace {
+
+// Old-style kernels
+// TODO(b/344892332): To be removed after the 6M compatibility period is over.
 
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("blas_strsm", Trsm<float>::Kernel,
                                          "Host");
@@ -104,6 +110,15 @@ XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM(
     "lapack_cgees", ComplexGees<std::complex<float>>::Kernel, "Host");
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM(
     "lapack_zgees", ComplexGees<std::complex<double>>::Kernel, "Host");
+
+// FFI Kernels
+
+JAX_CPU_REGISTER_HANDLER(lapack_spotrf_ffi);
+JAX_CPU_REGISTER_HANDLER(lapack_dpotrf_ffi);
+JAX_CPU_REGISTER_HANDLER(lapack_cpotrf_ffi);
+JAX_CPU_REGISTER_HANDLER(lapack_zpotrf_ffi);
+
+#undef JAX_CPU_REGISTER_HANDLER
 
 }  // namespace
 }  // namespace jax

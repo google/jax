@@ -63,8 +63,13 @@ from jax._src import config
 from jax._src import test_util as jtu
 from jax._src.lib import cuda_versions
 from jax._src.lib import xla_client
+from jax._src.lib import version as jaxlib_version
 
 config.parse_flags_with_absl()
+
+# TODO(b/344892332): Remove this, once the minimum supported version of jaxlib
+#                    is updated to higher than 0.4.28
+has_xla_ffi_support = jaxlib_version > (0, 4, 28)
 
 def _is_required_cusolver_version_satisfied(required_version):
   if cuda_versions is None:
@@ -106,9 +111,13 @@ class CompatTest(bctu.CompatTestBase):
   def test_custom_call_coverage(self):
     """Tests that the back compat tests cover all the targets declared stable."""
     targets_to_cover = set(_export._CUSTOM_CALL_TARGETS_GUARANTEED_STABLE)
+    cpu_ffi_testdatas = [
+        cpu_cholesky_lapack_potrf.data_2024_05_31,
+    ]
     # Add here all the testdatas that should cover the targets guaranteed
     # stable
     covering_testdatas = [
+        *cpu_ffi_testdatas,
         cpu_cholesky_lapack_potrf.data_2023_06_19,
         cpu_eig_lapack_geev.data_2023_06_19,
         cpu_eigh_lapack_syev.data_2023_03_17,
@@ -169,7 +178,13 @@ class CompatTest(bctu.CompatTestBase):
     atol = dict(f32=1e-4, f64=1e-12, c64=1e-4, c128=1e-12)[dtype_name]
 
     data = self.load_testdata(cpu_cholesky_lapack_potrf.data_2023_06_19[dtype_name])
-    self.run_one_test(func, data, rtol=rtol, atol=atol)
+    expect_calls = [data.custom_call_targets[0] + "_ffi"] if has_xla_ffi_support else None
+    self.run_one_test(func, data, rtol=rtol, atol=atol,
+                      expect_current_custom_calls=expect_calls)
+    if has_xla_ffi_support:
+      # FFI Kernel test
+      data = self.load_testdata(cpu_cholesky_lapack_potrf.data_2024_05_31[dtype_name])
+      self.run_one_test(func, data, rtol=rtol, atol=atol)
 
   @parameterized.named_parameters(
       dict(testcase_name=f"_dtype={dtype_name}", dtype_name=dtype_name)

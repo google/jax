@@ -15,9 +15,13 @@ limitations under the License.
 
 #include "jaxlib/cpu/lapack_kernels.h"
 
+#include <type_traits>
+
 // From a Python binary, JAX obtains its LAPACK/BLAS kernels from Scipy, but
 // a C++ user should link against LAPACK directly. This is needed when using
 // JAX-generated HLO from C++.
+
+namespace ffi = xla::ffi;
 
 extern "C" {
 
@@ -41,10 +45,10 @@ jax::Orgqr<double>::FnType dorgqr_;
 jax::Orgqr<std::complex<float>>::FnType cungqr_;
 jax::Orgqr<std::complex<double>>::FnType zungqr_;
 
-jax::Potrf<float>::FnType spotrf_;
-jax::Potrf<double>::FnType dpotrf_;
-jax::Potrf<std::complex<float>>::FnType cpotrf_;
-jax::Potrf<std::complex<double>>::FnType zpotrf_;
+jax::CholeskyFactorization<ffi::DataType::F32>::FnType spotrf_;
+jax::CholeskyFactorization<ffi::DataType::F64>::FnType dpotrf_;
+jax::CholeskyFactorization<ffi::DataType::C64>::FnType cpotrf_;
+jax::CholeskyFactorization<ffi::DataType::C128>::FnType zpotrf_;
 
 jax::RealGesdd<float>::FnType sgesdd_;
 jax::RealGesdd<double>::FnType dgesdd_;
@@ -80,51 +84,89 @@ jax::Sytrd<std::complex<double>>::FnType zhetrd_;
 
 namespace jax {
 
+#define JAX_KERNEL_FNTYPE_MISMATCH_MSG "FFI Kernel FnType mismatch"
+
+static_assert(
+    std::is_same_v<jax::CholeskyFactorization<ffi::DataType::F32>::FnType,
+                   jax::Potrf<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::CholeskyFactorization<ffi::DataType::F64>::FnType,
+                   jax::Potrf<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::CholeskyFactorization<ffi::DataType::C64>::FnType,
+                   jax::Potrf<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::CholeskyFactorization<ffi::DataType::C128>::FnType,
+                   jax::Potrf<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+
+#undef JAX_KERNEL_FNTYPE_MISMATCH_MSG
+
 static auto init = []() -> int {
-  Trsm<float>::fn = strsm_;
-  Trsm<double>::fn = dtrsm_;
-  Trsm<std::complex<float>>::fn = ctrsm_;
-  Trsm<std::complex<double>>::fn = ztrsm_;
-  Getrf<float>::fn = sgetrf_;
-  Getrf<double>::fn = dgetrf_;
-  Getrf<std::complex<float>>::fn = cgetrf_;
-  Getrf<std::complex<double>>::fn = zgetrf_;
-  Geqrf<float>::fn = sgeqrf_;
-  Geqrf<double>::fn = dgeqrf_;
-  Geqrf<std::complex<float>>::fn = cgeqrf_;
-  Geqrf<std::complex<double>>::fn = zgeqrf_;
-  Orgqr<float>::fn = sorgqr_;
-  Orgqr<double>::fn = dorgqr_;
-  Orgqr<std::complex<float>>::fn = cungqr_;
-  Orgqr<std::complex<double>>::fn = zungqr_;
-  Potrf<float>::fn = spotrf_;
-  Potrf<double>::fn = dpotrf_;
-  Potrf<std::complex<float>>::fn = cpotrf_;
-  Potrf<std::complex<double>>::fn = zpotrf_;
-  RealGesdd<float>::fn = sgesdd_;
-  RealGesdd<double>::fn = dgesdd_;
-  ComplexGesdd<std::complex<float>>::fn = cgesdd_;
-  ComplexGesdd<std::complex<double>>::fn = zgesdd_;
-  RealSyevd<float>::fn = ssyevd_;
-  RealSyevd<double>::fn = dsyevd_;
-  ComplexHeevd<std::complex<float>>::fn = cheevd_;
-  ComplexHeevd<std::complex<double>>::fn = zheevd_;
-  RealGeev<float>::fn = sgeev_;
-  RealGeev<double>::fn = dgeev_;
-  ComplexGeev<std::complex<float>>::fn = cgeev_;
-  ComplexGeev<std::complex<double>>::fn = zgeev_;
-  RealGees<float>::fn = sgees_;
-  RealGees<double>::fn = dgees_;
-  ComplexGees<std::complex<float>>::fn = cgees_;
-  ComplexGees<std::complex<double>>::fn = zgees_;
-  Gehrd<float>::fn = sgehrd_;
-  Gehrd<double>::fn = dgehrd_;
-  Gehrd<std::complex<float>>::fn = cgehrd_;
-  Gehrd<std::complex<double>>::fn = zgehrd_;
-  Sytrd<float>::fn = ssytrd_;
-  Sytrd<double>::fn = dsytrd_;
-  Sytrd<std::complex<float>>::fn = chetrd_;
-  Sytrd<std::complex<double>>::fn = zhetrd_;
+  AssignKernelFn<Trsm<float>>(strsm_);
+  AssignKernelFn<Trsm<double>>(dtrsm_);
+  AssignKernelFn<Trsm<std::complex<float>>>(ctrsm_);
+  AssignKernelFn<Trsm<std::complex<double>>>(ztrsm_);
+
+  AssignKernelFn<Getrf<float>>(sgetrf_);
+  AssignKernelFn<Getrf<double>>(dgetrf_);
+  AssignKernelFn<Getrf<std::complex<float>>>(cgetrf_);
+  AssignKernelFn<Getrf<std::complex<double>>>(zgetrf_);
+
+  AssignKernelFn<Geqrf<float>>(sgeqrf_);
+  AssignKernelFn<Geqrf<double>>(dgeqrf_);
+  AssignKernelFn<Geqrf<std::complex<float>>>(cgeqrf_);
+  AssignKernelFn<Geqrf<std::complex<double>>>(zgeqrf_);
+
+  AssignKernelFn<Orgqr<float>>(sorgqr_);
+  AssignKernelFn<Orgqr<double>>(dorgqr_);
+  AssignKernelFn<Orgqr<std::complex<float>>>(cungqr_);
+  AssignKernelFn<Orgqr<std::complex<double>>>(zungqr_);
+
+  AssignKernelFn<Potrf<float>>(spotrf_);
+  AssignKernelFn<Potrf<double>>(dpotrf_);
+  AssignKernelFn<Potrf<std::complex<float>>>(cpotrf_);
+  AssignKernelFn<Potrf<std::complex<double>>>(zpotrf_);
+
+  AssignKernelFn<RealGesdd<float>>(sgesdd_);
+  AssignKernelFn<RealGesdd<double>>(dgesdd_);
+  AssignKernelFn<ComplexGesdd<std::complex<float>>>(cgesdd_);
+  AssignKernelFn<ComplexGesdd<std::complex<double>>>(zgesdd_);
+
+  AssignKernelFn<RealSyevd<float>>(ssyevd_);
+  AssignKernelFn<RealSyevd<double>>(dsyevd_);
+  AssignKernelFn<ComplexHeevd<std::complex<float>>>(cheevd_);
+  AssignKernelFn<ComplexHeevd<std::complex<double>>>(zheevd_);
+
+  AssignKernelFn<RealGeev<float>>(sgeev_);
+  AssignKernelFn<RealGeev<double>>(dgeev_);
+  AssignKernelFn<ComplexGeev<std::complex<float>>>(cgeev_);
+  AssignKernelFn<ComplexGeev<std::complex<double>>>(zgeev_);
+
+  AssignKernelFn<RealGees<float>>(sgees_);
+  AssignKernelFn<RealGees<double>>(dgees_);
+  AssignKernelFn<ComplexGees<std::complex<float>>>(cgees_);
+  AssignKernelFn<ComplexGees<std::complex<double>>>(zgees_);
+
+  AssignKernelFn<Gehrd<float>>(sgehrd_);
+  AssignKernelFn<Gehrd<double>>(dgehrd_);
+  AssignKernelFn<Gehrd<std::complex<float>>>(cgehrd_);
+  AssignKernelFn<Gehrd<std::complex<double>>>(zgehrd_);
+
+  AssignKernelFn<Sytrd<float>>(ssytrd_);
+  AssignKernelFn<Sytrd<double>>(dsytrd_);
+  AssignKernelFn<Sytrd<std::complex<float>>>(chetrd_);
+  AssignKernelFn<Sytrd<std::complex<double>>>(zhetrd_);
+
+  // FFI Kernels
+
+  AssignKernelFn<CholeskyFactorization<ffi::DataType::F32>>(spotrf_);
+  AssignKernelFn<CholeskyFactorization<ffi::DataType::F64>>(dpotrf_);
+  AssignKernelFn<CholeskyFactorization<ffi::DataType::C64>>(cpotrf_);
+  AssignKernelFn<CholeskyFactorization<ffi::DataType::C128>>(zpotrf_);
 
   return 0;
 }();

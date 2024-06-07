@@ -866,9 +866,13 @@ def _check_lowering(lowering) -> None:
         "serialization error, unimplemented lowered.compile_args:\n" +
         "\n".join(not_implemented_msgs))
 
+_CPU_FFI_KERNELS = [
+    "lapack_spotrf_ffi", "lapack_dpotrf_ffi", "lapack_cpotrf_ffi", "lapack_zpotrf_ffi",
+]
 # These are the JAX custom call target names that are guaranteed to be stable.
 # Their backwards compatibility is tested by back_compat_test.py.
 _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
+    *_CPU_FFI_KERNELS,
     "Sharding", "SPMDFullToShardShape", "SPMDShardToFullShape",
     "cu_threefry2x32",
     "__gpu$xla.gpu.triton",  # Pallas call on GPU
@@ -896,7 +900,7 @@ _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
     # triangular_solve on CPU
     "blas_strsm", "blas_dtrsm", "blas_ctrsm", "blas_ztrsm",
     # TODO(atondwal, necula): add back_compat tests for lu on CPU/GPU
-    # # lu on CPU
+    # lu on CPU
     "lapack_sgetrf",  "lapack_dgetrf", "lapack_cgetrf", "lapack_zgetrf",
     # schur on CPU
     "lapack_sgees", "lapack_dgees", "lapack_cgees", "lapack_zgees",
