@@ -1157,3 +1157,16 @@ pytype_library(
     visibility = ["//visibility:public"],
     deps = [":jax"],
 )
+
+pytype_library(
+    name = "experimental_colocated_python",
+    srcs = [
+        "experimental/colocated_python/__init__.py",
+        "experimental/colocated_python/api.py",
+        "experimental/colocated_python/func.py",
+        "experimental/colocated_python/func_backend.py",
+        "experimental/colocated_python/serialization.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [":jax"] + py_deps("numpy") + py_deps("cloudpickle"),
+)
