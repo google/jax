@@ -37,8 +37,9 @@ from jax._src.nn.functions import (
   relu as relu,
   relu6 as relu6,
   scaled_dot_product_attention as scaled_dot_product_attention,
-  SdpaCausalMask as SdpaCausalMask,
-  SdpaPhiloxDropout as SdpaPhiloxDropout,
+  ScaledDotProductAttentionCausalMask as ScaledDotProductAttentionCausalMask,
+  ScaledDotProductAttentionPhiloxDropout as \
+      ScaledDotProductAttentionPhiloxDropout,
   selu as selu,
   sigmoid as sigmoid,
   soft_sign as soft_sign,

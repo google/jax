@@ -33,7 +33,7 @@ from jax._src import dtypes
 from jax._src import util
 from jax._src.core import AxisName
 from jax._src.cudnn.fused_attention_stablehlo import (
-    dot_product_attention, MaskType)
+    dot_product_attention as cudnn_dot_product_attention, MaskType)
 from jax._src.numpy import util as numpy_util
 from jax._src.typing import Array, ArrayLike
 from jax._src.ops.special import logsumexp as _logsumexp
@@ -778,7 +778,7 @@ def _causal_mask(T, dtype):
   mask = mask[jnp.newaxis, jnp.newaxis, :, :]
   return mask
 
-class SdpaCausalMask:
+class ScaledDotProductAttentionCausalMask:
   def __call__(self, x: ArrayLike, mask: ArrayLike | None = None) -> Array:
     """Mask the input with causal masking"""
     if mask is not None:
@@ -792,7 +792,7 @@ class SdpaCausalMask:
     return x + mask
 
 @dataclass
-class SdpaPhiloxDropout:
+class ScaledDotProductAttentionPhiloxDropout:
   rate: float = 0.0
   seed: int = 123
   def __call__(self, x: ArrayLike) -> Array:
@@ -819,7 +819,7 @@ def scaled_dot_product_attention(
     _pv_dot_general: Callable[..., ArrayLike] = lax.dot_general) -> Array:
   r"""Scaled dot product attention function.
 
-  Computes the attention function on Quary, Key, and Value tensors:
+  Computes the attention function on Query, Key, and Value tensors:
 
   .. math ::
     \mathrm{Attention}(Q, K, V)=\mathrm{softmax}(\frac{QK^T}{\sqrt{d_k}}V)
@@ -890,21 +890,22 @@ def scaled_dot_product_attention(
   # implementation.
   try:
     maybe_fuse = softmax_fn is None
-    maybe_fuse = maybe_fuse and (dropout_fn is None or
-                                 type(dropout_fn) is SdpaPhiloxDropout)
-    maybe_fuse = maybe_fuse and (mask_fn is None or
-                                 type(mask_fn) is SdpaCausalMask)
+    maybe_fuse = maybe_fuse and (
+        dropout_fn is None or
+        type(dropout_fn) is ScaledDotProductAttentionPhiloxDropout)
+    maybe_fuse = maybe_fuse and (
+        mask_fn is None or type(mask_fn) is ScaledDotProductAttentionCausalMask)
     if maybe_fuse:
       rate, seed = 0.0, 0
-      if type(dropout_fn) is SdpaPhiloxDropout:
+      if type(dropout_fn) is ScaledDotProductAttentionPhiloxDropout:
         rate, seed = (dropout_fn.rate, dropout_fn.seed)
 
       mask_type = MaskType.NO_MASK
-      if type(mask_fn) is SdpaCausalMask:
+      if type(mask_fn) is ScaledDotProductAttentionCausalMask:
         mask_type = MaskType.CAUSAL
 
       # The `mask` to this API is an additive mask. However, the `mask` taken by
-      # the dot_product_attention is assumed to be a multiplicative
+      # the cudnn_dot_product_attention is assumed to be a multiplicative
       # mask. So, we pass it via `bias` to preserve its "additive" behavior.
       if bias is not None:
         # Cudnn flash attention applies post-scale bias. So we scale the bias.
@@ -918,7 +919,7 @@ def scaled_dot_product_attention(
       elif mask is not None:
         bias = mask
 
-      encoded = dot_product_attention(
+      encoded = cudnn_dot_product_attention(
           query, key, value, bias, None, scale=scale_val, mask_type=mask_type,
           seed=seed, dropout_rate=rate
       )

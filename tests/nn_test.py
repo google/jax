@@ -123,7 +123,8 @@ class NNFunctionsTest(jtu.JaxTestCase):
     self.assertIsNotNone(probs_ref)
 
     # Test runtime generated causal mask
-    out, probs = sdpa(Q, K, V, bias, mask_fn=nn.SdpaCausalMask())
+    out, probs = sdpa(Q, K, V, bias,
+                      mask_fn=nn.ScaledDotProductAttentionCausalMask())
     self.assertIsNone(probs)
     self.assertAllClose(out_ref, out, atol=atol)
     # Test user-given causal mask
@@ -157,7 +158,7 @@ class NNFunctionsTest(jtu.JaxTestCase):
                                                                (grad, zeros))
 
     # Test runtime generated causal mask
-    sdpa_fn = partial(sdpa, mask_fn=nn.SdpaCausalMask())
+    sdpa_fn = partial(sdpa, mask_fn=nn.ScaledDotProductAttentionCausalMask())
     _, sdpa_vjp_fn0 = jax.vjp(sdpa_fn, Q, K, V, bias, None)
     # Test user-given causal mask
     _, sdpa_vjp_fn1 = jax.vjp(sdpa, Q, K, V, bias, causal_mask)
