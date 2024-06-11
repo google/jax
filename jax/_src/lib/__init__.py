@@ -85,7 +85,9 @@ cpu_feature_guard.check_cpu_features()
 
 import jaxlib.utils as utils
 import jaxlib.xla_client as xla_client
-import jaxlib.lapack as lapack
+
+if version >= (0, 4, 29):
+  import jaxlib.ffi as ffi
 
 xla_extension = xla_client._xla
 pytree = xla_client._xla.pytree
@@ -96,6 +98,8 @@ pmap_lib = xla_client._xla.pmap_lib
 def _xla_gc_callback(*args):
   xla_client._xla.collect_garbage()
 gc.callbacks.append(_xla_gc_callback)
+
+import jaxlib.lapack as lapack
 
 try:
   import jaxlib.cuda._versions as cuda_versions  # pytype: disable=import-error

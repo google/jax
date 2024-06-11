@@ -76,16 +76,10 @@ def initialize():
     return
 
   options = xla_client.generate_pjrt_gpu_plugin_options()
-  c_api = xb.register_plugin(
+  xb.register_plugin(
       'cuda', priority=500, library_path=str(path), options=options
   )
   if cuda_plugin_extension:
-    xla_client.register_custom_call_handler(
-        "CUDA",
-        functools.partial(
-            cuda_plugin_extension.register_custom_call_target, c_api
-        ),
-    )
     for _name, _value in cuda_plugin_extension.registrations().items():
       xla_client.register_custom_call_target(_name, _value, platform="CUDA")
   else:

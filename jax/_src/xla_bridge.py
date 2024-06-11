@@ -43,6 +43,7 @@ from jax._src import traceback_util
 from jax._src import util
 from jax._src.cloud_tpu_init import maybe_import_libtpu
 from jax._src.lib import cuda_versions
+from jax._src.lib import version as jaxlib_version
 from jax._src.lib import xla_client
 from jax._src.lib import xla_extension
 from jax._src.lib import xla_extension_version
@@ -236,6 +237,11 @@ def register_backend_factory(name: str, factory: BackendFactory, *,
     factory, priority, fail_quietly, experimental, c_api)
   if make_topology is not None:
     _topology_factories[name] = make_topology
+  if c_api is not None and jaxlib_version >= (0, 4, 29):
+    from jax._src.lib import ffi
+    xla_client.register_custom_call_handler(
+        name, partial(ffi.register_handler, c_api)
+    )
 
 
 def make_cpu_client() -> xla_client.Client:

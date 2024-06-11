@@ -57,6 +57,7 @@ py_library_providing_imports_info(
     lib_rule = pytype_library,
     deps = [
         ":cpu_feature_guard",
+        ":ffi",
         ":utils",
         "//jaxlib/cpu:_lapack",
         "//jaxlib/mlir",
@@ -198,7 +199,7 @@ pybind_extension(
     deps = [
         "@com_google_absl//absl/status",
         "@nanobind",
-        "//jaxlib:kernel_nanobind_helpers",
+        ":kernel_nanobind_helpers",
         "@xla//third_party/python_runtime:headers",
         "@xla//xla:status",
         "@local_config_cuda//cuda:cuda_headers",
@@ -213,6 +214,21 @@ pybind_extension(
         "@xla//xla/tsl/cuda:cublas",
         "@xla//xla/tsl/cuda:cudart",
         "@xla//xla/tsl/python/lib/core:numpy",
+    ],
+)
+
+pybind_extension(
+    name = "ffi",
+    srcs = ["ffi.cc"],
+    module_name = "ffi",
+    deps = [
+        "@xla//xla/ffi/api:c_api",
+        "@xla//xla/pjrt:status_casters",
+        "@xla//xla/pjrt/c:pjrt_c_api_ffi_extension_hdrs",
+        "@xla//xla/pjrt/c:pjrt_c_api_hdrs",
+        "@xla//xla/pjrt/c:pjrt_c_api_helpers",
+        "@com_google_absl//absl/status",
+        "@nanobind",
     ],
 )
 
