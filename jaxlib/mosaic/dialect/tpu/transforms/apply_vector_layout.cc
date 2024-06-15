@@ -3296,13 +3296,6 @@ FailureOr<xla::Array<Value>> vector_extract_slice_impl(
   // We currently only support no-op cases - that is, those where we effectively
   // just extract a slice of vregs without doing any operations (e.g. shifts) on
   // them.
-  // TODO(tlongeri): VectorLayout enforces that the offsets must fall in the
-  // first tile of each vreg. That means a no-op would not result in a valid
-  // layout if the index offset falls within a different tile in the vreg. Do we
-  // want to loosen this restriction or add shifts? This is the only non-no-op
-  // that might make sense to support - otherwise we should expect
-  // infer-vector-layout to assign no-op layouts and have the burden of any
-  // shifts that might be needed later fall on relayout.
   for (auto [index_offset, in_offset, vreg_slice, out_offset] : llvm::zip_equal(
            ArrayRef<int64_t>(full_offsets).take_back(2), layout_in.offsets(),
            layout_in.vregSlice(ctx.target_shape), layout_out.offsets())) {
@@ -5209,6 +5202,18 @@ LogicalResult applyLayoutOp(RewriteContext &ctx, Operation &op) {
     }
   }
 
+  // TODO: b/342235360 - This check is temporary while we increase and test
+  // support for offsets outside of the first tile. When support is more broad,
+  // any op without support should check it within their own rule.
+  if (!isa<vector::ExtractStridedSliceOp>(op)) {
+    for (const Layout &layout : layouts_in) {
+      if (layout && layout->offsets()[1].has_value() &&
+          layout->offsets()[1].value() >= layout->tiling()[1]) {
+        return op.emitError(
+            "Not implemented: Input offsets outside of the first tile");
+      }
+    }
+  }
   const bool no_vector_args =
       llvm::none_of(layouts_out,
                     [](Layout layout) { return layout.has_value(); }) &&
