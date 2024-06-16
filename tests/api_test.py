@@ -4728,6 +4728,60 @@ class APITest(jtu.JaxTestCase):
     out = jax.jit(lambda: int(jax.jit(lambda x: x)(3)))()  # don't crash
     self.assertEqual(out, 3)
 
+  def test_x64_literal(self):
+    @jax.jit
+    def f(a):
+      with config.enable_x64(True):
+        b = a * 1.
+      # c = b * 1.
+      # with config.enable_x64(True):
+      #   d = c * 1.
+      return b
+
+    # print(jax.make_jaxpr(f)(1.))
+
+    # d = f(1.)
+    # print(d, d.dtype)
+
+    # e = d + 1.
+    # print(e, e.dtype)
+
+    # with config.enable_x64(True):
+    #   f1 = e + 1.
+    # print(f1, f1.dtype)
+
+    # out = jax.jit(jax.grad(f))(1.)
+    # print(out, out.dtype)  # out.dtype should be float64
+    # print(jax.make_jaxpr(jax.jit(jax.grad(f)))(1.))
+
+    out2 = jax.grad(f)(1.)
+    print(out2, out2.dtype)  # out2.dtype should be float64
+
+    # def foo(x):
+    #   with config.enable_x64(True):
+    #     clipped = x.astype(jnp.uint64)
+    #     clipped = clipped % 2
+    #     # Notably, the line below gives the identical error
+    #     clipped = clipped % jnp.asarray(2, jnp.uint64)
+    #     return clipped
+
+    # x = jnp.asarray(.5)
+
+    # print(foo(x))
+    # j_foo = jax.jit(foo)
+    # print(j_foo(x))
+
+  def test_yash(self):
+    def f(x):
+      with config.enable_x64(True):
+        B = jnp.linalg.det(x.astype(jnp.float64))
+      return B
+
+    x = jax.random.uniform(key=jax.random.key(1), shape=(4,4))
+
+    print(jax.jacfwd(f)(x))
+    print(jax.jacrev(f)(x))
+
 
 class RematTest(jtu.JaxTestCase):
 

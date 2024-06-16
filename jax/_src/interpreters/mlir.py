@@ -1548,68 +1548,68 @@ def jaxpr_subcomp(ctx: ModuleContext, jaxpr: core.Jaxpr,
   map(write, jaxpr.invars, args)
   last_used = core.last_used(jaxpr)
   for eqn in jaxpr.eqns:
-    in_nodes = map(read, eqn.invars)
-    source_info = eqn.source_info.replace(
-        name_stack=name_stack + eqn.source_info.name_stack)
-    loc = _source_info_to_location(ctx, eqn.primitive, eqn.params, source_info)
-    with (source_info_util.user_context(eqn.source_info.traceback), loc,
-          eqn.ctx.manager):
-      override_rule = get_override_lowering_rule(eqn.primitive)
-      platform_rules: dict[str, LoweringRule] = {}
-      default_rule: LoweringRule | None = None
-      # See mlir.lower_per_platform for meaning of `platform_rules` and `default_rule`
-      if override_rule is not None:
-        default_rule = override_rule
-      else:
-        # First the platform-specific rules
-        for p in ctx.platforms:
-          if eqn.primitive in _platform_specific_lowerings[p]:
-            platform_rules[p] = _platform_specific_lowerings[p][eqn.primitive]
-          elif eqn.primitive in xla._backend_specific_translations[p]:
-            platform_rules[p] = xla_fallback_lowering(eqn.primitive)
-        # Now the default rule
-        if eqn.primitive in _lowerings:
-          default_rule = _lowerings[eqn.primitive]
-        elif eqn.primitive in xla._translations:
-          default_rule = xla_fallback_lowering(eqn.primitive)
+    with eqn.ctx.manager:
+      in_nodes = map(read, eqn.invars)
+      source_info = eqn.source_info.replace(
+          name_stack=name_stack + eqn.source_info.name_stack)
+      loc = _source_info_to_location(ctx, eqn.primitive, eqn.params, source_info)
+      with source_info_util.user_context(eqn.source_info.traceback), loc:
+        override_rule = get_override_lowering_rule(eqn.primitive)
+        platform_rules: dict[str, LoweringRule] = {}
+        default_rule: LoweringRule | None = None
+        # See mlir.lower_per_platform for meaning of `platform_rules` and `default_rule`
+        if override_rule is not None:
+          default_rule = override_rule
+        else:
+          # First the platform-specific rules
+          for p in ctx.platforms:
+            if eqn.primitive in _platform_specific_lowerings[p]:
+              platform_rules[p] = _platform_specific_lowerings[p][eqn.primitive]
+            elif eqn.primitive in xla._backend_specific_translations[p]:
+              platform_rules[p] = xla_fallback_lowering(eqn.primitive)
+          # Now the default rule
+          if eqn.primitive in _lowerings:
+            default_rule = _lowerings[eqn.primitive]
+          elif eqn.primitive in xla._translations:
+            default_rule = xla_fallback_lowering(eqn.primitive)
 
-      effects = list(effects_lib.ordered_effects.filter_in(eqn.effects))
-      tokens_in = tokens.subset(effects)
-      avals_in = map(aval, eqn.invars)
-      compute_type = eqn.ctx.compute_type if eqn.ctx is not None else None
-      rule_ctx = LoweringRuleContext(
-          module_context=ctx, primitive=eqn.primitive,
-          name_stack=source_info.name_stack,
-          avals_in=avals_in,
-          avals_out=map(aval, eqn.outvars), tokens_in=tokens_in,
-          tokens_out=None, dim_var_values=dim_var_values,
-          compute_type=compute_type)
-      if config.dynamic_shapes.value:
-        axis_size_env = {d: read(d)[0]
-                         for a in avals_in if type(a) is core.DShapedArray
-                         for d in a.shape if type(d) is core.Var}
-        rule_ctx = rule_ctx.replace(axis_size_env=axis_size_env)
+        effects = list(effects_lib.ordered_effects.filter_in(eqn.effects))
+        tokens_in = tokens.subset(effects)
+        avals_in = map(aval, eqn.invars)
+        compute_type = eqn.ctx.compute_type if eqn.ctx is not None else None
+        rule_ctx = LoweringRuleContext(
+            module_context=ctx, primitive=eqn.primitive,
+            name_stack=source_info.name_stack,
+            avals_in=avals_in,
+            avals_out=map(aval, eqn.outvars), tokens_in=tokens_in,
+            tokens_out=None, dim_var_values=dim_var_values,
+            compute_type=compute_type)
+        if config.dynamic_shapes.value:
+          axis_size_env = {d: read(d)[0]
+                          for a in avals_in if type(a) is core.DShapedArray
+                          for d in a.shape if type(d) is core.Var}
+          rule_ctx = rule_ctx.replace(axis_size_env=axis_size_env)
 
-      rule_inputs = map(_unwrap_singleton_ir_values, in_nodes)
-      ans = lower_per_platform(rule_ctx, str(eqn.primitive),
-                               platform_rules, default_rule,
-                               eqn.effects,
-                               *rule_inputs, **eqn.params)
+        rule_inputs = map(_unwrap_singleton_ir_values, in_nodes)
+        ans = lower_per_platform(rule_ctx, str(eqn.primitive),
+                                platform_rules, default_rule,
+                                eqn.effects,
+                                *rule_inputs, **eqn.params)
 
-      if effects:
-        # If there were ordered effects in the primitive, there should be output
-        # tokens we need for subsequent ordered effects.
-        tokens_out = rule_ctx.tokens_out
-        if tokens_out is None:
-          raise ValueError(
-              f'Lowering rule for `{eqn.primitive}` needs to set `tokens_out` '
-              f'because it has effects: {eqn.effects}.')
-        if tokens_out.effects() != tokens_in.effects():
-          raise ValueError(
-              f'Lowering rule for `{eqn.primitive}` '
-              'returns incorrect set of output tokens. '
-              f'Expected: {tuple(tokens_in.effects())} vs. Actual: {tuple(tokens_out.effects())}')
-        tokens = tokens.update_tokens(tokens_out)
+        if effects:
+          # If there were ordered effects in the primitive, there should be output
+          # tokens we need for subsequent ordered effects.
+          tokens_out = rule_ctx.tokens_out
+          if tokens_out is None:
+            raise ValueError(
+                f'Lowering rule for `{eqn.primitive}` needs to set `tokens_out` '
+                f'because it has effects: {eqn.effects}.')
+          if tokens_out.effects() != tokens_in.effects():
+            raise ValueError(
+                f'Lowering rule for `{eqn.primitive}` '
+                'returns incorrect set of output tokens. '
+                f'Expected: {tuple(tokens_in.effects())} vs. Actual: {tuple(tokens_out.effects())}')
+          tokens = tokens.update_tokens(tokens_out)
 
     try:
       out_nodes = tuple(map(wrap_singleton_ir_values, ans))

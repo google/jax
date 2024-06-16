@@ -1983,8 +1983,12 @@ def _pjit_jvp(primals_in, tangents_in,
   primals_out, tangents_out = split_list(outputs, [len(jaxpr.jaxpr.outvars)])
   assert len(primals_out) == len(jaxpr.jaxpr.outvars)
   tangents_out_it = iter(tangents_out)
-  return primals_out, [next(tangents_out_it) if nz else ad.Zero(aval)
-                       for nz, aval in zip(is_nz_tangents_out, jaxpr.out_avals)]
+  tangents_out_ = [next(tangents_out_it) if nz else ad.Zero(aval)
+                   for nz, aval in zip(is_nz_tangents_out, jaxpr.out_avals)]
+  print(primals_out, tangents_out_)
+  # if [p.dtype for p in primals_out] != [t.dtype for t in tangents_out_]:
+  #   breakpoint()
+  return primals_out, tangents_out_
 ad.primitive_jvps[pjit_p] = _pjit_jvp
 
 
