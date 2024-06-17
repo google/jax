@@ -22,6 +22,7 @@ arrays.
 """
 from __future__ import annotations
 
+import atexit
 import collections
 from collections.abc import Generator, Hashable, Iterable, Sequence
 from functools import partial, lru_cache
@@ -49,6 +50,7 @@ from jax._src import effects
 from jax._src import array
 from jax._src import basearray
 from jax._src import dtypes
+from jax._src import sharding
 from jax._src import sharding_impls
 from jax._src import sharding_specs
 from jax._src import source_info_util
@@ -2936,7 +2938,7 @@ def block_until_ready(x):
 
   return x
 
-
+@atexit.register
 def clear_backends():
   """
   Clear all backend clients so that new backend clients can be created later.
@@ -2945,6 +2947,7 @@ def clear_backends():
   xb.local_devices.cache_clear()
   xb.process_count.cache_clear()
   dispatch.xla_primitive_callable.cache_clear()
+  sharding._addressable_devices_indices_map.cache_clear()
   pjit._pjit_lower_cached.cache_clear()
   pjit._create_pjit_jaxpr.cache_clear()  # pytype: disable=attribute-error
   pjit._cpp_pjit_cache.clear()
