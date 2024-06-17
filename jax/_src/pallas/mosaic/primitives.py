@@ -62,7 +62,7 @@ mlir.register_lowering(repeat_p, _repeat_lowering_rule)
 bitcast_p = jax_core.Primitive("bitcast")
 
 
-def bitcast(x, ty: DTypeLike):
+def bitcast(x: jax.Array, ty: DTypeLike) -> jax.Array:
   ty = dtypes.canonicalize_dtype(ty)
   if len(x.shape) < 2:
     raise ValueError("Not implemented: bitcast 1D")
@@ -104,13 +104,13 @@ roll_p = jax_core.Primitive("roll")
 
 
 def roll(
-    x,
+    x: jax.Array,
     shift: int,
     axis: int,
     *,
     stride: int | None = None,
     stride_axis: int | None = None,
-):
+) -> jax.Array:
   if shift < 0:
     raise ValueError("shift must be non-negative.")
   if axis < 0 or axis >= len(x.shape):
