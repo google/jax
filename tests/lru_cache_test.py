@@ -49,25 +49,25 @@ class LRUCacheTest(LRUCacheTestCase):
 
   def test_get_nonexistent_key(self):
     cache = LRUCache(self.name, max_size=-1)
-    self.assertIsNone(cache.get("cache-a"))
+    self.assertIsNone(cache.get("a"))
 
   def test_put_and_get_key(self):
     cache = LRUCache(self.name, max_size=-1)
 
-    cache.put("cache-a", b"a")
-    self.assertEqual(cache.get("cache-a"), b"a")
-    self.assertEqual(set(self.path.glob("cache-*")), {self.path / "cache-a"})
+    cache.put("a", b"a")
+    self.assertEqual(cache.get("a"), b"a")
+    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"a{cache._cache_suffix}"})
 
-    cache.put("cache-b", b"b")
-    self.assertEqual(cache.get("cache-a"), b"a")
-    self.assertEqual(cache.get("cache-b"), b"b")
-    self.assertEqual(set(self.path.glob("cache-*")), {self.path / "cache-a", self.path / "cache-b"})
+    cache.put("b", b"b")
+    self.assertEqual(cache.get("a"), b"a")
+    self.assertEqual(cache.get("b"), b"b")
+    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"a{cache._cache_suffix}", self.path / f"b{cache._cache_suffix}"})
 
   def test_put_empty_value(self):
     cache = LRUCache(self.name, max_size=-1)
 
-    cache.put("cache-a", b"")
-    self.assertEqual(cache.get("cache-a"), b"")
+    cache.put("a", b"")
+    self.assertEqual(cache.get("a"), b"")
 
   def test_put_empty_key(self):
     cache = LRUCache(self.name, max_size=-1)
@@ -78,67 +78,67 @@ class LRUCacheTest(LRUCacheTestCase):
   def test_eviction(self):
     cache = LRUCache(self.name, max_size=2)
 
-    cache.put("cache-a", b"a")
-    cache.put("cache-b", b"b")
+    cache.put("a", b"a")
+    cache.put("b", b"b")
 
-    # `sleep()` is necessary to guarantee that `cache-b`"s timestamp is strictly greater than `cache-a`"s
+    # `sleep()` is necessary to guarantee that `b`"s timestamp is strictly greater than `a`"s
     time.sleep(1)
-    cache.get("cache-b")
+    cache.get("b")
 
-    # write `cache-c`, evict `cache-a`
-    cache.put("cache-c", b"c")
-    self.assertEqual(set(self.path.glob("cache-*")), {self.path / "cache-b", self.path / "cache-c"})
+    # write `c`, evict `a`
+    cache.put("c", b"c")
+    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"b{cache._cache_suffix}", self.path / f"c{cache._cache_suffix}"})
 
-    # calling `get()` on `cache-b` makes `cache-c` least recently used
+    # calling `get()` on `b` makes `c` least recently used
     time.sleep(1)
-    cache.get("cache-b")
+    cache.get("b")
 
-    # write `cache-d`, evict `cache-c`
-    cache.put("cache-d", b"d")
-    self.assertEqual(set(self.path.glob("cache-*")), {self.path / "cache-b", self.path / "cache-d"})
+    # write `d`, evict `c`
+    cache.put("d", b"d")
+    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"b{cache._cache_suffix}", self.path / f"d{cache._cache_suffix}"})
 
   def test_eviction_with_empty_value(self):
     cache = LRUCache(self.name, max_size=1)
 
-    cache.put("cache-a", b"a")
+    cache.put("a", b"a")
 
-    # write `cache-b` with length 0
+    # write `b` with length 0
     # eviction should not happen even though the cache is full
-    cache.put("cache-b", b"")
-    self.assertEqual(set(self.path.glob("cache-*")), {self.path / "cache-a", self.path / "cache-b"})
+    cache.put("b", b"")
+    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"a{cache._cache_suffix}", self.path / f"b{cache._cache_suffix}"})
 
-    # calling `get()` on `cache-a` makes `cache-b` least recently used
+    # calling `get()` on `a` makes `b` least recently used
     time.sleep(1)
-    cache.get("cache-a")
+    cache.get("a")
 
-    # writing `cache-c` should result in evicting the
-    # least recent used file (`cache-b`) first,
-    # but this is not sufficient to make room for `cache-c`,
-    # so `cache-a` should be evicted as well
-    cache.put("cache-c", b"c")
-    self.assertEqual(set(self.path.glob("cache-*")), {self.path / "cache-c"})
+    # writing `c` should result in evicting the
+    # least recent used file (`b`) first,
+    # but this is not sufficient to make room for `c`,
+    # so `a` should be evicted as well
+    cache.put("c", b"c")
+    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"c{cache._cache_suffix}"})
 
   def test_existing_cache_dir(self):
     cache = LRUCache(self.name, max_size=2)
 
-    cache.put("cache-a", b"a")
+    cache.put("a", b"a")
 
     # simulates reinitializing the cache in another process
     del cache
     cache = LRUCache(self.name, max_size=2)
 
-    self.assertEqual(cache.get("cache-a"), b"a")
+    self.assertEqual(cache.get("a"), b"a")
 
     # ensure that the LRU policy survives cache reinitialization
-    cache.put("cache-b", b"b")
+    cache.put("b", b"b")
 
-    # calling `get()` on `cache-a` makes `cache-b` least recently used
+    # calling `get()` on `a` makes `b` least recently used
     time.sleep(1)
-    cache.get("cache-a")
+    cache.get("a")
 
-    # write `cache-c`, evict `cache-b`
-    cache.put("cache-c", b"c")
-    self.assertEqual(set(self.path.glob("cache-*")), {self.path / "cache-a", self.path / "cache-c"})
+    # write `c`, evict `b`
+    cache.put("c", b"c")
+    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"a{cache._cache_suffix}", self.path / f"c{cache._cache_suffix}"})
 
   def test_max_size(self):
     cache = LRUCache(self.name, max_size=1)
@@ -146,9 +146,9 @@ class LRUCacheTest(LRUCacheTestCase):
     msg = (r"Cache value for key .+? of size \d+ bytes exceeds the maximum "
            r"cache size of \d+ bytes")
     with self.assertWarnsRegex(UserWarning, msg):
-      cache.put("cache-a", b"aaaa")
-    self.assertIsNone(cache.get("cache-a"))
-    self.assertEqual(set(self.path.glob("cache-*")), set())
+      cache.put("a", b"aaaa")
+    self.assertIsNone(cache.get("a"))
+    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), set())
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from __future__ import annotations
 import heapq
 import logging
 import pathlib
+import time
 import warnings
 
 from jax._src.compilation_cache_interface import CacheInterface
@@ -41,6 +42,8 @@ class LRUCache(CacheInterface):
   is disabled, and the LRU cache functions as a normal cache
   without any size limitations.
   """
+  _cache_suffix = "-cache.bin"
+  _atime_suffix = "-atime.txt"
 
   def __init__(self, path: str, *, max_size: int, lock_timeout_secs: float | None = 10):
     """Args:
@@ -87,19 +90,24 @@ class LRUCache(CacheInterface):
     if not key:
       raise ValueError("key cannot be empty")
 
-    file = self.path / key
+    cache_file = self.path / f"{key}{self._cache_suffix}"
+    atime_file = self.path / f"{key}{self._atime_suffix}"
 
     if self.eviction_enabled:
       self.lock.acquire(timeout=self.lock_timeout_secs)
 
     try:
-      if not file.exists():
+      if not cache_file.exists():
         logger.debug(f"Cache miss for key: {key!r}")
         return None
 
       logger.debug(f"Cache hit for key: {key!r}")
-      file.touch()  # update mtime
-      return file.read_bytes()
+
+      # update timestamp
+      timestamp = self._get_current_timestamp()
+      atime_file.write_text(str(timestamp))
+
+      return cache_file.read_bytes()
 
     finally:
       if self.eviction_enabled:
@@ -125,21 +133,31 @@ class LRUCache(CacheInterface):
       warnings.warn(msg)
       return
 
-    file = self.path / key
+    cache_file = self.path / f"{key}{self._cache_suffix}"
+    atime_file = self.path / f"{key}{self._atime_suffix}"
 
     if self.eviction_enabled:
       self.lock.acquire(timeout=self.lock_timeout_secs)
 
     try:
-      if file.exists():
+      if cache_file.exists():
         return
 
       self._evict_if_needed(additional_size=len(val))
-      file.write_bytes(val)
+
+      cache_file.write_bytes(val)
+
+      # update timestamp
+      timestamp = self._get_current_timestamp()
+      atime_file.write_text(str(timestamp))
 
     finally:
       if self.eviction_enabled:
         self.lock.release()
+
+  @staticmethod
+  def _get_current_timestamp() -> int:
+    return time.time_ns()
 
   def _evict_if_needed(self, *, additional_size: int = 0) -> None:
     """Evicts the least recently used items from the cache if necessary
@@ -153,26 +171,36 @@ class LRUCache(CacheInterface):
     if not self.eviction_enabled:
       return
 
-    # a priority queue, each element is a tuple `(file_mtime, file, file_size)`
-    h: list[tuple[int, pathlib.Path, int]] = []
+    # a priority queue, each element is a tuple `(file_atime, key, file_size)`
+    h: list[tuple[int, str, int]] = []
     dir_size = 0
-    for file in self.path.iterdir():
-      if file.is_file():
-        file_size = file.stat().st_size
-        file_mtime = file.stat().st_mtime_ns
+    for cache_file in self.path.glob(f"*{self._cache_suffix}"):
+      if cache_file.is_file():
+        file_size = cache_file.stat().st_size
+
+        key = cache_file.name.removesuffix(self._cache_suffix)
+        atime_file = self.path / f"{key}{self._atime_suffix}"
+        file_atime = int(atime_file.read_text())
 
         dir_size += file_size
-        heapq.heappush(h, (file_mtime, file, file_size))
+        heapq.heappush(h, (file_atime, key, file_size))
 
     target_size = self.max_size - additional_size
     # evict files until the directory size is less than or equal
     # to `target_size`
     while dir_size > target_size:
-      file_mtime, file, file_size = heapq.heappop(h)
-      msg = (f"Evicting cache file {file.name}: file size {file_size} bytes, "
+      file_atime, key, file_size = heapq.heappop(h)
+
+      msg = (f"Evicting cache entry {key!r}: file size {file_size} bytes, "
              f"target cache size {target_size} bytes")
       logger.debug(msg)
-      file.unlink()
+
+      cache_file = self.path / f"{key}{self._cache_suffix}"
+      atime_file = self.path / f"{key}{self._atime_suffix}"
+
+      cache_file.unlink()
+      atime_file.unlink()
+
       dir_size -= file_size
 
   # See comments in `jax.src.compilation_cache.get_file_cache()` for details.
