@@ -145,7 +145,9 @@ class XlaBridgeTest(jtu.JaxTestCase):
     with warnings.catch_warnings(record=True) as w:
       warnings.simplefilter("always")
 
-      def _mock_tpu_client_with_options(library_path=None, options=None):
+      def _mock_tpu_client_with_options_and_distributed_client(
+          library_path=None, options=None, distributed_client=None
+      ):
         time_to_wait = 5
         start = time.time()
         while not w:
@@ -159,12 +161,25 @@ class XlaBridgeTest(jtu.JaxTestCase):
         msg = str(w[-1].message)
         self.assertIn("Did you run your code on all TPU hosts?", msg)
 
+      def _mock_tpu_client_with_options(library_path=None, options=None):
+        _mock_tpu_client_with_options_and_distributed_client(
+            library_path=library_path, options=options, distributed_client=None
+        )
+
       def _mock_tpu_client(library_path=None):
         _mock_tpu_client_with_options(library_path=library_path, options=None)
 
-      if xla_extension_version >= 267:
-        with mock.patch.object(xc, "make_tpu_client",
-                              side_effect=_mock_tpu_client_with_options):
+      if xla_extension_version >= 271:
+        with mock.patch.object(
+            xc,
+            "make_tpu_client",
+            side_effect=_mock_tpu_client_with_options_and_distributed_client,
+        ):
+          xb.tpu_client_timer_callback(0.01)
+      elif xla_extension_version >= 267:
+        with mock.patch.object(
+            xc, "make_tpu_client", side_effect=_mock_tpu_client_with_options
+        ):
           xb.tpu_client_timer_callback(0.01)
       else:
         with mock.patch.object(xc, "make_tpu_client",

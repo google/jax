@@ -147,7 +147,12 @@ def tpu_client_timer_callback(timer_secs: float) -> xla_client.Client | None:
   t.start()
 
   try:
-    if xla_extension_version >= 267:
+    if xla_extension_version >= 271:
+      client = xla_client.make_tpu_client( # type: ignore
+          get_tpu_library_path(),
+          _options_from_jax_configs("tpu"),
+          distributed.global_state.client)
+    elif xla_extension_version >= 267:
       client = xla_client.make_tpu_client( # type: ignore
           get_tpu_library_path(),
           _options_from_jax_configs("tpu"))
