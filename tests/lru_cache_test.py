@@ -21,7 +21,7 @@ import time
 from absl.testing import absltest
 
 from jax._src import path as pathlib
-from jax._src.lru_cache import LRUCache
+from jax._src.lru_cache import _CACHE_SUFFIX, LRUCache
 import jax._src.test_util as jtu
 
 
@@ -56,12 +56,12 @@ class LRUCacheTest(LRUCacheTestCase):
 
     cache.put("a", b"a")
     self.assertEqual(cache.get("a"), b"a")
-    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"a{cache._cache_suffix}"})
+    self.assertEqual(set(self.path.glob(f"*{_CACHE_SUFFIX}")), {self.path / f"a{_CACHE_SUFFIX}"})
 
     cache.put("b", b"b")
     self.assertEqual(cache.get("a"), b"a")
     self.assertEqual(cache.get("b"), b"b")
-    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"a{cache._cache_suffix}", self.path / f"b{cache._cache_suffix}"})
+    self.assertEqual(set(self.path.glob(f"*{_CACHE_SUFFIX}")), {self.path / f"a{_CACHE_SUFFIX}", self.path / f"b{_CACHE_SUFFIX}"})
 
   def test_put_empty_value(self):
     cache = LRUCache(self.name, max_size=-1)
@@ -81,13 +81,13 @@ class LRUCacheTest(LRUCacheTestCase):
     cache.put("a", b"a")
     cache.put("b", b"b")
 
-    # `sleep()` is necessary to guarantee that `b`"s timestamp is strictly greater than `a`"s
+    # `sleep()` is necessary to guarantee that `b`'s timestamp is strictly greater than `a`'s
     time.sleep(1)
     cache.get("b")
 
     # write `c`, evict `a`
     cache.put("c", b"c")
-    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"b{cache._cache_suffix}", self.path / f"c{cache._cache_suffix}"})
+    self.assertEqual(set(self.path.glob(f"*{_CACHE_SUFFIX}")), {self.path / f"b{_CACHE_SUFFIX}", self.path / f"c{_CACHE_SUFFIX}"})
 
     # calling `get()` on `b` makes `c` least recently used
     time.sleep(1)
@@ -95,7 +95,7 @@ class LRUCacheTest(LRUCacheTestCase):
 
     # write `d`, evict `c`
     cache.put("d", b"d")
-    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"b{cache._cache_suffix}", self.path / f"d{cache._cache_suffix}"})
+    self.assertEqual(set(self.path.glob(f"*{_CACHE_SUFFIX}")), {self.path / f"b{_CACHE_SUFFIX}", self.path / f"d{_CACHE_SUFFIX}"})
 
   def test_eviction_with_empty_value(self):
     cache = LRUCache(self.name, max_size=1)
@@ -105,7 +105,7 @@ class LRUCacheTest(LRUCacheTestCase):
     # write `b` with length 0
     # eviction should not happen even though the cache is full
     cache.put("b", b"")
-    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"a{cache._cache_suffix}", self.path / f"b{cache._cache_suffix}"})
+    self.assertEqual(set(self.path.glob(f"*{_CACHE_SUFFIX}")), {self.path / f"a{_CACHE_SUFFIX}", self.path / f"b{_CACHE_SUFFIX}"})
 
     # calling `get()` on `a` makes `b` least recently used
     time.sleep(1)
@@ -116,7 +116,7 @@ class LRUCacheTest(LRUCacheTestCase):
     # but this is not sufficient to make room for `c`,
     # so `a` should be evicted as well
     cache.put("c", b"c")
-    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"c{cache._cache_suffix}"})
+    self.assertEqual(set(self.path.glob(f"*{_CACHE_SUFFIX}")), {self.path / f"c{_CACHE_SUFFIX}"})
 
   def test_existing_cache_dir(self):
     cache = LRUCache(self.name, max_size=2)
@@ -138,7 +138,7 @@ class LRUCacheTest(LRUCacheTestCase):
 
     # write `c`, evict `b`
     cache.put("c", b"c")
-    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), {self.path / f"a{cache._cache_suffix}", self.path / f"c{cache._cache_suffix}"})
+    self.assertEqual(set(self.path.glob(f"*{_CACHE_SUFFIX}")), {self.path / f"a{_CACHE_SUFFIX}", self.path / f"c{_CACHE_SUFFIX}"})
 
   def test_max_size(self):
     cache = LRUCache(self.name, max_size=1)
@@ -148,7 +148,7 @@ class LRUCacheTest(LRUCacheTestCase):
     with self.assertWarnsRegex(UserWarning, msg):
       cache.put("a", b"aaaa")
     self.assertIsNone(cache.get("a"))
-    self.assertEqual(set(self.path.glob(f"*{cache._cache_suffix}")), set())
+    self.assertEqual(set(self.path.glob(f"*{_CACHE_SUFFIX}")), set())
 
 
 if __name__ == "__main__":
