@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import collections.abc
 import dataclasses
+import enum
 import functools
 import io
 import os
@@ -69,6 +70,20 @@ tpu_custom_call_p.def_impl(
 tpu_custom_call_p.multiple_results = True
 
 
+class MemorySpace(enum.Enum):
+  HBM = enum.auto()
+  VMEM = enum.auto()
+
+  @property
+  def color(self) -> int:
+    if self == MemorySpace.HBM:
+      return 0
+    elif self == MemorySpace.VMEM:
+      return 1
+    else:
+      raise ValueError("invalid memory space: " + str(self))
+
+
 @dataclasses.dataclass(frozen=True)
 class CostEstimate:
   flops: int
@@ -95,6 +110,7 @@ class CustomCallBackendConfig:
   vmem_limit_bytes: int | None
   flags: dict[str, bool | int | float] | None
   allow_input_fusion: list[bool] | None
+  output_memory_spaces: tuple[MemorySpace, ...] | None
   serialization_format: int | None
 
   # We omit the body while printing, because primitive params get embedded
@@ -133,6 +149,13 @@ class CustomCallBackendConfig:
         config.write(b"true" if value else b"false")
         # config.write(str(value).lower().encode("ascii"))
         if i + 1 != len(self.allow_input_fusion):
+          config.write(b",")
+      config.write(b"]")
+    if self.output_memory_spaces is not None:
+      config.write(b', "output_memory_colors": [')
+      for i, memory_space in enumerate(self.output_memory_spaces):
+        config.write(str(memory_space.color).encode("ascii"))
+        if i:
           config.write(b",")
       config.write(b"]")
     config.write(b"}")  # End of custom_call_config.
@@ -375,6 +398,7 @@ def as_tpu_kernel(
     flags: dict[str, bool | int | float] | None = None,
     allow_input_fusion: list[bool] | None = None,
     input_output_aliases: tuple[tuple[int, int], ...] = (),
+    output_memory_spaces: tuple[MemorySpace, ...] | None = None,
 ) -> Callable[..., Any]:
   """Turns an MLIR Mosaic kernel into a JAX-compatible function."""
   # We use jax.jit to make sure we hit the fast compilation cache.
@@ -434,6 +458,7 @@ def as_tpu_kernel(
       flags=flags,
       allow_input_fusion=allow_input_fusion,
       input_output_aliases=input_output_aliases,
+      output_memory_spaces=output_memory_spaces,
   )
 
 
@@ -452,6 +477,7 @@ def _lowered_as_tpu_kernel(
     flags: dict[str, bool | int | float] | None = None,
     allow_input_fusion: list[bool] | None = None,
     input_output_aliases: tuple[tuple[int, int], ...] = (),
+    output_memory_spaces: tuple[MemorySpace, ...] | None = None,
     serialization_format: int | None = 1,
 ):
   """Turns a low-level MLIR Mosaic kernel into a JAX-compatible function."""
@@ -482,6 +508,7 @@ def _lowered_as_tpu_kernel(
         vmem_limit_bytes,
         flags,
         allow_input_fusion,
+        output_memory_spaces,
         serialization_format=serialization_format,
     )
     result = tpu_custom_call_p.bind(
