@@ -2188,9 +2188,11 @@ lowering_rules[tpu_primitives.repeat_p] = _repeat_lowering_rule
 
 
 def _roll_lowering_rule(
-    ctx: LoweringRuleContext, x, *, shift, axis, stride, stride_axis
+    ctx: LoweringRuleContext, x, shift, *, axis, stride, stride_axis
 ):
+  (out_aval,) = ctx.avals_out
   return tpu.RotateOp(
+      aval_to_ir_type(out_aval),
       x,
       shift,
       axis,

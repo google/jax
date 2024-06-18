@@ -232,10 +232,10 @@ def TPU_StridedStoreOp : TPU_Op<"strided_store"> {
   let hasVerifier = 1;
 }
 
-def TPU_RotateOp : TPU_Op<"rotate", [Pure, SameOperandsAndResultType]> {
+def TPU_RotateOp : TPU_Op<"rotate", [Pure]> {
   let arguments = (ins
     AnyVector:$value,
-    SI32Attr:$amount,
+    I32:$amount,
     SI32Attr:$dimension,
     // When the stride is specified, the rotation amount for each index on the
     // stride dimension will be (amount + stride * index).
@@ -244,7 +244,7 @@ def TPU_RotateOp : TPU_Op<"rotate", [Pure, SameOperandsAndResultType]> {
   );
   let results = (outs AnyVector:$result);
   let assemblyFormat = [{
-    $value `by` $amount `dim` $dimension (`stride` $stride `stride_dim` $stride_dimension^)? attr-dict `:` type($value)
+    $value `by` $amount `dim` $dimension attr-dict `:` type($value) `,` type($amount)  `->` type($result)
   }];
   let hasVerifier = 1;
 }

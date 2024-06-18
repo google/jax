@@ -2023,7 +2023,7 @@ LogicalResult tpu_assume_layout_rule(RewriteContext &ctx, Operation &op,
 LogicalResult tpu_rotate_rule(RewriteContext &ctx, Operation &op,
                               const ArrayRef<Layout> layouts_in,
                               const ArrayRef<Layout> layouts_out) {
-  CHECK_EQ(layouts_in.size(), 1);
+  CHECK_EQ(layouts_in.size(), 2);
   CHECK_EQ(layouts_out.size(), 1);
   if (!layouts_in.front().has_value()) {
     return op.emitOpError("Expected non-null input layout");
@@ -2116,9 +2116,12 @@ LogicalResult tpu_rotate_rule(RewriteContext &ctx, Operation &op,
                 stride > 0 ? builder.getSI32IntegerAttr(stride) : nullptr;
             auto stride_dimension_attr =
                 stride > 0 ? builder.getSI32IntegerAttr(0) : nullptr;
-            *v = builder.create<tpu::RotateOp>(res_vreg_ty, *v, shift_in_vreg,
-                                               tiling_dim, stride_attr,
-                                               stride_dimension_attr);
+            *v = builder.create<tpu::RotateOp>(
+                res_vreg_ty, *v,
+                builder.create<arith::ConstantOp>(
+                    builder.getI32Type(),
+                    builder.getI32IntegerAttr(shift_in_vreg)),
+                tiling_dim, stride_attr, stride_dimension_attr);
           });
         }
         // After rotation on each vreg, we need to select the wrapped data
@@ -2149,7 +2152,14 @@ LogicalResult tpu_rotate_rule(RewriteContext &ctx, Operation &op,
 
   xla::Array<Value> out_tiles(in_tiles.dimensions());
   const auto dim = rotate_op.getDimension();
-  const auto amount = rotate_op.getAmount() % vty.getDimSize(dim);
+  auto amt_const = getIntConst(rotate_op.getAmount(), /*silent=*/true);
+  if (failed(amt_const)) {
+    return op.emitOpError("Not implemented: shifting by non-constant amounts");
+  }
+  if (amt_const.value() < 0) {
+    return op.emitOpError("Not implemented: shifting by negative amount");
+  }
+  const auto amount = amt_const.value() % vty.getDimSize(dim);
 
   if (rotate_op.getStride().has_value() &&
       rotate_op.getStrideDimension().has_value()) {
@@ -4358,8 +4368,11 @@ xla::Array<Value> retileToReducedSublanes(
     if (rotate_amt < 0) {
       rotate_amt += target_shape[0];
     }
+    auto loc = src_vreg.getLoc();
     *rotated_src_vreg = builder.create<tpu::RotateOp>(
-        src_vreg.getLoc(), src_vreg, rotate_amt,
+        loc, src_vreg.getType(), src_vreg,
+        builder.create<arith::ConstantOp>(
+            loc, builder.getI32Type(), builder.getI32IntegerAttr(rotate_amt)),
         /*dimension=*/0, /*stride=*/nullptr, /*stride_dimension=*/nullptr);
   });
   // Assemble output vregs using tiles from rotated vregs using select.
@@ -4467,9 +4480,14 @@ xla::Array<Value> retileToReducedSublanes(
       // dst_tile_3_0_1
       // dst_tile_3_0_2
       // dst_tile_3_0_3
+      auto loc = dst_tile.getLoc();
       *dst_vreg = builder.create<tpu::RotateOp>(
-          dst_tile.getLoc(), dst_tile,
-          target_shape[0] - first_dst_tile_sublane_offset, /*dimension=*/0,
+          loc, dst_tile.getType(), dst_tile,
+          builder.create<arith::ConstantOp>(
+              loc, builder.getI32Type(),
+              builder.getI32IntegerAttr(target_shape[0] -
+                                        first_dst_tile_sublane_offset)),
+          /*dimension=*/0,
           /*stride=*/nullptr, /*stride_dimension=*/nullptr);
     }
   });
@@ -4522,19 +4540,22 @@ Value copy_one_sublane(OpBuilder &builder, Value src_vreg, int src_sl_idx,
                                          src_vreg, gather_indices,
                                          /*dimension=*/0);
   }
+  auto loc = src_vreg.getLoc();
   auto src_vreg_rot = builder.create<tpu::RotateOp>(
-      src_vreg.getLoc(), src_vreg,
-      /*amount=*/(dst_sl_idx - src_sl_idx + 8) % 8,
+      loc, src_vreg.getType(), src_vreg,
+      /*amount=*/
+      builder.create<arith::ConstantOp>(
+          loc, builder.getI32Type(),
+          builder.getI32IntegerAttr((dst_sl_idx - src_sl_idx + 8) % 8)),
       /*dimension=*/0, /*stride=*/nullptr, /*stride_dimension=*/nullptr);
-  auto boundIdxConst =
-      std::bind(IdxConst, std::placeholders::_1, builder, src_vreg.getLoc());
+  auto boundIdxConst = std::bind(IdxConst, std::placeholders::_1, builder, loc);
   auto sublanes_mask = builder.create<tpu::CreateMaskOp>(
-      src_vreg.getLoc(), VectorType::get(target_shape, builder.getI1Type()),
+      loc, VectorType::get(target_shape, builder.getI1Type()),
       ValueRange{boundIdxConst(dst_sl_idx), boundIdxConst(0)},
       ValueRange{boundIdxConst(dst_sl_idx + 1),
                  boundIdxConst(target_shape[1])});
-  return builder.create<arith::SelectOp>(src_vreg.getLoc(), sublanes_mask,
-                                         src_vreg_rot, dst_vreg);
+  return builder.create<arith::SelectOp>(loc, sublanes_mask, src_vreg_rot,
+                                         dst_vreg);
 }
 
 // TODO(apaszke): Test this function properly
@@ -4831,13 +4852,16 @@ FailureOr<TypedValue<VectorType>> relayout(
           sublane_diff += target_shape[0];
         }
         src_tiles.Each([&](absl::Span<const int64_t> idx, Value tile) {
-          dst_tiles(idx) =
-              builder
-                  .create<tpu::RotateOp>(v.getLoc(), tile,
-                                         /*amount=*/sublane_diff,
-                                         /*dimension=*/0, /*stride=*/nullptr,
-                                         /*stride_dimension=*/nullptr)
-                  .getResult();
+          dst_tiles(idx) = builder
+                               .create<tpu::RotateOp>(
+                                   v.getLoc(), tile.getType(), tile,
+                                   /*amount=*/
+                                   builder.create<arith::ConstantOp>(
+                                       v.getLoc(), builder.getI32Type(),
+                                       builder.getI32IntegerAttr(sublane_diff)),
+                                   /*dimension=*/0, /*stride=*/nullptr,
+                                   /*stride_dimension=*/nullptr)
+                               .getResult();
         });
       }
       const int src_subelem = *src.offsets()[0] % packing;
@@ -4907,15 +4931,18 @@ FailureOr<TypedValue<VectorType>> relayout(
             ValueRange{boundIdxConst(target_shape[0]),
                        boundIdxConst(lane_end)});
       }
+      int rot_amt = col_diff < 0 ? target_shape[1] + col_diff : col_diff;
       src_tiles.Each([&](absl::Span<const int64_t> idx, Value *tile) {
-        *tile = builder
-                    .create<tpu::RotateOp>(v.getLoc(), *tile,
-                                           /*amount=*/col_diff < 0
-                                               ? target_shape[1] + col_diff
-                                               : col_diff,
-                                           /*dimension=*/1, /*stride=*/nullptr,
-                                           /*stride_dimension=*/nullptr)
-                    .getResult();
+        *tile =
+            builder
+                .create<tpu::RotateOp>(v.getLoc(), tile->getType(), *tile,
+                                       /*amount=*/
+                                       builder.create<arith::ConstantOp>(
+                                           v.getLoc(), builder.getI32Type(),
+                                           builder.getI32IntegerAttr(rot_amt)),
+                                       /*dimension=*/1, /*stride=*/nullptr,
+                                       /*stride_dimension=*/nullptr)
+                .getResult();
       });
       src_tiles.Each([&](absl::Span<const int64_t> idx, Value rot_tile) {
         Value prev_rot_tile;

@@ -108,13 +108,13 @@ roll_p = jax_core.Primitive("roll")
 
 def roll(
     x,
-    shift: int,
+    shift,
     axis: int,
     *,
     stride: int | None = None,
     stride_axis: int | None = None,
 ):
-  if shift < 0:
+  if isinstance(shift, int) and shift < 0:
     raise ValueError("shift must be non-negative.")
   if axis < 0 or axis >= len(x.shape):
     raise ValueError("axis is out of range.")
@@ -128,19 +128,20 @@ def roll(
     if axis == stride_axis:
       raise ValueError("expected axis and stride_axis are different.")
   return roll_p.bind(
-      x, shift=shift, axis=axis, stride=stride, stride_axis=stride_axis
+      x, shift, axis=axis, stride=stride, stride_axis=stride_axis
   )
 
 
 @roll_p.def_abstract_eval
-def _roll_abstract_eval(x, **_):
+def _roll_abstract_eval(x, shift, **_):
+  del shift
   return jax_core.raise_to_shaped(x)
 
 
 def _roll_lowering_rule(
-    ctx: mlir.LoweringRuleContext, x, *, shift, axis, stride, stride_axis
+    ctx: mlir.LoweringRuleContext, x, shift, *, axis, stride, stride_axis
 ):
-  def _roll(x):
+  def _roll(x, shift):
     if stride is None:
       return jnp.roll(x, shift, axis)
     outputs = [
@@ -149,7 +150,7 @@ def _roll_lowering_rule(
     ]
     return jnp.concatenate(outputs, stride_axis)
 
-  return mlir.lower_fun(_roll, multiple_results=False)(ctx, x)
+  return mlir.lower_fun(_roll, multiple_results=False)(ctx, x, shift)
 
 
 mlir.register_lowering(roll_p, _roll_lowering_rule)

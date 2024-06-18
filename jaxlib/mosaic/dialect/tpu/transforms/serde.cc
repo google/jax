@@ -27,6 +27,8 @@ limitations under the License.
 #include "mlir/IR/Visitors.h"
 #include "mlir/Pass/Pass.h"  // IWYU pragma: keep
 #include "mlir/Support/LLVM.h"
+#include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/include/mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/include/mlir/IR/OpDefinition.h"
 #include "mlir/include/mlir/IR/OperationSupport.h"
 #include "mlir/include/mlir/Support/LogicalResult.h"
@@ -41,7 +43,7 @@ namespace {
 
 constexpr std::string_view kMangledDialect = "stable_mosaic.";
 constexpr StringRef kVersionAttrName = "stable_mosaic.version";
-constexpr int kVersion = 2;
+constexpr int kVersion = 3;
 
 StringRef mangle(StringRef name, std::string* storage) {
   storage->clear();
@@ -100,10 +102,52 @@ LogicalResult semaphore_signal_rule(Operation* op, int version) {
   return success();
 }
 
+LogicalResult rotate_rule(Operation* op, int version) {
+  // Update rotate amount from static attribute to dynamic value in version 3.
+  if (version < 3) {
+    /* Previous interface:
+    def TPU_RotateOp : TPU_Op<"rotate", [Pure, SameOperandsAndResultType]> {
+      let arguments = (ins
+        AnyVector:$value,
+        SI32Attr:$amount,
+        SI32Attr:$dimension,
+        OptionalAttr<SI32Attr>:$stride,
+        OptionalAttr<SI32Attr>:$stride_dimension
+      );
+      let results = (outs AnyVector:$result);
+      ...
+    }
+    */
+    if (op->getNumOperands() == 1) {
+      ImplicitLocOpBuilder builder(op->getLoc(), op);
+      auto amount = op->getAttrOfType<IntegerAttr>("amount");
+      auto dimension = op->getAttrOfType<IntegerAttr>("dimension");
+      IntegerAttr stride = nullptr;
+      if (op->hasAttrOfType<IntegerAttr>("stride")) {
+        stride = op->getAttrOfType<IntegerAttr>("stride");
+      }
+      IntegerAttr stride_dimension = nullptr;
+      if (op->hasAttrOfType<IntegerAttr>("stride_dimension")) {
+        stride_dimension = op->getAttrOfType<IntegerAttr>("stride_dimension");
+      }
+      auto new_op = builder.create<tpu::RotateOp>(
+          op->getResult(0).getType(), op->getOperand(0),
+          builder.create<arith::ConstantOp>(builder.getI32Type(), amount),
+          dimension, stride, stride_dimension);
+      op->replaceAllUsesWith(new_op);
+      op->erase();
+    } else {
+      return op->emitError("Unexpected operand count in tpu.rotate");
+    }
+  }
+  return success();
+}
+
 const llvm::StringMap<rule_type>& upgrade_rules() {
   static auto rules = new llvm::StringMap<rule_type>{
       {EnqueueDMAOp::getOperationName(), enqueue_dma_rule},
       {SemaphoreSignalOp::getOperationName(), semaphore_signal_rule},
+      {RotateOp::getOperationName(), rotate_rule},
   };
   return *rules;
 }
