@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import heapq
 import logging
-import pathlib
 import warnings
 
+from jax._src import path as pathlib
 from jax._src.compilation_cache_interface import CacheInterface
 
 
@@ -72,8 +72,8 @@ class LRUCache(CacheInterface):
       self.max_size = max_size
       self.lock_timeout_secs = lock_timeout_secs
 
-      lock_path = self.path / ".lockfile"
-      self.lock = filelock.FileLock(lock_path)
+      self.lock_path = self.path / ".lockfile"
+      self.lock = filelock.FileLock(self.lock_path)
 
   def get(self, key: str) -> bytes | None:
     """Retrieves the cached value for the given key.
@@ -157,9 +157,10 @@ class LRUCache(CacheInterface):
     h: list[tuple[int, pathlib.Path, int]] = []
     dir_size = 0
     for file in self.path.iterdir():
-      if file.is_file():
-        file_size = file.stat().st_size
-        file_mtime = file.stat().st_mtime_ns
+      if file.is_file() and file != self.lock_path:
+        stat = file.stat()
+        file_size = stat.length
+        file_mtime = stat.mtime
 
         dir_size += file_size
         heapq.heappush(h, (file_mtime, file, file_size))
@@ -169,7 +170,7 @@ class LRUCache(CacheInterface):
     # to `target_size`
     while dir_size > target_size:
       file_mtime, file, file_size = heapq.heappop(h)
-      msg = (f"Evicting cache file {file.name}: file size {file_size} bytes, "
+      msg = (f"Evicting cache file {file}: file size {file_size} bytes, "
              f"target cache size {target_size} bytes")
       logger.debug(msg)
       file.unlink()
