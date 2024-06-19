@@ -226,6 +226,10 @@ class VectorLayoutInferer {
         if (infer(op).failed()) {
           return failure();
         }
+      } else if (auto op = dyn_cast<tpu::DynamicRotateOp>(any_op)) {
+        if (infer(op).failed()) {
+          return failure();
+        }
       } else if (auto op = dyn_cast<tpu::ConcatenateOp>(any_op)) {
         if (infer(op).failed()) {
           return failure();
@@ -712,6 +716,7 @@ class VectorLayoutInferer {
     return success();
   }
 
+  // TODO(b/347016737): deprecate the static rotate.
   LogicalResult infer(tpu::RotateOp op) {
     auto bitwidth = op.getType().getElementTypeBitWidth();
     if (bitwidth != 32) {
@@ -723,6 +728,21 @@ class VectorLayoutInferer {
     auto layout = VectorLayout(bitwidth, {0, 0}, nativeTiling(bitwidth),
                                ImplicitDim::kNone);
     setLayout(op, layout, layout);
+    return success();
+  }
+
+  LogicalResult infer(tpu::DynamicRotateOp op) {
+    auto bitwidth = op.getType().getElementTypeBitWidth();
+    // TODO(b/347067057): Support dynamic rotate with packed dtype.
+    if (bitwidth != 32) {
+      NYI("Rotate with non-32-bit data");
+    }
+    if (op.getType().getRank() < 2) {
+      NYI("Unsupported 1D shape");
+    }
+    auto layout = VectorLayout(bitwidth, {0, 0}, nativeTiling(bitwidth),
+                               ImplicitDim::kNone);
+    setLayout(op, {layout, kNoLayout}, layout);
     return success();
   }
 
@@ -1573,13 +1593,21 @@ class VectorLayoutInferer {
     if (default_tiling_[0] % layout.tiling()[0] == 0 &&
         default_tiling_[1] == layout.tiling()[1]) {
       src_layout = layout;
+      dst_layout = VectorLayout(32, layout.offsets(), src_layout->tiling(),
+                                layout.implicit_dim());
+    } else if (layout.tiling() ==
+               nativeTiling(src_ty.getElementTypeBitWidth())) {
+      // If the source is already in native tiling, we can unpack it directly.
+      src_layout = layout;
+      dst_layout = VectorLayout(32, layout.offsets(), default_tiling_,
+                                layout.implicit_dim());
     } else {
       // TODO(b/335863273): we should also reduce offsets.
       src_layout = VectorLayout(layout.bitwidth(), layout.offsets(),
                                 default_tiling_, layout.implicit_dim());
+      dst_layout = VectorLayout(32, layout.offsets(), default_tiling_,
+                                layout.implicit_dim());
     }
-    dst_layout = VectorLayout(32, layout.offsets(), src_layout->tiling(),
-                              layout.implicit_dim());
     setLayout(op, src_layout, dst_layout);
     return success();
   }

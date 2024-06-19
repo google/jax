@@ -24,7 +24,7 @@ jobs:
           access_token: ${{ github.token }}
 
       - name: Install LLVM/Clang
-        run: choco install llvm --version=18.1.4 --yes
+        run: choco install llvm --version=18.1.4 --yes --no-progress --allow-downgrade
 
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # ratchet:actions/checkout@v4
 
@@ -39,8 +39,7 @@ jobs:
           JAXLIB_RELEASE: true
         run: |
           python -m pip install -r build/test-requirements.txt
-          python -m pip uninstall -y matplotlib
-          python -m pip install --pre --upgrade numpy==2.0.0rc2 scipy==1.13.0
+          python -m pip install --upgrade numpy==2.0.0 scipy==1.13.1
           "C:\\msys64\\;C:\\msys64\\usr\\bin\\;" >> $env:GITHUB_PATH
           python.exe build\build.py `
             --bazel_options=--color=yes `

@@ -26,6 +26,8 @@ from jax._src.pallas.mosaic.pipeline import emit_pipeline
 from jax._src.pallas.mosaic.pipeline import emit_pipeline_with_allocations
 from jax._src.pallas.mosaic.pipeline import get_pipeline_schedule
 from jax._src.pallas.mosaic.pipeline import make_pipeline_allocations
+from jax._src.pallas.mosaic.pipeline import ARBITRARY
+from jax._src.pallas.mosaic.pipeline import PARALLEL
 from jax._src.pallas.mosaic.primitives import async_copy
 from jax._src.pallas.mosaic.primitives import async_remote_copy
 from jax._src.pallas.mosaic.primitives import bitcast

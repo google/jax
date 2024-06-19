@@ -47,7 +47,6 @@ def pallas_call_lowering(
     name: str,
     in_shapes: tuple[jax.ShapeDtypeStruct, ...],
     out_shapes: tuple[jax.ShapeDtypeStruct, ...],
-    which_linear: tuple[bool, ...],
     interpret: bool,
     debug: bool,
     input_output_aliases: tuple[tuple[int, int], ...],
@@ -62,7 +61,6 @@ def pallas_call_lowering(
         name=name,
         out_shapes=out_shapes,
         in_shapes=in_shapes,
-        which_linear=which_linear,
         interpret=interpret,
         debug=debug,
         input_output_aliases=input_output_aliases,
@@ -87,7 +85,7 @@ def pallas_call_lowering(
     print(grid_mapping)
 
   lowering_result = lowering.lower_jaxpr_to_triton_module(
-      jaxpr, (*in_shapes, *out_shapes), grid_mapping, name,
+      jaxpr, (*in_shapes, *out_shapes), grid_mapping, name, lowering_platform
   )
   module_op = lowering_result.module.operation
   if debug:

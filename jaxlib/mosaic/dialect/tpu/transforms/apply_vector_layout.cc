@@ -7,10 +7,10 @@
 #include <cstdlib>
 #include <functional>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <tuple>
 #include <utility>
-#include <vector>
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
@@ -110,6 +110,14 @@ namespace mlir::tpu {
 #define TPU_ASSERT_LE_LOC(loc, lhs, rhs) \
   TPU_ASSERT_CMP_LOC_IMPL(mlir::emitError(loc), lhs, rhs, <=)
 
+// The minimum bound required to rotate with scratch space. The bound refers to
+// the number of VREGs on rotation dim. This number was concluded from some cost
+// analysis for comparing different dynamic rotation implementations. If
+// actual bound is greater than this, dynamic rotation with internal scratch
+// space is more efficient.
+// TODO(jevinjiang): need to update it based on the generation.
+static constexpr int kMinBoundToRotateWithScratch = 27;
+
 LogicalResult applyLayoutBlock(RewriteContext &ctx, Block &block);
 namespace {
 
@@ -154,6 +162,36 @@ FailureOr<Value> maskOOB(RewriteContext &ctx, OpBuilder &builder,
       DenseElementsAttr::get(neutral_vec_ty, neutral));
   return builder
       .create<arith::SelectOp>(value.getLoc(), mask, value, neutral_vec)
+      .getResult();
+}
+
+// Get the address of pre-allocated internal scratch space with requested shape.
+//
+// Arguments:
+//   shape: The shape of the requested scratch space.
+//   elem_ty: The type of the elements in the requested scratch space.
+//
+// Returns:
+//   A memref of the requested shape and type.
+FailureOr<Value> getInternalScratch(RewriteContext &ctx, OpBuilder &builder,
+                                    Location loc, ArrayRef<int64_t> shape,
+                                    Type elem_ty) {
+  if (shape.empty()) {
+    return failure();
+  }
+  if (shape.back() % ctx.target_shape[1] != 0) {
+    return failure();
+  }
+  int sublane_count =
+      std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>()) /
+      ctx.target_shape[1];
+  if (sublane_count > ctx.max_sublanes_in_scratch) {
+    return failure();
+  }
+  FAILUREOR_ASSIGN_OR_RETURN(
+      MemRefType scratch_ref_ty,
+      inferMemref(MemRefType::get(shape, elem_ty), ctx.hardware_generation));
+  return builder.create<tpu::GetInternalScratchOp>(loc, scratch_ref_ty)
       .getResult();
 }
 
@@ -203,6 +241,21 @@ xla::Array<Value> concatenate(const ArrayRef<xla::Array<Value>> arrays,
   }
   return res;
 }
+
+SmallVector<xla::Array<Value>> split(const xla::Array<Value> &vregs, int axis) {
+  CHECK(axis >= 0 && axis < vregs.num_dimensions());
+  SmallVector<xla::Array<Value>> chunks;
+  chunks.reserve(vregs.dim(axis));
+  SmallVector<int64_t> starts(vregs.num_dimensions(), 0);
+  SmallVector<int64_t> limits(vregs.dimensions().begin(),
+                              vregs.dimensions().end());
+  for (int64_t i = 0; i < vregs.dim(axis); ++i) {
+    starts[axis] = i;
+    limits[axis] = i + 1;
+    chunks.push_back(vregs.Slice(starts, limits));
+  }
+  return chunks;
+};
 
 template <typename T>
 ArrayRef<T> XlaArrayToFlatArrayRef(xla::Array<T> xla_array) {
@@ -719,27 +772,38 @@ LogicalResult ext_op_rule_impl(RewriteContext &ctx, OpTy op,
       const VectorType res_vreg_ty,
       getNativeVregType(result_ty.getElementType(), ctx.target_shape));
   if (layout_in.implicit_dim() != layout_out.implicit_dim()) {
-    return op.emitOpError("Not implemented: Change of layout during the cast");
+    return op.emitOpError(
+        "Not implemented: Change of implicit dim during the cast");
   }
   if (layout_in.offsets() != layout_out.offsets()) {
     return op.emitOpError("Not implemented: Change of offsets during the cast");
   }
-  if (layout_in.tiling() != layout_out.tiling()) {
-    return op.emitOpError("Not implemented: Changing tiling during the cast");
-  }
-  auto tiling = layout_in.tiling();
-  if (ctx.target_shape[0] % tiling[0] != 0 ||
-      ctx.target_shape[1] != tiling[1]) {
-    return op.emitOpError("Not implemented: tiling not supported");
-  }
   const int packing = layout_in.packing();
-  output_vregs.Each([&](absl::Span<const int64_t> idxs, Value *v) {
-    SmallVector<int64_t> input_vreg_idxs(toArrayRef(idxs));
-    input_vreg_idxs.back() /= packing;
-    const int64_t vreg_part = idxs.back() % packing;
-    *v = builder.create<UnpackSubelementsOp>(
-        res_vreg_ty, input_vregs(input_vreg_idxs), vreg_part);
-  });
+  if (layout_in.hasNativeTiling(ctx.target_shape)) {
+    output_vregs.Each([&](absl::Span<const int64_t> idxs, Value *v) {
+      SmallVector<int64_t> input_vreg_idxs(toArrayRef(idxs));
+      int64_t vreg_part = *(input_vreg_idxs.end() - 2) % packing;
+      *(input_vreg_idxs.end() - 2) /= packing;
+      *v = builder.create<UnpackSubelementsOp>(
+          res_vreg_ty, input_vregs(input_vreg_idxs), vreg_part);
+    });
+  } else {
+    if (layout_in.tiling() != layout_out.tiling()) {
+      return op.emitOpError("Not implemented: Changing tiling during the cast");
+    }
+    auto tiling = layout_in.tiling();
+    if (ctx.target_shape[0] % tiling[0] != 0 ||
+        ctx.target_shape[1] != tiling[1]) {
+      return op.emitOpError("Not implemented: tiling not supported");
+    }
+    output_vregs.Each([&](absl::Span<const int64_t> idxs, Value *v) {
+      SmallVector<int64_t> input_vreg_idxs(toArrayRef(idxs));
+      input_vreg_idxs.back() /= packing;
+      const int64_t vreg_part = idxs.back() % packing;
+      *v = builder.create<UnpackSubelementsOp>(
+          res_vreg_ty, input_vregs(input_vreg_idxs), vreg_part);
+    });
+  }
   if (layout_out.implicit_dim() != VectorLayout::ImplicitDim::kNone) {
     output_vregs.Reshape(output_vregs_shape);
   }
@@ -1989,19 +2053,13 @@ LogicalResult tpu_assume_layout_rule(RewriteContext &ctx, Operation &op,
   return success();
 }
 
-LogicalResult tpu_rotate_rule(RewriteContext &ctx, Operation &op,
-                              const ArrayRef<Layout> layouts_in,
-                              const ArrayRef<Layout> layouts_out) {
-  CHECK_EQ(layouts_in.size(), 1);
-  CHECK_EQ(layouts_out.size(), 1);
-  if (!layouts_in.front().has_value()) {
-    return op.emitOpError("Expected non-null input layout");
-  }
-  if (!layouts_out.front().has_value()) {
-    return op.emitOpError("Expected non-null output layout");
-  }
-  const VectorLayout &layout_in = *layouts_in.front();
-  const VectorLayout &layout_out = *layouts_out.front();
+// TODO(b/347016737): Deprecate tpu.rotate and only use tpu.dynamic_rotate. So
+// we do not need template for the op type and to explicitly force amount
+// argument to dynamic.
+template <typename OpTy>
+LogicalResult rotate_rule_impl(RewriteContext &ctx, OpTy op, Value amount,
+                               const VectorLayout &layout_in,
+                               const VectorLayout &layout_out) {
   auto layout = VectorLayout(32, {0, 0}, ctx.target_shape,
                              VectorLayout::ImplicitDim::kNone);
   if (layout_in != layout) {
@@ -2010,8 +2068,7 @@ LogicalResult tpu_rotate_rule(RewriteContext &ctx, Operation &op,
   if (layout_out != layout) {
     return op.emitOpError("Not implemented: unsupported layout for output");
   }
-  tpu::RotateOp rotate_op = cast<tpu::RotateOp>(op);
-  auto vty = rotate_op.getResult().getType();
+  auto vty = op.getResult().getType();
   if (vty.getRank() < 2) {
     return op.emitOpError("Not implemented: unsupported 1D shape");
   }
@@ -2020,23 +2077,77 @@ LogicalResult tpu_rotate_rule(RewriteContext &ctx, Operation &op,
     return op.emitOpError("Not implemented: unsupported unaliged shape");
   }
 
-  ImplicitLocOpBuilder builder(op.getLoc(), &op);
+  ImplicitLocOpBuilder builder(op.getLoc(), op.getOperation());
   FAILUREOR_ASSIGN_OR_RETURN(
       VectorType res_vreg_ty,
       getNativeVregType(vty.getElementType(), ctx.target_shape));
   FAILUREOR_ASSIGN_OR_RETURN(
       const xla::Array<Value> in_tiles,
-      disassemble(builder, layout_in, rotate_op.getValue(), ctx.target_shape));
+      disassemble(builder, layout_in, op.getValue(), ctx.target_shape));
 
   FAILUREOR_ASSIGN_OR_RETURN(
       const VectorType i32_vreg,
       getNativeVregType(builder.getI32Type(), ctx.target_shape));
-  auto getVmaskByPaddingEnd = [&](int dim, int padding, int stride = 0) {
+
+  // Some helper functions for math ops.
+  auto mlirI32Const = [&](int d) {
+    return builder.create<arith::ConstantOp>(
+        builder.getIntegerAttr(builder.getI32Type(), d));
+  };
+  auto mlirIndexConst = [&](int d) {
+    return builder.create<arith::ConstantOp>(
+        builder.getIntegerAttr(builder.getIndexType(), d));
+  };
+  auto modI = [&](const Value &v, unsigned d) -> Value {
+    if (auto cst = getIntConst(v, /*silent=*/true); succeeded(cst)) {
+      return mlirI32Const(cst.value() % d);
+    }
+    return builder.create<arith::RemUIOp>(v, mlirI32Const(d));
+  };
+  auto divI = [&](const Value &v, unsigned d) -> Value {
+    if (auto cst = getIntConst(v, /*silent=*/true); succeeded(cst)) {
+      return mlirI32Const(cst.value() / d);
+    }
+    return builder.create<arith::DivUIOp>(v, mlirI32Const(d));
+  };
+  auto addI = [&](const Value &v, unsigned d) -> Value {
+    if (auto cst = getIntConst(v, /*silent=*/true); succeeded(cst)) {
+      return mlirI32Const(cst.value() + d);
+    }
+    return builder.create<arith::AddIOp>(v, mlirI32Const(d));
+  };
+
+  // A helper function that creates a VMASK with false flags to bottom (dim = 0)
+  // or right (dim = 1) where the flag count corresponds to the (dim_size -
+  // padding). If stride is provided, the padding value is sequentially
+  // increased by the stride value along the dim.
+  //
+  // For example, assume VMASK shape is (4, 8)
+  //
+  // getVmaskByPaddingEnd(padding=3, dim=1) creates:
+  //  [T, T, T, T, T, F, F, F]
+  //  [T, T, T, T, T, F, F, F]
+  //  [T, T, T, T, T, F, F, F]
+  //  [T, T, T, T, T, F, F, F]
+  //
+  // getVmaskByPaddingEnd(padding=3, dim=1, stride=1) creates:
+  //  [T, T, T, T, T, F, F, F]
+  //  [T, T, T, T, T, T, F, F]
+  //  [T, T, T, T, T, T, T, F]
+  //  [T, T, T, T, T, T, T, T]
+  auto getVmaskByPaddingEnd = [&](Value padding, int dim, int stride = 0) {
     CHECK(dim == 0 || dim == 1);
-    CHECK(padding >= 0 && padding <= ctx.target_shape[dim]);
-    Value padding_vreg = builder.create<arith::ConstantOp>(
-        DenseElementsAttr::get(i32_vreg, builder.getI32IntegerAttr(
-                                             ctx.target_shape[dim] - padding)));
+    Value padding_vreg;
+    if (auto padding_cst = getIntConst(padding, /*silent=*/true);
+        succeeded(padding_cst)) {
+      CHECK_GE(padding_cst.value(), 0);
+      CHECK_LE(padding_cst.value(), ctx.target_shape[dim]);
+      padding_vreg = builder.create<arith::ConstantOp>(DenseElementsAttr::get(
+          i32_vreg, builder.getI32IntegerAttr(padding_cst.value())));
+    } else {
+      padding_vreg = builder.create<vector::BroadcastOp>(i32_vreg, padding);
+    }
+
     if (stride > 0) {
       auto offset = builder.create<arith::MulIOp>(
           i32_vreg,
@@ -2053,77 +2164,155 @@ LogicalResult tpu_rotate_rule(RewriteContext &ctx, Operation &op,
         padding_vreg);
   };
 
-  auto splitVregs = [](const xla::Array<Value> &vregs, int axis) {
-    CHECK(axis >= 0 && axis < vregs.num_dimensions());
-    SmallVector<xla::Array<Value>> chunks;
-    chunks.reserve(vregs.dim(axis));
-    for (int64_t i = 0; i < vregs.dim(axis); ++i) {
-      SmallVector<int64_t> starts(vregs.num_dimensions(), 0);
-      starts[axis] = i;
-      SmallVector<int64_t> limits(vregs.dimensions().begin(),
-                                  vregs.dimensions().end());
-      limits[axis] = i + 1;
-      chunks.push_back(vregs.Slice(starts, limits));
+  // Apply rotation on each vreg with the assumption that shift <= VREG dim size
+  // and blend the data from contiguous vregs to emulate circular rotation.
+  auto rotateOnTilingDim = [&](const xla::Array<Value> &vregs,
+                               const Value &shift, int axis, int stride = 0) {
+    if (auto shift_cst = getIntConst(shift, /*silent=*/true);
+        succeeded(shift_cst)) {
+      if (shift_cst.value() == 0 && stride == 0) {
+        return vregs;
+      }
     }
-    return chunks;
+    int tiling_dim = axis - (vregs.num_dimensions() - 2);
+    CHECK((tiling_dim == 0 && stride == 0) || (tiling_dim == 1 && stride >= 0));
+    xla::Array<Value> result(vregs.dimensions());
+    auto chunks = split(vregs, axis);
+    for (int64_t i = 0; i < chunks.size(); ++i) {
+      chunks[i].Each([&](absl::Span<const int64_t> idxs, Value *v) {
+        auto stride_attr =
+            stride > 0 ? builder.getSI32IntegerAttr(stride) : nullptr;
+        auto stride_dimension_attr =
+            stride > 0 ? builder.getSI32IntegerAttr(0) : nullptr;
+        *v = builder.create<tpu::DynamicRotateOp>(res_vreg_ty, *v, shift,
+                                                  tiling_dim, stride_attr,
+                                                  stride_dimension_attr);
+      });
+    }
+    auto mask = getVmaskByPaddingEnd(shift, tiling_dim, stride);
+    xla::Array<Value> last_chunk_copy(chunks[chunks.size() - 1]);
+    for (int64_t i = chunks.size() - 1; i > 0; --i) {
+      chunks[i].Each([&](absl::Span<const int64_t> idxs, Value *v) {
+        *v = builder.create<arith::SelectOp>(mask, chunks[i - 1](idxs), *v);
+      });
+    }
+    chunks[0].Each([&](absl::Span<const int64_t> idxs, Value *v) {
+      *v = builder.create<arith::SelectOp>(mask, last_chunk_copy(idxs), *v);
+    });
+    return concatenate(chunks, axis);
   };
-  auto roll = [&](const xla::Array<Value> &vregs, int64_t shift, int axis,
-                  int stride = 0) {
+
+  std::function<xla::Array<Value>(const xla::Array<Value> &, Value, int, int)>
+      rotate;
+  rotate = [&](const xla::Array<Value> &vregs, Value shift, int axis,
+               int stride) {
     xla::Array<Value> result(vregs.dimensions());
     CHECK(axis >= 0 && axis < vregs.num_dimensions());
-    auto chunks = splitVregs(vregs, axis);
-    if (axis >= vregs.num_dimensions() - 2) {
-      int tiling_dim = axis - (vregs.num_dimensions() - 2);
-      int64_t shift_in_vreg = shift % ctx.target_shape[tiling_dim];
-      shift /= ctx.target_shape[tiling_dim];
-      CHECK((tiling_dim == 0 && stride == 0) ||
-            (tiling_dim == 1 && stride >= 0));
-      if (shift_in_vreg != 0 || stride != 0) {
-        for (int64_t i = 0; i < chunks.size(); ++i) {
-          chunks[i].Each([&](absl::Span<const int64_t> idxs, Value *v) {
-            auto stride_attr =
-                stride > 0 ? builder.getSI32IntegerAttr(stride) : nullptr;
-            auto stride_dimension_attr =
-                stride > 0 ? builder.getSI32IntegerAttr(0) : nullptr;
-            *v = builder.create<tpu::RotateOp>(res_vreg_ty, *v, shift_in_vreg,
-                                               tiling_dim, stride_attr,
-                                               stride_dimension_attr);
-          });
-        }
-        // After rotation on each vreg, we need to select the wrapped data
-        // from the previous vreg and overwrite them to the current vreg.
-        auto mask = getVmaskByPaddingEnd(
-            tiling_dim, ctx.target_shape[tiling_dim] - shift_in_vreg, stride);
-        xla::Array<Value> last_chunk_copy(chunks[chunks.size() - 1]);
-        for (int64_t i = chunks.size() - 1; i > 0; --i) {
-          chunks[i].Each([&](absl::Span<const int64_t> idxs, Value *v) {
-            *v = builder.create<arith::SelectOp>(mask, chunks[i - 1](idxs), *v);
-          });
-        }
-        chunks[0].Each([&](absl::Span<const int64_t> idxs, Value *v) {
-          *v = builder.create<arith::SelectOp>(mask, last_chunk_copy(idxs), *v);
-        });
+    int tiling_dim = axis - (vregs.num_dimensions() - 2);
+    CHECK((tiling_dim != 1 && stride == 0) || (tiling_dim == 1 && stride >= 0));
+    SmallVector<xla::Array<Value>, 4> chunks;
+    // Handle rotation with static shift.
+    if (auto shift_cst = getIntConst(shift, /*silent=*/true);
+        succeeded(shift_cst)) {
+      int64_t static_shift = shift_cst.value();
+      if (tiling_dim >= 0) {
+        shift = mlirI32Const(static_shift % ctx.target_shape[tiling_dim]);
+        static_shift /= ctx.target_shape[tiling_dim];
+        chunks = split(rotateOnTilingDim(vregs, shift, axis, stride), axis);
+      } else {
+        chunks = split(vregs, axis);
       }
-    } else {
-      CHECK_EQ(stride, 0);
+      // Now we only need to shuffle vregs.
+      for (int64_t i = 0; i < chunks.size(); ++i) {
+        SmallVector<int64_t> starts(result.num_dimensions(), 0);
+        starts[axis] = (i + static_shift) % result.dim(axis);
+        result.UpdateSlice(chunks[i], starts);
+      }
+      return result;
     }
-    // Now we only need to shuffle vregs.
-    for (int64_t i = 0; i < chunks.size(); ++i) {
-      SmallVector<int64_t> starts(result.num_dimensions(), 0);
-      starts[axis] = (i + shift) % result.dim(axis);
-      result.UpdateSlice(chunks[i], starts);
+    // Handle rotation with dynamic shift.
+    // TODO(jevinjiang): consider optimize with assume_multiple op.
+    Value in_vreg_shift = tiling_dim >= 0
+                              ? modI(shift, ctx.target_shape[tiling_dim])
+                              : mlirI32Const(0);
+    Value vreg_shift =
+        tiling_dim >= 0 ? divI(shift, ctx.target_shape[tiling_dim]) : shift;
+    result = tiling_dim >= 0
+                 ? rotateOnTilingDim(vregs, in_vreg_shift, axis, stride)
+                 : vregs;
+    int bound = vregs.dim(axis);
+    if (bound <= ctx.max_sublanes_in_scratch / ctx.target_shape[0] &&
+        bound >= kMinBoundToRotateWithScratch) {
+      // Use static store + dynamic load to implement dynamic shift.
+      if (auto scratch_ref = getInternalScratch(
+              ctx, builder, op.getLoc(),
+              {ctx.max_sublanes_in_scratch / ctx.target_shape[0],
+               ctx.target_shape[0], ctx.target_shape[1]},
+              vty.getElementType());
+          succeeded(scratch_ref)) {
+        auto cst_0 = mlirIndexConst(0);
+        SmallVector<Value, 3> scratch_indices(3, cst_0);
+        SmallVector<bool> sublane_mask(ctx.target_shape[0], true);
+        const auto sublane_mask_attr =
+            DenseBoolArrayAttr::get(op.getContext(), sublane_mask);
+        chunks = split(result, axis);
+        chunks[0].Each([&](absl::Span<const int64_t> idxs, Value *v) {
+          // Static store vregs.
+          for (int i = 0; i < bound; ++i) {
+            scratch_indices[0] = mlirIndexConst(i);
+            builder.create<tpu::StoreOp>(chunks[i](idxs), scratch_ref.value(),
+                                         scratch_indices, sublane_mask_attr,
+                                         /*mask=*/nullptr,
+                                         /*sublane_stride=*/nullptr);
+          }
+          // Dynamic load vregs back from a circular buffer.
+          for (int i = 0; i < bound; ++i) {
+            scratch_indices[0] = builder.create<arith::IndexCastOp>(
+                builder.getIndexType(),
+                modI(builder.create<arith::SubIOp>(mlirI32Const(bound + i),
+                                                   vreg_shift),
+                     bound));
+            chunks[i](idxs) =
+                builder.create<tpu::LoadOp>(v->getType(), scratch_ref.value(),
+                                            scratch_indices, sublane_mask_attr,
+                                            /*sublane_stride=*/nullptr);
+          }
+        });
+        return concatenate(chunks, axis);
+      }
+    }
+    // Convert dynamic shift to log(bound) static ops.
+    int roll_by = 1;
+    Value cst_1 = mlirI32Const(1);
+    while (bound > 0) {
+      auto new_result = rotate(
+          result,
+          mlirI32Const(tiling_dim >= 0 ? roll_by * ctx.target_shape[tiling_dim]
+                                       : roll_by),
+          axis, /*stride=*/0);
+      auto mask = builder.create<arith::CmpIOp>(
+          arith::CmpIPredicate::ne,
+          builder.create<vector::BroadcastOp>(
+              i32_vreg, builder.create<arith::AndIOp>(vreg_shift, cst_1)),
+          builder.create<arith::ConstantOp>(
+              DenseElementsAttr::get(i32_vreg, builder.getI32IntegerAttr(0))));
+      result.Each([&](absl::Span<const int64_t> idxs, Value *v) {
+        *v = builder.create<arith::SelectOp>(mask, new_result(idxs), *v);
+      });
+      roll_by *= 2;
+      bound /= 2;
+      vreg_shift = divI(vreg_shift, 2);
     }
     return result;
   };
 
   xla::Array<Value> out_tiles(in_tiles.dimensions());
-  const auto dim = rotate_op.getDimension();
-  const auto amount = rotate_op.getAmount() % vty.getDimSize(dim);
+  const auto dim = op.getDimension();
+  amount = modI(amount, vty.getDimSize(dim));
 
-  if (rotate_op.getStride().has_value() &&
-      rotate_op.getStrideDimension().has_value()) {
-    auto stride_dim = rotate_op.getStrideDimension().value();
-    auto stride = rotate_op.getStride().value() % vty.getDimSize(stride_dim);
+  if (op.getStride().has_value() && op.getStrideDimension().has_value()) {
+    auto stride_dim = op.getStrideDimension().value();
+    auto stride = op.getStride().value() % vty.getDimSize(stride_dim);
     if (stride_dim == dim) {
       return op.emitOpError(
           "Expected rotation dimension and stride dimension are not equal");
@@ -2138,44 +2327,94 @@ LogicalResult tpu_rotate_rule(RewriteContext &ctx, Operation &op,
             "is the minor most when stride dimension is the second minor most");
       }
       CHECK_GE(stride, 0);
-      auto chunks = splitVregs(in_tiles, stride_dim);
+      auto chunks = split(in_tiles, stride_dim);
       for (int64_t i = 0; i < chunks.size(); ++i) {
-        int64_t base_amount =
-            (ctx.target_shape[0] * i * stride + amount) % vty.getDimSize(dim);
+        Value base_amount = modI(addI(amount, ctx.target_shape[0] * i * stride),
+                                 vty.getDimSize(dim));
         // After applying stride, we expect all shifts in a vreg are less or
         // equal to the vreg's lane count for now.
-        auto max_shift_in_vreg = base_amount % ctx.target_shape[1] +
-                                 (ctx.target_shape[0] - 1) * stride;
-        if (max_shift_in_vreg > ctx.target_shape[1]) {
-          return op.emitOpError("Not implemented: the max shift in a vreg ")
-                 << max_shift_in_vreg << " is larger than the vreg's width "
-                 << ctx.target_shape[1];
+        if (auto base_amount_cst = getIntConst(base_amount, /*silent=*/true);
+            succeeded(base_amount_cst)) {
+          int64_t static_base_amount = base_amount_cst.value();
+          auto max_shift_in_vreg = static_base_amount % ctx.target_shape[1] +
+                                   (ctx.target_shape[0] - 1) * stride;
+          if (max_shift_in_vreg > ctx.target_shape[1]) {
+            return op.emitOpError("Not implemented: the max shift in a vreg ")
+                   << max_shift_in_vreg << " is larger than the vreg's width "
+                   << ctx.target_shape[1];
+          }
         }
         SmallVector<int64_t> starts(out_tiles.num_dimensions(), 0);
         starts[stride_dim] = i;
-        out_tiles.UpdateSlice(roll(chunks[i], base_amount, dim, stride),
+        out_tiles.UpdateSlice(rotate(chunks[i], base_amount, dim, stride),
                               starts);
       }
     } else {
       // Split vregs along the stride dimension.
-      auto chunks = splitVregs(in_tiles, stride_dim);
+      auto chunks = split(in_tiles, stride_dim);
       for (int64_t i = 0; i < chunks.size(); ++i) {
         SmallVector<int64_t> starts(out_tiles.num_dimensions(), 0);
         starts[stride_dim] = i;
-        out_tiles.UpdateSlice(roll(chunks[i], amount + i * stride, dim),
-                              starts);
+        out_tiles.UpdateSlice(
+            rotate(chunks[i], addI(amount, i * stride), dim, /*stride=*/0),
+            starts);
       }
     }
   } else {  // No stride.
-    out_tiles = roll(in_tiles, amount, dim);
+    out_tiles = rotate(in_tiles, amount, dim, /*stride=*/0);
   }
 
   const RollVectorsOp rolled_op =
-      assemble(builder, rotate_op.getResult().getType(), layout_out, out_tiles,
+      assemble(builder, op.getResult().getType(), layout_out, out_tiles,
                ctx.target_shape);
   op.replaceAllUsesWith(rolled_op);
   op.erase();
   return success();
+}
+
+// TODO(b/347016737): deprecate the static rotate.
+LogicalResult tpu_rotate_rule(RewriteContext &ctx, Operation &op,
+                              const ArrayRef<Layout> layouts_in,
+                              const ArrayRef<Layout> layouts_out) {
+  CHECK_EQ(layouts_in.size(), 1);
+  CHECK_EQ(layouts_out.size(), 1);
+  if (!layouts_in.front().has_value()) {
+    return op.emitOpError("Expected non-null input layout");
+  }
+  if (!layouts_out.front().has_value()) {
+    return op.emitOpError("Expected non-null output layout");
+  }
+  auto rotate_op = cast<tpu::RotateOp>(op);
+  if (rotate_op.getAmount() < 0) {
+    return op.emitOpError("Not implemented: shifting by negative amount");
+  }
+  ImplicitLocOpBuilder builder(op.getLoc(), &op);
+  Value shift = builder.create<arith::ConstantOp>(
+      builder.getIntegerAttr(builder.getI32Type(), rotate_op.getAmount()));
+  const VectorLayout &layout_in = *layouts_in.front();
+  const VectorLayout &layout_out = *layouts_out.front();
+  return rotate_rule_impl(ctx, rotate_op, shift, layout_in, layout_out);
+}
+
+LogicalResult tpu_dynamic_rotate_rule(RewriteContext &ctx, Operation &op,
+                                      const ArrayRef<Layout> layouts_in,
+                                      const ArrayRef<Layout> layouts_out) {
+  CHECK_EQ(layouts_in.size(), 2);
+  CHECK_EQ(layouts_out.size(), 1);
+  if (!layouts_in.front().has_value()) {
+    return op.emitOpError("Expected non-null layout for the value to rotate");
+  }
+  if (layouts_in[1].has_value()) {
+    return op.emitOpError("Expected null layout for the shift");
+  }
+  if (!layouts_out.front().has_value()) {
+    return op.emitOpError("Expected non-null output layout");
+  }
+  auto rotate_op = cast<tpu::DynamicRotateOp>(op);
+  const VectorLayout &layout_in = *layouts_in.front();
+  const VectorLayout &layout_out = *layouts_out.front();
+  return rotate_rule_impl(ctx, rotate_op, rotate_op.getAmount(), layout_in,
+                          layout_out);
 }
 
 LogicalResult tpu_concatenate_rule(RewriteContext &ctx, Operation &op,
@@ -4041,6 +4280,7 @@ const llvm::StringMap<rule_type> &rules() {
       {scf::IfOp::getOperationName(), scf_if_rule},
       {scf::YieldOp::getOperationName(), scf_yield_rule},
       {tpu::RotateOp::getOperationName(), tpu_rotate_rule},
+      {tpu::DynamicRotateOp::getOperationName(), tpu_dynamic_rotate_rule},
       {tpu::ConcatenateOp::getOperationName(), tpu_concatenate_rule},
       {tpu::IotaOp::getOperationName(), tpu_iota_rule},
       {tpu::GatherOp::getOperationName(), tpu_gather_rule},
@@ -5024,12 +5264,14 @@ struct ApplyVectorLayoutPass
     : public impl::ApplyVectorLayoutPassBase<ApplyVectorLayoutPass> {
   ApplyVectorLayoutPass(int hardware_generation_, int lane_count_,
                         int sublane_count_, int mxu_contracting_size_,
-                        int mxu_noncontracting_size_) {
+                        int mxu_noncontracting_size_,
+                        int max_sublanes_in_scratch_) {
     hardware_generation = hardware_generation_;
     sublane_count = sublane_count_;
     lane_count = lane_count_;
     mxu_contracting_size = mxu_contracting_size_;
     mxu_noncontracting_size = mxu_noncontracting_size_;
+    max_sublanes_in_scratch = max_sublanes_in_scratch_;
   }
   void runOnOperation() override {
     // Fail if hardware_generation has not been set from the default value.
@@ -5041,7 +5283,8 @@ struct ApplyVectorLayoutPass
     RewriteContext ctx{func,
                        hardware_generation,
                        {sublane_count, lane_count},
-                       {mxu_contracting_size, mxu_noncontracting_size}};
+                       {mxu_contracting_size, mxu_noncontracting_size},
+                       max_sublanes_in_scratch};
     if (failed(applyLayoutFunc(ctx, func))) {
       signalPassFailure();
       return;
@@ -5051,10 +5294,11 @@ struct ApplyVectorLayoutPass
 
 std::unique_ptr<OperationPass<func::FuncOp>> createApplyVectorLayoutPass(
     int hardware_generation, int lane_count, int sublane_count,
-    int mxu_contracting_size, int mxu_noncontracting_size) {
+    int mxu_contracting_size, int mxu_noncontracting_size,
+    int max_sublanes_in_scratch) {
   return std::make_unique<ApplyVectorLayoutPass>(
       hardware_generation, lane_count, sublane_count, mxu_contracting_size,
-      mxu_noncontracting_size);
+      mxu_noncontracting_size, max_sublanes_in_scratch);
 }
 
 }  // namespace mlir::tpu

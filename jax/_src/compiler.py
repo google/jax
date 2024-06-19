@@ -37,13 +37,13 @@ from jax._src.lib.mlir import ir
 import numpy as np
 
 
-_DISABLE_MOST_OPTIMIZATIONS = config.DEFINE_bool(
+_DISABLE_MOST_OPTIMIZATIONS = config.bool_flag(
     'jax_disable_most_optimizations',
     config.bool_env('JAX_DISABLE_MOST_OPTIMIZATIONS', False),
     'Try not to do much optimization work. This can be useful if the cost of '
     'optimization is greater than that of running a less-optimized program.')
 
-_COMPILER_DETAILED_LOGGING_MIN_OPS = config.DEFINE_integer(
+_COMPILER_DETAILED_LOGGING_MIN_OPS = config.int_flag(
     "jax_compiler_detailed_logging_min_ops",
     config.int_env("JAX_COMPILER_DETAILED_LOGGING_MIN_OPS", 10),
     help=(

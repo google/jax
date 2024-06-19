@@ -1314,7 +1314,7 @@ class Jax2TfTest(tf_test_util.JaxToTfTestCase):
     shape = (3, 2)
     x = np.arange(math.prod(shape), dtype=np.float32).reshape(shape)
 
-    jax_comp = jax.xla_computation(f_while)(x)
+    jax_comp = jax.jit(f_while).lower(x).compiler_ir('hlo')
     backend = xb.get_backend()
     modules = backend.compile(jax_comp).hlo_modules()
     jax_opt_hlo = modules[0].to_string()

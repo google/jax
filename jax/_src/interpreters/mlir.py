@@ -67,14 +67,14 @@ Value = Any  # = ir.Value
 # mypy implicitly sets this variable to true when type checking.
 MYPY = False
 
-_JAX_DUMP_IR_TO = config.DEFINE_string(
+_JAX_DUMP_IR_TO = config.string_flag(
     'jax_dump_ir_to', os.getenv('JAX_DUMP_IR_TO', ''),
     help="Path to which the IR that is emitted by JAX should be dumped as "
          "text files. If omitted, JAX will not dump IR. "
          "Supports the special value 'sponge' to pick the path from the "
          "environment variable TEST_UNDECLARED_OUTPUTS_DIR.")
 
-_JAX_INCLUDE_DEBUG_INFO_IN_DUMPS = config.DEFINE_string(
+_JAX_INCLUDE_DEBUG_INFO_IN_DUMPS = config.string_flag(
   'jax_include_debug_info_in_dumps',
   os.getenv('JAX_INCLUDE_DEBUG_INFO_IN_DUMPS', "True"),
   help="Determine whether or not to keep debug symbols and location information "
@@ -546,13 +546,6 @@ class LoweringParameters:
   # existing Jax rules.
   override_lowering_rules: tuple[tuple[core.Primitive, LoweringRule]] | None = None
 
-  # The current lowering platforms, a non-empty tuple containing some of
-  # 'cpu', 'cuda', 'rocm', 'tpu'. If the tuple has multiple entries we are
-  # doing multi-platform lowering, otherwise it can specify cross-platform
-  # lowering. The value None specifies the default lowering platform.
-  # This is used only in export and jax2tf.
-  platforms: tuple[str, ...] | None = None
-
   # Signals that the entire computation being lowered operates on global
   # constants. This will result in adding jax.global_constant attributes
   # to the arguments of all functions that are created, e.g., floor_divide.
@@ -621,8 +614,7 @@ class ModuleContext:
       module: ir.Module | None = None,
       ip: ir.InsertionPoint | None = None,
       symbol_table: ir.SymbolTable | None = None,
-      cached_primitive_lowerings: None | (dict[Any,
-                                                func_dialect.FuncOp]) = None,
+      cached_primitive_lowerings: None | (dict[Any, func_dialect.FuncOp]) = None,
       traceback_caches: None | TracebackCaches = None,
       shape_poly_state = None):
 
@@ -948,8 +940,7 @@ def lower_jaxpr_to_module(
                       channel_iterator=channel_iter,
                       host_callbacks=host_callbacks,
                       lowering_parameters=lowering_parameters,
-                      shape_poly_state=ShapePolyLoweringState(
-                          dim_vars, lowering_parameters.platforms))
+                      shape_poly_state=ShapePolyLoweringState(dim_vars, platforms))
   with ctx.context, ir.Location.unknown(ctx.context):
     # Remove module name characters that XLA would alter. This ensures that
     # XLA computation preserves the module name.

@@ -707,7 +707,7 @@ def make_xmap_callable(fun: lu.WrappedFun,
         f, 'xmap', name, mesh,
         in_shardings, out_shardings, donated_invars,
         use_spmd_lowering, in_avals,
-        tiling_method=tiling_method,
+        tiling_method=tiling_method, lowering_platforms=None,
         lowering_parameters=lowering_parameters)
   else:
     jaxpr, out_avals, consts = pe.trace_to_jaxpr_final(f, in_avals)
@@ -716,7 +716,8 @@ def make_xmap_callable(fun: lu.WrappedFun,
         (UNSPECIFIED,) * len(in_avals), (UNSPECIFIED,) * len(out_avals),
         (None,) * len(in_avals), (None,) * len(out_avals),
         donated_invars, keep_unused=True, inline=False,
-        devices_from_context=None, lowering_parameters=lowering_parameters)
+        devices_from_context=None, lowering_platforms=None,
+        lowering_parameters=lowering_parameters, pgle_profiler=None)
 
 
 class EvaluationPlan(NamedTuple):
@@ -1849,7 +1850,7 @@ def _ensure_spmd_and(f):
   return update
 
 
-SPMD_LOWERING = config.define_bool_state(
+SPMD_LOWERING = config.bool_state(
     name="experimental_xmap_spmd_lowering",
     default=False,
     help=("When set, multi-device xmap computations will be compiled through "
@@ -1857,7 +1858,7 @@ SPMD_LOWERING = config.define_bool_state(
           "Not supported on CPU!"),
     update_global_hook=_clear_compilation_cache,
     update_thread_local_hook=_thread_local_flag_unsupported)
-SPMD_LOWERING_MANUAL = config.define_bool_state(
+SPMD_LOWERING_MANUAL = config.bool_state(
     name="experimental_xmap_spmd_lowering_manual",
     default=False,
     help=("When set, multi-device xmap computations will be compiled using "
@@ -1866,7 +1867,7 @@ SPMD_LOWERING_MANUAL = config.define_bool_state(
           "Requires experimental_xmap_spmd_lowering!"),
     update_global_hook=_ensure_spmd_and(_clear_compilation_cache),
     update_thread_local_hook=_thread_local_flag_unsupported)
-_ENSURE_FIXED_SHARDING = config.define_bool_state(
+_ENSURE_FIXED_SHARDING = config.bool_state(
     name="experimental_xmap_ensure_fixed_sharding",
     default=False,
     help=("When set and `experimental_xmap_spmd_lowering` is enabled, the lowering will "

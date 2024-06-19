@@ -30,7 +30,6 @@ from jax._src import op_shardings
 from jax._src import test_util as jtu
 from jax._src import xla_bridge as xb
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 from jax._src.util import safe_zip
 from jax._src.sharding import common_devices_indices_map
 from jax._src.sharding_impls import (_op_sharding_to_pos_sharding,
@@ -1244,8 +1243,6 @@ class ShardingTest(jtu.JaxTestCase):
     with self.assertRaisesRegex(ValueError, msg):
       jax.jit(f)(x)
 
-  @unittest.skipIf(xla_extension_version < 269,
-                   "Test requires jaxlib 0.4.29 or newer")
   def test_make_array_from_single_device_arrays_bad_inputs(self):
     x = jnp.arange(10)
     mesh = jtu.create_global_mesh((2,), ('x',))

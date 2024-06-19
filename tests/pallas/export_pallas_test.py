@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """Test exporting Pallas kernels."""
+import sys
 
 from absl.testing import absltest
 import jax
@@ -28,6 +29,12 @@ jax.config.parse_flags_with_absl()
 
 
 class ExportTest(jtu.JaxTestCase):
+
+  def setUp(self):
+    if sys.platform == "win32":
+      self.skipTest("Only works on non-Windows platforms")
+
+    super().setUp()
 
   def test_cross_platform(self):
     def add_vectors_kernel(x_ref, y_ref, o_ref):

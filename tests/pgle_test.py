@@ -32,7 +32,6 @@ from jax.experimental import profiler as exp_profiler
 import jax.numpy as jnp
 from jax.sharding import NamedSharding, PartitionSpec
 from jax._src import compilation_cache as cc
-from jax._src.lib import xla_extension_version
 import numpy as np
 
 from jax.experimental.serialize_executable import (
@@ -55,9 +54,6 @@ class PgleTest(jtu.JaxTestCase):
 
   @unittest.skip("Test failing in CI")
   def testPGLEProfilerGetFDOProfile(self):
-    if xla_extension_version < 268:
-      return self.skipTest('Requires xla_extension_version >= 268')
-
     mesh = jtu.create_global_mesh((2,), ('x',))
 
     @partial(
@@ -86,9 +82,6 @@ class PgleTest(jtu.JaxTestCase):
     self.assertIn(b'custom', fdo_profile)
 
   def testAutoPgle(self):
-    if xla_extension_version < 268:
-      return self.skipTest('Requires xla_extension_version >= 268')
-
     mesh = jtu.create_global_mesh((2,), ('x',))
 
     @partial(
@@ -126,9 +119,6 @@ class PgleTest(jtu.JaxTestCase):
       self.assertEqual(cache_miss_count[0], 0)
 
   def testAutoPgleWithAot(self):
-    if xla_extension_version < 268:
-      return self.skipTest('Requires xla_extension_version >= 268')
-
     @jax.jit
     def f(x):
       return x * 2
@@ -153,8 +143,6 @@ class PgleTest(jtu.JaxTestCase):
 
   @unittest.skip("Test failing in CI")
   def testAutoPgleWithPersistentCache(self):
-    if xla_extension_version < 268:
-      return self.skipTest('Requires xla_extension_version >= 268')
 
     @jax.jit
     def f(x):

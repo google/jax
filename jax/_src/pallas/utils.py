@@ -15,7 +15,9 @@
 """Pallas utility functions."""
 
 from __future__ import annotations
+from typing import overload
 
+import jax
 from jax import lax
 from jax._src import core as jax_core
 from jax._src.util import split_list
@@ -32,9 +34,26 @@ def when(condition):
       lax.cond(condition, f, lambda: None)
   return _wrapped
 
-
+@overload
 def cdiv(a: int, b: int) -> int:
-  return (a + b - 1) // b
+  ...
+
+@overload
+def cdiv(a: int, b: jax.Array) -> jax.Array:
+  ...
+
+@overload
+def cdiv(a: jax.Array, b: int) -> jax.Array:
+  ...
+
+@overload
+def cdiv(a: jax.Array, b: jax.Array) -> jax.Array:
+  ...
+
+def cdiv(a: int | jax.Array, b: int | jax.Array) -> int | jax.Array:
+  if isinstance(a, int) and isinstance(b, int):
+    return (a + b - 1) // b
+  return lax.div(a + b - 1, b)
 
 
 def strides_from_shape(shape: tuple[int, ...]) -> tuple[int, ...]:

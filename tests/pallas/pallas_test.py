@@ -25,6 +25,7 @@ from absl.testing import parameterized
 import jax
 from jax import lax
 from jax import random
+from jax._src import checkify
 from jax._src import config
 from jax._src import linear_util as lu
 from jax._src import state
@@ -981,6 +982,21 @@ class PallasCallVmapTest(PallasTest):
     out_ref = jnp.arange(2, 10)
     np.testing.assert_allclose(out, out_ref)
 
+  def test_vmap_of_kernel_with_input_output_aliases_different_axes(self):
+    @functools.partial(
+        self.pallas_call,
+        out_shape=jax.ShapeDtypeStruct((4,), jnp.int32),
+        debug=False,
+        input_output_aliases={0: 0},
+        grid=(),
+    )
+    def add(x_ref, o_ref):
+      o_ref[()] = x_ref[()] + 1
+
+    out = jax.vmap(add, in_axes=1)(jnp.arange(8).reshape((4, 2)))
+    out_ref = jnp.arange(1, 9).reshape((4, 2)).swapaxes(0, 1)
+    np.testing.assert_allclose(out, out_ref)
+
   def test_vmap_of_slicing_kernel_different_axes(self):
     @functools.partial(
         self.pallas_call, out_shape=jax.ShapeDtypeStruct((2,), jnp.int32),
@@ -1117,6 +1133,17 @@ class PallasOpsTest(PallasTest):
       x = jnp.array([1, 2, 3, 4]).astype(x_dtype)
       y = jnp.array([1, 2, 3, 4]).astype(y_dtype)
       np.testing.assert_allclose(kernel(x, y), lax.pow(x, y))
+
+  @parameterized.parameters(0, 1, 2, 3, 4, 5, -1, -2, -3)
+  def test_integer_pow(self, y):
+    @functools.partial(
+        self.pallas_call, out_shape=jax.ShapeDtypeStruct((4,), jnp.float32),
+    )
+    def kernel(x_ref, o_ref):
+      o_ref[:] = lax.integer_pow(x_ref[...], y)
+
+    x = jnp.array([1, 2, 3, 4]).astype(jnp.float32) / 10
+    np.testing.assert_allclose(kernel(x), lax.integer_pow(x, y))
 
   @parameterized.parameters("float32", "float64")
   def test_nextafter(self, dtype):
@@ -2147,16 +2174,11 @@ class RmsNormInterpreterTest(PallasTest):
 
 class SoftmaxTest(PallasTest):
 
-  @parameterized.parameters(
-      (shape, dtype)
-      for shape in [(1024, 125), (4, 1024, 125)]
-      for dtype in (jnp.bfloat16, jnp.float16, jnp.float32)
+  @parameterized.product(
+      shape=[(1024, 125), (4, 1024, 125)],
+      dtype=[jnp.bfloat16, jnp.float16, jnp.float32]
   )
   def test_softmax(self, shape, dtype):
-    # TODO(bchetioui): add Triton bug reference when filed
-    if dtype == jnp.bfloat16:
-      raise absltest.SkipTest("Disabled due to Triton lowering bug")
-
     x = jax.random.normal(random.key(0), shape, dtype=dtype)
 
     atol, rtol = {
@@ -2165,9 +2187,11 @@ class SoftmaxTest(PallasTest):
         jnp.float32: (1e-7, 1e-6),
     }[dtype]
 
+    # We upcast to float32 because NumPy <2.0 does not handle custom dtypes
+    # properly. See https://github.com/google/jax/issues/11014.
     np.testing.assert_allclose(
-        softmax.softmax(x, axis=-1),
-        jax.nn.softmax(x, axis=-1),
+        softmax.softmax(x, axis=-1).astype(jnp.float32),
+        jax.nn.softmax(x, axis=-1).astype(jnp.float32),
         atol=atol,
         rtol=rtol,
     )
@@ -2258,6 +2282,115 @@ class PallasInterpretModeOutOfBoundsTest(PallasTest):
     # masked before computation. This should return the correct result.
     with self.subTest('MaskedOutputIsCorrect'):
       np.testing.assert_allclose(out, expected, atol=atol)
+
+
+class PallasCheckifyTest(PallasTest):
+  # TODO(b/346651778): Support non-interpret mode checkify.
+  INTERPRET: bool = True
+
+  def test_no_checkify(self,):
+      def kernel(y_ref):
+        y_ref[...] = jnp.zeros_like(y_ref[...])
+      out_shape = jax.ShapeDtypeStruct((2, 2), jnp.float32)
+      pallas_call = self.pallas_call(kernel,
+                                   out_shape=out_shape)
+      checked_call = checkify.checkify(pallas_call)
+      err, result = checked_call()
+      err.throw()  # Should not raise.
+      np.testing.assert_allclose(result, jnp.zeros_like(result))
+
+  def test_does_not_clobber_previous_error(self,):
+      def kernel(y_ref):
+        y_ref[...] = jnp.zeros_like(y_ref[...])
+        checkify.check(False, "error in kernel")
+      out_shape = jax.ShapeDtypeStruct((2, 2), jnp.float32)
+      pallas_call = self.pallas_call(kernel,
+                                   out_shape=out_shape)
+      def error_before_call():
+        checkify.check(False, "error before call")
+        return pallas_call()
+      checked_call = checkify.checkify(error_before_call)
+      err, result = checked_call()
+      with self.assertRaisesRegex(
+          checkify.JaxRuntimeError, "error before call"):
+        err.throw()
+      np.testing.assert_allclose(result, jnp.zeros_like(result))
+
+  @parameterized.parameters((False,), (True,))
+  def test_trivial_check(self, assert_cond):
+      def kernel(x_ref, y_ref):
+        y_ref[...] = x_ref[...]
+        checkify.check(assert_cond, "pallas check failed")
+      input = jnp.arange(4, dtype=jnp.int32)
+      out_shape = jax.ShapeDtypeStruct(input.shape, input.dtype)
+      pallas_call = self.pallas_call(kernel,
+                                   out_shape=out_shape)
+      checked_call = checkify.checkify(pallas_call)
+      err, result = checked_call(input)
+      if not assert_cond:
+        with self.assertRaisesRegex(
+            checkify.JaxRuntimeError, "pallas check failed"):
+          err.throw()
+      np.testing.assert_allclose(result, input)
+
+  def test_nan_error(self):
+      def kernel(x_ref, y_ref):
+        y_ref[...] = jnp.log(x_ref[...])
+      input = jnp.arange(4, dtype=jnp.float32) - 2
+      out_shape = jax.ShapeDtypeStruct(input.shape, input.dtype)
+      pallas_call = self.pallas_call(kernel,
+                                   out_shape=out_shape)
+      checked_call = checkify.checkify(pallas_call,
+                                       errors=checkify.all_checks)
+      err, result = checked_call(input)
+      with self.assertRaisesRegex(
+          checkify.JaxRuntimeError, "nan generated by primitive: log"):
+        err.throw()
+      is_nan = jnp.isnan(result)
+      np.testing.assert_allclose(is_nan, input < 0)
+
+  def test_nan_error_with_assertion(self):
+      # TODO(b/346842088): Fix check asserts clobbering other errors.
+      self.skipTest('Known failure.')
+      # Test NaN error is not clobbered by an assertion failure
+      def kernel(x_ref, y_ref):
+        y_ref[...] = jnp.log(x_ref[...])
+        checkify.check(False, "do not raise")
+      input = jnp.arange(4, dtype=jnp.float32) - 10
+      out_shape = jax.ShapeDtypeStruct(input.shape, input.dtype)
+      pallas_call = self.pallas_call(kernel,
+                                     out_shape=out_shape)
+      checked_call = checkify.checkify(pallas_call,
+                                       errors=checkify.all_checks)
+      err, _ = checked_call(input)
+      with self.assertRaisesRegex(
+          checkify.JaxRuntimeError, "nan generated by primitive: log"):
+        err.throw()
+
+  @parameterized.parameters((5, 0), (8, 3), (4, 3))
+  def test_checkify_returns_first_error_in_grid(
+      self, num_loops, fail_iteration):
+    # Check that checkify returns the first error that occurs
+    # TODO(justinfu): This test doesn't make sense on GPU, where threads run
+    # in parallel. Update checkify to return a grid of errors.
+    def kernel(x_ref, _):
+      value = jnp.squeeze(x_ref[...])
+      checkify.check(
+          value < fail_iteration, "failed on loop {itr}", itr=value)
+    input_arr = jnp.arange(num_loops, dtype=jnp.float32)
+    in_specs = [pl.BlockSpec(lambda x : (x,), (1,))]
+    out_shape = jax.ShapeDtypeStruct((1,), dtype=jnp.float32)
+    pallas_call = self.pallas_call(kernel,
+                                 grid=(num_loops,),
+                                 in_specs=in_specs,
+                                 out_shape=out_shape)
+
+    checked_call = checkify.checkify(pallas_call,
+                                     errors=checkify.all_checks)
+    err, _ = checked_call(input_arr)
+    with self.assertRaisesRegex(
+        checkify.JaxRuntimeError, f"failed on loop {fail_iteration}"):
+      err.throw()
 
 
 if __name__ == "__main__":

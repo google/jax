@@ -19,16 +19,11 @@ from jax import numpy as jnp
 from jax._src import config
 from jax._src import test_util as jtu
 from jax._src.lax import linalg as lax_linalg
-from jax._src.lib import version as jaxlib_version  # pylint: disable=g-importing-member
 import numpy as np
 
 config.parse_flags_with_absl()
 
 class CholeskyUpdateTest(jtu.JaxTestCase):
-  def setUp(self):
-    super().setUp()
-    if jaxlib_version < (0, 4, 29):
-      self.skipTest("Requires jaxlib 0.4.29 or newer")
 
   @jtu.sample_product(
       shape=[

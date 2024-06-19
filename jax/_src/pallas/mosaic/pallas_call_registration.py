@@ -36,7 +36,6 @@ def pallas_call_tpu_lowering_rule(
     ctx: mlir.LoweringRuleContext, *in_nodes,
     jaxpr: jax_core.Jaxpr,
     name: str,
-    which_linear: tuple[bool, ...],
     grid_mapping: core.GridMapping,
     input_output_aliases: tuple[tuple[int, int], ...],
     in_shapes: tuple[jax.ShapeDtypeStruct, ...],
@@ -49,7 +48,6 @@ def pallas_call_tpu_lowering_rule(
     return mlir.lower_fun(pallas_call_p.impl, multiple_results=True)(
         ctx, *in_nodes, jaxpr=jaxpr, name=name, out_shapes=out_shapes,
         in_shapes=in_shapes,
-        which_linear=which_linear,
         interpret=interpret, debug=debug,
         input_output_aliases=input_output_aliases,
         grid_mapping=grid_mapping,
@@ -111,6 +109,9 @@ def pallas_call_tpu_lowering_rule(
         flags=mosaic_params.get("flags"),
         allow_input_fusion=mosaic_params.get("allow_input_fusion"),
         input_output_aliases=input_output_aliases,
+        internal_scratch_in_bytes=mosaic_params.get(
+            "internal_scratch_in_bytes"
+        ),
     )(
         *dynamic_grid_args,
         *extra_args,

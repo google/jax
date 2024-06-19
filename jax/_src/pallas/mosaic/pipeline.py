@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """Module for emitting custom TPU pipelines within a Pallas call."""
+from __future__ import annotations
 
 import dataclasses
 import enum
@@ -24,11 +25,13 @@ from typing import Optional, Union, Any, Sequence
 import jax
 from jax import lax
 from jax import tree_util
+from jax._src import util as jax_util
 from jax._src.pallas import core as pallas_core
 from jax._src.pallas.mosaic import core as tpu_core
 from jax._src.pallas.mosaic import primitives as tpu_primitives
 from jax.experimental import pallas as pl
 import jax.numpy as jnp
+import numpy as np
 
 
 SMEM = tpu_core.TPUMemorySpace.SMEM
@@ -43,6 +46,9 @@ CondVal = Union[jax.Array, bool]
 PipelineBlockSpecs = Union[Sequence[pallas_core.BlockSpec], Any]
 PipelineRefs = Union[Sequence[REF], Any]
 
+
+# TODO(sharadmv): make this a parameter and make it queryable from the Device.
+_TILING = (8, 128)
 
 def _broadcast_pytree_to(from_pytree, to_pytree):
   """Broadcast a prefix pytree to a given full tree."""
@@ -63,14 +69,73 @@ def _broadcast_pytree_to(from_pytree, to_pytree):
   return tree_util.tree_unflatten(treedef, broadcast_leaves)
 
 
+def _get_tpu_generation() -> int:
+  kind = jax.devices()[0].device_kind
+  if kind.endswith(' lite'):
+    kind = kind[:-len(' lite')]
+  assert kind[:5] == "TPU v", kind
+  return int(kind[5])
+
+def _make_tiling(shape: tuple[int, ...], dtype: np.dtype) -> tuple[int, ...]:
+  # For a n-dimensional shape, returns (8, 128) for the last 2 dimensions
+  # and 1 for the leading n - 2. For example, (256, 256) -> (8, 128) and
+  # (2, 3, 128, 128) -> (1, 1, 8, 128).
+  if len(shape) < 2:
+    raise ValueError(f"Shape must have at least 2 dimensions: {shape=}")
+  leading_dims, final_dims = shape[:-2], shape[-2:]
+  # We want to find the minimum power of 2 that fits the second-minor dimension
+  # of shape, with maximum value 8.
+  second_minor, _ = final_dims
+  packing = 4 // dtype.itemsize
+  max_tiling = _TILING[0]
+  second_minor_tiling = (1 + int(_get_tpu_generation() < 4)) * packing
+  while second_minor_tiling < min(second_minor, max_tiling):
+    second_minor_tiling *= 2
+  return (*(1,) * len(leading_dims), second_minor_tiling, _TILING[1])
+
+
 def _mod(a, n):
   """"Calculates a mod n for positive and negative a with |a| <= n."""
   return lax.rem(a + n, n)
 
 
-def _make_ds(idx, size):
+def _round_up_to_nearest_multiple(s: int, multiple: int) -> int:
+  if s % multiple == 0:
+    return s
+  # Subtract off the remainder, then add multiple
+  return s - s % multiple + multiple
+
+
+def _make_ds(
+    idx: jax.Array | int, size: jax.Array | int
+) -> pl.Slice:
   """Make a DMA slice with mosaic size hints."""
-  return pl.ds(pl.multiple_of(idx * size, size), size)
+  out = pl.ds(idx * size, size)
+  assert isinstance(out, pl.Slice)
+  return out
+
+
+def _make_block_slice(
+    block_index: jax.Array, block_size: int, size: int, tiling: int
+) -> pl.Slice | slice:
+  # Computes a slice given a block index and block size. In the default case,
+  # we return slice(block_index * block_size, (block_index + 1) * block_size).
+  # However, if the total size of the ref does not divide block size and we are
+  # selecting the last block, we need to pick the lowest tiling size multiple
+  # that contains the block.
+  if size % block_size == 0:
+    return _make_ds(block_index, block_size)
+  if block_size % tiling != 0:
+    raise ValueError(f"Block size must divide tiling: {block_size=}, {tiling=}")
+  num_blocks = pl.cdiv(size, block_size)
+  is_last = block_index == num_blocks - 1
+  rounded_size = jnp.where(
+      is_last,
+      _round_up_to_nearest_multiple(size % block_size, tiling),
+      block_size,
+  )
+  rounded_size = pl.multiple_of(rounded_size, tiling)
+  return pl.ds(block_index * block_size, rounded_size)
 
 
 def _tuples_differ(xs, ys):
@@ -87,15 +152,16 @@ def _grid_size(grid):
   return size
 
 
-def _get_indices(step, grid):
+def _get_indices(step, grid, offsets):
   """Get indices for a given step and grid."""
   extended_grid = grid + (1,)
   strides = tuple(
       itertools.accumulate(extended_grid[::-1], func=operator.mul))[::-1]
-  return tuple(
+  indices = tuple(
       lax.div(lax.rem(step, a), b)
       for a, b in zip(strides[:-1], strides[1:])
   )
+  return tuple(a + b for a, b in zip(indices, offsets, strict=True))
 
 
 class BufferType(enum.Enum):
@@ -259,49 +325,110 @@ class BufferedRef:
     if self.memory_space == VMEM: return
     self.current_slot[0] = self.next_slot[0]
 
+  def get_dma_slice(self, src_shape, src_dtype, grid_indices):
+    # We need to handle blocks that might go OOB in the src array. An in bounds
+    # block looks like this (for array shape (600, 600) and block shape
+    # (256, 256)):
+    #
+    # +--------------+------------------|
+    # | Block (0,0)  |                  |
+    # | (256, 256)   |                  |
+    # +--------------+                  |
+    # |    A (600, 600)                 |
+    # |                                 |
+    # +---------------------------------+
+    #
+    # For in-bounds blocks, we don't need to do anything special.
+    # An out-of-bounds block looks like this:
+    #
+    # +--------------+------------------|
+    # |                                 |
+    # |                                 |
+    # +                                 |
+    # |    A (600, 600)                 |
+    # +--------------+                  |
+    # | Block (2,0)  |                  |
+    # + --------------------------------|
+    # | XXXXXXXXXX   |
+    # +--------------+
+    # where the X's indicate where the block is out of bounds.
+    #
+    # When we have an out of bounds block like this, we need to truncate it to
+    # a tile boundary (tiles are (8, 128) along the two minormost dimensions).
+    # In this case, we'll have a block that is indexing the
+    # 512:768 elements of A along the first dimension. We need to convert 768
+    # into 600 (600 % 8 == 0), so our indexing will look like this:
+
+    # +--------------+------------------|
+    # |                                 |
+    # |                                 |
+    # +                                 |
+    # |    A (600, 600)                 |
+    # +--------------+                  |
+    # | Block (2,0)  |                  |
+    # + --------------------------------|
+    # where it is now a (88, 256) sized block.
+    #
+    # Suppose A is now (601, 600), instead of picking a (88, 256)-sized block
+    # for the last iteration on that dimension, we will pick the next highest
+    # tile multiple, i.e. (96, 256).
+    if len(src_shape) < 2:
+      raise NotImplementedError("Must use >1D values.")
+
+    tiling = _make_tiling(src_shape, src_dtype)
+    block_shape = tuple(1 if b is None else b for b in self.block_shape)
+    block_indices = self.compute_index(*grid_indices)
+    return jax.tree.map(
+        _make_block_slice, block_indices, block_shape, src_shape, tiling
+    )
+
   def copy_in(self, src_ref, grid_indices):
     """Starts copy of HBM dma slice into the current slot."""
     assert self.is_input
     if self.memory_space == VMEM: return
-    dma_slice = self.compute_slice(grid_indices)
     next_slot = lax.rem(self.current_slot[0] + 1, 2)
     self.next_slot[0] = next_slot
+    src_slice = self.get_dma_slice(src_ref.shape, src_ref.dtype, grid_indices)
+    dst_slice = tuple(pl.ds(0, s.size) for s in src_slice)
     tpu_primitives.make_async_copy(
-        src_ref.at[dma_slice],
-        self.vmem_ref.at[next_slot],
+        src_ref.at[src_slice],
+        self.vmem_ref.at[next_slot].at[dst_slice],
         self.sem_recv).start()
 
   def copy_out(self, dst_ref, grid_indices):
     """Starts copy of HBM dma slice from the current slot."""
     assert self.is_output
     if self.memory_space == VMEM: return
-    dma_slice = self.compute_slice(grid_indices)
     slot = self.current_slot[0]
     self.next_slot[0] = lax.rem(slot + 1, 2)
+    dst_slice = self.get_dma_slice(dst_ref.shape, dst_ref.dtype, grid_indices)
+    src_slice = tuple(pl.ds(0, s.size) for s in dst_slice)
     tpu_primitives.make_async_copy(
-        self.vmem_ref.at[slot],
-        dst_ref.at[dma_slice],
+        self.vmem_ref.at[slot].at[src_slice],
+        dst_ref.at[dst_slice],
         self.sem_send).start()
 
   def wait_in(self, src_ref, grid_indices):
     """Waits for input copy to finish."""
     assert self.is_input
     if self.memory_space == VMEM: return
-    dma_slice = self.compute_slice(grid_indices)
+    src_slice = self.get_dma_slice(src_ref.shape, src_ref.dtype, grid_indices)
+    dst_slice = tuple(pl.ds(0, s.size) for s in src_slice)
     tpu_primitives.make_async_copy(
-        src_ref.at[dma_slice],                   # nb: doesn't matter
-        self.vmem_ref.at[self.current_slot[0]],  # only dst shape is important
+        src_ref.at[src_slice],                   # nb: doesn't matter
+        self.vmem_ref.at[self.current_slot[0]].at[dst_slice],  # only dst shape is important
         self.sem_recv).wait()
 
   def wait_out(self, dst_ref, grid_indices):
     """Waits for output copy to finish."""
     assert self.is_output
     if self.memory_space == VMEM: return
-    dma_slice = self.compute_slice(grid_indices)
     prev_slot = lax.rem(self.current_slot[0] + 1, 2)
+    dst_slice = self.get_dma_slice(dst_ref.shape, dst_ref.dtype, grid_indices)
+    src_slice = tuple(pl.ds(0, s.size) for s in dst_slice)
     tpu_primitives.make_async_copy(
-        self.vmem_ref.at[prev_slot],  # nb: doesn't matter
-        dst_ref.at[dma_slice],        # only dst shape is important
+        self.vmem_ref.at[prev_slot].at[src_slice],  # nb: doesn't matter
+        dst_ref.at[dst_slice],        # only dst shape is important
         self.sem_send).wait()
 
   # Accumulator methods
@@ -350,8 +477,9 @@ class Scheduler:
   """Sequences input and output copies and waits for a pipeline."""
 
   def __init__(self,
-               step,
-               grid,
+               step: jax.Array,
+               grid: tuple[int | jax.Array, ...],
+               grid_offsets: tuple[int | jax.Array, ...],
                first_cycle=None,
                last_cycle=None,
                init_accumulators=None,
@@ -361,6 +489,7 @@ class Scheduler:
       Args:
         step: inner step number.
         grid: pallas grid for BufferedRefs.
+        grid_offsets: offsets for grid indices (used for megacore).
         first_cycle: whether this is the first invocation of the pipeline.
         last_cycle: whether this is the last invocation of the pipeline.
         init_accumulators: do we zero-initialize accumulator state for this
@@ -388,9 +517,13 @@ class Scheduler:
     self.next_step = _mod(step + 1, self.num_steps)
 
     # Derived grid indices for present, previous, and next steps.
-    self.indices = _get_indices(step, grid)
-    self.prev_indices = _get_indices(self.prev_step, self.grid)
-    self.next_indices = _get_indices(self.next_step, self.grid)
+    self.indices = _get_indices(step, grid, grid_offsets)
+    self.prev_indices = _get_indices(
+        self.prev_step, grid, grid_offsets
+    )
+    self.next_indices = _get_indices(
+        self.next_step, grid, grid_offsets
+    )
 
   def grid_env(self):
     return pallas_core.grid_env(
@@ -628,13 +761,79 @@ def make_pipeline_allocations(
   return (*in_brefs, *out_brefs)
 
 
+class GridDimensionSemantics:
+  pass
+PARALLEL = GridDimensionSemantics()
+ARBITRARY = GridDimensionSemantics()
+
+
+def _partition_grid(
+    grid: tuple[int | jax.Array, ...],
+    core_axis: int | None,
+    dimension_semantics: tuple[GridDimensionSemantics, ...] | None,
+) -> tuple[tuple[int | jax.Array, ...], tuple[int | jax.Array, ...]]:
+  if core_axis is None:
+    # We aren't partitioning the grid
+    return grid, (0,) * len(grid)
+  num_cores = pl.num_programs(core_axis)
+  # Check that num_cores is statically known
+  if not isinstance(num_cores, int):
+    raise NotImplementedError(
+        f"Cannot partition grid over dynamic number of cores: {core_axis=}"
+    )
+  if num_cores == 1:
+    # We aren't partitioning the grid
+    return grid, (0,) * len(grid)
+
+  # If dimension_semantics aren't provided, we assume it is all arbitrary.
+  if dimension_semantics is None:
+    dimension_semantics = (ARBITRARY,) * len(grid)
+  if len(dimension_semantics) != len(grid):
+    raise ValueError("dimension_semantics must be the same length as grid.")
+
+  parallel_dimensions = {i for i, d in enumerate(dimension_semantics)
+                         if d == PARALLEL}
+  # If there are no parallel dimensions, we can't partition the grid
+  if not parallel_dimensions:
+    # TODO(sharadmv): enable running kernel on just one core
+    raise NotImplementedError(
+        "Cannot partition over cores without parallel grid dimensions:"
+        f" {dimension_semantics=}"
+    )
+
+  # Try to find a divisible dimension to partition the grid on
+  divisible_dimensions = {
+      i for i in parallel_dimensions
+      if isinstance(grid[i], int) and grid[i] % num_cores == 0
+  }
+  if not divisible_dimensions:
+    # TODO(sharadmv): enable uneven grid partitioning
+    raise NotImplementedError(
+        f"Uneven partitioning of grid not supported: {grid=}, {num_cores=}"
+    )
+  first_divisible_dimension, *_ = [
+      i for i in range(len(dimension_semantics)) if i in divisible_dimensions
+  ]
+  partitioned_dim_size = grid[first_divisible_dimension] // num_cores
+  partitioned_dim_offset = pl.program_id(core_axis) * partitioned_dim_size
+  new_grid = jax_util.tuple_update(
+      grid, first_divisible_dimension, partitioned_dim_size
+  )
+  offsets = jax_util.tuple_update(
+      (0,) * len(grid), first_divisible_dimension, partitioned_dim_offset
+  )
+  return new_grid, offsets
+
+
 def emit_pipeline(
     body,
     *,
-    grid,
+    grid: tuple[int | jax.Array, ...],
     in_specs=None,
     out_specs=None,
     should_accumulate_out=False,
+    core_axis: int | None = None,
+    dimension_semantics: tuple[GridDimensionSemantics, ...] | None = None
 ):
   """Creates a function to emit a manual pallas pipeline.
 
@@ -653,7 +852,13 @@ def emit_pipeline(
     out_specs: output pallas block specs
     should_accumulate_out: booleans to indicate which outputs should be treated
       as accumulators.
+    core_axis: optional int, indicates whether or not to partition the grid
+      along the core axis.
+    dimension_semantics: optional tuple of GridDimensionSemantics (e.g. PARALLEL
+      or ARBITRARY).
   """
+  grid, grid_offsets = _partition_grid(grid, core_axis, dimension_semantics)
+
   num_steps = _grid_size(grid)
   if not isinstance(in_specs, (list, tuple)):
     in_specs = (in_specs,)
@@ -737,6 +942,7 @@ def emit_pipeline(
       scheduler = Scheduler(
           step,
           grid,
+          grid_offsets=grid_offsets,
           first_cycle=first_cycle,
           last_cycle=last_cycle,
           init_accumulators=init_accumulators)

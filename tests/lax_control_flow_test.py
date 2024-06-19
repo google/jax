@@ -2322,7 +2322,7 @@ class LaxControlFlowTest(jtu.JaxTestCase):
     A = jnp.zeros((3, 3))
     # The second DUS was unnecessarily replicating A across time.
     # We check XLA because _scan_impl is "underneath" the jaxpr language.
-    s = str(jax.xla_computation(jax.grad(loss))(A).as_hlo_text())
+    s = jax.jit(jax.grad(loss)).lower(A).as_text('hlo')
     assert s.count("dynamic-update-slice(") < 2
 
   def testScanLengthArg(self):
@@ -2417,8 +2417,8 @@ class LaxControlFlowTest(jtu.JaxTestCase):
 
     # but HLO should grow due to unrolling
     self.assertLess(
-        len(str(jax.xla_computation(scan)(c, xs).as_hlo_text())),
-        len(str(jax.xla_computation(scan_unrolled)(c, xs).as_hlo_text())))
+        len(str(jax.jit(scan).lower(c, xs).as_text('hlo'))),
+        len(str(jax.jit(scan_unrolled).lower(c, xs).as_text('hlo'))))
 
   def test_scan_xs_none(self):
     def f(h, _):

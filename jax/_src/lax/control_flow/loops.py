@@ -50,7 +50,6 @@ from jax._src.lax.control_flow.common import (
     _abstractify, _avals_short, _check_tree_and_avals, _initial_style_jaxpr,
     _initial_style_jaxpr_attrs, _make_closed_jaxpr_attrs, _prune_zeros,
     _typecheck_param)
-from jax._src.lib import xla_extension_version
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
 from jax._src.numpy.ufuncs import logaddexp
@@ -2370,27 +2369,12 @@ def _cumulative_reduction_primitive(name, reduce_fn, reduce_window_fn):
         mlir.cache_lowering(mlir.lower_fun(fn, multiple_results=False)),
         platform=platform)
 
-  if xla_extension_version >= 266:
-    # For jax-metal, until reduce_window legalization is better supported.
-    register_lowering(partial(associative_scan, reduce_fn), 'METAL')
-    # In XLA, there's a rewriter for an O(N^2) reduce-window implementation.
-    register_lowering(
-        partial(cumred_reduce_window_impl, reduce_window_fn)
-    )
-  else:
-    # Older XLA versions only have this rewrite for TPU.
-    register_lowering(
-        partial(cumred_reduce_window_impl, reduce_window_fn), 'tpu'
-    )
-    # Default for platforms not treated specially below.
-    register_lowering(partial(associative_scan, reduce_fn))
-
-    # On GPU, we choose between window reduction and associative scan
-    # based on the input size.
-    for platform in ['cuda', 'rocm']:
-      register_lowering(
-          partial(cumred_gpu_impl, reduce_window_fn, reduce_fn), platform
-      )
+  # For jax-metal, until reduce_window legalization is better supported.
+  register_lowering(partial(associative_scan, reduce_fn), 'METAL')
+  # In XLA, there's a rewriter for an O(N^2) reduce-window implementation.
+  register_lowering(
+      partial(cumred_reduce_window_impl, reduce_window_fn)
+  )
 
   return reducer_p
 

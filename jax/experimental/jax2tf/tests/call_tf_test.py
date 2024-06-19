@@ -695,7 +695,6 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
     jax.grad(cos_tf_sin_jax)(x)
 
     logging.info(jax.make_jaxpr(cos_tf_sin_jax)(x))
-    logging.info(jax.xla_computation(cos_tf_sin_jax)(x).as_hlo_text())
 
   def test_tf_gather(self):
     """tf_gather gradient output is tf.IndexSlices."""

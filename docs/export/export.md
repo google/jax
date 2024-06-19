@@ -634,7 +634,7 @@ We list here a history of the calling convention version numbers:
 
 ## Migration guide from jax.experimental.export
 
-On June 14, 2014 we deprecated the `jax.experimental.export` APIs
+On June 14, 2024 we deprecated the `jax.experimental.export` APIs
 in favor of `jax.export` APIs. There have been some minor changes:
 
   * `jax.experimental.export.export`:

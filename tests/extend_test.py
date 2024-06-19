@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import unittest
 
 import numpy as np
 from absl.testing import absltest, parameterized
@@ -31,7 +30,6 @@ from jax._src import test_util as jtu
 from jax._src.interpreters import mlir
 from jax._src.lib.mlir import ir
 from jax._src.extend import ffi
-from jax._src.lib import xla_extension_version
 
 jax.config.parse_flags_with_absl()
 
@@ -93,7 +91,6 @@ class RandomTest(jtu.JaxTestCase):
 
 class FfiTest(jtu.JaxTestCase):
 
-  @unittest.skipIf(xla_extension_version < 265, "Requires jaxlib 0.4.29")
   def testHeadersExist(self):
     base_dir = os.path.join(jex.ffi.include_dir(), "xla", "ffi", "api")
     for header in ["c_api.h", "api.h", "ffi.h"]:

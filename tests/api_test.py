@@ -58,7 +58,6 @@ from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.lib import xla_client
 from jax._src.lib import xla_extension
-from jax._src.lib import xla_extension_version
 import jax._src.util as jax_util
 from jax.ad_checkpoint import checkpoint_name, checkpoint as new_checkpoint
 import jax.custom_batching
@@ -707,7 +706,6 @@ class JitTest(jtu.BufferDonationTestCase):
     self.assertNotEqual(z3.unsafe_buffer_pointer(), x1.unsafe_buffer_pointer())
     self.assertEqual(z2, 1)
 
-  @unittest.skipIf(xla_extension_version < 264, "jaxlib version too old")
   def test_print_token_buffer_error(self):
     token = jax.lax.create_token()
     with self.assertRaisesRegex(
@@ -2955,6 +2953,7 @@ class APITest(jtu.JaxTestCase):
     axis_env = [(axis_name, jax.local_device_count())]
     _ = api.xla_computation(fn, axis_env=axis_env, backend='cpu')(input_x)
 
+  @jtu.unaccelerate_getattr_deprecation(jax, 'xla_computation')
   def test_xla_computation_axis_env(self):
     def fn(x):
       z = x * jax.lax.axis_index('i').astype(jnp.float32)
@@ -4727,6 +4726,13 @@ class APITest(jtu.JaxTestCase):
   def test_inner_jit_forwarded_consts_stay_const(self):
     out = jax.jit(lambda: int(jax.jit(lambda x: x)(3)))()  # don't crash
     self.assertEqual(out, 3)
+
+  def test_lowering_platform_aot(self):
+    @jax.jit
+    def f(x):
+      return x * 2
+
+    f.trace(jnp.arange(8)).lower(lowering_platforms=('tpu',))  # doesn't crash
 
 
 class RematTest(jtu.JaxTestCase):
@@ -10559,8 +10565,8 @@ class BufferDonationTest(jtu.BufferDonationTestCase):
 
 class NamedCallTest(jtu.JaxTestCase):
 
+  @jtu.unaccelerate_getattr_deprecation(jax, 'xla_computation')
   def test_default_name(self):
-
     @api.named_call
     def my_test_function(x):
       return x**2
@@ -10731,9 +10737,11 @@ class OverrideLoweringTest(jtu.JaxTestCase):
     rules = ((jax.lax.sharding_constraint_p, wsc_as_noop),)
     lowered_ir = (
         jax.jit(f)
-        .lower(jax.ShapeDtypeStruct((2, 4), dtype=jnp.bfloat16),
-               _experimental_lowering_parameters=mlir.LoweringParameters(
-                 override_lowering_rules=rules)).as_text())
+        .trace(jax.ShapeDtypeStruct((2, 4), dtype=jnp.bfloat16))
+        .lower(_private_parameters=mlir.LoweringParameters(
+            override_lowering_rules=rules))
+        .as_text()
+    )
     self.assertNotIn("stablehlo.custom_call @Sharding", lowered_ir)
 
 

@@ -30,6 +30,7 @@ executable protocols described above.
 """
 from __future__ import annotations
 
+import functools
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, NamedTuple, Protocol, Union, runtime_checkable
@@ -446,9 +447,14 @@ class Traced(Stage):
     return self._out_tree.unflatten(
         [OutInfo(o.shape, o.dtype) for o in self.jaxpr.out_avals])
 
-  def lower(self):
-    lowering = self._lower_callable()
-    return Lowered(lowering, self.args_info, self._out_tree)
+  def lower(self, lowering_platforms: tuple[str, ...] | None = None,
+            _private_parameters: mlir.LoweringParameters | None = None):
+    if _private_parameters is None:
+      _private_parameters = mlir.LoweringParameters()
+    new_callable = functools.partial(
+        self._lower_callable, lowering_platforms=lowering_platforms,
+        lowering_parameters=_private_parameters)
+    return Lowered(new_callable(), self.args_info, self._out_tree)
 
 
 class Compiled(Stage):

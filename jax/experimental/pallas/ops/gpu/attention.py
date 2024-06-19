@@ -119,7 +119,7 @@ def mha_forward_kernel(
     # Ceildiv (`pl.cdiv` and `//` do not work due to type of start_q)
     upper_bound = lax.div(block_q * (start_q + 1) + block_k - 1, block_k)
   else:
-    upper_bound = pl.cdiv(seq_len, block_k)  # type: ignore
+    upper_bound = pl.cdiv(seq_len, block_k)
   o, m_i, l_i = lax.fori_loop(0, upper_bound, body, (o, m_i, l_i))
 
   if residual_refs:

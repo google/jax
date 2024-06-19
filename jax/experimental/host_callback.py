@@ -541,12 +541,12 @@ from jax._src.lib.mlir.dialects import hlo
 import numpy as np
 
 
-_HOST_CALLBACK_INLINE = config.DEFINE_bool(
+_HOST_CALLBACK_INLINE = config.bool_flag(
     'jax_host_callback_inline',
     config.bool_env('JAX_HOST_CALLBACK_INLINE', False),
     help='Inline the host_callback, if not in a staged context.'
 )
-_HOST_CALLBACK_MAX_QUEUE_BYTE_SIZE = config.DEFINE_integer(
+_HOST_CALLBACK_MAX_QUEUE_BYTE_SIZE = config.int_flag(
     'jax_host_callback_max_queue_byte_size',
     config.int_env('JAX_HOST_CALLBACK_MAX_QUEUE_BYTE_SIZE', int(256 * 1e6)),
     help=('The size in bytes of the buffer used to hold outfeeds from each '
@@ -555,7 +555,7 @@ _HOST_CALLBACK_MAX_QUEUE_BYTE_SIZE = config.DEFINE_integer(
           'until the Python callback consume more outfeeds.'),
     lower_bound=int(16 * 1e6)
 )
-_HOST_CALLBACK_OUTFEED = config.DEFINE_bool(
+_HOST_CALLBACK_OUTFEED = config.bool_flag(
     'jax_host_callback_outfeed',
     config.bool_env('JAX_HOST_CALLBACK_OUTFEED', False),
     help=(
@@ -564,7 +564,7 @@ _HOST_CALLBACK_OUTFEED = config.DEFINE_bool(
         'Has no effect on TPU, since only the outfeed mechanism is implemented.'
     )
 )
-_HOST_CALLBACK_LEGACY = config.DEFINE_bool(
+_HOST_CALLBACK_LEGACY = config.bool_flag(
     'jax_host_callback_legacy',
     config.bool_env('JAX_HOST_CALLBACK_LEGACY', True),
     help=(

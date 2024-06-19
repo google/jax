@@ -151,7 +151,7 @@ def jax_to_ir(fn, input_shapes, *, constants=None, format):
     return fn_curried(**dict(zip(arg_names, args)))
 
   if format == 'HLO':
-    comp = jax.xla_computation(ordered_wrapper)(*args)
+    comp = jax.jit(ordered_wrapper).lower(*args).compiler_ir('hlo')
     serialized_proto = comp.as_serialized_hlo_module_proto()
     debug_txt = comp.as_hlo_text()
   else:

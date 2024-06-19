@@ -47,7 +47,7 @@ try:
 except ImportError:
   FLAGS = {}
 
-_MOSAIC_USE_PYTHON_PIPELINE = config.define_bool_state(
+_MOSAIC_USE_PYTHON_PIPELINE = config.bool_state(
     name="mosaic_use_python_pipeline",
     default=False,
     help=(
@@ -57,7 +57,7 @@ _MOSAIC_USE_PYTHON_PIPELINE = config.define_bool_state(
     ),
 )
 
-_MOSAIC_ALLOW_HLO = config.define_bool_state(
+_MOSAIC_ALLOW_HLO = config.bool_state(
     name="jax_mosaic_allow_hlo",
     default=False,
     help="Allow hlo dialects in Mosaic",
@@ -96,6 +96,7 @@ class CustomCallBackendConfig:
   flags: dict[str, bool | int | float] | None
   allow_input_fusion: list[bool] | None
   serialization_format: int | None
+  internal_scratch_in_bytes: int | None
 
   # We omit the body while printing, because primitive params get embedded
   # in HLO metadata, and the body blows up its size.
@@ -135,6 +136,9 @@ class CustomCallBackendConfig:
         if i + 1 != len(self.allow_input_fusion):
           config.write(b",")
       config.write(b"]")
+    if self.internal_scratch_in_bytes is not None:
+      config.write(b', "internal_scratch_in_bytes": ')
+      config.write(str(self.internal_scratch_in_bytes).encode("ascii"))
     config.write(b"}")  # End of custom_call_config.
     if self.device_type is not None:
       config.write(b', "device_type": ')
@@ -375,6 +379,7 @@ def as_tpu_kernel(
     flags: dict[str, bool | int | float] | None = None,
     allow_input_fusion: list[bool] | None = None,
     input_output_aliases: tuple[tuple[int, int], ...] = (),
+    internal_scratch_in_bytes: int | None = None,
 ) -> Callable[..., Any]:
   """Turns an MLIR Mosaic kernel into a JAX-compatible function."""
   # We use jax.jit to make sure we hit the fast compilation cache.
@@ -434,6 +439,7 @@ def as_tpu_kernel(
       flags=flags,
       allow_input_fusion=allow_input_fusion,
       input_output_aliases=input_output_aliases,
+      internal_scratch_in_bytes=internal_scratch_in_bytes,
   )
 
 
@@ -453,6 +459,7 @@ def _lowered_as_tpu_kernel(
     allow_input_fusion: list[bool] | None = None,
     input_output_aliases: tuple[tuple[int, int], ...] = (),
     serialization_format: int | None = 1,
+    internal_scratch_in_bytes: int | None = None,
 ):
   """Turns a low-level MLIR Mosaic kernel into a JAX-compatible function."""
   unpack = False
@@ -482,7 +489,8 @@ def _lowered_as_tpu_kernel(
         vmem_limit_bytes,
         flags,
         allow_input_fusion,
-        serialization_format=serialization_format,
+        serialization_format,
+        internal_scratch_in_bytes,
     )
     result = tpu_custom_call_p.bind(
         *args,

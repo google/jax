@@ -262,8 +262,11 @@ class LayoutTest(jtu.JaxTestCase):
         ' compiled with'):
       compiled(arr)
 
+  @jtu.ignore_warning(category=DeprecationWarning,
+                      message="backend and device argument")
   def test_cpu_default_backend_layout(self):
-    out_cpu = jax.jit(jnp.dot, backend='cpu')(np.ones((8, 8)), np.ones((8, 8)))
+    inp = jax.device_put(np.ones((8, 8)), device=jax.devices('cpu')[0])
+    out_cpu = jax.jit(jnp.dot)(inp, inp)
 
     jax.jit(jnp.dot, backend=jax.default_backend()).lower(
         out_cpu, out_cpu).compile()  # doesn't crash

@@ -32,7 +32,6 @@ from jax._src import util
 from jax._src import xla_bridge
 from jax._src import core
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 from jax._src.op_shardings import (
     are_op_shardings_equal, get_num_ways_dim_sharded, is_op_sharding_replicated)
 from jax._src.partition_spec import PartitionSpec
@@ -1054,10 +1053,6 @@ def prepare_axis_resources(axis_resources,
       if isinstance(entry, PmapSharding):
         raise ValueError(f'One of {what} got sharding {entry} which is not '
                          'allowed.')
-      if xla_extension_version < 270:
-        if not isinstance(entry, XLACompatibleSharding):
-          raise ValueError(f'One of {what} got sharding {entry} which is not a '
-                           'subclass of XLACompatibleSharding.')
       new_entries.append(entry)
     else:
       new_entries.append(ParsedPartitionSpec.from_user_input(

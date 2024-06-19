@@ -40,7 +40,6 @@ from jax._src.interpreters import xla
 from jax._src.layout import AutoLayout, DeviceLocalLayout, Layout
 from jax._src.lib import xla_client as xc
 from jax._src.lib import xla_extension as xe
-from jax._src.lib import xla_extension_version
 from jax._src.sharding import Sharding
 from jax._src.sharding_impls import (
     PmapSharding, SingleDeviceSharding,
@@ -1120,14 +1119,8 @@ def _array_shard_arg(xs, shardings):
         results.append(
             shard_sharded_device_array_slow_path(x, devices, indices, sharding))
 
-  if xla_extension_version < 271:
-    copy_outs = [
-        xc.copy_array_to_devices_with_sharding(x, d, s)  # pytype: disable=module-attr
-        for x, d, s in safe_zip(batch_xs, batch_devs, batch_shardings)
-    ]
-  else:
-    copy_outs = xc.batched_copy_array_to_devices_with_sharding(
-        batch_xs, batch_devs, batch_shardings)
+  copy_outs = xc.batched_copy_array_to_devices_with_sharding(
+      batch_xs, batch_devs, batch_shardings)
   for i, copy_out in safe_zip(batch_indices, copy_outs):
     assert results[i] is None
     results[i] = copy_out

@@ -1819,8 +1819,6 @@ def _cpp_pmap(
 
   @api_boundary
   def trace(*args, **kwargs):
-    lowering_parameters = kwargs.pop(
-        '_experimental_lowering_parameters', mlir.LoweringParameters())
     p = _prepare_pmap(
         fun, in_axes, out_axes, static_broadcasted_tuple, donate_tuple,
         devices, backend, axis_size, args, kwargs)
@@ -1842,7 +1840,6 @@ def _cpp_pmap(
         donated_invars=p.donated_invars,
         is_explicit_global_axis_size=p.is_explicit_global_axis_size,
         avals=abstract_args,
-        lowering_parameters=lowering_parameters,
         closed_jaxpr=closed_jaxpr,
         backend=xc_backend,
         replicas=replicas,

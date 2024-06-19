@@ -56,38 +56,35 @@ def program_id_bind(*, axis: int):
   grid_env = pallas_core.current_grid_env()
   if grid_env:
     return grid_env[axis].index
+  frame = pallas_core.axis_frame()
+  # Query the size of the axis to make sure its a valid axis (and error
+  # otherwise).
+  _ = frame.size(axis)
   return jax_core.Primitive.bind(program_id_p, axis=axis)
 program_id_p.def_custom_bind(program_id_bind)
-
-def _program_id_impl(*, axis: int):
-  grid_env = pallas_core.current_grid_env()
-  assert grid_env
-  return grid_env[axis].index
-program_id_p.def_impl(_program_id_impl)
 
 def _program_id_abstract_eval(**_):
   return jax_core.ShapedArray((), jnp.int32)
 program_id_p.def_abstract_eval(_program_id_abstract_eval)
 
-
 num_programs_p = jax_core.Primitive("num_programs")
 
-def num_programs(axis: int) -> jax.Array:
+def num_programs(axis: int) -> int | jax.Array:
   """Returns the size of the grid along the given axis."""
   return num_programs_p.bind(axis=axis)
 
 @num_programs_p.def_custom_bind
 def _num_programs_bind(*, axis: int):
+  # We might be using a local grid env
   grid_env = pallas_core.current_grid_env()
   if grid_env:
-    return jnp.asarray(grid_env[axis].size, dtype=jnp.int32)
-  return jax_core.Primitive.bind(num_programs_p, axis=axis)
-
-@num_programs_p.def_impl
-def _num_programs_impl(*, axis: int):
-  grid_env = pallas_core.current_grid_env()
-  assert grid_env
-  return jnp.asarray(grid_env[axis].size, dtype=jnp.int32)
+    return grid_env[axis].size
+  # Otherwise, we look up the size of the grid in the axis env
+  frame = pallas_core.axis_frame()
+  size = frame.size(axis)
+  if size is pallas_core.dynamic_grid_dim:
+    return jax_core.Primitive.bind(num_programs_p, axis=axis)
+  return size
 
 @num_programs_p.def_abstract_eval
 def _num_programs_abstract_eval(**_):

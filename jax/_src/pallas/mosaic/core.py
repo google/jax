@@ -62,8 +62,14 @@ class semaphore(semaphore_dtype): pass
 class dma_semaphore(semaphore_dtype): pass
 class barrier_semaphore(semaphore_dtype): pass
 
+class AbstractSemaphoreTyRules:
+  @staticmethod
+  def pallas_interpret_element_aval(_) -> jax_core.ShapedArray:
+    return jax_core.ShapedArray((), jnp.dtype('int32'))
+
 class AbstractSemaphoreTy(dtypes.ExtendedDType):
   name: str
+  _rules = AbstractSemaphoreTyRules
 
   def __repr__(self) -> str:
     return self.name
@@ -166,6 +172,10 @@ class PrefetchScalarGridSpec(pallas_core.GridSpec):
   def get_grid_mapping(
       self, in_avals, in_tree, out_avals, out_tree
   ) -> tuple[tuple[jax_core.AbstractValue, ...], GridMapping]:
+    assert all(i is None or isinstance(i, int) for i in self.grid)
+    grid_mapping_grid = tuple(
+        pallas_core.dynamic_grid_dim if d is None else d for d in self.grid
+    )
     all_avals = tree_util.tree_unflatten(in_tree, in_avals)
     flat_scratch_shapes, scratch_tree = tree_util.tree_flatten(
         self.scratch_shapes)
@@ -191,15 +201,29 @@ class PrefetchScalarGridSpec(pallas_core.GridSpec):
         ((*grid_avals, *scalar_avals), {})
     )
     in_block_mappings = map(
-        partial(_convert_block_spec_to_block_mapping,
-                (*grid_avals, *scalar_ref_avals),
-                in_tree=index_map_in_tree), in_specs, in_ref_avals)
+        partial(
+            _convert_block_spec_to_block_mapping,
+            (*grid_avals, *scalar_ref_avals),
+            in_tree=index_map_in_tree,
+            grid=grid_mapping_grid,
+            mapped_dims=(),
+        ),
+        in_specs,
+        in_ref_avals,
+    )
     out_block_mappings = map(
-        partial(_convert_block_spec_to_block_mapping,
-                (*grid_avals, *scalar_ref_avals),
-                in_tree=index_map_in_tree), out_specs, out_ref_avals)
+        partial(
+            _convert_block_spec_to_block_mapping,
+            (*grid_avals, *scalar_ref_avals),
+            in_tree=index_map_in_tree,
+            grid=grid_mapping_grid,
+            mapped_dims=(),
+        ),
+        out_specs,
+        out_ref_avals,
+    )
     grid_mapping = GridMapping(
-        grid=self.grid,
+        grid=grid_mapping_grid,  # type: ignore
         block_mappings=(*in_block_mappings, *out_block_mappings),
         mapped_dims=(),
         num_index_operands=num_flat_scalar_prefetch,

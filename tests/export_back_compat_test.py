@@ -62,7 +62,6 @@ from jax.sharding import PartitionSpec as P
 from jax._src import config
 from jax._src import test_util as jtu
 from jax._src.lib import cuda_versions
-from jax._src.lib import xla_client
 
 config.parse_flags_with_absl()
 
@@ -713,8 +712,6 @@ class CompatTest(bctu.CompatTestBase):
                       check_results=check_top_k_results)
 
   def test_dynamic_approx_top_k(self):
-    if xla_client.mlir_api_version < 57:
-      self.skipTest("Requires newer jaxlib")
     # stablehlo.dynamic_approx_top_k is used temporarily for a approx_top_k
     # with dynamism
     # This is the input that was used to generate the test_data

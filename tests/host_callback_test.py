@@ -441,8 +441,12 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
     logging.info("%s: %s", self._testMethodName,
                  jax.make_jaxpr(func)(1))
-    logging.info("%s: %s", self._testMethodName,
-                 jax.xla_computation(func, backend=jtu.device_under_test())(1).as_hlo_text())
+    logging.info(
+        "%s: %s",
+        self._testMethodName,
+        jax.jit(func)
+        .trace(1)
+        .lower(lowering_platforms=(jtu.device_under_test(),)).as_text("hlo"))
     self.assertEqual(2, jax.jit(func)(1))
     hcb.barrier_wait()
 

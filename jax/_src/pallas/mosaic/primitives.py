@@ -35,8 +35,11 @@ from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.pallas import core as pl_core
 from jax._src.pallas.mosaic import core as tpu_core
+from jax._src.state import discharge as state_discharge
 from jax._src.typing import DTypeLike
 import jax.numpy as jnp
+
+Slice = indexing.Slice
 
 map, unsafe_map = util.safe_map, map
 zip, unsafe_zip = util.safe_zip, zip
@@ -105,13 +108,13 @@ roll_p = jax_core.Primitive("roll")
 
 def roll(
     x,
-    shift: int,
+    shift,
     axis: int,
     *,
     stride: int | None = None,
     stride_axis: int | None = None,
 ):
-  if shift < 0:
+  if isinstance(shift, int) and shift < 0:
     raise ValueError("shift must be non-negative.")
   if axis < 0 or axis >= len(x.shape):
     raise ValueError("axis is out of range.")
@@ -125,19 +128,20 @@ def roll(
     if axis == stride_axis:
       raise ValueError("expected axis and stride_axis are different.")
   return roll_p.bind(
-      x, shift=shift, axis=axis, stride=stride, stride_axis=stride_axis
+      x, shift, axis=axis, stride=stride, stride_axis=stride_axis
   )
 
 
 @roll_p.def_abstract_eval
-def _roll_abstract_eval(x, **_):
+def _roll_abstract_eval(x, shift, **_):
+  del shift
   return jax_core.raise_to_shaped(x)
 
 
 def _roll_lowering_rule(
-    ctx: mlir.LoweringRuleContext, x, *, shift, axis, stride, stride_axis
+    ctx: mlir.LoweringRuleContext, x, shift, *, axis, stride, stride_axis
 ):
-  def _roll(x):
+  def _roll(x, shift):
     if stride is None:
       return jnp.roll(x, shift, axis)
     outputs = [
@@ -146,7 +150,7 @@ def _roll_lowering_rule(
     ]
     return jnp.concatenate(outputs, stride_axis)
 
-  return mlir.lower_fun(_roll, multiple_results=False)(ctx, x)
+  return mlir.lower_fun(_roll, multiple_results=False)(ctx, x, shift)
 
 
 mlir.register_lowering(roll_p, _roll_lowering_rule)
@@ -460,6 +464,117 @@ def _dma_start_pp_eqn(eqn: jax_core.JaxprEqn,
 
 jax_core.pp_eqn_rules[dma_start_p] = _dma_start_pp_eqn
 
+def dma_start_discharge_rule(in_avals, out_avals,
+                             *args, tree, device_id_type):
+  (
+      src_ref,
+      src_indexers,
+      dst_ref,
+      dst_indexers,
+      dst_sem,
+      dst_sem_indexers,
+      src_sem,
+      src_sem_indexers,
+      device_id,
+  ) = tree_util.tree_unflatten(tree, args)
+  del out_avals, dst_sem, dst_sem_indexers
+  is_remote = src_sem is not None and device_id is not None
+  if is_remote:
+    if device_id_type == DeviceIdType.MESH:
+      raise NotImplementedError("Mesh device_id_type not supported.")
+  else:
+    assert src_sem is None
+    assert src_sem_indexers is None
+    assert device_id is None
+
+  def _find_slice_start_size(indexer):
+    num_scalar_idxs = 0
+    # TODO(b/329733289): support strided load/store in interpret mode.
+    for s in indexer.indices:
+      if isinstance(s, Slice) and s.stride > 1:
+        raise NotImplementedError("Strides not supported in discharge"
+                                  " rule of dma_start.")
+      if not isinstance(s, Slice):
+        num_scalar_idxs += 1
+    indices = indexer.indices
+    scalar_dims = [not isinstance(s, Slice) and not s.shape for s in indices]
+    slice_starts = [s.start if isinstance(s, Slice) else s for s in indices]
+    slice_sizes = tuple(s.size if isinstance(s, Slice) else 1 for s in indices)
+    return scalar_dims, slice_starts, slice_sizes, num_scalar_idxs
+
+  num_src_index_vals = 0
+  if src_indexers:
+    if len(src_indexers) != 1:
+      raise NotImplementedError("Multiple indexers not supported.")
+    idx = src_indexers[0]
+    if all((isinstance(s, Slice) or not s.shape) for s in idx.indices):
+      (_, slice_starts,
+       slice_sizes, num_scalar_idxs) = _find_slice_start_size(idx)
+      num_src_index_vals += num_scalar_idxs
+      updates = jax.lax.dynamic_slice(
+          src_ref, slice_starts, slice_sizes=slice_sizes)
+    else:
+      updates = src_ref[idx.indices]
+  else:
+    updates = src_ref
+
+  if is_remote:
+    # Note that this code only works in SPMD mode. If not all devices execute
+    # the DMA then the devices that do will hang.
+    # TODO(justinfu): Verify that code only works in SPMD mode.
+    axis_env = jax_core.thread_local_state.trace_state.axis_env
+    axis_names = tuple(frame.name for frame in axis_env)
+    nonempty_axis_names = tuple(name for name in axis_names if name is not None)
+    if len(nonempty_axis_names) > 1:
+      raise NotImplementedError("Sharding with more than one named axis not "
+                                "implemented in dma_start_p.")
+    shard_axis = nonempty_axis_names[0]
+    my_axis = jax.lax.axis_index(shard_axis)
+    # Update dst_ref from the perspective of the current device as the
+    # receiver.
+    who_copy_to_me = jax.lax.all_gather(device_id, shard_axis) == my_axis
+    # TODO(justinfu): Add a checkify for verifying there is at most one source.
+    # TODO(justinfu): Handle the case where no other device is copying to
+    # this device.
+    index = jnp.argmax(who_copy_to_me, axis=0)
+    global_updates = jax.lax.all_gather(updates, shard_axis)
+    updates = jax.lax.dynamic_index_in_dim(
+        global_updates, index, axis=0, keepdims=False)
+
+  num_dst_index_vals = 0
+  if dst_indexers:
+    if len(dst_indexers) != 1:
+      raise NotImplementedError("Multiple indexers not supported.")
+    idx = dst_indexers[0]
+    if all((isinstance(s, Slice) or not s.shape) for s in idx.indices):
+      (_, slice_starts, slice_sizes,
+       num_scalar_idxs) = _find_slice_start_size(idx)
+      num_dst_index_vals += num_scalar_idxs
+      if updates.shape != slice_sizes:
+        raise ValueError("DMA src and dst slices must have same shape. "
+                         f"Got src={updates.shape}, dst={slice_sizes}")
+      new_dst = jax.lax.dynamic_update_slice(
+          dst_ref, updates, slice_starts)
+    else:
+      new_dst = dst_ref.at[idx.indices].set(updates)
+  else:
+    new_dst = updates
+
+  # TODO(b/345505876): Implement semaphore counting.
+  new_avals = (None,)  # src_aval
+  new_avals += (None,) * num_src_index_vals
+  new_avals += (new_dst,)  # dst_aval
+  new_avals += (None,) * num_dst_index_vals
+  new_avals += (None,)  # dst_sem_aval
+  if is_remote:
+    new_avals += (None, None)  # src_sem_aval, device_id
+  assert (len(new_avals) ==
+          len(in_avals)), f"{len(new_avals), new_avals} != {len(in_avals)}"
+  return new_avals, []
+
+state_discharge.register_discharge_rule(dma_start_p)(dma_start_discharge_rule)
+
+
 dma_wait_p = jax_core.Primitive('dma_wait')
 dma_wait_p.multiple_results = True
 
@@ -484,6 +599,13 @@ def _dma_wait_pp_eqn(eqn: jax_core.JaxprEqn,
   ])
 
 jax_core.pp_eqn_rules[dma_wait_p] = _dma_wait_pp_eqn
+
+def dma_wait_discharge_rule(in_avals, out_avals,
+                             *args, tree, device_id_type):
+  del out_avals, args, tree, device_id_type
+  # TODO(justinfu): Implement semaphore counting.
+  return (None,) * len(in_avals), []
+state_discharge.register_discharge_rule(dma_wait_p)(dma_wait_discharge_rule)
 
 def _get_ref_and_indexers(ref):
   if isinstance(ref, state.RefView):

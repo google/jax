@@ -21,6 +21,7 @@ struct RewriteContext {
   const int hardware_generation;
   const std::array<int64_t, 2> target_shape = {8, 128};
   const std::array<int64_t, 2> mxu_shape = {128, 128};
+  const int max_sublanes_in_scratch = 0;
 
   MLIRContext *getMLIRContext() { return func.getContext(); }
 };

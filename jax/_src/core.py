@@ -62,7 +62,7 @@ zip, unsafe_zip = safe_zip, zip
 map, unsafe_map = safe_map, map
 
 
-_TRACER_ERROR_NUM_TRACEBACK_FRAMES = config.DEFINE_integer(
+_TRACER_ERROR_NUM_TRACEBACK_FRAMES = config.int_flag(
     'jax_tracer_error_num_traceback_frames',
     config.int_env('JAX_TRACER_ERROR_NUM_TRACEBACK_FRAMES', 5),
     help='Set the number of stack frames in JAX tracer error messages.'

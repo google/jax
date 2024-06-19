@@ -60,13 +60,12 @@ from jax._src.interpreters import ad
 from jax._src.interpreters import batching
 from jax._src.interpreters import mlir
 from jax._src.interpreters import pxla
-from jax._src.lib import xla_extension_version
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import func as func_dialect
 from jax._src.lib import xla_client as xc
 from jax._src import sharding
 from jax._src.sharding_impls import (
-    NamedSharding, XLACompatibleSharding, GSPMDSharding,
+    NamedSharding, GSPMDSharding,
     SingleDeviceSharding, PmapSharding, AUTO, UNSPECIFIED, UnspecifiedValue,
     ParsedPartitionSpec, SpecSync, get_single_pspec, is_auto, is_unspecified,
     is_unspecified_or_auto, prepare_axis_resources, parse_flatten_op_sharding)
@@ -333,10 +332,7 @@ def _cpp_pjit(jit_info: PjitInfo):
         jaxpr.consts, jit_info.abstracted_axes,
         pgle_profiler)
 
-    if xla_extension_version > 267:
-      return outs, maybe_fastpath_data, _need_to_rebuild_with_fdo(pgle_profiler)
-    else:
-      return outs, maybe_fastpath_data
+    return outs, maybe_fastpath_data, _need_to_rebuild_with_fdo(pgle_profiler)
 
   fun = jit_info.fun
   cpp_pjit_f = xc._xla.pjit(
@@ -500,16 +496,13 @@ def _make_jit_wrapper(jit_info: PjitInfo):
 
   @api_boundary
   def trace(*args, **kwargs) -> stages.Traced:
-    lowering_parameters = kwargs.pop(
-        '_experimental_lowering_parameters', mlir.LoweringParameters())
-
     (args_flat, params, in_avals, in_tree, out_tree, donated_invars,
      arg_names, num_consts, _) = _infer_params(jit_info, args, kwargs)
 
     donate_argnums = tuple(i for i, d in enumerate(donated_invars) if d)
     args_info = stages.make_args_info(in_tree, in_avals, donate_argnums)
     lower_callable = partial(_resolve_and_lower, args_flat, **params,
-                             lowering_parameters=lowering_parameters)
+                             pgle_profiler=None)
     return stages.Traced(params['jaxpr'], args_info, params["name"], out_tree,
                          lower_callable, args_flat, arg_names, num_consts)
 
@@ -1406,10 +1399,6 @@ def _resolve_in_shardings(
     # not allow None as the sharding.
     if arg_s is None:
       continue
-    if xla_extension_version < 270:
-      if not isinstance(arg_s, XLACompatibleSharding):
-        raise ValueError(f'One of the argument to pjit got sharding {arg_s} '
-                         'which is not a subclass of XLACompatibleSharding.')
     # Don't consider PmapSharding inputs as committed. They will get resharded
     # unconditionally.
     if isinstance(arg_s, PmapSharding):
@@ -1497,7 +1486,7 @@ def _resolve_in_shardings(
 def _resolve_and_lower(
     args, jaxpr, in_shardings, out_shardings, in_layouts,
     out_layouts, resource_env, donated_invars, name, keep_unused, inline,
-    lowering_parameters, pgle_profiler=None):
+    lowering_platforms, lowering_parameters, pgle_profiler):
   in_shardings = _resolve_in_shardings(
       args, in_shardings, out_shardings,
       resource_env.physical_mesh if resource_env is not None else None)
@@ -1506,6 +1495,7 @@ def _resolve_and_lower(
   lowered = _pjit_lower(
       jaxpr, in_shardings, out_shardings, in_layouts, out_layouts, resource_env,
       donated_invars, name, keep_unused, inline,
+      lowering_platforms=lowering_platforms,
       lowering_parameters=lowering_parameters,
       pgle_profiler=pgle_profiler)
   return lowered
@@ -1540,7 +1530,8 @@ def _pjit_call_impl_python(
       out_shardings=out_shardings, in_layouts=in_layouts,
       out_layouts=out_layouts, resource_env=resource_env,
       donated_invars=donated_invars, name=name, keep_unused=keep_unused,
-      inline=inline, lowering_parameters=mlir.LoweringParameters(),
+      inline=inline, lowering_platforms=None,
+      lowering_parameters=mlir.LoweringParameters(),
       pgle_profiler=pgle_profiler
   ).compile(compile_options)
 
@@ -1622,10 +1613,7 @@ def _pjit_call_impl(*args, jaxpr,
     fastpath_data = _get_fastpath_data(
         compiled, tree_structure(out_flat), args, out_flat, [], jaxpr.effects,
         jaxpr.consts, None, pgle_profiler)
-    if xla_extension_version > 267:
-      return out_flat, fastpath_data, _need_to_rebuild_with_fdo(pgle_profiler)
-    else:
-      return out_flat, fastpath_data
+    return out_flat, fastpath_data, _need_to_rebuild_with_fdo(pgle_profiler)
 
   f = _get_jaxpr_as_fun(
       jaxpr, in_shardings, out_shardings, in_layouts, out_layouts,
@@ -1659,6 +1647,7 @@ def _pjit_lower_cached(
     keep_unused: bool,
     inline: bool,
     *,
+    lowering_platforms: tuple[str, ...] | None,
     lowering_parameters: mlir.LoweringParameters,
     pgle_profiler: profiler.PGLEProfiler | None):
   if resource_env is not None:
@@ -1679,6 +1668,7 @@ def _pjit_lower_cached(
       jaxpr, api_name, name, mesh,
       in_shardings, out_shardings, donated_invars,
       True, jaxpr.in_avals, tiling_method=None,
+      lowering_platforms=lowering_platforms,
       lowering_parameters=lowering_parameters)
   else:
     return pxla.lower_sharding_computation(
@@ -1687,6 +1677,7 @@ def _pjit_lower_cached(
         keep_unused=keep_unused, inline=inline,
         devices_from_context=(
             None if mesh is None or mesh.empty else list(mesh.devices.flat)),
+        lowering_platforms=lowering_platforms,
         lowering_parameters=lowering_parameters,
         pgle_profiler=pgle_profiler)
 

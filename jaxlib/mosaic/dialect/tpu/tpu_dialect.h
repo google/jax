@@ -58,7 +58,8 @@ std::unique_ptr<OperationPass<func::FuncOp>> createInferVectorLayoutPass(
 
 std::unique_ptr<OperationPass<func::FuncOp>> createApplyVectorLayoutPass(
     int hardware_generation = -1, int lane_count = 128, int sublane_count = 8,
-    int mxu_contracting_size = 128, int mxu_noncontracting_size = 128);
+    int mxu_contracting_size = 128, int mxu_noncontracting_size = 128,
+    int max_sublanes_in_scratch = 0);
 
 std::unique_ptr<OperationPass<func::FuncOp>>
 createLogicalToPhysicalDeviceIdPass(int64_t total_devices);

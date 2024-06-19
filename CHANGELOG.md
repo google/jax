@@ -6,7 +6,11 @@ Best viewed [here](https://jax.readthedocs.io/en/latest/changelog.html).
 Remember to align the itemized text with the first line of an item within a list.
 -->
 
-## jax 0.4.30
+## jax 0.4.31
+
+## jaxlib 0.4.31
+
+## jax 0.4.30 (June 18, 2024)
 
 * Changes
   * JAX supports ml_dtypes >= 0.2. In 0.4.29 release, the ml_dtypes version was
@@ -32,8 +36,18 @@ Remember to align the itemized text with the first line of an item within a list
     See the [migration guide](https://jax.readthedocs.io/en/latest/export/export.html#migration-guide-from-jax-experimental-export).
   * Passing an array in place of a dtype is now deprecated in most cases; e.g. for arrays
     `x` and `y`, `x.astype(y)` will raise a warning. To silence it use `x.astype(y.dtype)`.
+  * `jax.xla_computation` is deprecated and will be removed in a future release.
+    Please use the AOT APIs to get the same functionality as `jax.xla_computation`.
+    * `jax.xla_computation(fn)(*args, **kwargs)` can be replaced with
+      `jax.jit(fn).lower(*args, **kwargs).compiler_ir('hlo')`.
+    * You can also use `.out_info` property of `jax.stages.Lowered` to get the
+      output information (like tree structure, shape and dtype).
+    * For cross-backend lowering, you can replace
+      `jax.xla_computation(fn, backend='tpu')(*args, **kwargs)` with
+      `jax.jit(fn).trace(*args, **kwargs).lower(lowering_platforms=('tpu',)).compiler_ir('hlo')`.
 
-## jaxlib 0.4.30
+
+## jaxlib 0.4.30 (June 18, 2024)
 
   * Support for monolithic CUDA jaxlibs has been dropped. You must use the
     plugin-based installation (`pip install jax[cuda12]` or

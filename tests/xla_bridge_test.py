@@ -27,7 +27,6 @@ from jax._src import test_util as jtu
 from jax._src import xla_bridge as xb
 from jax._src.interpreters import xla
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 
 config.parse_flags_with_absl()
 
@@ -162,14 +161,9 @@ class XlaBridgeTest(jtu.JaxTestCase):
       def _mock_tpu_client(library_path=None):
         _mock_tpu_client_with_options(library_path=library_path, options=None)
 
-      if xla_extension_version >= 267:
-        with mock.patch.object(xc, "make_tpu_client",
-                              side_effect=_mock_tpu_client_with_options):
-          xb.tpu_client_timer_callback(0.01)
-      else:
-        with mock.patch.object(xc, "make_tpu_client",
-                              side_effect=_mock_tpu_client):
-          xb.tpu_client_timer_callback(0.01)
+      with mock.patch.object(xc, "make_tpu_client",
+                            side_effect=_mock_tpu_client_with_options):
+        xb.tpu_client_timer_callback(0.01)
 
   def test_register_plugin(self):
     with self.assertLogs(level="WARNING") as log_output:
@@ -205,7 +199,7 @@ class XlaBridgeTest(jtu.JaxTestCase):
     self.assertTrue(registration.experimental)
 
     options = {}
-    if xb.get_backend().platform == 'tpu' and xla_extension_version >= 267:
+    if xb.get_backend().platform == 'tpu':
       options["ml_framework_name"] = "JAX"
       options["ml_framework_version"] = version.__version__
     mock_make.assert_called_once_with("name1", options, None)
@@ -243,7 +237,7 @@ class XlaBridgeTest(jtu.JaxTestCase):
         "string_option": "string",
         "float_option": 1.0,
         }
-    if xb.get_backend().platform == 'tpu' and xla_extension_version >= 267:
+    if xb.get_backend().platform == 'tpu':
       options["ml_framework_name"] = "JAX"
       options["ml_framework_version"] = version.__version__
 

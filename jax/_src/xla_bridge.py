@@ -45,7 +45,6 @@ from jax._src.cloud_tpu_init import get_tpu_library_path
 from jax._src.lib import cuda_versions
 from jax._src.lib import xla_client
 from jax._src.lib import xla_extension
-from jax._src.lib import xla_extension_version
 
 logger = logging.getLogger(__name__)
 
@@ -65,46 +64,46 @@ XlaBackend = xla_client.Client
 MIN_COMPUTE_CAPABILITY = 52
 
 # TODO(phawkins): Remove jax_xla_backend.
-_XLA_BACKEND = config.DEFINE_string(
+_XLA_BACKEND = config.string_flag(
     'jax_xla_backend', '',
     'Deprecated, please use --jax_platforms instead.')
-BACKEND_TARGET = config.DEFINE_string(
+BACKEND_TARGET = config.string_flag(
     'jax_backend_target',
     os.getenv('JAX_BACKEND_TARGET', '').lower(),
     'Either "local" or "rpc:address" to connect to a remote service target.')
 # TODO(skye): warn when this is used once we test out --jax_platforms a bit
-_PLATFORM_NAME = config.DEFINE_string(
+_PLATFORM_NAME = config.string_flag(
     'jax_platform_name',
     os.getenv('JAX_PLATFORM_NAME', '').lower(),
     'Deprecated, please use --jax_platforms instead.')
-CUDA_VISIBLE_DEVICES = config.DEFINE_string(
+CUDA_VISIBLE_DEVICES = config.string_flag(
     'jax_cuda_visible_devices', 'all',
     'Restricts the set of CUDA devices that JAX will use. Either "all", or a '
     'comma-separate list of integer device IDs.')
-_ROCM_VISIBLE_DEVICES = config.DEFINE_string(
+_ROCM_VISIBLE_DEVICES = config.string_flag(
     'jax_rocm_visible_devices', 'all',
     'Restricts the set of ROCM devices that JAX will use. Either "all", or a '
     'comma-separate list of integer device IDs.')
 
-_USE_MOCK_GPU_CLIENT = config.DEFINE_bool(
+_USE_MOCK_GPU_CLIENT = config.bool_flag(
     name="use_mock_gpu_client",
     default=False,
     help="If True, use a mock GPU client instead of a real one.",
 )
 
-_MOCK_NUM_GPUS = config.DEFINE_integer(
+_MOCK_NUM_GPUS = config.int_flag(
     name="mock_num_gpus",
     default=1,
     help="Mock GPU client number of gpus.",
 )
 
-_CPU_ENABLE_GLOO_COLLECTIVES = config.DEFINE_bool(
+_CPU_ENABLE_GLOO_COLLECTIVES = config.bool_flag(
     name="jax_cpu_enable_gloo_collectives",
     default=False,
     help="Deprecated, please use jax_cpu_collectives_implementation instead.",
 )
 
-_CPU_COLLECTIVES_IMPLEMENTATION = config.DEFINE_string(
+_CPU_COLLECTIVES_IMPLEMENTATION = config.string_flag(
     name='jax_cpu_collectives_implementation',
     default='none',
     help='Cross-process collective implementation used on CPU. Either "none", '
@@ -113,7 +112,7 @@ _CPU_COLLECTIVES_IMPLEMENTATION = config.DEFINE_string(
 
 # TODO(yueshengys): turn default back to True after resolving memory increase
 # issue.
-_CPU_ENABLE_ASYNC_DISPATCH = config.DEFINE_bool(
+_CPU_ENABLE_ASYNC_DISPATCH = config.bool_flag(
     name="jax_cpu_enable_async_dispatch",
     default=False,
     help="Only applies to non-parallel computations. If False, run computations"
@@ -147,13 +146,9 @@ def tpu_client_timer_callback(timer_secs: float) -> xla_client.Client | None:
   t.start()
 
   try:
-    if xla_extension_version >= 267:
-      client = xla_client.make_tpu_client( # type: ignore
-          get_tpu_library_path(),
-          _options_from_jax_configs("tpu"))
-    else:
-      client = xla_client.make_tpu_client(
-          get_tpu_library_path())
+    client = xla_client.make_tpu_client( # type: ignore
+        get_tpu_library_path(),
+        _options_from_jax_configs("tpu"))
   finally:
     t.cancel()
 
@@ -417,7 +412,7 @@ def _check_cuda_versions(raise_on_first_error: bool = False,
 
 
 def make_gpu_client(
-    *, platform_name: str, visible_devices_flag: config.FlagHolder[str]
+    *, platform_name: str, visible_devices_flag: config.Flag[str]
 ) -> xla_client.Client:
   visible_devices = visible_devices_flag.value
   allowed_devices = None

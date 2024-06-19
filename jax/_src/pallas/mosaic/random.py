@@ -149,8 +149,7 @@ def _make_stateful_sampler(sampler: SampleFnType) -> KeylessSampleFnType:
     # Pass in a placeholder key into the sampling function.
     # The key is ignored by the stateful random_bits function, but all jax
     # sampling functions expect a key as input so we must pass one in here.
-    placeholder_key = jax_prng.random_seed(
-        None, impl=tpu_internal_stateful_impl)
+    placeholder_key = jax_api_random.key(0, impl=tpu_internal_stateful_impl)
     return sampler(placeholder_key, *args, **kwargs)
   # Remove key argument from docstring.
   doc_lines = filter(

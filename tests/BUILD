@@ -35,6 +35,7 @@ jax_test(
     name = "api_test",
     srcs = ["api_test.py"],
     shard_count = 10,
+    tags = ["test_cpu_thunks"],
 )
 
 jax_test(

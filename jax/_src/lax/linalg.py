@@ -44,7 +44,6 @@ from jax._src.lib import gpu_linalg
 from jax._src.lib import gpu_solver
 from jax._src.lib import gpu_sparse
 from jax._src.lib import lapack
-from jax._src.lib import version as jaxlib_version
 from jax._src.lib import xla_client
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import chlo
@@ -510,10 +509,6 @@ def _cholesky_update_cuda_lowering_rule(ctx, r_matrix, w_vector):
     raise NotImplementedError(
         "Can only lower fast cholesky_update on CUDA."
     )
-  if jaxlib_version < (0, 4, 29):
-    raise NotImplementedError(
-        f"The jaxlib version {jaxlib_version} is too old."
-        "Please update to at least 0.4.29.")
   return gpu_linalg.cuda_cholesky_update(
       r_matrix, w_vector, r_matrix_aval.dtype)
 

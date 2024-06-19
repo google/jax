@@ -86,7 +86,7 @@ python-dateutil==2.9.0.post0
     # via matplotlib
 rich==13.7.1
     # via -r build/test-requirements.txt
-scipy==1.13.0
+scipy==1.13.1
     # via -r build/requirements.in
 six==1.16.0
     # via python-dateutil

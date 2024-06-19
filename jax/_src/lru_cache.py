@@ -77,8 +77,8 @@ class LRUCache(CacheInterface):
       self.max_size = max_size
       self.lock_timeout_secs = lock_timeout_secs
 
-      lock_path = self.path / ".lockfile"
-      self.lock = filelock.FileLock(lock_path)
+      self.lock_path = self.path / ".lockfile"
+      self.lock = filelock.FileLock(self.lock_path)
 
   def get(self, key: str) -> bytes | None:
     """Retrieves the cached value for the given key.

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import sys
 import unittest
 
 from absl.testing import absltest
@@ -27,10 +26,7 @@ config.parse_flags_with_absl()
 class GpuMemoryAllocationTest(absltest.TestCase):
 
   # This test must be run in its own subprocess.
-  @unittest.skipIf(
-      "pytest" in sys.modules,
-      "Test must run in an isolated process",
-  )
+  @jtu.skip_under_pytest("Test must run in an isolated process")
   @unittest.skipIf(
       "XLA_PYTHON_CLIENT_ALLOCATOR" in os.environ,
       "Test does not work if the python client allocator has been overriden",

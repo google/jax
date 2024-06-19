@@ -424,7 +424,7 @@ def export_back_compat(
   """
 
   def do_export(*args_specs, **kwargs_specs) -> Exported:
-    if hasattr(fun_jax, "lower"):
+    if hasattr(fun_jax, "trace"):
       # If we have a pjit or pmap already we do not wrap with another, and we
       # allow shardings.
       wrapped_fun_jax = fun_jax
@@ -433,8 +433,6 @@ def export_back_compat(
       # convert(f_jax), in which case a "jit" is implied. In that case we raise
       # an error if the lowered function contains non-replicated sharding annotations.
       wrapped_fun_jax = jax.jit(fun_jax)
-
-    has_trace = hasattr(wrapped_fun_jax, "trace")
 
     if lowering_platforms is not None:
       actual_lowering_platforms = tuple(lowering_platforms)
@@ -457,25 +455,12 @@ def export_back_compat(
               self_descr=f"current (from {shape_poly.args_kwargs_path_to_str(symbolic_scope[1])}) ",
               other_descr=shape_poly.args_kwargs_path_to_str(k_path))
 
-    if has_trace:
-      traced = wrapped_fun_jax.trace(  # type: ignore
-          *args_specs, **kwargs_specs,
-          _experimental_lowering_parameters=mlir.LoweringParameters(
-            platforms=actual_lowering_platforms,
-            for_export=True,
-          ))
-      jaxpr, fun_name = traced.jaxpr, traced.fun_name
-      lowered = traced.lower()
-    else:
-      lowered = wrapped_fun_jax.lower(
-          *args_specs, **kwargs_specs,
-          _experimental_lowering_parameters=mlir.LoweringParameters(
-              platforms=actual_lowering_platforms,
-              for_export=True,
-          ))
-      jaxpr, fun_name = None, util.fun_name(wrapped_fun_jax)
+    traced = wrapped_fun_jax.trace(*args_specs, **kwargs_specs)
+    lowered = traced.lower(
+        lowering_platforms=actual_lowering_platforms,
+        _private_parameters=mlir.LoweringParameters(for_export=True))
     return _export_lowered(
-        lowered, jaxpr, fun_name,
+        lowered, traced.jaxpr, traced.fun_name,
         disabled_checks=disabled_checks,
         _device_assignment_for_internal_jax2tf_use_only=_device_assignment_for_internal_jax2tf_use_only)
   return do_export
@@ -553,16 +538,12 @@ def export(
               self_descr=f"current (from {shape_poly.args_kwargs_path_to_str(symbolic_scope[1])}) ",
               other_descr=shape_poly.args_kwargs_path_to_str(k_path))
 
-    traced = fun_jit.trace(
-        *args_specs, **kwargs_specs,
-        _experimental_lowering_parameters=mlir.LoweringParameters(
-          platforms=actual_lowering_platforms,
-          for_export=True,
-        ))
-    jaxpr, fun_name = traced.jaxpr, traced.fun_name
-    lowered = traced.lower()
+    traced = fun_jit.trace(*args_specs, **kwargs_specs)
+    lowered = traced.lower(
+        lowering_platforms=actual_lowering_platforms,
+        _private_parameters=mlir.LoweringParameters(for_export=True))
     return _export_lowered(
-        lowered, jaxpr, fun_name,
+        lowered, traced.jaxpr, traced.fun_name,
         disabled_checks=disabled_checks)
   return do_export
 

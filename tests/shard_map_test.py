@@ -42,7 +42,6 @@ from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src import linear_util as lu
 from jax._src import tree_util
-from jax._src.lib import xla_extension_version
 import jax.numpy as jnp
 
 from jax.experimental.custom_partitioning import custom_partitioning
@@ -1706,7 +1705,6 @@ class ShardMapTest(jtu.JaxTestCase):
     with self.assertRaisesRegex(ValueError, "in_specs refers to 'j'"):
       f(v)
 
-  @unittest.skipIf(xla_extension_version < 262, "Requires jaxlib 0.4.28")
   def test_nested_partial_auto(self):
     mesh = jtu.create_global_mesh((2, 2), ('i', 'j'))
 

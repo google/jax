@@ -335,11 +335,6 @@ def _approx_top_k_lowering(ctx, operand, *, k,
         backend_config=backend_config,
         result_shapes=result_shapes)
   else:
-    if xc.mlir_api_version < 57:
-      raise NotImplementedError(
-          "approx_top_k with non-constant k requires jaxlib version 0.4.29 or "
-          "newer")
-
     k_value, = mlir.eval_dynamic_shape_as_vals(ctx, (k,))
     out = mlir.custom_call(
         "stablehlo.dynamic_approx_top_k",

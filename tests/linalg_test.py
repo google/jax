@@ -290,7 +290,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     for result in results:
       self.assertTrue(np.all(np.isnan(result)))
 
-
   @jtu.sample_product(
     shape=[(4, 4), (5, 5), (8, 8), (7, 6, 6)],
     dtype=float_types + complex_types,
@@ -345,13 +344,13 @@ class NumpyLinalgTest(jtu.JaxTestCase):
         np.matmul(args, vs) - ws[..., None, :] * vs) < 1e-3))
 
   @jtu.sample_product(
-    n=[0, 4, 5, 50, 512],
-    dtype=float_types + complex_types,
-    lower=[True, False],
+      n=[0, 4, 5, 50, 512],
+      dtype=float_types + complex_types,
+      lower=[True, False],
   )
   def testEigh(self, n, dtype, lower):
     rng = jtu.rand_default(self.rng())
-    tol = 0.5 * np.maximum(n, 80) * np.finfo(dtype).eps
+    eps = np.finfo(dtype).eps
     args_maker = lambda: [rng((n, n), dtype)]
 
     uplo = "L" if lower else "U"
@@ -361,15 +360,36 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     w, v = jnp.linalg.eigh(np.tril(a) if lower else np.triu(a),
                            UPLO=uplo, symmetrize_input=False)
     w = w.astype(v.dtype)
-    self.assertLessEqual(
-        np.linalg.norm(np.eye(n) - np.matmul(np.conj(T(v)), v)), 4 * tol
+    tol = 2 * n * eps
+    self.assertAllClose(
+        np.eye(n, dtype=v.dtype),
+        np.matmul(np.conj(T(v)), v),
+        atol=tol,
+        rtol=tol,
     )
+
     with jax.numpy_rank_promotion('allow'):
-      self.assertLessEqual(np.linalg.norm(np.matmul(a, v) - w * v),
-                           tol * np.linalg.norm(a))
+      tol = 100 * eps
+      self.assertLessEqual(
+          np.linalg.norm(np.matmul(a, v) - w * v), tol * np.linalg.norm(a)
+      )
 
     self._CompileAndCheck(
-        partial(jnp.linalg.eigh, UPLO=uplo), args_maker, rtol=tol
+        partial(jnp.linalg.eigh, UPLO=uplo), args_maker, rtol=eps
+    )
+
+    # Compare eigenvalues against Numpy using double precision. We do not compare
+    # eigenvectors because they are not uniquely defined, but the two checks above
+    # guarantee that that they satisfy the conditions for being eigenvectors.
+    double_type = dtype
+    if dtype == np.float32:
+      double_type = np.float64
+    if dtype == np.complex64:
+      double_type = np.complex128
+    w_np = np.linalg.eigvalsh(a.astype(double_type))
+    tol = 8 * eps
+    self.assertAllClose(
+        w_np.astype(w.dtype), w, atol=tol * np.linalg.norm(a), rtol=tol
     )
 
   @jtu.sample_product(
@@ -383,7 +403,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     dtype = np.float32
     n = 256
     rng = jtu.rand_default(self.rng())
-    tol = np.maximum(n, 80) * np.finfo(dtype).eps
+    eps = np.finfo(dtype).eps
     args_maker = lambda: [rng((n, n), dtype)]
     subset_by_index = (start, end)
     k = end - start
@@ -397,21 +417,36 @@ class NumpyLinalgTest(jtu.JaxTestCase):
 
     self.assertEqual(v.shape, (n, k))
     self.assertEqual(w.shape, (k,))
-    self.assertLessEqual(
-        np.linalg.norm(np.eye(k) - np.matmul(np.conj(T(v)), v)), 3 * tol
-    )
     with jax.numpy_rank_promotion("allow"):
+      tol = 200 * eps
       self.assertLessEqual(
           np.linalg.norm(np.matmul(a, v) - w * v), tol * np.linalg.norm(a)
       )
+    tol = 3 * n * eps
+    self.assertAllClose(
+        np.eye(k, dtype=v.dtype),
+        np.matmul(np.conj(T(v)), v),
+        atol=tol,
+        rtol=tol,
+    )
 
-    self._CompileAndCheck(partial(jnp.linalg.eigh), args_maker, rtol=tol)
+    self._CompileAndCheck(partial(jnp.linalg.eigh), args_maker, rtol=eps)
 
     # Compare eigenvalues against Numpy. We do not compare eigenvectors because
     # they are not uniquely defined, but the two checks above guarantee that
     # that they satisfy the conditions for being eigenvectors.
-    w_np = np.linalg.eigvalsh(a)[subset_by_index[0] : subset_by_index[1]]
-    self.assertAllClose(w_np, w, atol=tol, rtol=tol)
+    double_type = dtype
+    if dtype == np.float32:
+      double_type = np.float64
+    if dtype == np.complex64:
+      double_type = np.complex128
+    w_np = np.linalg.eigvalsh(a.astype(double_type))[
+        subset_by_index[0] : subset_by_index[1]
+    ]
+    tol = 20 * eps
+    self.assertAllClose(
+        w_np.astype(w.dtype), w, atol=tol * np.linalg.norm(a), rtol=tol
+    )
 
   def testEighZeroDiagonal(self):
     a = np.array([[0., -1., -1.,  1.],
@@ -568,7 +603,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     ws, vs = vmap(jsp.linalg.eigh)(args)
     ws = ws.astype(vs.dtype)
     norm = np.max(np.linalg.norm(np.matmul(args, vs) - ws[..., None, :] * vs))
-    self.assertLess(norm, 1e-2)
+    self.assertLess(norm, 1.4e-2)
 
   @jtu.sample_product(
     shape=[(1,), (4,), (5,)],
@@ -795,7 +830,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
       max_backward_error = np.amax(backward_error)
       return max_backward_error
 
-    tol = 80 * jnp.finfo(dtype).eps
+    tol = 100 * jnp.finfo(dtype).eps
     reconstruction_tol = 2 * tol
     unitariness_tol = 3 * tol
 

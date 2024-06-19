@@ -9,7 +9,7 @@ different builds for different operating systems and accelerators.
 
 * **CPU-only (Linux/macOS/Windows)**
   ```
-  pip install -U "jax[cpu]"
+  pip install -U jax
   ```
 * **GPU (NVIDIA, CUDA 12)**
   ```
@@ -54,7 +54,7 @@ development on a laptop, you can run:
 
 ```bash
 pip install --upgrade pip
-pip install --upgrade jax[cpu]
+pip install --upgrade jax
 ```
 
 On Windows, you may also need to install the

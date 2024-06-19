@@ -26,7 +26,6 @@ from jax import lax
 from jax._src import test_util as jtu
 from jax._src import xla_bridge as xb
 from jax._src import config
-from jax._src.lib import xla_extension_version
 from jax.ad_checkpoint import checkpoint_name, checkpoint as new_checkpoint
 import jax.numpy as jnp
 from jax.ad_checkpoint import Offloadable, remat, Recompute
@@ -68,8 +67,6 @@ def _create_inputs(shape, pspec, mem_kind=None):
 class ShardingMemoriesTest(jtu.JaxTestCase):
 
   def setUp(self):
-    if xla_extension_version < 265 and not jtu.test_device_matches(["tpu"]):
-      self.skipTest("Memories do not work on CPU and GPU backends yet.")
     # TODO(b/311021572)
     if jtu.is_cloud_tpu():
       self.skipTest("Experimental feature not yet implemented on Cloud TPU")
@@ -398,6 +395,20 @@ class DevicePutTest(jtu.JaxTestCase):
     out_host = jax.device_put(py_inp, s_host)
     self._check_device_put_addressable_shards(
         out_host, py_inp, s_host, host_memory_kind, index=False)
+
+  def test_device_put_inside_jit(self):
+    _, s_host, np_inp, inp_host = _create_inputs(
+        (8, 2), P("x", "y"), mem_kind="pinned_host")
+    s_dev = s_host.with_memory_kind("device")
+
+    @jax.jit
+    def f(a, b):
+      x, y = jax.device_put((a, b), s_dev)
+      return x * y
+
+    out = f(inp_host, inp_host)
+    self._check_device_put_addressable_shards(
+        out, np_inp * np_inp, s_dev, "device")
 
   def test_parameter_streaming(self):
     _, s_host, np_inp, inp_host = _create_inputs(

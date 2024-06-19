@@ -50,7 +50,6 @@ from jax._src.cloud_tpu_init import running_in_cloud_tpu_vm
 from jax._src.interpreters import mlir
 from jax._src.interpreters import pxla
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 from jax._src.numpy.util import promote_dtypes, promote_dtypes_inexact
 from jax._src.public_test_util import (  # noqa: F401
     _assert_numpy_allclose, _check_dtypes_match, _default_tolerance, _dtype, check_close, check_grads,
@@ -66,18 +65,18 @@ import numpy.random as npr
 # jax.test_util. Functionality appearing here is for internal use only, and
 # may be changed or removed at any time and without any deprecation cycle.
 
-_TEST_DUT = config.DEFINE_string(
+_TEST_DUT = config.string_flag(
     'jax_test_dut', '',
     help=
     'Describes the device under test in case special consideration is required.'
 )
 
-NUM_GENERATED_CASES = config.DEFINE_integer(
+NUM_GENERATED_CASES = config.int_flag(
   'jax_num_generated_cases',
   int(os.getenv('JAX_NUM_GENERATED_CASES', '10')),
   help='Number of generated cases to test')
 
-_MAX_CASES_SAMPLING_RETRIES = config.DEFINE_integer(
+_MAX_CASES_SAMPLING_RETRIES = config.int_flag(
   'max_cases_sampling_retries',
   int(os.getenv('JAX_MAX_CASES_SAMPLING_RETRIES', '100')),
   'Number of times a failed test sample should be retried. '
@@ -85,23 +84,23 @@ _MAX_CASES_SAMPLING_RETRIES = config.DEFINE_integer(
   'sampling process is terminated.'
 )
 
-_SKIP_SLOW_TESTS = config.DEFINE_bool(
+_SKIP_SLOW_TESTS = config.bool_flag(
     'jax_skip_slow_tests',
     config.bool_env('JAX_SKIP_SLOW_TESTS', False),
     help='Skip tests marked as slow (> 5 sec).'
 )
 
-_TEST_TARGETS = config.DEFINE_string(
+_TEST_TARGETS = config.string_flag(
   'test_targets', os.getenv('JAX_TEST_TARGETS', ''),
   'Regular expression specifying which tests to run, called via re.search on '
   'the test name. If empty or unspecified, run all tests.'
 )
-_EXCLUDE_TEST_TARGETS = config.DEFINE_string(
+_EXCLUDE_TEST_TARGETS = config.string_flag(
   'exclude_test_targets', os.getenv('JAX_EXCLUDE_TEST_TARGETS', ''),
   'Regular expression specifying which tests NOT to run, called via re.search '
   'on the test name. If empty or unspecified, run all tests.'
 )
-TEST_WITH_PERSISTENT_COMPILATION_CACHE = config.DEFINE_bool(
+TEST_WITH_PERSISTENT_COMPILATION_CACHE = config.bool_flag(
     'jax_test_with_persistent_compilation_cache',
     config.bool_env('JAX_TEST_WITH_PERSISTENT_COMPILATION_CACHE', False),
     help='If enabled, the persistent compilation cache will be enabled for all '
@@ -180,6 +179,17 @@ def check_eq(xs, ys, err_msg=''):
   tree_all(tree_map(assert_close, xs, ys))
 
 
+# TODO(yashkatariya): Make this context manager check for deprecation message
+# in OSS.
+@contextmanager
+def unaccelerate_getattr_deprecation(module, name):
+  message, prev_attr = module._deprecations[name]
+  module._deprecations[name] = (message, getattr(module, f"_deprecated_{name}"))
+  try:
+    yield
+  finally:
+    module._deprecations[name] = (message, prev_attr)
+
 @contextmanager
 def capture_stdout() -> Generator[Callable[[], str | None], None, None]:
   """Context manager to capture all stdout output."""
@@ -245,32 +255,18 @@ def count_primitive_compiles():
 
 @contextmanager
 def count_device_put_fast_path_hit():
-  if xla_extension_version < 271:
-    original_fn = xc.copy_array_to_devices_with_sharding
-    count = [0]
+  original_fn = xc.batched_copy_array_to_devices_with_sharding
+  count = [0]
 
-    def copy_array_to_devices_with_sharding_and_count(*args, **kwargs):
-      count[0] += 1
-      return original_fn(*args, **kwargs)
+  def batched_copy_array_to_devices_with_sharding_and_count(*args, **kwargs):
+    count[0] += 1
+    return original_fn(*args, **kwargs)
 
-    xc.copy_array_to_devices_with_sharding = copy_array_to_devices_with_sharding_and_count
-    try:
-      yield count
-    finally:
-      xc.copy_array_to_devices_with_sharding = original_fn
-  else:
-    original_fn = xc.batched_copy_array_to_devices_with_sharding
-    count = [0]
-
-    def batched_copy_array_to_devices_with_sharding_and_count(*args, **kwargs):
-      count[0] += 1
-      return original_fn(*args, **kwargs)
-
-    xc.batched_copy_array_to_devices_with_sharding = batched_copy_array_to_devices_with_sharding_and_count
-    try:
-      yield count
-    finally:
-      xc.batched_copy_array_to_devices_with_sharding = original_fn
+  xc.batched_copy_array_to_devices_with_sharding = batched_copy_array_to_devices_with_sharding_and_count
+  try:
+    yield count
+  finally:
+    xc.batched_copy_array_to_devices_with_sharding = original_fn
 
 
 @contextmanager
@@ -570,6 +566,18 @@ def pytest_mark_if_available(marker: str):
       return func_or_class
     return getattr(pytest.mark, marker)(func_or_class)
   return wrap
+
+
+def is_running_under_pytest():
+  return "pytest" in sys.modules
+
+
+def skip_under_pytest(reason: str):
+  """A decorator for test methods to skip the test when run under pytest."""
+  reason = "Running under pytest: " + reason
+  def skip(test_method):
+    return unittest.skipIf(is_running_under_pytest(), reason)(test_method)
+  return skip
 
 
 def format_test_name_suffix(opname, shapes, dtypes):
