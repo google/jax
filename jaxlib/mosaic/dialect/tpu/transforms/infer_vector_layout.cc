@@ -1109,20 +1109,23 @@ class VectorLayoutInferer {
 
     SmallVector<Layout, 4> in_layout(op->getNumOperands(), kNoLayout);
     CHECK_EQ(op->getNumOperands(), op.getIndices().size() + 1);
-    SmallVector<int64_t, 2> tile_offsets;  // indices % tiling
-    for (int i = 0; i < tiling.size(); ++i) {
-      int dim = rank - tiling.size() + i;
+    // Infer the static offset on a given tiling dimension.
+    auto infer_offset = [&](int64_t &offset,
+                            int64_t tiling_dim) -> LogicalResult {
+      int dim = rank - tiling.size() + tiling_dim;
       Value tiled_index = op.getIndices()[dim];
       if (auto cst_op = tiled_index.getDefiningOp<arith::ConstantOp>()) {
-        tile_offsets.push_back(cast<IntegerAttr>(cst_op.getValue()).getInt() %
-                               tiling[i]);
-      } else {
-        if (failed(verifyDivisibleIndex(tiled_index, tiling[i], dim, op))) {
-          return failure();
-        }
-        tile_offsets.push_back(0);
+        offset =
+            cast<IntegerAttr>(cst_op.getValue()).getInt() % tiling[tiling_dim];
+        return success();
       }
-    }
+      if (failed(
+              verifyDivisibleIndex(tiled_index, tiling[tiling_dim], dim, op))) {
+        return failure();
+      }
+      offset = 0;
+      return success();
+    };
 
     if (rank == 0) {
       op.emitOpError("rank 0 vectors unsupported");
@@ -1133,15 +1136,17 @@ class VectorLayoutInferer {
       const int64_t lane_tiling = packing * target_shape_[1];
       auto tile = tiling.front();
       TPU_CHECK_OP(tile % lane_tiling == 0, "Unsupported tiling for 1D load");
-      CHECK_EQ(tile_offsets.size(), 1);
+      int64_t offset;
+      if (failed(infer_offset(offset, 0))) {
+        return failure();
+      }
       // TODO(apaszke): We could generate replicated loads for short values.
       setLayout(op, in_layout,
-                VectorLayout(bitwidth, {0, tile_offsets[0] % lane_tiling},
+                VectorLayout(bitwidth, {0, offset % lane_tiling},
                              {1, lane_tiling}, ImplicitDim::kSecondMinor));
     } else {  // rank >= 2
       TPU_CHECK_OP(tiling.size() == 2, "Expected 2D tiling in 2D+ loads");
-      CHECK_EQ(tile_offsets.size(), 2);
-      std::array<std::optional<int64_t>, 2> offsets;
+      LayoutOffsets offsets = {0, 0};
       const auto tile_src_shape = src_ty.getShape().take_back(2);
       const auto tile_res_shape = res_ty.getShape().take_back(2);
       const int64_t num_sublanes = tile_res_shape[0];
@@ -1155,10 +1160,12 @@ class VectorLayoutInferer {
       if (bitwidth == 32 &&
           (tile_src_shape[1] <= target_shape_[1] || num_sublanes == 1)) {
         offsets[0] = 0;
-      } else {
-        offsets[0] = tile_offsets[0];
+      } else if (failed(infer_offset(*offsets[0], 0))) {
+        return failure();
       }
-      offsets[1] = tile_offsets[1];
+      if (failed(infer_offset(*offsets[1], 1))) {
+        return failure();
+      }
       std::array<int64_t, 2> layout_tiling{tiling[0], tiling[1]};
       if (num_sublanes == 1 && bitwidth == 32 &&
           tiling[1] == target_shape_[1] &&
@@ -1462,20 +1469,23 @@ class VectorLayoutInferer {
     }
     auto tiling = *maybe_tiling;
 
-    SmallVector<int64_t, 2> tile_offsets;  // indices % tiling
-    for (int i = 0; i < tiling.size(); ++i) {
-      int dim = rank - tiling.size() + i;
+    // Infer the static offset on a given tiling dimension.
+    auto infer_offset = [&](int64_t &offset,
+                            int64_t tiling_dim) -> LogicalResult {
+      int dim = rank - tiling.size() + tiling_dim;
       Value tiled_index = op.getIndices()[dim];
       if (auto cst_op = tiled_index.getDefiningOp<arith::ConstantOp>()) {
-        tile_offsets.push_back(cast<IntegerAttr>(cst_op.getValue()).getInt() %
-                               tiling[i]);
-      } else {
-        if (failed(verifyDivisibleIndex(tiled_index, tiling[i], dim, op))) {
-          return failure();
-        }
-        tile_offsets.push_back(0);
+        offset =
+            cast<IntegerAttr>(cst_op.getValue()).getInt() % tiling[tiling_dim];
+        return success();
       }
-    }
+      if (failed(
+              verifyDivisibleIndex(tiled_index, tiling[tiling_dim], dim, op))) {
+        return failure();
+      }
+      offset = 0;
+      return success();
+    };
 
     Layout store_layout;
     if (rank == 0) {
@@ -1488,14 +1498,15 @@ class VectorLayoutInferer {
       auto tile = tiling.front();
       TPU_CHECK_OP(tile % lane_tiling == 0,
                    "Unsupported 1D tiling for 1D store");
-      CHECK_EQ(tile_offsets.size(), 1);
-      store_layout =
-          VectorLayout(bitwidth, {0, tile_offsets[0] % lane_tiling},
-                       {1, lane_tiling}, ImplicitDim::kSecondMinor);
+      int64_t offset;
+      if (failed(infer_offset(offset, 0))) {
+        return failure();
+      }
+      store_layout = VectorLayout(bitwidth, {0, offset % lane_tiling},
+                                  {1, lane_tiling}, ImplicitDim::kSecondMinor);
     } else {  // rank >= 2  // NOLINT(readability-else-after-return)
       TPU_CHECK_OP(tiling.size() == 2, "Expected 2D tiling in 2D+ store");
-      CHECK_EQ(tile_offsets.size(), 2);
-      std::array<std::optional<int64_t>, 2> offsets;
+      LayoutOffsets offsets = {0, 0};
       const auto tile_ref_shape = ref_ty.getShape().take_back(2);
       const auto tile_store_shape = store_ty.getShape().take_back(2);
       const int64_t num_sublanes = tile_store_shape[0];
@@ -1509,10 +1520,12 @@ class VectorLayoutInferer {
       if (bitwidth == 32 &&
           (tile_ref_shape[1] <= target_shape_[1] || num_sublanes == 1)) {
         offsets[0] = 0;
-      } else {
-        offsets[0] = tile_offsets[0];
+      } else if (failed(infer_offset(*offsets[0], 0))) {
+        return failure();
       }
-      offsets[1] = tile_offsets[1];
+      if (failed(infer_offset(*offsets[1], 1))) {
+        return failure();
+      }
       if (num_sublanes == 1 && bitwidth == 32 &&
           tiling[1] == target_shape_[1] &&
           tile_store_shape[1] > target_shape_[1]) {
