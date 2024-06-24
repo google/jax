@@ -866,7 +866,8 @@ def dot_product_attention(
           (e.g. :code:`-0.5 * jnp.finfo(dtype).max`) represents `False`. The
           shape is broadcastable to :code:`(BNTS)`.
     scale: scale for the logits. If None, the scale will be set to 1 divided by
-           the square root of query size.
+           the square root of query size. Note, the currently implementation
+           only supports post-bias scale.
     is_causal: If true, assumes upper left causal attention masking.
     implementation: A string to control which implementation to use. Supported
                     strings are `xla` (default), `cudnn` (cuDNN flash
@@ -917,7 +918,9 @@ def dot_product_attention(
     #     However, we'd like the bias addition before the scale, i.e.
     #     scale*(QK+bias). So, we scale the bias beforehand.
     # TODO(kaixih@nvidia): The logic of (1) should be moved to the internal of
-    # cudnn_dot_product_attention.
+    # cudnn_dot_product_attention. For (2), it seems we want to support both
+    # cases, e.g., flax/cudnn attention is the post-scale bias, but praxis
+    # attention is the post-bias scale.
     if bias is None:
       bias = mask
     else:

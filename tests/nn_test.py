@@ -146,13 +146,17 @@ class NNFunctionsTest(jtu.JaxTestCase):
     self.assertIsNone(probs_ans)
     self.assertAllClose(out_ref, out_ans, atol=atol)
 
-  @parameterized.parameters(False, True)
+  @parameterized.parameters([
+      [jnp.bfloat16, False],
+      [jnp.bfloat16, True],
+      [jnp.float16, False],
+      [jnp.float16, True],
+  ])
   @jtu.skip_on_flag("jax_skip_slow_tests", True)
-  def testDotProductAttentionMaskTrain(self, use_bias):
+  def testDotProductAttentionMaskTrain(self, dtype, use_bias):
     if not jtu.test_device_matches(["gpu"]):
       raise unittest.SkipTest("Test fails on GPU")
 
-    dtype = jnp.bfloat16
     sdpa = nn.dot_product_attention
     B, S, T, N, H = 4, 1024, 1024, 4, 64
     zeros = jnp.zeros((B, N, T, S), dtype)
