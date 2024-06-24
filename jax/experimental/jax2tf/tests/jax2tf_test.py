@@ -1558,10 +1558,10 @@ class Jax2TfTest(tf_test_util.JaxToTfTestCase):
         stack.enter_context(mesh)
       # Run the JAX native version, to check it works, and to fill caches.
       _ = func_to_convert(*args)
-      exported = export.export(
+      exported = export.create(
           (jax.jit(func_to_convert) if not hasattr(func_to_convert, "trace") else func_to_convert),
-          lowering_platforms=("tpu",)
-      )(*(core.ShapedArray(a.shape, a.dtype) for a in args))
+          *(core.ShapedArray(a.shape, a.dtype) for a in args),
+          export_platforms=("tpu",))
 
     if transform1 == "shard_map":
       self.assertIn("stablehlo.all_gather", str(exported.mlir_module()))

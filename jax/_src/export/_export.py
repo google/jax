@@ -245,9 +245,9 @@ class Exported:
     Example usage:
     >>> from jax import export
     >>> exp_mesh = sharding.Mesh(jax.devices(), ("a",))
-    >>> exp = export.export(jax.jit(lambda x: jax.numpy.add(x, x),
-    ...                             in_shardings=sharding.NamedSharding(exp_mesh, sharding.PartitionSpec("a")))
-    ...     )(np.arange(jax.device_count()))
+    >>> exp = export.create(jax.jit(lambda x: jax.numpy.add(x, x),
+    ...                             in_shardings=sharding.NamedSharding(exp_mesh, sharding.PartitionSpec("a"))),
+    ...           np.arange(jax.device_count()))
     >>> exp.in_shardings_hlo
     ({devices=[8]<=[8]},)
 
@@ -465,7 +465,8 @@ def export_back_compat(
         _device_assignment_for_internal_jax2tf_use_only=_device_assignment_for_internal_jax2tf_use_only)
   return do_export
 
-def export(
+# For backwards compatibility only
+def _deprecated_export(
     fun_jit: stages.Wrapped,
     *,
     platforms: Sequence[str] | None = None,
@@ -473,6 +474,9 @@ def export(
     disabled_checks: Sequence[DisabledSafetyCheck] = (),
     ) -> Callable[..., Exported]:
   """Exports a JAX function for persistent serialization.
+
+  Note: use {func}`jax.export.create` instead. We have this `export.export`
+    function for backwards compatibility only.
 
   Args:
     fun_jit: the function to export. Should be the result of `jax.jit`.
@@ -546,6 +550,53 @@ def export(
         lowered, traced.jaxpr, traced.fun_name,
         disabled_checks=disabled_checks)
   return do_export
+
+def create(
+    fun_jit: stages.Wrapped,
+    *fun_args,
+    export_platforms: Sequence[str] | None = None,
+    export_disabled_checks: Sequence[DisabledSafetyCheck] = (),
+    **fun_kwargs,
+    ) -> Exported:
+  """Exports a JAX function for persistent serialization.
+
+  Args:
+    fun_jit: the function to export. Should be the result of `jax.jit`.
+    fun_args, fun_kwargs: the positional and keyword arguments for `fun_jit`.
+        They can be pytrees of objects that have `.shape` and `.type` attributes,
+        e.g., {class}`jax.Array` or {class}`jax.ShapeDtypeStruct`.
+    export_platforms:
+        Optional sequence containing the plaforms for which the function should
+        be exported.
+        See https://jax.readthedocs.io/en/latest/export/export.html#cross-platform-and-multi-platform-export.
+    export_disabled_checks: the safety checks to disable. See documentation for
+        of {class}`jax.export.DisabledSafetyCheck`.
+
+  Returns: an `Exported`.
+
+  Usage:
+
+      >>> from jax import export
+      >>> exported: export.Exported = export.create(jnp.sin,
+      ...     np.arange(4, dtype=np.float32))
+      >>>
+      >>> # You can inspect the Exported object
+      >>> exported.in_avals
+      (ShapedArray(float32[4]),)
+      >>> blob: bytearray = exported.serialize()
+      >>>
+      >>> # The serialized bytes are safe to use in a separate process
+      >>> rehydrated: export.Exported = export.deserialize(blob)
+      >>> rehydrated.fun_name
+      'sin'
+      >>> rehydrated.call(np.array([.1, .2, .3, .4], dtype=np.float32))
+      Array([0.09983342, 0.19866933, 0.29552022, 0.38941833], dtype=float32)
+  """
+  return _deprecated_export(
+      fun_jit,
+      platforms=export_platforms,
+      disabled_checks=export_disabled_checks)(*fun_args, **fun_kwargs)
+
 
 def _export_lowered(
     lowered: stages.Lowered,
@@ -648,9 +699,10 @@ def _export_lowered(
                                              device_assignment=device_assignment,
                                              apply_jit=True,
                                              flat_primal_fun=True)
-    return export(fun_vjp_jax,  # type: ignore[arg-type]
-                  platforms=exp_primal.platforms,
-                  disabled_checks=exp_primal.disabled_safety_checks)(*vjp_in_avals)
+    return create(fun_vjp_jax,  # type: ignore[arg-type]
+                  *vjp_in_avals,
+                  export_platforms=exp_primal.platforms,
+                  export_disabled_checks=exp_primal.disabled_safety_checks)
 
   return Exported(
       fun_name=fun_name,

@@ -139,14 +139,19 @@ def _testing_multi_platform_fun_expected(x,
   ]
 
 
-def get_exported(fun: Callable, vjp_order=0,
-                 **export_kwargs):
-  """Like export.export but with serialization + deserialization."""
-  def serde_exported(*fun_args, **fun_kwargs):
-    exp = export.export(fun, **export_kwargs)(*fun_args, **fun_kwargs)
-    serialized = exp.serialize(vjp_order=vjp_order)
-    return export.deserialize(serialized)
-  return serde_exported
+def get_exported(fun: Callable,
+                 *fun_args,
+                 vjp_order=0,
+                 export_platforms: Sequence[str] = (),
+                 export_disabled_checks: Sequence[export.DisabledSafetyCheck] = (),
+                 **fun_kwargs) -> export.Exported:
+  """Like export.create but with serialization + deserialization."""
+  exp = export.create(fun, *fun_args,
+                      export_platforms=export_platforms,
+                      export_disabled_checks=export_disabled_checks,
+                      **fun_kwargs)
+  serialized = exp.serialize(vjp_order=vjp_order)
+  return export.deserialize(serialized)
 
 
 # Run tests with the maximum supported version by default
@@ -169,7 +174,7 @@ class JaxExportTest(jtu.JaxTestCase):
     @jax.jit
     def my_fun(x):
       return jnp.sin(x)
-    exp = get_exported(my_fun)(jax.ShapeDtypeStruct((4,), dtype=np.float32))
+    exp = get_exported(my_fun, jax.ShapeDtypeStruct((4,), dtype=np.float32))
     self.assertEqual("my_fun", exp.fun_name)
     expected_lowering_platform = xb.canonicalize_platform(jax.default_backend())
     self.assertEqual((expected_lowering_platform,),
@@ -184,7 +189,7 @@ class JaxExportTest(jtu.JaxTestCase):
     def f(a_b_pair, *, a, b):
       return (dict(res=a_b_pair, a=a, b=b), jnp.sin(a), jnp.cos(b))
 
-    exp = get_exported(jax.jit(f), lowering_platforms=("cpu",))((a, b), a=a, b=b)
+    exp = get_exported(jax.jit(f), (a, b), a=a, b=b, export_platforms=("cpu",))
     a_aval = core.ShapedArray(a.shape, a.dtype)
     b_aval = core.ShapedArray(b.shape, b.dtype)
     self.assertEqual(exp.platforms, ("cpu",))
@@ -198,39 +203,35 @@ class JaxExportTest(jtu.JaxTestCase):
   def test_basic(self):
     f = jnp.sin
     x = np.arange(4, dtype=np.float32)
-    exp_f = get_exported(f)(x)
+    exp_f = get_exported(f, x)
 
     self.assertAllClose(f(x), exp_f.call(x))
 
   def test_jit_static_arg(self):
 
     with self.subTest("static_argnames"):
-
       @functools.partial(jax.jit, static_argnames=["c"])
       def f(x, *, c):
         return c * jnp.sin(x)
 
       x = np.arange(4, dtype=np.float32)
-      exp_f = get_exported(f)(x, c=0.1)
-
+      exp_f = get_exported(f, x, c=0.1)
       self.assertAllClose(f(x, c=0.1), exp_f.call(x))
 
     with self.subTest("static_argnums"):
-
       @functools.partial(jax.jit, static_argnums=[1])
       def g(x, c):
         return c * jnp.sin(x)
 
       x = np.arange(4, dtype=np.float32)
-      exp_g = get_exported(g)(x, 0.1)
-
+      exp_g = get_exported(g, x, 0.1)
       self.assertAllClose(g(x, 0.1), exp_g.call(x))
 
   def test_export_error_no_jit(self):
     # Can export a lambda, without jit
     with self.assertRaisesRegex(ValueError,
                                 "Function to be exported must be the result of `jit`"):
-      _ = export.export(lambda x: jnp.sin(x))
+      _ = export.create(lambda x: jnp.sin(x), 1.)
 
   @jtu.ignore_warning(category=DeprecationWarning,
                       message="The jax.experimental.export module is deprecated")
@@ -246,11 +247,17 @@ class JaxExportTest(jtu.JaxTestCase):
     self.assertAllClose(export.call(exp)(1.), np.sin(1.))
     self.assertAllClose(export.call_exported(exp)(1.), np.sin(1.))
 
+  @jtu.ignore_warning(category=DeprecationWarning,
+                      message="The function jax.export.export is deprecated")
+  def test_export_export_back_compat(self):
+    exp = export.export(jax.jit(lambda x: jnp.sin(x)))(.1)
+    self.assertAllClose(exp.call(1.), np.sin(1.))
+
   def test_call_exported_lambda(self):
     # When we export a lambda, the exported.fun_name is not a valid MLIR function name
     f = jax.jit(lambda x: jnp.sin(x))
     x = np.arange(4, dtype=np.float32)
-    exp_f = get_exported(f)(x)
+    exp_f = get_exported(f, x)
     self.assertAllClose(f(x), exp_f.call(x))
 
   def test_call_name_conflict(self):
@@ -260,7 +267,7 @@ class JaxExportTest(jtu.JaxTestCase):
       return jnp.where(x > 0, jnp.ones_like(x), jnp.zeros_like(x))
 
     x = jnp.arange(-20, 20, dtype=np.int32)
-    exp_inner = export.export(inner)(x)
+    exp_inner = export.create(inner, x)
     self.assertIn("@_where(", str(exp_inner.mlir_module()))
 
     @jax.jit
@@ -269,7 +276,7 @@ class JaxExportTest(jtu.JaxTestCase):
       x = exp_inner.call(x)
       return inner(x)
 
-    export.export(outer)(x)
+    export.create(outer, x)
 
   def test_call_twice_exported(self):
     def f(x): return jnp.sin(x)
@@ -277,7 +284,7 @@ class JaxExportTest(jtu.JaxTestCase):
 
     @jax.jit
     def f1(x):
-      exp_f = get_exported(jax.jit(f))(x)
+      exp_f = get_exported(jax.jit(f), x)
       return exp_f.call(x) + exp_f.call(x)
 
     self.assertAllClose(2. * f(x), f1(x))
@@ -286,7 +293,7 @@ class JaxExportTest(jtu.JaxTestCase):
     f = jax.jit(lambda x, y: jnp.sin(x))
     x = np.arange(4, dtype=np.float32)
     y = np.arange(6, dtype=np.float32)
-    exp_f = get_exported(f)(x, y)
+    exp_f = get_exported(f, x, y)
 
     self.assertAllClose(f(x, y), exp_f.call(x, y))
 
@@ -296,7 +303,7 @@ class JaxExportTest(jtu.JaxTestCase):
     def f(a_b_pair, a, b):
       return (dict(res=a_b_pair, a=a, b=b), jnp.sin(a), jnp.cos(b))
 
-    exp_f = get_exported(jax.jit(f))((a, b), a=a, b=b)
+    exp_f = get_exported(jax.jit(f), (a, b), a=a, b=b)
     self.assertAllClose(f((a, b), a=a, b=b),
                         exp_f.call((a, b), a=a, b=b))
 
@@ -304,7 +311,7 @@ class JaxExportTest(jtu.JaxTestCase):
     def f(a_b_pair, *, c):
       return jnp.sin(a_b_pair[0]) + jnp.cos(a_b_pair[1]) + c
     a = b = c = np.arange(4, dtype=np.float32)
-    exp_f = get_exported(jax.jit(f))((a, b), c=c)
+    exp_f = get_exported(jax.jit(f), (a, b), c=c)
 
     with self.assertRaisesRegex(
         ValueError,
@@ -315,7 +322,7 @@ class JaxExportTest(jtu.JaxTestCase):
     def f(a, *, b):  # a: f32[4] and b: f32[4]
       return jnp.sin(a) + jnp.cos(b)
     f32_4 = np.arange(4, dtype=np.float32)
-    exp_f = get_exported(jax.jit(f))(f32_4, b=f32_4)
+    exp_f = get_exported(jax.jit(f), f32_4, b=f32_4)
 
     with self.assertRaisesRegex(ValueError,
         r"Shape mismatch for args\[0\].shape\[0\]"):
@@ -337,7 +344,7 @@ class JaxExportTest(jtu.JaxTestCase):
     test_platform = jtu.device_under_test()
     if test_platform == "gpu": test_platform = "cuda"
     self.assertEqual(export.default_export_platform(), test_platform)
-    exp = export.export(jnp.sin)(1.)
+    exp = export.create(jnp.sin, 1.)
     self.assertEqual(exp.platforms, (export.default_export_platform(),))
 
   @jtu.parameterized_filterable(
@@ -347,7 +354,7 @@ class JaxExportTest(jtu.JaxTestCase):
   def test_error_wrong_platform(self, platform):
     a = np.arange(4, dtype=np.float32)
 
-    exp_f = get_exported(jnp.sin, lowering_platforms=(platform,))(a)
+    exp_f = get_exported(jnp.sin, a, export_platforms=(platform,))
     if xb.canonicalize_platform(jtu.device_under_test()) == platform:
       raise unittest.SkipTest("Uninteresting scenario")
 
@@ -357,8 +364,9 @@ class JaxExportTest(jtu.JaxTestCase):
 
     # Now try with the platform check disabled
     exp_f_no_platform_check = get_exported(
-      jnp.sin, lowering_platforms=(platform,),
-      disabled_checks=[export.DisabledSafetyCheck.platform()])(a)
+        jnp.sin, a,
+        export_platforms=(platform,),
+        export_disabled_checks=[export.DisabledSafetyCheck.platform()])
     res = exp_f_no_platform_check.call(a)
     self.assertAllClose(res, jnp.sin(a))
 
@@ -382,14 +390,14 @@ class JaxExportTest(jtu.JaxTestCase):
     with self.assertRaisesRegex(ValueError,
         "Cannot serialize code with custom calls whose targets .*"):
       get_exported(
-        jax.jit(lambda a: a + test_primitive.bind(a))
-      )(a)
+        jax.jit(lambda a: a + test_primitive.bind(a)),
+        a)
 
     # Now try again with the safety check disabled
     exp = get_exported(
-      jax.jit(lambda a: a + test_primitive.bind(a)),
-      disabled_checks=[export.DisabledSafetyCheck.custom_call("disallowed_call_target")]
-    )(a)
+        jax.jit(lambda a: a + test_primitive.bind(a)),
+        a,
+        export_disabled_checks=[export.DisabledSafetyCheck.custom_call("disallowed_call_target")])
     self.assertIn("disallowed_call_target", exp.mlir_module())
 
   def test_lowering_parameters_for_export(self):
@@ -412,12 +420,12 @@ class JaxExportTest(jtu.JaxTestCase):
 
     with self.assertRaisesRegex(ValueError,
         "Lowering for export not supported"):
-      export.export(jax.jit(f))(a)
+      export.create(jax.jit(f), a)
 
   def test_grad(self):
     f = lambda x: jnp.sum(jnp.sin(x))
     x = np.arange(4, dtype=np.float32)
-    exp_f = get_exported(jax.jit(f), vjp_order=1)(x)
+    exp_f = get_exported(jax.jit(f), x, vjp_order=1)
 
     f1 = exp_f.call
     self.assertAllClose(jax.grad(f)(x), jax.grad(f1)(x))
@@ -425,7 +433,7 @@ class JaxExportTest(jtu.JaxTestCase):
   def test_higher_order_grad(self):
     f = lambda x: x ** 3
     x = np.float32(4.)
-    exp_f = get_exported(jax.jit(f), vjp_order=3)(x)
+    exp_f = get_exported(jax.jit(f), x, vjp_order=3)
 
     f1 = exp_f.call
     self.assertAllClose(jax.grad(f)(x),
@@ -453,7 +461,7 @@ class JaxExportTest(jtu.JaxTestCase):
     self.assertAllClose(res, (xi_ct, xf_ct))
     (f_outi_ct2, f_outf_ct2), = f_vjp2((xi_ct, xf_ct))
 
-    exp = get_exported(jax.jit(f), vjp_order=2)(xi, xf)
+    exp = get_exported(jax.jit(f), xi, xf, vjp_order=2)
     fr = exp.call
 
     res = fr(xi, xf)
@@ -481,7 +489,7 @@ class JaxExportTest(jtu.JaxTestCase):
 
     a = np.arange(4, dtype=np.float32)
     b = np.arange(6, dtype=np.float32)
-    exp_f = get_exported(jax.jit(f), vjp_order=1)((a, b), a=a, b=b)
+    exp_f = get_exported(jax.jit(f), (a, b), a=a, b=b, vjp_order=1)
 
     out_ct = f((a, b), a=a, b=b)  # The output has the right structure as the cotangent
     def f1_jax(a, b):  # For VJP, make a function without kwargs
@@ -498,12 +506,12 @@ class JaxExportTest(jtu.JaxTestCase):
     def f1(x):
       return jnp.sin(x)
     a = np.arange(4, dtype=np.float32)
-    exp_f1 = get_exported(jax.jit(f1))(a)
+    exp_f1 = get_exported(jax.jit(f1), a)
     def f2(x):
       res1 = exp_f1.call(x)
       res2 = exp_f1.call(res1)
       return jnp.cos(res2)
-    exp_f2 = get_exported(jax.jit(f2))(a)
+    exp_f2 = get_exported(jax.jit(f2), a)
 
     self.assertAllClose(jnp.cos(jnp.sin(jnp.sin(a))),
                         exp_f2.call(a))
@@ -514,7 +522,7 @@ class JaxExportTest(jtu.JaxTestCase):
       return jnp.concatenate([a, b], axis=0)
 
     scope = export.SymbolicScope()
-    exp = get_exported(jax.jit(f))(
+    exp = get_exported(jax.jit(f),
         jax.ShapeDtypeStruct(export.symbolic_shape("(2*w, h)", scope=scope), a.dtype),
         jax.ShapeDtypeStruct(export.symbolic_shape("(w, h)", scope=scope), a.dtype))
     self.assertEqual("(2*w, h)", str(exp.in_avals[0].shape))
@@ -553,7 +561,7 @@ class JaxExportTest(jtu.JaxTestCase):
       return jnp.concatenate([a0, a1, ak], axis=0)
 
     a_poly_spec = jax.ShapeDtypeStruct(export.symbolic_shape("(w, h)"), a.dtype)
-    exp = get_exported(jax.jit(f))(a_poly_spec, a_poly_spec, ak=a_poly_spec)
+    exp = get_exported(jax.jit(f), a_poly_spec, a_poly_spec, ak=a_poly_spec)
     self.assertEqual("(w, h)", str(exp.in_avals[0].shape))
     self.assertEqual("(3*w, h)", str(exp.out_avals[0].shape))
 
@@ -570,7 +578,7 @@ class JaxExportTest(jtu.JaxTestCase):
             "Invalid mixing of symbolic scopes when exporting f.*"
             r"Expected current \(from args\[0\]\) scope .*"
             r"and found for 'w' \(args\[1\]\) scope .*", re.DOTALL)):
-      get_exported(jax.jit(f))(x_poly_spec, y_poly_spec)
+      get_exported(jax.jit(f), x_poly_spec, y_poly_spec)
 
   def test_poly_export_callable_with_no_name(self):
     # This was reported by a user
@@ -591,7 +599,7 @@ class JaxExportTest(jtu.JaxTestCase):
 
     a, = export.symbolic_shape("a,")
     # No error
-    _ = get_exported(jax.jit(MyCallable()))(
+    _ = get_exported(jax.jit(MyCallable()),
         jax.ShapeDtypeStruct((a, a), dtype=np.float32)
     )
 
@@ -612,7 +620,7 @@ class JaxExportTest(jtu.JaxTestCase):
             ValueError,
             f"The requested export calling convention version {v} is outside the range of supported versions"))
 
-        exp = get_exported(jnp.sin)(
+        exp = get_exported(jnp.sin,
             jax.ShapeDtypeStruct(export.symbolic_shape("w, h"), np.float32))
         x = np.arange(30, dtype=np.float32).reshape((5, 6))
         res = exp.call(x)
@@ -656,8 +664,9 @@ class JaxExportTest(jtu.JaxTestCase):
       return jnp.reshape(x, (-1, x.shape[1]))
 
     disabled_checks = ()
-    exp_f = get_exported(jax.jit(f), disabled_checks=disabled_checks)(
-        jax.ShapeDtypeStruct(export.symbolic_shape(poly_spec), np.float32))
+    exp_f = get_exported(jax.jit(f),
+                         jax.ShapeDtypeStruct(export.symbolic_shape(poly_spec), np.float32),
+                         export_disabled_checks=disabled_checks)
     self.assertEqual(exp_f.uses_global_constants, poly_spec != "3,4,12")
     arg = np.arange(np.prod(arg_shape),
                     dtype=arg_dtype).reshape(arg_shape)  # arg : f32[3,4,12]
@@ -758,7 +767,7 @@ class JaxExportTest(jtu.JaxTestCase):
 
     arg = np.arange(np.prod(arg_shape),
                     dtype=arg_dtype).reshape(arg_shape)  # x : f32[3,4,12]
-    inner_exp = get_exported(jax.jit(inner))(
+    inner_exp = get_exported(jax.jit(inner),
         jax.ShapeDtypeStruct(export.symbolic_shape(inner_poly_spec), np.float32))
 
     self.assertEqual(inner_exp.uses_global_constants,
@@ -773,7 +782,7 @@ class JaxExportTest(jtu.JaxTestCase):
         stack.push(self.assertRaisesRegex(ValueError, expect_error_outer_exp))
 
       # Call it after exporting again, with polymorphic shapes
-      outer_exp = get_exported(jax.jit(outer))(
+      outer_exp = get_exported(jax.jit(outer),
           jax.ShapeDtypeStruct(export.symbolic_shape(outer_poly_spec), arg.dtype))
 
     if expect_error_outer_exp is not None:
@@ -848,7 +857,7 @@ class JaxExportTest(jtu.JaxTestCase):
     with contextlib.ExitStack() as stack:
       if expect_error is not None:
         stack.push(self.assertRaisesRegex(Exception, re.escape(expect_error)))
-      exp = get_exported(jax.jit(f_jax))(
+      exp = get_exported(jax.jit(f_jax),
           jax.ShapeDtypeStruct(export.symbolic_shape(poly_spec), x.dtype))
       exp.call(x)
 
@@ -860,8 +869,8 @@ class JaxExportTest(jtu.JaxTestCase):
       return jnp.logical_not(x)
 
     x = np.array([True, False, True, False], dtype=np.bool_)
-    exp = get_exported(f_jax)(jax.ShapeDtypeStruct(export.symbolic_shape("b"),
-                                                   x.dtype))
+    exp = get_exported(f_jax,
+                       jax.ShapeDtypeStruct(export.symbolic_shape("b"), x.dtype))
     res = exp.call(x)
     self.assertAllClose(f_jax(x), res)
 
@@ -882,8 +891,8 @@ class JaxExportTest(jtu.JaxTestCase):
       return x + x
 
     x = np.arange(6, dtype=dtype)
-    exp = get_exported(f_jax)(jax.ShapeDtypeStruct(export.symbolic_shape("b"),
-                                                   x.dtype))
+    exp = get_exported(f_jax,
+                       jax.ShapeDtypeStruct(export.symbolic_shape("b"), x.dtype))
     res = exp.call(x)
     self.assertAllClose(f_jax(x), res)
 
@@ -899,15 +908,15 @@ class JaxExportTest(jtu.JaxTestCase):
       b = x.shape[0]
       return jnp.ones(output_shape(b), dtype=x.dtype)
     x = np.arange(5, dtype=np.float32)
-    exp = get_exported(f)(jax.ShapeDtypeStruct(export.symbolic_shape("b"),
-                                                x.dtype))
+    exp = get_exported(f,
+                       jax.ShapeDtypeStruct(export.symbolic_shape("b"), x.dtype))
     # Call with static shapes
     res = exp.call(x)
     self.assertAllClose(res, f(x))
 
     # Now re-export with shape polymorphism
     x_spec = jax.ShapeDtypeStruct(export.symbolic_shape("a"), x.dtype)
-    exp2 = get_exported(jax.jit(exp.call))(x_spec)
+    exp2 = get_exported(jax.jit(exp.call), x_spec)
     a = exp2.in_avals[0].shape[0]
     self.assertEqual(exp2.out_avals[0].shape, output_shape(a))
 
@@ -918,7 +927,7 @@ class JaxExportTest(jtu.JaxTestCase):
       return x + jnp.arange(x.shape[0], dtype=x.dtype).reshape((x.shape[0], 1))
 
     a, = export.symbolic_shape("a")
-    exp = export.export(jax.jit(f))(
+    exp = export.create(jax.jit(f),
         jax.ShapeDtypeStruct((a, 4), np.float32))
     f_exp = exp.call
     x_jit = np.arange(12, dtype=np.float32).reshape((3, 4))
@@ -943,7 +952,7 @@ class JaxExportTest(jtu.JaxTestCase):
       return b * 2.
 
     res_native = f_jax(a)
-    exp = get_exported(f_jax)(a)
+    exp = get_exported(f_jax, a)
 
     self.assertEqual(exp.nr_devices, len(export_devices))
     run_devices = export_devices[::-1]  # We can use other devices
@@ -993,7 +1002,7 @@ class JaxExportTest(jtu.JaxTestCase):
                 in_shardings=(jax.sharding.NamedSharding(export_mesh, P("x", None),),
                               None),
                 out_shardings=(jax.sharding.NamedSharding(export_mesh, P("x", None),)))
-    exp = get_exported(f)(a, a)
+    exp = get_exported(f, a, a)
 
     # We can use other devices and other meshes for running
     run_devices = devices[::-1]
@@ -1017,7 +1026,7 @@ class JaxExportTest(jtu.JaxTestCase):
         (jax.local_device_count(), 10)
     )
     res_native = f_without_shardings(a)
-    exp = get_exported(f_without_shardings)(a)
+    exp = get_exported(f_without_shardings, a)
     self.assertEqual(exp.nr_devices, 1)
 
     run_devices = jax.local_devices()
@@ -1040,7 +1049,7 @@ class JaxExportTest(jtu.JaxTestCase):
     a = jnp.arange(jax.device_count() * 10, dtype=np.float32).reshape(
         (jax.device_count(), 10)
     )
-    exp = get_exported(f_with_sharding)(a)
+    exp = get_exported(f_with_sharding, a)
     self.assertEqual(exp.nr_devices, 1)
 
     run_devices = jax.local_devices()
@@ -1064,7 +1073,7 @@ class JaxExportTest(jtu.JaxTestCase):
 
     a = jnp.arange(100, dtype=jnp.float32).reshape((1, 100))
     res_native = f_jax(a)
-    exp = get_exported(f_jax)(a)
+    exp = get_exported(f_jax, a)
     self.assertEqual(exp.nr_devices, 1)
 
     b = jnp.arange(jax.device_count() * 100, dtype=jnp.float32).reshape(
@@ -1086,7 +1095,7 @@ class JaxExportTest(jtu.JaxTestCase):
     a = jnp.arange(jax.device_count() * 10, dtype=np.float32).reshape(
         (jax.device_count(), 10)
     )
-    exp = get_exported(f_with_sharding)(a)
+    exp = get_exported(f_with_sharding, a)
     self.assertEqual(exp.nr_devices, 1)
 
     run_devices = jax.local_devices()
@@ -1125,7 +1134,7 @@ class JaxExportTest(jtu.JaxTestCase):
       return lax.ppermute(b, "x", perm=perm)
 
     args_specs = export.symbolic_args_specs((a,), poly)
-    exp = get_exported(f_jax)(*args_specs)
+    exp = get_exported(f_jax, *args_specs)
 
     # Test JAX native execution
     res_jax = f_jax(a)
@@ -1198,7 +1207,7 @@ class JaxExportTest(jtu.JaxTestCase):
       if with_mesh_context:
         stack.enter_context(mesh)
       # Serialize higher-order gradiends
-      exp = get_exported(f_jax_pjit, vjp_order=2)(x)
+      exp = get_exported(f_jax_pjit, x, vjp_order=2)
       exp_vjp = exp.vjp()
       # Try 2nd order grad as well
       exp_vjp2 = exp_vjp.vjp()
@@ -1299,8 +1308,8 @@ class JaxExportTest(jtu.JaxTestCase):
     input = jnp.ones(shape=(jax.local_device_count(),), device=shardings)
     input_rev = jax.device_put(input_no_shards, device=shardings_rev)
 
-    exp = export.export(pjit.pjit(f, in_shardings=shardings))(input)
-    exp_rev = export.export(pjit.pjit(f, in_shardings=shardings_rev))(input_no_shards)
+    exp = export.create(pjit.pjit(f, in_shardings=shardings), input)
+    exp_rev = export.create(pjit.pjit(f, in_shardings=shardings_rev), input_no_shards)
 
     _ = exp.serialize(vjp_order=1)
     _ = exp_rev.serialize(vjp_order=1)
@@ -1311,8 +1320,8 @@ class JaxExportTest(jtu.JaxTestCase):
 
   def test_multi_platform(self):
     x = np.arange(8, dtype=np.float32)
-    exp = get_exported(jax.jit(_testing_multi_platform_func),
-                       lowering_platforms=("tpu", "cpu", "cuda","rocm"))(x)
+    exp = get_exported(jax.jit(_testing_multi_platform_func), x,
+                       export_platforms=("tpu", "cpu", "cuda","rocm"))
     self.assertEqual(exp.platforms, ("tpu", "cpu", "cuda", "rocm"))
     module_str = str(exp.mlir_module())
     expected_main_re = (
@@ -1335,14 +1344,15 @@ class JaxExportTest(jtu.JaxTestCase):
   def test_multi_platform_nested(self):
     x = np.arange(5, dtype=np.float32)
     exp = get_exported(jax.jit(lambda x: _testing_multi_platform_func(jnp.sin(x))),
-                       lowering_platforms=("cpu", "tpu", "cuda","rocm"))(x)
+                       x,
+                       export_platforms=("cpu", "tpu", "cuda","rocm"))
     self.assertEqual(exp.platforms, ("cpu", "tpu", "cuda","rocm"))
 
     # Now serialize the call to the exported using a different sequence of
     # lowering platforms, but included in the lowering platforms for the
     # nested exported.
-    exp2 = get_exported(jax.jit(exp.call),
-                        lowering_platforms=("cpu", "cuda","rocm"))(x)
+    exp2 = get_exported(jax.jit(exp.call), x,
+                        export_platforms=("cpu", "cuda", "rocm"))
 
     # Ensure that we do not have multiple lowerings of the exported function
     exp2_module_str = str(exp2.mlir_module())
@@ -1360,12 +1370,12 @@ class JaxExportTest(jtu.JaxTestCase):
 
   def test_multi_platform_nested_inside_single_platform_export(self):
     x = np.arange(5, dtype=np.float32)
-    exp = get_exported(jax.jit(_testing_multi_platform_func),
-                       lowering_platforms=("cpu", "tpu", "cuda","rocm"))(x)
+    exp = get_exported(jax.jit(_testing_multi_platform_func), x,
+                       export_platforms=("cpu", "tpu", "cuda","rocm"))
     self.assertEqual(exp.platforms, ("cpu", "tpu", "cuda", "rocm"))
 
     # Now serialize the call for the current platform.
-    exp2 = get_exported(jax.jit(exp.call))(x)
+    exp2 = get_exported(jax.jit(exp.call), x)
     module_str = str(exp2.mlir_module())
     self.assertIn("jax.uses_shape_polymorphism = true",
                   module_str)
@@ -1426,7 +1436,8 @@ class JaxExportTest(jtu.JaxTestCase):
     def f(x):
       return times_2_or_3_or_4.bind(x)
     x = np.float32(42.)
-    exp = export.export(f, lowering_platforms=["cpu", "cuda", "tpu"])(x)
+    exp = export.create(f, x,
+                        export_platforms=["cpu", "cuda", "tpu"])
     expected = x * np.float32(dict(cpu=2, gpu=3, tpu=4)[jtu.device_under_test()])
     self.assertAllClose(exp.call(x), expected)
 
@@ -1434,15 +1445,15 @@ class JaxExportTest(jtu.JaxTestCase):
     if jtu.test_device_matches(["gpu"]):
       # The export is not applicable to GPU
       raise unittest.SkipTest("Not intended for running on GPU")
-    exp = get_exported(jax.jit(lambda x: jnp.reshape(_testing_multi_platform_func(x), (-1,))),
-                       lowering_platforms=("cpu", "tpu"))(
-        jax.ShapeDtypeStruct(export.symbolic_shape("b1, b2"), np.float32)
-    )
+    exp = get_exported(
+        jax.jit(lambda x: jnp.reshape(_testing_multi_platform_func(x), (-1,))),
+        jax.ShapeDtypeStruct(export.symbolic_shape("b1, b2"), np.float32),
+        export_platforms=("cpu", "tpu"))
     x = np.arange(12, dtype=np.float32).reshape((3, 4))
     res = exp.call(x)
     self.assertAllClose(res, _testing_multi_platform_fun_expected(x).reshape((-1,)))
     # Now serialize the call to the exported
-    exp2 = get_exported(jax.jit(exp.call))(x)
+    exp2 = get_exported(jax.jit(exp.call), x)
     res2 = exp2.call(x)
     self.assertAllClose(res2, _testing_multi_platform_fun_expected(x).reshape((-1,)))
 
@@ -1458,8 +1469,8 @@ class JaxExportTest(jtu.JaxTestCase):
       return b * 2.
 
     res_native = f_jax(a)
-    exp = get_exported(f_jax,
-                        lowering_platforms=("cpu", "tpu", "cuda", "rocm"))(a)
+    exp = get_exported(f_jax, a,
+                       export_platforms=("cpu", "tpu", "cuda", "rocm"))
 
     # Call with argument placed on different plaforms
     for platform in self.__class__.platforms:
@@ -1495,7 +1506,7 @@ class JaxExportTest(jtu.JaxTestCase):
           testing_primitive_with_effect_p.bind(x, effect_class_name="ForTestingOrderedEffect2")
         )
 
-      exp = get_exported(jax.jit(f_jax))(x)
+      exp = get_exported(jax.jit(f_jax), x)
       self.assertEqual(["ForTestingOrderedEffect1()", "ForTestingOrderedEffect2()"],
                       sorted(str(e) for e in exp.ordered_effects))
       self.assertEqual(["ForTestingUnorderedEffect1()"],
@@ -1562,8 +1573,9 @@ class JaxExportTest(jtu.JaxTestCase):
       x = np.arange(12, dtype=np.float32).reshape((3, 4))
       def f_jax(x):  # x: f32[b1, b2]
         return 10. + testing_primitive_with_effect_p.bind(x, effect_class_name="ForTestingOrderedEffect1")
-      exp = get_exported(jax.jit(f_jax))(jax.ShapeDtypeStruct(
-          export.symbolic_shape("b2, b1"), x.dtype))
+      exp = get_exported(
+          jax.jit(f_jax),
+          jax.ShapeDtypeStruct(export.symbolic_shape("b2, b1"), x.dtype))
       mlir_module_str = str(exp.mlir_module())
       wrapped_main_expected_re = (
         r"@_wrapped_jax_export_main\("
@@ -1605,8 +1617,8 @@ class JaxExportTest(jtu.JaxTestCase):
                                                   effect_class_name="ForTestingOrderedEffect1")
       exp = get_exported(
           jax.jit(f_jax),
-          lowering_platforms=("cpu", "tpu")
-          )(jax.ShapeDtypeStruct(export.symbolic_shape("b1, b2"), x.dtype))
+          jax.ShapeDtypeStruct(export.symbolic_shape("b1, b2"), x.dtype),
+          export_platforms=("cpu", "tpu"))
       mlir_module_str = str(exp.mlir_module())
       wrapped_main_expected_re = (
         r"@_wrapped_jax_export_main\("
@@ -1650,7 +1662,7 @@ class JaxExportTest(jtu.JaxTestCase):
         )
 
       f_jax = jax.jit(f_jax, donate_argnums=(0,))
-      exp = export.export(f_jax)(x)
+      exp = export.create(f_jax, x)
       mlir_module_str = str(exp.mlir_module())
       self.assertRegex(mlir_module_str, r"@main.*tf.aliasing_output = 1")
       self.assertRegex(mlir_module_str, r"@_wrapped_jax_export_main.*tf.aliasing_output = 1")
@@ -1672,7 +1684,7 @@ class JaxExportTest(jtu.JaxTestCase):
         x,
         effect_class_name="ForTestingOrderedEffect" + name)
     with self.assertRaisesRegex(Exception, expect_error):
-      _ = get_exported(jax.jit(f_jax))(jax.ShapeDtypeStruct((3, 4), x.dtype))
+      _ = get_exported(jax.jit(f_jax), jax.ShapeDtypeStruct((3, 4), x.dtype))
 
   @jtu.parameterized_filterable(
     kwargs=[
@@ -1689,7 +1701,7 @@ class JaxExportTest(jtu.JaxTestCase):
     rhs = np.arange(num_groups * k * n, dtype=dtype).reshape((num_groups, k, n))
     res_native = f_jax(lhs, rhs, group_sizes)
 
-    exp_f = get_exported(jax.jit(f_jax))(
+    exp_f = get_exported(jax.jit(f_jax),
         jax.ShapeDtypeStruct(lhs.shape, dtype=lhs.dtype),
         jax.ShapeDtypeStruct(rhs.shape, dtype=rhs.dtype),
         jax.ShapeDtypeStruct(group_sizes.shape, dtype=group_sizes.dtype),

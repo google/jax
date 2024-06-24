@@ -293,13 +293,13 @@ data_{datetime.date.today().strftime('%Y_%m_%d')} = dict(
     """
     # Use the native exporter, to make sure we get the proper serialization.
     args_specs = export.symbolic_args_specs(data.inputs, polymorphic_shapes)
-    exported = export.export(
-      jax.jit(func),
-      lowering_platforms=(self.default_jax_backend(),),
-      disabled_checks=tuple(
+    exported = export.create(
+      jax.jit(func), *args_specs,
+      export_platforms=(self.default_jax_backend(),),
+      export_disabled_checks=tuple(
         export.DisabledSafetyCheck.custom_call(target)
         for target in allow_unstable_custom_call_targets)
-    )(*args_specs)
+    )
 
     module_str = str(exported.mlir_module())
     serialized = exported.mlir_module_serialized

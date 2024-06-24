@@ -1275,10 +1275,10 @@ class PolyHarness(Harness):
 
     if self.expect_error is not None:
       with tst.assertRaisesRegex(self.expect_error[0], self.expect_error[1]):
-        export.export(f_jax)(*args_specs)
+        export.create(f_jax, *args_specs)
       return None
 
-    exp = export.export(f_jax)(*args_specs)
+    exp = export.create(f_jax, *args_specs)
     if not self.check_result:
       return None
     # Run the JAX natively and then the exported function and compare
@@ -1408,7 +1408,7 @@ class ShapePolyTest(jtu.JaxTestCase):
     def f_jax(x, *, y):
       return x + jnp.sin(y)
 
-    exp = export.export(jax.jit(f_jax))(
+    exp = export.create(jax.jit(f_jax),
         jax.ShapeDtypeStruct(export.symbolic_shape("b"), x.dtype),
         y=jax.ShapeDtypeStruct(y.shape, y.dtype))
     self.assertAllClose(f_jax(x, y=y), exp.call(x, y=y))
@@ -1616,7 +1616,7 @@ class ShapePolyTest(jtu.JaxTestCase):
         acc += jnp.sum(slice, axis=0)
       return acc
 
-    _ = export.export(jax.jit(f))(
+    _ = export.create(jax.jit(f),
         jax.ShapeDtypeStruct(export.symbolic_shape("a, b"), np.int32))
 
 
@@ -1629,7 +1629,7 @@ class ShapePolyTest(jtu.JaxTestCase):
     x_spec = jax.ShapeDtypeStruct(
         export.symbolic_shape("a",
                               constraints=["a >= 2", "a <= 4"]), np.int32)
-    exp = export.export(jax.jit(f))(x_spec)
+    exp = export.create(jax.jit(f), x_spec)
 
     x_2 = np.arange(2, dtype=np.int32)
     res_2 = exp.call(x_2)
@@ -1660,20 +1660,20 @@ class ShapePolyTest(jtu.JaxTestCase):
       assert _bounds(a) == expected_a_bounds
 
     x_spec = jax.ShapeDtypeStruct(export.symbolic_shape("a"), np.int32)
-    _ = export.export(f)(x_spec)
+    _ = export.create(f, x_spec)
     self.assertEqual(1, f_tracing_count)
-    _ = export.export(f)(x_spec)  # This hits the tracing cache
+    _ = export.create(f, x_spec)  # This hits the tracing cache
     self.assertEqual(1, f_tracing_count)
 
     # Recreate x_spec, with the same symbolic expressions, and the same scope
     x_spec = jax.ShapeDtypeStruct(export.symbolic_shape("a",
                                                         scope=x_spec.shape[0].scope), np.int32)
-    _ = export.export(f)(x_spec)  # This hits the tracing cache
+    _ = export.create(f, x_spec)  # This hits the tracing cache
     self.assertEqual(1, f_tracing_count)
 
     # Recreate x_spec, with the same symbolic expressisions with a fresh scope
     x_spec = jax.ShapeDtypeStruct(export.symbolic_shape("a"), np.int32)
-    _ = export.export(f)(x_spec)  # This is a cache miss
+    _ = export.create(f, x_spec)  # This is a cache miss
     self.assertEqual(2, f_tracing_count)
 
     # Now with constraints
@@ -1681,7 +1681,7 @@ class ShapePolyTest(jtu.JaxTestCase):
                                                         constraints=["a >= 2"]),
                                   np.int32)
     expected_a_bounds = (2, np.inf)
-    _ = export.export(f)(x_spec)  # Cache miss
+    _ = export.create(f, x_spec)  # Cache miss
     self.assertEqual(3, f_tracing_count)
 
   def test_unused_args(self):

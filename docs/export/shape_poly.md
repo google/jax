@@ -29,7 +29,7 @@ following example:
 (a, b)
 
 >>> # Then we export with symbolic shapes:
->>> exp: export.Exported = export.export(jax.jit(f))(
+>>> exp: export.Exported = export.create(jax.jit(f),
 ...     jax.ShapeDtypeStruct(x_shape, jnp.int32))
 >>> exp.in_avals
 (ShapedArray(int32[a,b]),)
@@ -67,7 +67,7 @@ on a polymorphic shape specification:
 >>> x = np.ones((3, 1), dtype=np.int32)
 >>> y = np.ones((3, 4), dtype=np.int32)
 >>> args_specs = export.symbolic_args_specs((x, y), "a, ...")
->>> exp = export.export(jax.jit(f1))(* args_specs)
+>>> exp = export.create(jax.jit(f1), *args_specs)
 >>> exp.in_avals
 (ShapedArray(int32[a,1]), ShapedArray(int32[a,4]))
 
@@ -115,7 +115,7 @@ For any JAX function `f` and any argument specification `arg_spec` containing a
 symbolic shape, and any concrete argument `arg` whose shape matches `arg_spec`:
 
  * If the JAX native execution succeeds on the concrete argument: `res = f(arg)`,
- * and if the exporting succeeds with symbolic shapes: `exp = export.export(f)(arg_spec)`,
+ * and if the exporting succeeds with symbolic shapes: `exp = export.create(f, arg_spec)`,
  * then compiling and running the export will succeed with the same result: `res == exp.call(arg)`
 
 It is crucial to understand that `f(arg)` has the freedom to re-invoke
@@ -150,7 +150,7 @@ new shape:
 ```python
 >>> f = lambda x: jnp.reshape(x, (x.shape[0] * x.shape[1],))
 >>> arg_spec = jax.ShapeDtypeStruct(export.symbolic_shape("b, 4"), jnp.int32)
->>> exp = export.export(jax.jit(f))(arg_spec)
+>>> exp = export.create(jax.jit(f), arg_spec)
 >>> exp.out_avals
 (ShapedArray(int32[4*b]),)
 
@@ -162,12 +162,12 @@ The result of these operations can be used as regular JAX arrays,
 bug cannot be used anymore as dimensions in shapes.
 
 ```python
->>> exp = export.export(jax.jit(lambda x: jnp.array(x.shape[0]) + x))(
+>>> exp = export.create(jax.jit(lambda x: jnp.array(x.shape[0]) + x),
 ...     jax.ShapeDtypeStruct(export.symbolic_shape("b"), np.int32))
 >>> exp.call(jnp.arange(3, dtype=np.int32))
 Array([3, 4, 5], dtype=int32)
 
->>> exp = export.export(jax.jit(lambda x: x.reshape(jnp.array(x.shape[0]) + 2)))(
+>>> exp = export.create(jax.jit(lambda x: x.reshape(jnp.array(x.shape[0]) + 2)),
 ...     jax.ShapeDtypeStruct(export.symbolic_shape("b"), np.int32))  # doctest: +IGNORE_EXCEPTION_DETAIL
 Traceback (most recent call last):
 TypeError: Shapes must be 1D sequences of concrete values of integer type, got [Traced<ShapedArray(int32[], weak_type=True)>with<DynamicJaxprTrace(level=1/0)>].
@@ -183,10 +183,10 @@ they are involved in operations with non-integer scalars or with
 JAX arrays:
 
 ```python
->>> exp = export.export(jax.jit(
+>>> exp = export.create(jax.jit(
 ...     lambda x: (5. + x.shape[0],
 ...                x.shape[0] - np.arange(5, dtype=jnp.int32),
-...                x + x.shape[0] + jnp.sin(x.shape[0]))))(
+...                x + x.shape[0] + jnp.sin(x.shape[0]))),
 ...     jax.ShapeDtypeStruct(export.symbolic_shape("b"), jnp.int32))
 >>> exp.out_avals
 (ShapedArray(float32[], weak_type=True),
@@ -204,8 +204,8 @@ Another typical example is when computing averages
 (observe how `x.shape[0]` is automatically turned into a JAX array):
 
 ```python
->>> exp = export.export(jax.jit(
-...     lambda x: jnp.sum(x, axis=0) / x.shape[0]))(
+>>> exp = export.create(jax.jit(
+...     lambda x: jnp.sum(x, axis=0) / x.shape[0]),
 ...     jax.ShapeDtypeStruct(export.symbolic_shape("b, c"), jnp.int32))
 >>> exp.call(jnp.arange(12, dtype=jnp.int32).reshape((3, 4)))
 Array([4., 5., 6., 7.], dtype=float32)
@@ -221,13 +221,13 @@ JAX shape check errors:
 
 ```python
 >>> v, = export.symbolic_shape("v,")
->>> export.export(jax.jit(lambda x, y: x + y))(
+>>> export.create(jax.jit(lambda x, y: x + y),
 ...     jax.ShapeDtypeStruct((v,), dtype=np.int32),
 ...     jax.ShapeDtypeStruct((4,), dtype=np.int32))
 Traceback (most recent call last):
 TypeError: add got incompatible shapes for broadcasting: (v,), (4,).
 
->>> export.export(jax.jit(lambda x: jnp.matmul(x, x)))(
+>>> export.create(jax.jit(lambda x: jnp.matmul(x, x)),
 ...     jax.ShapeDtypeStruct((v, 4), dtype=np.int32))
 Traceback (most recent call last):
 TypeError: dot_general requires contracting dimensions to have the same shape, got (4,) and (v,).
@@ -261,7 +261,7 @@ we raise {class}`InconclusiveDimensionOperation`. E.g.,
 
 ```python
 import jax
->>> export.export(jax.jit(lambda x: 0 if x.shape[0] + 1 >= x.shape[1] else 1))(
+>>> export.create(jax.jit(lambda x: 0 if x.shape[0] + 1 >= x.shape[1] else 1),
 ...     jax.ShapeDtypeStruct(export.symbolic_shape("a, b"), dtype=np.int32))  # doctest: +IGNORE_EXCEPTION_DETAIL
 Traceback (most recent call last):
 jax._src.export.shape_poly.InconclusiveDimensionOperation: Symbolic dimension comparison 'a + 1' >= 'b' is inconclusive.
@@ -312,7 +312,7 @@ for dimension sizes. E.g.,
     are at most as large as the axis size.
 
 ```python
->>> _ = export.export(jax.jit(lambda x: x[0:16]))(
+>>> _ = export.create(jax.jit(lambda x: x[0:16]),
 ...    jax.ShapeDtypeStruct(export.symbolic_shape("b + 15"), dtype=np.int32))
 
 ```
@@ -326,7 +326,7 @@ You can also specify **explicit** symbolic constraints:
 >>> # Introduce dimension variable with constraints.
 >>> a, b = export.symbolic_shape("a, b",
 ...                              constraints=("a >= b", "b >= 16"))
->>> _ = export.export(jax.jit(lambda x: x[:x.shape[1], :16]))(
+>>> _ = export.create(jax.jit(lambda x: x[:x.shape[1], :16]),
 ...    jax.ShapeDtypeStruct((a, b), dtype=np.int32))
 
 ```
@@ -367,7 +367,7 @@ can prove. Hence the following code raises an error:
 from jax import lax
 >>> b, = export.symbolic_shape("b")
 >>> f = lambda x: lax.slice_in_dim(x, 0, x.shape[0] % 3)
->>> export.export(jax.jit(f))(
+>>> export.create(jax.jit(f),
 ...     jax.ShapeDtypeStruct((b,), dtype=np.int32))  # doctest: +IGNORE_EXCEPTION_DETAIL
 Traceback (most recent call last):
 jax._src.export.shape_poly.InconclusiveDimensionOperation: Symbolic dimension comparison 'b' >= 'mod(b, 3)' is inconclusive.
@@ -389,7 +389,7 @@ is attempting to prove:
 >>> b, = export.symbolic_shape("b",
 ...                            constraints=["b >= mod(b, 3)"])
 >>> f = lambda x: lax.slice_in_dim(x, 0, x.shape[0] % 3)
->>> _ = export.export(jax.jit(f))(
+>>> _ = export.create(jax.jit(f),
 ...     jax.ShapeDtypeStruct((b,), dtype=np.int32))
 
 ```
@@ -497,7 +497,7 @@ variable `k` cannot be derived from the shape of the input `x: i32[4, 10]`:
 >>> x = np.arange(40, dtype=np.int32).reshape((4, 10))
 
 >>> # Export with static `k=3`. Since `k` appears in shapes it must be in `static_argnums`.
->>> exp_static_k = export.export(jax.jit(my_top_k, static_argnums=0))(3, x)
+>>> exp_static_k = export.create(jax.jit(my_top_k, static_argnums=0), 3, x)
 >>> exp_static_k.in_avals[0]
 ShapedArray(int32[4,10])
 
@@ -513,7 +513,7 @@ Array([[ 9,  8,  7],
 
 >>> # Now attempt to export with symbolic `k` so that we choose `k` after export.
 >>> k, = export.symbolic_shape("k", constraints=["k <= 10"])
->>> export.export(jax.jit(my_top_k, static_argnums=0))(k, x)  # doctest: +IGNORE_EXCEPTION_DETAIL
+>>> export.create(jax.jit(my_top_k, static_argnums=0), k, x)  # doctest: +IGNORE_EXCEPTION_DETAIL
 Traceback (most recent call last):
 KeyError: "Encountered dimension variable 'k' that is not appearing in the shapes of the function arguments
 
@@ -530,7 +530,7 @@ and there is no performance penalty when we call the exported function.
 ```python
 >>> def my_top_k_with_dimensions(dimensions, x):  # dimensions: i32[0, k], x: i32[4, 10]
 ...   return my_top_k(dimensions.shape[1], x)
->>> exp = export.export(jax.jit(my_top_k_with_dimensions))(
+>>> exp = export.create(jax.jit(my_top_k_with_dimensions),
 ...     jax.ShapeDtypeStruct((0, k), dtype=np.int32),
 ...     x)
 >>> exp.in_avals
@@ -554,7 +554,7 @@ expression that JAX cannot currently solve:
 
 ```python
 >>> a, = export.symbolic_shape("a")
->>> export.export(jax.jit(lambda x: x.shape[0]))(
+>>> export.create(jax.jit(lambda x: x.shape[0]),
 ...    jax.ShapeDtypeStruct((a * a,), dtype=np.int32))  # doctest: +IGNORE_EXCEPTION_DETAIL
 Traceback (most recent call last):
 ValueError: Cannot solve for values of dimension variables {'a'}.
@@ -585,7 +585,7 @@ on an argument of shape `(3, 3, 5)`:
 ```python
 >>> def f(x):  # x: f32[b, b, 2*d]
 ...   return x
->>> exp = export.export(jax.jit(f))(
+>>> exp = export.create(jax.jit(f),
 ...     jax.ShapeDtypeStruct(export.symbolic_shape("b, b, 2*d"), dtype=np.int32))   
 >>> exp.call(np.ones((3, 3, 5), dtype=np.int32))  # doctest: +IGNORE_EXCEPTION_DETAIL
 Traceback (most recent call last):
@@ -614,7 +614,7 @@ compute the inferred dimension for a `reshape` operation:
 
 ```python
 >>> b, = export.symbolic_shape("b")
->>> export.export(jax.jit(lambda x: x.reshape((2, -1))))(
+>>> export.create(jax.jit(lambda x: x.reshape((2, -1))),
 ...     jax.ShapeDtypeStruct((b,), dtype=np.int32))
 Traceback (most recent call last):
 jax._src.core.InconclusiveDimensionOperation: Cannot divide evenly the sizes of shapes (b,) and (2, -1).
@@ -627,13 +627,13 @@ Note that the following will succeed:
 ```python
 >>> b, = export.symbolic_shape("b")
 >>> # We specify that the first dimension is a multiple of 4
->>> exp = export.export(jax.jit(lambda x: x.reshape((2, -1))))(
+>>> exp = export.create(jax.jit(lambda x: x.reshape((2, -1))),
 ...     jax.ShapeDtypeStruct((4*b,), dtype=np.int32))
 >>> exp.out_avals
 (ShapedArray(int32[2,2*b]),)
 
 >>> # We specify that some other dimension is even
->>> exp = export.export(jax.jit(lambda x: x.reshape((2, -1))))(
+>>> exp = export.create(jax.jit(lambda x: x.reshape((2, -1))),
 ...     jax.ShapeDtypeStruct((b, 5, 6), dtype=np.int32))
 >>> exp.out_avals
 (ShapedArray(int32[2,15*b]),)

@@ -29,8 +29,9 @@ Here is an example:
 >>> def f(x): return 2 * x * x
 
 
->>> exported: export.Exported = export.export(jax.jit(f))(
-...    jax.ShapeDtypeStruct((), np.float32))
+>>> exported: export.Exported = export.create(
+...     jax.jit(f),
+...     jax.ShapeDtypeStruct((), np.float32))
 
 >>> # You can inspect the Exported object
 >>> exported.fun_name
@@ -85,7 +86,7 @@ function cannot be differentiated):
 >>> def f(x): return 7 * x * x * x
 
 >>> # Serialize 3 levels of VJP along with the primal function
->>> blob: bytearray = export.export(jax.jit(f))(1.).serialize(vjp_order=3)
+>>> blob: bytearray = export.create(jax.jit(f), 1.).serialize(vjp_order=3)
 >>> rehydrated_f: Callable = export.deserialize(blob).call
 
 >>> rehydrated_f(0.1)  # 7 * 0.1^3
@@ -203,14 +204,14 @@ module @jit_bind attributes {mhlo.num_partitions = 1 : i32, mhlo.num_replicas = 
 }
 
 >>> # If we try to export, we get an error
->>> export.export(jax.jit(new_prim.bind))(1.)  # doctest: +IGNORE_EXCEPTION_DETAIL
+>>> export.create(jax.jit(new_prim.bind), 1.)  # doctest: +IGNORE_EXCEPTION_DETAIL
 Traceback (most recent call last):
 ValueError: Cannot serialize code with custom calls whose targets have no compatibility guarantees: my_new_bind
 
 >>> # We can avoid the error if we pass a `DisabledSafetyCheck.custom_call`
->>> exp = export.export(
-...    jax.jit(new_prim.bind),
-...    disabled_checks=[export.DisabledSafetyCheck.custom_call("my_new_prim")])(1.)
+>>> exp = export.create(
+...    jax.jit(new_prim.bind), 1.,
+...    export_disabled_checks=[export.DisabledSafetyCheck.custom_call("my_new_prim")])
 
 ```
 
@@ -246,7 +247,7 @@ on multiple platforms.
 
 >>> # You can specify the export platform, e.g., `tpu`, `cpu`, `cuda`, `rocm`
 >>> # even if the current machine does not have that accelerator.
->>> exp = export.export(jax.jit(lax.cos), platforms=['tpu'])(1.)
+>>> exp = export.create(jax.jit(lax.cos), 1., export_platforms=['tpu'])
 
 >>> # But you will get an error if you try to compile `exp`
 >>> # on a machine that does not have TPUs.
@@ -259,16 +260,16 @@ ValueError: Function 'cos' was lowered for platforms '('tpu',)' but it is used o
 >>> # that the code lowered will run adequately on the current
 >>> # compilation platform (which is the case for `cos` in this
 >>> # example):
->>> exp_unsafe = export.export(jax.jit(lax.cos),
-...    lowering_platforms=['tpu'],
-...    disabled_checks=[export.DisabledSafetyCheck.platform()])(1.)
+>>> exp_unsafe = export.create(jax.jit(lax.cos), 1.,
+...    export_platforms=['tpu'],
+...    export_disabled_checks=[export.DisabledSafetyCheck.platform()])
 
 >>> exp_unsafe.call(1.)
 Array(0.5403023, dtype=float32, weak_type=True)
 
 # and similarly with multi-platform lowering
->>> exp_multi = export.export(jax.jit(lax.cos),
-...    lowering_platforms=['tpu', 'cpu', 'cuda'])(1.)
+>>> exp_multi = export.create(jax.jit(lax.cos), 1.,
+...    export_platforms=['tpu', 'cpu', 'cuda'])
 >>> exp_multi.call(1.)
 Array(0.5403023, dtype=float32, weak_type=True)
 
@@ -292,12 +293,12 @@ the same StableHLO as for the single-plaform export.
 ...     x = jnp.cos(x)
 ...   return x
 
->>> exp_single = export.export(jax.jit(f))(1.)
+>>> exp_single = export.create(jax.jit(f), 1.)
 >>> len(exp_single.mlir_module_serialized)  # doctest: +SKIP
 9220
 
->>> exp_multi = export.export(jax.jit(f),
-...                           lowering_platforms=["cpu", "tpu", "cuda"])(1.)
+>>> exp_multi = export.create(jax.jit(f), 1.,
+...                           export_platforms=["cpu", "tpu", "cuda"])
 >>> len(exp_multi.mlir_module_serialized)  # doctest: +SKIP
 9282
 
@@ -335,7 +336,7 @@ physical devices that were used for exporting.
 ...   return x.T
 
 >>> arg = jnp.arange(8 * len(export_devices))
->>> exp = export.export(jax.jit(f, in_shardings=(NamedSharding(export_mesh, P("a")),)))(arg)
+>>> exp = export.create(jax.jit(f, in_shardings=(NamedSharding(export_mesh, P("a")),)), arg)
 
 >>> # `exp` knows for how many devices it was exported.
 >>> exp.nr_devices
@@ -385,7 +386,7 @@ of devices than it was exported for:
 ...   return x.T
 
 >>> arg = jnp.arange(4 * len(export_devices))
->>> exp = export.export(jax.jit(f, in_shardings=(NamedSharding(export_mesh, P("a")),)))(arg)
+>>> exp = export.create(jax.jit(f, in_shardings=(NamedSharding(export_mesh, P("a")),)), arg)
 
 >>> exp.call(arg)  # doctest: +IGNORE_EXCEPTION_DETAIL
 Traceback (most recent call last):
@@ -408,7 +409,7 @@ artifacts using a new mesh constructed at the call site:
 ...   return x.T
 
 >>> arg = jnp.arange(4 * len(export_devices))
->>> exp = export.export(jax.jit(f, in_shardings=(NamedSharding(export_mesh, P("a")),)))(arg)
+>>> exp = export.create(jax.jit(f, in_shardings=(NamedSharding(export_mesh, P("a")),)), arg)
 
 >>> # Prepare the mesh for calling `exp`.
 >>> calling_mesh = Mesh(np.array(export_devices[::-1]), ("b",))
@@ -434,7 +435,7 @@ on multiple devices, and the compiler will shard the function appropriately:
 ...   return jnp.cos(x)
 
 >>> arg = jnp.arange(4)
->>> exp = export.export(jax.jit(f))(arg)
+>>> exp = export.create(jax.jit(f), arg)
 >>> exp.in_avals
 (ShapedArray(int32[4]),)
 
@@ -461,7 +462,7 @@ As of June 2024, all function exported with version 9
 
 ```python
 >>> from jax import export
->>> exp: export.Exported = export.export(jnp.cos)(1.)
+>>> exp: export.Exported = export.create(jnp.cos, 1.)
 >>> exp.calling_convention_version
 9
 
@@ -479,7 +480,7 @@ or the `JAX_EXPORT_CALLING_CONVENTION_VERSION` environment variable:
 
 >>> from jax._src import config
 >>> with config.jax_export_calling_convention_version(9):
-...  exp = export.export(jnp.cos)(1.)
+...  exp = export.create(jnp.cos, 1.)
 ...  exp.calling_convention_version
 9
 
@@ -638,10 +639,18 @@ On June 14, 2024 we deprecated the `jax.experimental.export` APIs
 in favor of `jax.export` APIs. There have been some minor changes:
 
   * `jax.experimental.export.export`:
-    * The old function used to allow any Python callable, or the result of
+    * The new function name is {func}`jax.export.create`.
+    * The old function used to allow as input any Python callable, or the result of
       `jax.jit`. Now only the latter is accepted. You have to manually apply
-      `jax.jit` to the function to export before calling `export`.
-    * The old `lowering_parameters` kwarg is now named `platforms`
+      `jax.jit` to the function to export before calling `create`.
+    * The old `lowering_parameters` kwarg is now named `export_platforms`
+    * The old `disabled_checks` kwarg is now called `export_disabled_checks`
+    * The old function used to return a Callable to apply on the function
+      positional and keyword arguments. Now {func}`jax.export.create`
+      takes the function to be exported and the positional and keyword
+      arguments and returns an `Exported`. Therefore, instead of
+      `jax.experimental.export(f)(*args, *kwargs)` you should now use
+      `jax.export.create(f, *args, *kwargs)`.
   * `jax.experimental.export.default_lowering_platform()` is now
     at {func}`jax.export.default_export_platform`.
   * `jax.experimental.export.call` is now a method of the {class}`jax.export.Exported` object.

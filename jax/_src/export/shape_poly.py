@@ -1861,7 +1861,7 @@ class ShapeConstraints:
   def shape_assertions(self, eval: CachingShapeEvaluator) -> None:
     """Computes the shape assertions for the set of constraints.
 
-    See jax_export.Exported docstring.
+    See {class}`jax_export.Exported` docstring.
     """
     # We want to report the errors in the same order as `check_statically`.
     # So, we process them in order, in case some fail statically, and we
