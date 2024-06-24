@@ -16,11 +16,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from functools import partial
 import operator
 import numpy as np
-from typing import Any, Callable
+from typing import Any
 import warnings
 
 import jax
@@ -769,41 +768,62 @@ def hard_silu(x: ArrayLike) -> Array:
 
 hard_swish = hard_silu
 
-def _causal_mask(T, dtype):
+def _get_large_negative(dtype):
   dtype_max = jnp.finfo(dtype).max
-  large_negative_number = jnp.asarray(-0.5 * dtype_max, dtype=dtype)
+  return jnp.asarray(-0.7 * dtype_max, dtype=dtype)
+
+def _get_causal_mask(T, dtype):
+  large_negative_number = _get_large_negative(dtype)
   col_idx = jnp.tile(jnp.arange(T)[jnp.newaxis, :], [T, 1])
   row_idx = jnp.tile(jnp.arange(T)[:, jnp.newaxis], [1, T])
   mask = (row_idx < col_idx).astype(dtype) * large_negative_number
   mask = mask[jnp.newaxis, jnp.newaxis, :, :]
   return mask
 
-class ScaledDotProductAttentionCausalMask:
-  def __call__(self, x: ArrayLike, mask: ArrayLike | None = None) -> Array:
-    """Mask the input with causal masking"""
-    if mask is not None:
-      warnings.warn(
-          "The provided mask will be ignored since the causal mask is used")
-      del mask
-    T = x.shape[-2]
-    assert T == x.shape[-1], f'T should equal to S: {T} vs {x.shape[-1]}'
-    assert jnp.issubdtype(x.dtype, jnp.floating), x.dtype
-    mask = _causal_mask(T, x.dtype)
-    return x + mask
+def _dot_product_attention_xla(
+    query: ArrayLike,
+    key: ArrayLike,
+    value: ArrayLike,
+    bias: ArrayLike | None,
+    mask: ArrayLike | None,
+    is_causal: bool,
+    scale: float):
+  # Compute the attention logits
+  logits = jnp.einsum('BTNH,BSNH->BNTS', query, key)
 
-@dataclass
-class ScaledDotProductAttentionPhiloxDropout:
-  rate: float = 0.0
-  seed: int = 123
-  def __call__(self, x: ArrayLike) -> Array:
-    if self.rate == 0.0:
-      return x
+  # Bias
+  if bias is not None:
+    logits = logits + bias.astype(logits.dtype)
+
+  # Logits scaling
+  scale = jnp.array(scale, dtype=logits.dtype)
+  logits = jnp.multiply(logits, scale)
+
+  # Mask
+  if mask is not None:
+    if mask.dtype == jnp.bool_:
+      large_negative_number = _get_large_negative(logits.dtype)
+      padded_logits = jnp.where(mask, logits, large_negative_number)
     else:
-      raise ValueError(
-          "This dropout should only be used in the context of cuDNN flash"
-          "attention; Please check if other spda configs are compatible.")
+      padded_logits = logits + mask
+  else:
+    padded_logits = logits
 
-def scaled_dot_product_attention(
+  if is_causal:
+    T, S = query.shape[-3], key.shape[-3]
+    assert T == S, f'T should equal to S, but got {T} vs {S}'
+    mask = _get_causal_mask(T, logits.dtype)
+    padded_logits = padded_logits + mask
+
+  # Softmax and it is always carried out in fp32.
+  padded_logits = padded_logits.astype(jnp.float32)
+  probs = jax.nn.softmax(padded_logits, axis=-1).astype(key.dtype)
+
+  # Compute the attention context.
+  encoded = jnp.einsum('BNTS,BSNH->BTNH', probs, value)
+  return encoded, probs
+
+def dot_product_attention(
     query: ArrayLike,
     key: ArrayLike,
     value: ArrayLike,
@@ -811,12 +831,8 @@ def scaled_dot_product_attention(
     mask: ArrayLike | None = None,
     *,
     scale: float | None = None,
-    logits_cap: float | None = None,
-    mask_fn: Callable[[ArrayLike, ArrayLike], ArrayLike] = None,
-    softmax_fn: Callable[[ArrayLike], ArrayLike] = None,
-    dropout_fn: Callable[[ArrayLike, ...], ArrayLike] = None,
-    _qk_dot_general: Callable[..., ArrayLike] = lax.dot_general,
-    _pv_dot_general: Callable[..., ArrayLike] = lax.dot_general) -> Array:
+    is_causal: bool = False,
+    implementation: str | None = None) -> Array:
   r"""Scaled dot product attention function.
 
   Computes the attention function on Query, Key, and Value tensors:
@@ -825,10 +841,7 @@ def scaled_dot_product_attention(
     \mathrm{Attention}(Q, K, V)=\mathrm{softmax}(\frac{QK^T}{\sqrt{d_k}}V)
 
   If we define :code:`logits` as the output of :math:`QK^T` and the
-  :code:`probs` as the output of :math:`softmax`. This function supports
-  optional or custom (1) scale function over :code:`logits`; (2) attention mask
-  over scaled :code:`logits`; (3) softmax over masked :code:`logits`; (4)
-  dropout over :code:`probs`.
+  :code:`probs` as the output of :math:`softmax`.
 
   Throughout this function, we utilize the following uppercase letters to
   represent the shape of array:
@@ -845,23 +858,19 @@ def scaled_dot_product_attention(
     value: value array; shape :code:`(BSNH)`
     bias: optional, bias array to be added to logits; shape broadcastable to
           :code:`(BNTS)`.
-    mask: optional, mask array used to filter out logits. We use additive
-          masking: 0 represents true and values below a large negative number (
-          e.g. :code:`-0.5 * jnp.finfo(dtype).max`); shape broadcastable to
-          :code:`(BNTS)`.
+    mask: optional, mask array used to filter out logits. Two types of masks are
+          supported. (1) A boolean mask where `True` indicates the element
+          should take part in attention; (2) A float mask of the same type as
+          query that will be added to the attention score, meaning 0. represents
+          `True` and a large negative number 
+          (e.g. :code:`-0.5 * jnp.finfo(dtype).max`) represents `False`. The
+          shape is broadcastable to :code:`(BNTS)`.
     scale: scale for the logits. If None, the scale will be set to 1 divided by
            the square root of query size.
-    logits_cap: caps the logits if it is > 0.0. Defaults to None, meaning no
-                capping. Otherwise, it applies
-                :code:`cap * jnp.tanh(logits / cap)`.
-    mask_fn: custom masking function takes in :code:`logits` and :code:`mask`
-             and outputs masked :code:`logits`.
-    softmax_fn: custom softmax function takes in :code:`logits` and outputs
-                :code:`probs`.
-    dropout_fn: custom dropout function takes in :code:`probs` outputs the new
-                `probs`.
-    _qk_dot_general: custom dot function for qk dot (mainly for quantization).
-    _pv_dot_general: custom dot function for pv dot (mainly for quantization).
+    is_causal: If true, assumes upper left causal attention masking.
+    implementation: A string to control which implementation to use. Supported
+                    strings are `xla` (default), `cudnn` (cuDNN flash
+                    attention).
 
   Returns:
     An array with the same shape of :code:`query`. If flash attention is not
@@ -882,90 +891,47 @@ def scaled_dot_product_attention(
   _assert_has_shape(query, [B, -1, N, H])
   T = query.shape[1]
   scale_val = (1.0 / np.sqrt(H) if scale is None else scale)
+  assert query.dtype == key.dtype == value.dtype
+  if mask is not None:
+    assert mask.dtype == query.dtype or mask.dtype == jnp.bool_
 
-  if not (mask is None or mask_fn is None):
-      raise ValueError("Cannot provide both mask and mask_fn")
+  if implementation in ('xla', None):
+    encoded, probs = _dot_product_attention_xla(
+        query, key, value, bias, mask, is_causal=is_causal, scale=scale_val
+    )
+  elif implementation == 'cudnn':
+    mask_type = MaskType.CAUSAL if is_causal else MaskType.NO_MASK
+    # Convert bool mask to float mask for addition
+    if mask is not None:
+      if mask.dtype == jnp.bool_:
+        large_negative_number = _get_large_negative(query.dtype)
+        mask = jnp.where(mask, jnp.zeros((), query.dtype),
+                         large_negative_number)
 
-  # Try if the flash attention can be used. If failed, fall back to the default 
-  # implementation.
-  try:
-    maybe_fuse = softmax_fn is None
-    maybe_fuse = maybe_fuse and (
-        dropout_fn is None or
-        type(dropout_fn) is ScaledDotProductAttentionPhiloxDropout)
-    maybe_fuse = maybe_fuse and (
-        mask_fn is None or type(mask_fn) is ScaledDotProductAttentionCausalMask)
-    if maybe_fuse:
-      rate, seed = 0.0, 0
-      if type(dropout_fn) is ScaledDotProductAttentionPhiloxDropout:
-        rate, seed = (dropout_fn.rate, dropout_fn.seed)
-
-      mask_type = MaskType.NO_MASK
-      if type(mask_fn) is ScaledDotProductAttentionCausalMask:
-        mask_type = MaskType.CAUSAL
-
-      # The `mask` to this API is an additive mask. However, the `mask` taken by
-      # the cudnn_dot_product_attention is assumed to be a multiplicative
-      # mask. So, we pass it via `bias` to preserve its "additive" behavior.
-      if bias is not None:
-        # Cudnn flash attention applies post-scale bias. So we scale the bias.
-        # Note, mathematically, (logits+bias)*scale is equivalent to
-        # logits*scale+bias*scale, but the latter may cause numerical
-        # differences especially when bias is in narrower dtypes.
-        scale = jnp.array(scale_val, dtype=bias.dtype)
-        bias = jnp.multiply(bias, scale)
-        if mask is not None:
-          bias = bias + mask
-      elif mask is not None:
-        bias = mask
-
-      encoded = cudnn_dot_product_attention(
-          query, key, value, bias, None, scale=scale_val, mask_type=mask_type,
-          seed=seed, dropout_rate=rate
-      )
-      return encoded, None
+    # Prepare the bias for cudnn flash attention:
+    # (1) We should never use the mask argument of cudnn, because it is
+    #     multiplicative and thus the masked values (i.e. the zeros) will
+    #     still take part in the following softmax. So, we need to use the bias
+    #     argument for the mask to ensure the masked values are very small.
+    # (2) Cudnn does the scale before the bias addition, i.e. scale*QK+bias.
+    #     However, we'd like the bias addition before the scale, i.e.
+    #     scale*(QK+bias). So, we scale the bias beforehand.
+    # TODO(kaixih@nvidia): The logic of (1) should be moved to the internal of
+    # cudnn_dot_product_attention.
+    if bias is None:
+      bias = mask
     else:
-      warnings.warn("The flash attention cannot be used because unsupported"
-                    " softmax_fn, mask_fn, or dropout_fn.")
-  except Exception as e:
-    warnings.warn(f"The flash attention cannot be used because: {e}")
+      scale = jnp.array(scale_val, dtype=bias.dtype)
+      bias = jnp.multiply(bias, scale)
+      if mask is not None:
+        bias = bias + mask
 
-  # Compute the attention logits
-  logits = jnp.einsum('BTNH,BSNH->BNTS', query, key,
-                      _dot_general=_qk_dot_general)
-  # Bias
-  if bias is not None:
-    logits = logits + bias.astype(logits.dtype)
-
-  # Logits scaling
-  scale = jnp.array(scale_val, dtype=logits.dtype)
-  logits = jnp.multiply(logits, scale)
-
-  # Logits capping
-  if logits_cap is not None and logits_cap > 0.:
-    cap = jnp.array(logits_cap, dtype=logits.dtype)
-    logits = cap * jnp.tanh(logits / cap)
-
-  # Mask
-  if mask_fn is not None:
-    padded_logits = mask_fn(logits, mask)
-  elif mask is not None:
-    padded_logits = logits + mask
+    encoded = cudnn_dot_product_attention(
+        query, key, value, bias, mask=None, scale=scale_val, mask_type=mask_type
+    )
+    probs = None
   else:
-    padded_logits = logits
+    raise ValueError(f"Unsupported implementation option: {implementation}")
 
-  # Softmax and it is always carried out in fp32.
-  padded_logits = padded_logits.astype(jnp.float32)
-  if softmax_fn is not None:
-    probs = softmax_fn(padded_logits)
-  else:
-    probs = jax.nn.softmax(padded_logits, axis=-1).astype(key.dtype)
-
-  # Apply attention dropout.
-  if dropout_fn is not None:
-    probs = dropout_fn(probs)
-
-  # Compute the attention context.
-  encoded = jnp.einsum('BNTS,BSNH->BTNH', probs, value,
-                        _dot_general=_pv_dot_general)
   return encoded, probs
+
