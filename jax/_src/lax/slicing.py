@@ -1820,7 +1820,7 @@ def _gather_lower(ctx, operand, indices, *,
 
   assert mode in (GatherScatterMode.PROMISE_IN_BOUNDS,
                   GatherScatterMode.CLIP), mode
-  try:
+  if hlo.get_api_version() >= 7:
     dnums = hlo.GatherDimensionNumbers.get(
         collapsed_slice_dims=list(dimension_numbers.collapsed_slice_dims),
         operand_batching_dims=[],
@@ -1830,7 +1830,7 @@ def _gather_lower(ctx, operand, indices, *,
         start_index_map=list(dimension_numbers.start_index_map),
     )
   # TODO: b/342182301 - Remove this branch once only the new API is supported
-  except:
+  else:
     dnums = hlo.GatherDimensionNumbers.get(
         collapsed_slice_dims=list(dimension_numbers.collapsed_slice_dims),
         index_vector_dim=len(ctx.avals_in[1].shape) - 1,
@@ -2486,7 +2486,7 @@ def _scatter_lower(ctx, operand, indices, updates, *,
                           updates, dnums=dimension_numbers)
 
   dnums = dimension_numbers
-  try:
+  if hlo.get_api_version() >= 7:
     scatter_dnums = hlo.ScatterDimensionNumbers.get(
         update_window_dims=list(dnums.update_window_dims),
         inserted_window_dims=list(dnums.inserted_window_dims),
@@ -2496,7 +2496,7 @@ def _scatter_lower(ctx, operand, indices, updates, *,
         index_vector_dim=len(ctx.avals_in[1].shape) - 1,
     )
   # TODO: b/342182301 - Remove this branch once only the new API is supported
-  except:
+  else:
     scatter_dnums = hlo.ScatterDimensionNumbers.get(
         update_window_dims=list(dnums.update_window_dims),
         inserted_window_dims=list(dnums.inserted_window_dims),
@@ -2555,7 +2555,7 @@ def _scatter_add_lower_gpu(ctx, operand, indices, updates,
 
   aval_out, = ctx.avals_out
   dnums = dimension_numbers
-  try:
+  if hlo.get_api_version() >= 7:
     scatter_dnums = hlo.ScatterDimensionNumbers.get(
         update_window_dims=list(dnums.update_window_dims),
         inserted_window_dims=list(dnums.inserted_window_dims),
@@ -2565,7 +2565,7 @@ def _scatter_add_lower_gpu(ctx, operand, indices, updates,
         index_vector_dim=len(ctx.avals_in[1].shape) - 1,
     )
   # TODO: b/342182301 - Remove this branch once only the new API is supported
-  except:
+  else:
     scatter_dnums = hlo.ScatterDimensionNumbers.get(
         update_window_dims=list(dnums.update_window_dims),
         inserted_window_dims=list(dnums.inserted_window_dims),
