@@ -832,7 +832,7 @@ def dot_product_attention(
     *,
     scale: float | None = None,
     is_causal: bool = False,
-    implementation: str | None = None,
+    implementation: str = 'xla',
     return_probs: bool = False) -> Union[Array, tuple[Array, Array], str]:
   r"""Scaled dot product attention function.
 
@@ -903,7 +903,7 @@ def dot_product_attention(
         not return_probs
     ), "Implementation `cudnn` doesn't support return_probs=True."
 
-  if implementation in ('xla', None):
+  if implementation == 'xla':
     encoded, probs = _dot_product_attention_xla(
         query, key, value, bias, mask, is_causal=is_causal, scale=scale_val
     )
