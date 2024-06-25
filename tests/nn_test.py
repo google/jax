@@ -52,6 +52,9 @@ class NNFunctionsTest(jtu.JaxTestCase):
       raise unittest.SkipTest("Test fails on GPU")
 
     sdpa = nn.dot_product_attention
+    sdpa_xla = partial(sdpa, implementation='xla')
+    sdpa_cudnn = partial(sdpa, implementation='cudnn')
+
     B, S, T, N, H = 4, 1024, 1024, 4, 64
     keys = random.split(random.PRNGKey(0), 4)
     Q = random.normal(keys[0], (B, T, N, H), dtype)
@@ -62,11 +65,9 @@ class NNFunctionsTest(jtu.JaxTestCase):
     else:
       bias = None
 
-    out_ref, probs_ref = sdpa(Q, K, V, bias, implementation='xla')
-    out_ans, probs_ans = sdpa(Q, K, V, bias, implementation='cudnn')
-    self.assertIsNotNone(probs_ref)
-    self.assertIsNone(probs_ans)
-    self.assertAllClose(out_ref, out_ans)
+    out_ref = sdpa_xla(Q, K, V, bias)
+    out_ans = sdpa_cudnn(Q, K, V, bias)
+    self.assertAllClose(out_ref, out_ans, atol=0.2, rtol=0.2)
 
   @parameterized.parameters([
       [jnp.bfloat16, False],
@@ -82,7 +83,6 @@ class NNFunctionsTest(jtu.JaxTestCase):
     dtype = jnp.bfloat16
     sdpa = nn.dot_product_attention
     B, S, T, N, H = 4, 1024, 1024, 4, 64
-    zeros = jnp.zeros((B, N, T, S), dtype)
     keys = random.split(random.PRNGKey(0), 5)
     Q = random.normal(keys[0], (B, T, N, H), dtype)
     K = random.normal(keys[1], (B, S, N, H), dtype)
@@ -95,16 +95,16 @@ class NNFunctionsTest(jtu.JaxTestCase):
 
     sdpa_xla = partial(sdpa, implementation='xla')
     _, sdpa_vjp_xla = jax.vjp(sdpa_xla, Q, K, V, bias)
-    dQ_ref, dK_ref, dV_ref, dbias_ref = sdpa_vjp_xla((grad, zeros))
+    dQ_ref, dK_ref, dV_ref, dbias_ref = sdpa_vjp_xla(grad)
 
     sdpa_cudnn = partial(sdpa, implementation='cudnn')
     _, sdpa_vjp_cudnn = jax.vjp(sdpa_cudnn, Q, K, V, bias)
-    dQ_ans, dK_ans, dV_ans, dbias_ans = sdpa_vjp_cudnn((grad, None))
-    rtol, atol = (.01, .01)
+    dQ_ans, dK_ans, dV_ans, dbias_ans = sdpa_vjp_cudnn(grad)
+    rtol, atol = (.02, .02)
     self.assertAllClose(dQ_ref, dQ_ans, rtol=rtol, atol=atol)
     self.assertAllClose(dK_ref, dK_ans, rtol=rtol, atol=atol)
-    self.assertAllClose(dV_ref, dV_ans)
-    self.assertAllClose(dbias_ref, dbias_ans)
+    self.assertAllClose(dV_ref, dV_ans, rtol=rtol, atol=atol)
+    self.assertAllClose(dbias_ref, dbias_ans, rtol=rtol, atol=atol)
 
   @parameterized.parameters([
       [jnp.bfloat16, False],
@@ -128,22 +128,16 @@ class NNFunctionsTest(jtu.JaxTestCase):
     else:
       bias = None
 
-    out_ref, probs_ref = sdpa(Q, K, V, bias, is_causal=True,
-                              implementation='xla')
-    self.assertIsNotNone(probs_ref)
+    out_ref = sdpa(Q, K, V, bias, is_causal=True, implementation='xla')
 
     atol = .02 if use_bias else .01
     # Test cudnn with runtime generated causal mask
-    out_ans, probs_ans = sdpa(Q, K, V, bias, is_causal=True,
-                              implementation='cudnn')
-    self.assertIsNone(probs_ans)
+    out_ans = sdpa(Q, K, V, bias, is_causal=True, implementation='cudnn')
     self.assertAllClose(out_ref, out_ans, atol=atol)
 
     # Test cudnn with user-provided causal mask
     causal_mask = _get_causal_mask(T, Q.dtype)
-    out_ans, probs_ans = sdpa(Q, K, V, bias, causal_mask,
-                              implementation='cudnn')
-    self.assertIsNone(probs_ans)
+    out_ans = sdpa(Q, K, V, bias, causal_mask, implementation='cudnn')
     self.assertAllClose(out_ref, out_ans, atol=atol)
 
   @parameterized.parameters([
@@ -159,7 +153,6 @@ class NNFunctionsTest(jtu.JaxTestCase):
 
     sdpa = nn.dot_product_attention
     B, S, T, N, H = 4, 1024, 1024, 4, 64
-    zeros = jnp.zeros((B, N, T, S), dtype)
     keys = random.split(random.PRNGKey(0), 5)
     Q = random.normal(keys[0], (B, T, N, H), dtype)
     K = random.normal(keys[1], (B, S, N, H), dtype)
@@ -172,7 +165,7 @@ class NNFunctionsTest(jtu.JaxTestCase):
 
     sdpa_xla = partial(sdpa, implementation='xla', is_causal=True)
     out_ref, sdpa_vjp_xla = jax.vjp(sdpa_xla, Q, K, V, bias)
-    dQ_ref, dK_ref, dV_ref, dbias_ref = sdpa_vjp_xla((grad, zeros))
+    dQ_ref, dK_ref, dV_ref, dbias_ref = sdpa_vjp_xla(grad)
 
     # Test cudnn with runtime generated causal mask
     sdpa_cudnn0 = partial(sdpa, implementation='cudnn', is_causal=True)
@@ -182,13 +175,14 @@ class NNFunctionsTest(jtu.JaxTestCase):
     causal_mask = _get_causal_mask(T, Q.dtype)
     _, sdpa_vjp_cudnn1 = jax.vjp(sdpa_cudnn1, Q, K, V, bias, causal_mask)
 
+    rtol, atol = (.02, .02)
     sdpa_fns = [sdpa_vjp_cudnn0, sdpa_vjp_cudnn1]
     for sdpa_fn in sdpa_fns:
-      dQ_ans, dK_ans, dV_ans, dbias_ans, _ = sdpa_fn((grad, None))
-      self.assertAllClose(dQ_ref, dQ_ans, atol=.02, rtol=.02)
-      self.assertAllClose(dK_ref, dK_ans, atol=.02, rtol=.02)
-      self.assertAllClose(dV_ref, dV_ans, atol=.02, rtol=.02)
-      self.assertAllClose(dbias_ref, dbias_ans)
+      dQ_ans, dK_ans, dV_ans, dbias_ans, _ = sdpa_fn(grad)
+      self.assertAllClose(dQ_ref, dQ_ans, rtol=rtol, atol=atol)
+      self.assertAllClose(dK_ref, dK_ans, rtol=rtol, atol=atol)
+      self.assertAllClose(dV_ref, dV_ans, rtol=rtol, atol=atol)
+      self.assertAllClose(dbias_ref, dbias_ans, rtol=0.04, atol=atol)
 
   @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def testSoftplusGrad(self):

@@ -791,13 +791,13 @@ def _dot_product_attention_xla(
   # Compute the attention logits
   logits = jnp.einsum('BTNH,BSNH->BNTS', query, key)
 
-  # Bias
-  if bias is not None:
-    logits = logits + bias.astype(logits.dtype)
-
   # Logits scaling
   scale = jnp.array(scale, dtype=logits.dtype)
   logits = jnp.multiply(logits, scale)
+
+  # Bias
+  if bias is not None:
+    logits = logits + bias.astype(logits.dtype)
 
   # Mask
   if mask is not None:
@@ -832,7 +832,8 @@ def dot_product_attention(
     *,
     scale: float | None = None,
     is_causal: bool = False,
-    implementation: str | None = None) -> Array:
+    implementation: str | None = None,
+    return_probs: bool = False) -> Union[Array, tuple[Array, Array], str]:
   r"""Scaled dot product attention function.
 
   Computes the attention function on Query, Key, and Value tensors:
@@ -866,9 +867,11 @@ def dot_product_attention(
           (e.g. :code:`-0.5 * jnp.finfo(dtype).max`) represents `False`. The
           shape is broadcastable to :code:`(BNTS)`.
     scale: scale for the logits. If None, the scale will be set to 1 divided by
-           the square root of query size. Note, the currently implementation
-           only supports post-bias scale.
-    is_causal: If true, assumes upper left causal attention masking.
+           the square root of query's head dimension (i.e. H).
+    is_causal: If true, causal attention will be applied. Note, some
+               implemntations like `xla` will generate a mask tensor and apply
+               it to the logits, but other implementations like `cudnn` will
+               avoid computing the unmasked regions.
     implementation: A string to control which implementation to use. Supported
                     strings are `xla` (default), `cudnn` (cuDNN flash
                     attention).
@@ -891,10 +894,14 @@ def dot_product_attention(
   _assert_has_shape(value, [B, S, N, H])
   _assert_has_shape(query, [B, -1, N, H])
   T = query.shape[1]
-  scale_val = (1.0 / np.sqrt(H) if scale is None else scale)
+  scale_val = (1.0 / np.sqrt(H)) if scale is None else scale
   assert query.dtype == key.dtype == value.dtype
   if mask is not None:
     assert mask.dtype == query.dtype or mask.dtype == jnp.bool_
+  if implementation != 'cudnn':
+    assert (
+        not return_probs
+    ), "Implementation `cudnn` doesn't support return_probs=True."
 
   if implementation in ('xla', None):
     encoded, probs = _dot_product_attention_xla(
@@ -910,31 +917,25 @@ def dot_product_attention(
                          large_negative_number)
 
     # Prepare the bias for cudnn flash attention:
-    # (1) We should never use the mask argument of cudnn, because it is
-    #     multiplicative and thus the masked values (i.e. the zeros) will
-    #     still take part in the following softmax. So, we need to use the bias
-    #     argument for the mask to ensure the masked values are very small.
-    # (2) Cudnn does the scale before the bias addition, i.e. scale*QK+bias.
-    #     However, we'd like the bias addition before the scale, i.e.
-    #     scale*(QK+bias). So, we scale the bias beforehand.
-    # TODO(kaixih@nvidia): The logic of (1) should be moved to the internal of
-    # cudnn_dot_product_attention. For (2), it seems we want to support both
-    # cases, e.g., flax/cudnn attention is the post-scale bias, but praxis
-    # attention is the post-bias scale.
+    #   We should never use the mask argument of cudnn, because it is
+    #   multiplicative and thus the masked values (i.e. the zeros) will
+    #   still take part in the following softmax. So, we need to use the bias
+    #   argument for the mask to ensure the masked values are very small.
+    # TODO(kaixih@nvidia): The logic should be moved to the internal of
+    # cudnn_dot_product_attention.
     if bias is None:
       bias = mask
     else:
-      scale = jnp.array(scale_val, dtype=bias.dtype)
-      bias = jnp.multiply(bias, scale)
       if mask is not None:
         bias = bias + mask
 
     encoded = cudnn_dot_product_attention(
         query, key, value, bias, mask=None, scale=scale_val, mask_type=mask_type
     )
-    probs = None
   else:
     raise ValueError(f"Unsupported implementation option: {implementation}")
 
-  return encoded, probs
+  if return_probs:
+    return encoded, probs
 
+  return encoded
