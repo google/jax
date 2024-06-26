@@ -196,10 +196,29 @@ def windows_cc_shared_mlir_library(name, out, deps = [], srcs = [], exported_sym
 
 ALL_BACKENDS = ["cpu", "gpu", "tpu"]
 
-def if_building_jaxlib(if_building, if_not_building = ["@pypi_jaxlib//:pkg"]):
+def if_building_jaxlib(
+        if_building,
+        if_not_building = [
+            "@pypi_jaxlib//:pkg",
+            "@pypi_jax_cuda12_plugin//:pkg",
+            "@pypi_jax_cuda12_pjrt//:pkg",
+        ],
+        if_not_building_for_cpu = ["@pypi_jaxlib//:pkg"]):
+    """Adds jaxlib and jaxlib cuda plugin wheels as dependencies instead of depending on sources. 
+
+    This allows us to test prebuilt versions of jaxlib wheels against the rest of the JAX codebase.
+
+    Args:
+      if_building: the source code targets to depend on in case we don't depend on the jaxlib wheels
+      if_not_building: the jaxlib wheels to depend on including gpu-specific plugins in case of
+                       gpu-enabled builds
+      if_not_building_for_cpu: the jaxlib wheels to depend on in case of cpu-only builds
+    """
+
     return select({
         "//jax:enable_jaxlib_build": if_building,
-        "//conditions:default": if_not_building,
+        "//jax_plugins/cuda:disable_jaxlib_for_cpu_build": if_not_building_for_cpu,
+        "//jax_plugins/cuda:disable_jaxlib_for_cuda12_build": if_not_building,
     })
 
 # buildifier: disable=function-docstring
