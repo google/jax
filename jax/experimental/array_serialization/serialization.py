@@ -23,19 +23,17 @@ import itertools
 import logging
 import os
 import re
-import sys
 import threading
 import time
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, List, Optional, Protocol, Union
 
 import jax
 from jax._src import array
 from jax._src import distributed
 from jax._src import sharding
-from jax._src import sharding_impls
-from jax._src.layout import Layout, DeviceLocalLayout as DLL
 from jax._src import typing
 from jax._src import util
+from jax._src.layout import DeviceLocalLayout as DLL, Layout
 from jax._src.lib import xla_extension as xe
 import jax.numpy as jnp
 import numpy as np
@@ -66,6 +64,14 @@ _BARRIER_TIMED_OUT_MSG = (
     "* Try increasing the timeout you pass to GlobalAsyncCheckpointManager.")
 
 logger = logging.getLogger(__name__)
+
+
+class _Future(Protocol):
+  """Abstracted Orbax Future class for duck typing."""
+
+  def result(self, timeout: Optional[int] = None) -> Any:
+    """Waits for the future to complete its operation."""
+    ...
 
 
 async def create_async_array_from_callback(
@@ -185,6 +191,63 @@ class _LimitInFlightBytes:
       self._cv.notify_all()
 
 
+class _CommitFutureWithLimitInFlightBytesRelease:
+  """A future that returns the result of a commit future and releases the bytes."""
+
+  def __init__(self, commit_future, byte_limiter, requested_bytes):
+    self._commit_future = commit_future
+    self._byte_limiter = byte_limiter
+    self._requested_bytes = requested_bytes
+
+  def _commit_result(self) -> Any:
+    return self._commit_future.result()
+
+  def result(self, timeout: Optional[int] = None) -> Any:
+    del timeout
+    result = self._commit_result()
+    if self._byte_limiter is not None:
+      self._byte_limiter.release_bytes(self._requested_bytes)
+    return result
+
+
+async def _write_array_shard(
+    shard: array.Shard,
+    arr_inp: array.ArrayImpl,
+    t: ts.TensorStore,
+    commit_future: Optional[List[_Future]],
+    replica_id: int,
+    byte_limiter: Optional[_LimitInFlightBytes],
+):
+  """Write a single shard of a global array."""
+  if shard.replica_id == replica_id:
+    requested_bytes = estimate_write_memory_footprint(arr_inp)
+    if byte_limiter is not None:
+      await byte_limiter.wait_for_bytes(requested_bytes)
+    write_future = t[shard.index].write(
+        shard.data,
+        # Avoid additional copy of input array into the TensorStore chunk
+        # cache.  If `arr_inp` is a jax.Array, the result of converting
+        # it to a NumPy array, as is done internally by TensorStore, is
+        # guaranteed to be immutable and therefore it is safe to retain a
+        # reference indefinitely.
+        can_reference_source_data_indefinitely=isinstance(
+            arr_inp, array.ArrayImpl
+        ),
+    )
+    if commit_future is not None:
+      assert isinstance(commit_future, list)
+      commit_future.append(
+          _CommitFutureWithLimitInFlightBytesRelease(
+              write_future.commit, byte_limiter, requested_bytes
+          )
+      )
+      await write_future.copy
+    else:
+      await write_future.commit
+      if byte_limiter is not None:
+        await byte_limiter.release_bytes(requested_bytes)
+
+
 async def async_serialize(
     arr_inp,
     tensorstore_spec,
@@ -192,6 +255,7 @@ async def async_serialize(
     context=TS_CONTEXT,
     primary_host: Optional[int] = 0,
     replica_id: int = 0,
+    byte_limiter: _LimitInFlightBytes | None = None,
 ):
   """Serialize an array using TensorStore.
 
@@ -205,8 +269,10 @@ async def async_serialize(
     primary_host: Primary host, which indicates the host that will be treated as
       the "leader". If None, all hosts are treated as the primary. DO NOT USE
       unless you are sure you know what you are doing.
-    replica_id: Allows overriding the shard replica id that will be saved.
-      DO NOT USE unless you are sure you know what you are doing.
+    replica_id: Allows overriding the shard replica id that will be saved. DO
+      NOT USE unless you are sure you know what you are doing.
+    transaction: TensorStore transaction to use for opening and writing the
+      array.  If not specified, a non-transactional write will be used.
   """
   if (isinstance(arr_inp, array.ArrayImpl) and jax.process_count() > 1 and
       arr_inp.is_fully_addressable):
@@ -254,18 +320,18 @@ async def async_serialize(
       context=context,
   )
 
-  async def _write_array(shard):
-    if shard.replica_id == replica_id:
-      write_future = t[shard.index].write(shard.data)
-      if commit_future is not None:
-        assert isinstance(commit_future, list)
-        commit_future.append(write_future.commit)
-        await write_future.copy
-      else:
-        await write_future.commit
-
   local_shards = arr_inp.addressable_shards
-  future_write_state = jax.tree_util.tree_map(_write_array, local_shards)
+  future_write_state = jax.tree_util.tree_map(
+      partial(
+          _write_array_shard,
+          arr_inp=arr_inp,
+          t=t,
+          commit_future=commit_future,
+          replica_id=replica_id,
+          byte_limiter=byte_limiter,
+      ),
+      local_shards,
+  )
   return await asyncio.gather(*future_write_state)
 
 
@@ -274,6 +340,10 @@ def run_serialization(arrays, tensorstore_specs):
     future_writer = jax.tree_util.tree_map(async_serialize, arrays, tensorstore_specs)
     return await asyncio.gather(*future_writer)
   asyncio.run(_run_serializer())
+
+
+def estimate_write_memory_footprint(arr: array.ArrayImpl) -> int:
+  return arr.size * arr.dtype.itemsize
 
 
 def estimate_read_memory_footprint(t: ts.TensorStore,
@@ -309,6 +379,77 @@ def estimate_read_memory_footprint(t: ts.TensorStore,
   return num_bytes
 
 
+async def _read_and_device_put_shard(
+    device: jax.Device,
+    dll: DLL,
+    t: ts.Tensorstore,
+    new_shard_shape: Sequence[int],
+    dtype: jnp.dtype,
+    requested_domain: ts.IndexDomain,
+    restricted_domain: ts.IndexDomain,
+) -> jax.Array:
+  # This maybe needed because the shape the array was saved with is smaller
+  # than the requested shape of the array in which it will be reloaded. So
+  # the extra values will be filled with 0s.
+  out = np.zeros(new_shard_shape, dtype=t.dtype.numpy_dtype)
+  await ts.array(out)[ts.d[:].translate_to[requested_domain.origin]][
+      restricted_domain
+  ].write(t[restricted_domain])
+  if dtype is not None:
+    # Cast while reloading on process to avoid 2 copies on device if the
+    # casting is done on device.
+    out = out.astype(dtype)
+  # Convert to jnp array so that layouts are initialized properly for
+  # sub-byte dtypes.
+  # TODO(yashkatariya): This is a band-aid fix. Figure out a better way to
+  # make this work.
+  if out.dtype == jnp.int4:
+    out = jnp.asarray(out)  # type: ignore
+  return jax.device_put(
+      out, Layout(dll, jax.sharding.SingleDeviceSharding(device))
+  )
+
+
+async def _read_array_index_callback(
+    index: array.Index,
+    device: jax.Device,
+    t: ts.TensorStore,
+    dll: DLL,
+    shape: Sequence[int],
+    new_shard_shape: Sequence[int],
+    dtype: jnp.dtype,
+    byte_limiter: Optional[_LimitInFlightBytes],
+) -> jax.Array:
+  requested_domain = ts.IndexTransform(input_shape=shape)[index].domain
+  restricted_domain = t.domain.intersect(requested_domain)
+  requested_bytes = estimate_read_memory_footprint(t, restricted_domain)
+  # Limit the bytes read for every shard.
+  if byte_limiter is not None:
+    await byte_limiter.wait_for_bytes(requested_bytes)
+  result = await _read_and_device_put_shard(
+      device,
+      dll,
+      t,
+      new_shard_shape,
+      dtype,
+      requested_domain,
+      restricted_domain,
+  )
+  if byte_limiter is not None:
+    # NB: `out` actually might not be ready for garbage collection by the
+    # time we call release_bytes . Thus peak memory usage still might grow
+    # beyond what byte_limiter limit suggests it should. The simplest option
+    # would be to call  `result.block_until_ready()`` here. However it
+    # also comes with ~15-20% perf penalty as we would be waiting for CPU->GPU
+    # transfer instead of loading data. In the future, if memory pressure
+    # becomes a problem, we can instead instrument  bytelimiter to
+    # keep track of all in-flight tensors and only block_until_ready, if byte
+    # limiter hits the limit to get reduced memory usage, without losing
+    # performance in common use cases.
+    await byte_limiter.release_bytes(requested_bytes)
+  return result
+
+
 async def async_deserialize(
     user_in_sharding: jax.sharding.Sharding | Layout,
     tensorstore_spec: ts.Spec | dict[str, Any],
@@ -334,47 +475,19 @@ async def async_deserialize(
   )
   shape = t.shape if global_shape is None else global_shape
   new_shard_shape = in_sharding.shard_shape(tuple(shape))
-
-  async def cb(index: array.Index, device: jax.Device):
-    requested_domain = ts.IndexTransform(input_shape=shape)[index].domain
-    restricted_domain = t.domain.intersect(requested_domain)
-    requested_bytes = estimate_read_memory_footprint(t, restricted_domain)
-    # Limit the bytes read for every shard.
-    if byte_limiter is not None:
-      await byte_limiter.wait_for_bytes(requested_bytes)
-    # This maybe needed because the shape the array was saved with is smaller
-    # than the requested shape of the array in which it will be reloaded. So
-    # the extra values will be filled with 0s.
-    out = np.zeros(new_shard_shape, dtype=t.dtype.numpy_dtype)
-    await ts.array(out)[ts.d[:].translate_to[requested_domain.origin]][
-        restricted_domain].write(t[restricted_domain])
-    if dtype is not None:
-      # Cast while reloading on process to avoid 2 copies on device if the
-      # casting is done on device.
-      out = out.astype(dtype)
-    # Convert to jnp array so that layouts are initialized properly for
-    # sub-byte dtypes.
-    # TODO(yashkatariya): This is a band-aid fix. Figure out a better way to
-    # make this work.
-    if out.dtype == jnp.int4:
-      out = jnp.asarray(out)  # type: ignore
-    result = jax.device_put(
-        out, Layout(dll, jax.sharding.SingleDeviceSharding(device)))
-    if byte_limiter is not None:
-      # NB: `out` actually might not be ready for garbage collection by the
-      # time we call release_bytes . Thus peak memory usage still might grow
-      # beyond what byte_limiter limit suggests it should. The simplest option
-      # would be to call  `result.block_until_ready()`` here. However it
-      # also comes with ~15-20% perf penalty as we would be waiting for CPU->GPU
-      # transfer instead of loading data. In the future, if memory pressure
-      # becomes a problem, we can instead instrument  bytelimiter to
-      # keep track of all in-flight tensors and only block_until_ready, if byte
-      # limiter hits the limit to get reduced memory usage, without losing
-      # performance in common use cases.
-      await byte_limiter.release_bytes(requested_bytes)
-    return result
-
-  return await create_async_array_from_callback(tuple(shape), in_sharding, cb)
+  return await create_async_array_from_callback(
+      tuple(shape),
+      in_sharding,
+      partial(
+          _read_array_index_callback,
+          t=t,
+          dll=dll,
+          shape=shape,
+          new_shard_shape=new_shard_shape,
+          dtype=dtype,
+          byte_limiter=byte_limiter,
+      ),
+  )
 
 
 def run_deserialization(shardings: Sequence[sharding.Sharding | Layout],
