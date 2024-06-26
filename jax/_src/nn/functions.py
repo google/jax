@@ -801,11 +801,9 @@ def _dot_product_attention_xla(
 
   # Mask
   if mask is not None:
-    if mask.dtype == jnp.bool_:
-      large_negative_number = _get_large_negative(logits.dtype)
-      padded_logits = jnp.where(mask, logits, large_negative_number)
-    else:
-      padded_logits = logits + mask
+    assert mask.dtype == jnp.bool_
+    large_negative_number = _get_large_negative(logits.dtype)
+    padded_logits = jnp.where(mask, logits, large_negative_number)
   else:
     padded_logits = logits
 
@@ -859,13 +857,10 @@ def dot_product_attention(
     value: value array; shape :code:`(BSNH)`
     bias: optional, bias array to be added to logits; shape broadcastable to
           :code:`(BNTS)`.
-    mask: optional, mask array used to filter out logits. Two types of masks are
-          supported. (1) A boolean mask where `True` indicates the element
-          should take part in attention; (2) A float mask of the same type as
-          query that will be added to the attention score, meaning 0. represents
-          `True` and a large negative number 
-          (e.g. :code:`-0.5 * jnp.finfo(dtype).max`) represents `False`. The
-          shape is broadcastable to :code:`(BNTS)`.
+    mask: optional, mask array used to filter out logits. It is a boolean mask
+          where `True` indicates the element should take part in attention. For
+          an additive mask, users should pass it to `bias`. The shape is
+          broadcastable to :code:`(BNTS)`.
     scale: scale for the logits. If None, the scale will be set to 1 divided by
            the square root of query's head dimension (i.e. H).
     is_causal: If true, causal attention will be applied. Note, some
@@ -875,10 +870,13 @@ def dot_product_attention(
     implementation: A string to control which implementation to use. Supported
                     strings are `xla` (default), `cudnn` (cuDNN flash
                     attention).
+    return_probs: If True, then return a `(out, probs)` tuple, where `out` is
+                  the attention output and `probs` is the softmax result.
 
   Returns:
-    An array with the same shape of :code:`query`. If flash attention is not
-    used, the `probs` array will also be returned.
+    An array of the attention output with the same shape of :code:`query`; Or a
+    tuple of the attention output and the intermediate softmax result if
+    `return_probs` is True.
   """
   def _assert_has_shape(t: ArrayLike, shape: Sequence[int]) -> None:
     assert t.ndim == len(shape)
@@ -897,7 +895,7 @@ def dot_product_attention(
   scale_val = (1.0 / np.sqrt(H)) if scale is None else scale
   assert query.dtype == key.dtype == value.dtype
   if mask is not None:
-    assert mask.dtype == query.dtype or mask.dtype == jnp.bool_
+    assert mask.dtype == query.dtype and mask.dtype == jnp.bool_
   if implementation != 'cudnn':
     assert (
         not return_probs

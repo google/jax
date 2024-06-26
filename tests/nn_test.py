@@ -137,7 +137,8 @@ class NNFunctionsTest(jtu.JaxTestCase):
 
     # Test cudnn with user-provided causal mask
     causal_mask = _get_causal_mask(T, Q.dtype)
-    out_ans = sdpa(Q, K, V, bias, causal_mask, implementation='cudnn')
+    combined_bias = (bias + causal_mask) if use_bias else causal_mask
+    out_ans = sdpa(Q, K, V, combined_bias, implementation='cudnn')
     self.assertAllClose(out_ref, out_ans, atol=atol)
 
   @parameterized.parameters([
@@ -173,7 +174,8 @@ class NNFunctionsTest(jtu.JaxTestCase):
     # Test cudnn with user-provided causal mask
     sdpa_cudnn1 = partial(sdpa, implementation='cudnn', is_causal=False)
     causal_mask = _get_causal_mask(T, Q.dtype)
-    _, sdpa_vjp_cudnn1 = jax.vjp(sdpa_cudnn1, Q, K, V, bias, causal_mask)
+    combined_bias = (bias + causal_mask) if use_bias else causal_mask
+    _, sdpa_vjp_cudnn1 = jax.vjp(sdpa_cudnn1, Q, K, V, combined_bias, None)
 
     rtol, atol = (.02, .02)
     sdpa_fns = [sdpa_vjp_cudnn0, sdpa_vjp_cudnn1]
@@ -182,7 +184,8 @@ class NNFunctionsTest(jtu.JaxTestCase):
       self.assertAllClose(dQ_ref, dQ_ans, rtol=rtol, atol=atol)
       self.assertAllClose(dK_ref, dK_ans, rtol=rtol, atol=atol)
       self.assertAllClose(dV_ref, dV_ans, rtol=rtol, atol=atol)
-      self.assertAllClose(dbias_ref, dbias_ans, rtol=0.04, atol=atol)
+      if use_bias:
+        self.assertAllClose(dbias_ref, dbias_ans, rtol=0.04, atol=atol)
 
   @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def testSoftplusGrad(self):
