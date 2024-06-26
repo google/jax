@@ -85,7 +85,7 @@ class LRUCacheTest(LRUCacheTestCase):
     time.sleep(1)
     cache.get("b")
 
-    # write `c`, evict `a`
+    # write `c`. `a` should be evicted
     cache.put("c", b"c")
     self.assertEqual(set(self.path.glob(f"*{_CACHE_SUFFIX}")), {self.path / f"b{_CACHE_SUFFIX}", self.path / f"c{_CACHE_SUFFIX}"})
 
@@ -93,7 +93,7 @@ class LRUCacheTest(LRUCacheTestCase):
     time.sleep(1)
     cache.get("b")
 
-    # write `d`, evict `c`
+    # write `d`. `c` should be evicted
     cache.put("d", b"d")
     self.assertEqual(set(self.path.glob(f"*{_CACHE_SUFFIX}")), {self.path / f"b{_CACHE_SUFFIX}", self.path / f"d{_CACHE_SUFFIX}"})
 
@@ -136,7 +136,7 @@ class LRUCacheTest(LRUCacheTestCase):
     time.sleep(1)
     cache.get("a")
 
-    # write `c`, evict `b`
+    # write `c`. `b` should be evicted
     cache.put("c", b"c")
     self.assertEqual(set(self.path.glob(f"*{_CACHE_SUFFIX}")), {self.path / f"a{_CACHE_SUFFIX}", self.path / f"c{_CACHE_SUFFIX}"})
 
