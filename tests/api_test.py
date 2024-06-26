@@ -931,7 +931,7 @@ class JitTest(jtu.BufferDonationTestCase):
 
   def test_jit_wrapped_attributes(self):
     def f(x: int) -> int:
-      """docstring of f."""
+      """Docstring of f."""
       return x + 1
     f.some_value = 4
     jf = jit(f)

@@ -133,7 +133,8 @@ def flatten_fun_nokwargs2(in_tree, *args_flat):
 class _HashableWithStrictTypeEquality:
   """Box object used when comparing static arguments as a jit key.
 
-  Requires exact type equality using `is` and value equality."""
+  Requires exact type equality using `is` and value equality.
+  """
   __slots__ = ["val"]
 
   def __init__(self, val):
@@ -254,7 +255,7 @@ def _ensure_inbounds(allow_invalid: bool, num_args: int, argnums: Sequence[int]
 
 def argnums_partial_except(f: lu.WrappedFun, static_argnums: tuple[int, ...],
                            args: tuple[Any, ...], *, allow_invalid: bool):
-  "Version of ``argnums_partial`` that checks hashability of static_argnums."
+  """Version of ``argnums_partial`` that checks hashability of static_argnums."""
   if not static_argnums:
     return f, args
   static_argnums = _ensure_inbounds(allow_invalid, len(args), static_argnums)
@@ -667,7 +668,7 @@ def _arg_names(fn_signature, args, kwargs, static_argnums, static_argnames,
 
 @lu.transformation_with_aux
 def result_paths(*args, **kwargs):
-  "linear_util transform to get output pytree paths of pre-flattened function."
+  """linear_util transform to get output pytree paths of pre-flattened function."""
   ans = yield args, kwargs
   yield ans, [keystr(path) for path, _ in generate_key_paths(ans)]
 
@@ -687,7 +688,7 @@ def jaxpr_debug_info(jaxpr: core.Jaxpr, trace_debug: TracingDebugInfo | None,
 
 def debug_info_final(f: lu.WrappedFun, dbg: TracingDebugInfo | None,
                      res_paths: Callable[[], tuple[str, ...]]) -> lu.WrappedFun:
-  "Attach trace-time debug info and result paths lazy thunk to an lu.WrappedFun"
+  """Attach trace-time debug info and result paths lazy thunk to an lu.WrappedFun"""
   if dbg is None: return f
   assert dbg.result_paths is None
   res_paths_ = HashableFunction(res_paths, closure=())

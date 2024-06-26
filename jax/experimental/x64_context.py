@@ -38,9 +38,8 @@ def enable_x64(new_val: bool = True):
     ...
     float64
 
-  See Also
-  --------
-  jax.experimental.enable_x64 : temporarily enable X64 mode.
+  See also:
+    :func:`jax.experimental.enable_x64`
   """
   with config.enable_x64(new_val):
     yield
@@ -57,9 +56,8 @@ def disable_x64():
     ...
     float32
 
-  See Also
-  --------
-  jax.experimental.enable_x64 : temporarily enable X64 mode.
+  See also:
+    :func:`jax.experimental.enable_x64`
   """
   with config.enable_x64(False):
     yield

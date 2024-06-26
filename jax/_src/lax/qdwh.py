@@ -56,7 +56,7 @@ def _pad_in_dim(x, low=0, high=0, interior=0, fill_value=0, axis=0):
   return lax.pad(x, jnp.array(fill_value, x.dtype), pads)
 
 def _dynamic_concat(a, b, m, axis=0):
-  "Concatenates padded arrays `a` and `b` where the true size of `a` is `m`."
+  """Concatenates padded arrays `a` and `b` where the true size of `a` is `m`."""
   if m is None:
     return jnp.concatenate([a, b], axis=axis)
   return lax.dynamic_update_slice_in_dim(
@@ -114,7 +114,6 @@ def _use_cholesky(u, m, n, params):
 
 def _qdwh(x, m, n, max_iterations, eps):
   """QR-based dynamically weighted Halley iteration for polar decomposition."""
-
   # Estimates `alpha` and `beta = alpha * l`, where `alpha` is an estimate of
   # norm(x, 2) such that `alpha >= norm(x, 2)` and `beta` is a lower bound for
   # the smallest singular value of x.

@@ -654,7 +654,6 @@ def make_array_from_callback(
     A ``jax.Array`` via data fetched from ``data_callback``.
 
   Examples:
-
     >>> import math
     >>> from jax.sharding import Mesh
     >>> from jax.sharding import PartitionSpec as P
@@ -923,7 +922,6 @@ def make_array_from_single_device_arrays(
       contents matching ``arrays``.
 
   Examples:
-
     In this single-process example, we use ``make_array_from_single_device_arrays`` to create an
     a global array.
 

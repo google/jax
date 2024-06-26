@@ -336,6 +336,7 @@ def resize(image, shape: core.Shape, method: str | ResizeMethod,
       string. Available methods are: LINEAR, LANCZOS3, LANCZOS5, CUBIC.
     antialias: should an antialiasing filter be used when downsampling? Defaults
       to ``True``. Has no effect when upsampling.
+
   Returns:
     The resized image.
   """

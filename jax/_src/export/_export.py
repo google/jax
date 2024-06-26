@@ -95,6 +95,7 @@ class DisabledSafetyCheck:
     """Allows the serialization of a call target not known to be stable.
 
     Has effect only on serialization.
+
     Args:
       target_name: the name of the custom call target to allow.
     """

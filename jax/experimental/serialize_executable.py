@@ -46,7 +46,6 @@ def deserialize_and_load(serialized,
                          out_tree,
                          backend: str | xc.Client | None = None):
   """Constructs a jax.stages.Compiled from a serialized executable."""
-
   if backend is None or isinstance(backend, str):
     backend = jax.devices(backend)[0].client
 

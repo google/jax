@@ -461,13 +461,15 @@ class SerializationImpl:
   def before_conversion(self):
     """Called in the resulting TF function, before any other method.
 
-    Useful to set any global context."""
+    Useful to set any global context.
+    """
     raise NotImplementedError
 
   def after_conversion(self):
     """Called in the resulting TF function, after conversion is done.
 
-    Useful to restore any global context set up by `before_conversion`."""
+    Useful to restore any global context set up by `before_conversion`.
+    """
     raise NotImplementedError
 
   def run_fun_tf(self,
@@ -1056,7 +1058,6 @@ def _jax_physical_dtype(dtype):
 
 
 def _aval_to_tf_shape(aval: core.ShapedArray) -> tuple[int | None, ...]:
-
   """Generate a TF shape, possibly containing None for polymorphic dimensions."""
   aval = _jax_physical_aval(aval)
   return tuple(map(lambda d: None if export.is_symbolic_dim(d) else d,
@@ -1176,7 +1177,8 @@ def _ensure_tf_shape_if_dynamic(x: TfVal, shape):
 
 def _assert_matching_abstract_shape(x: TfVal, shape: Sequence[shape_poly.DimSize]):
   """Asserts that shape matches x.shape in the known dimensions and has
-  dimension polynomials elsewhere."""
+  dimension polynomials elsewhere.
+  """
   # Ensures that the shape does not contain None; it should contain symbolic expressions.
   def check_one(xd: int | None, sd: Any):
     if core.is_constant_dim(sd):

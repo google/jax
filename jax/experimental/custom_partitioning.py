@@ -300,7 +300,6 @@ class custom_partitioning:
   :code:`inspect.signature(fun)` to resolve these positional arguments.
 
   Examples:
-
     As an example, assume we want to enhance the existing ``jax.numpy.fft.fft``. This function computes
     the discrete Fourier transform of an N-dimensional input along the last dimension, and is batched
     along the first N-1 dimensions.

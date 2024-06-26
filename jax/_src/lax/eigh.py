@@ -80,6 +80,7 @@ def _slice(operand, start_indices, dynamic_slice_sizes, static_slice_sizes,
     static_slice_sizes: the padded size of the slice, which must be known at
       compile time. The static size must be larger than the dynamic size.
     fill_value: value with which to replace masked-out elements.
+
   Returns:
     An array with static shape `static_slice_sizes`, padded from its true
     (dynamic) size `dynamic_slice_sizes`.
@@ -99,11 +100,12 @@ def _update_slice(operand, update, start_indices, update_dims):
   values should not overwrite existing values in the array.
 
   Args:
-  operand: the array to update
-  update: the padded array to write
-  start_indices: the offset at which to write `update`.
-  update_dims: the true dimensions of the padded update `update`. Only values
-    inside the rectangle given by `update_dims` will be overwritten."""
+    operand: the array to update
+    update: the padded array to write
+    start_indices: the offset at which to write `update`.
+    update_dims: the true dimensions of the padded update `update`. Only values
+      inside the rectangle given by `update_dims` will be overwritten.
+  """
   operand_shape = operand.shape
   operand = lax.pad(operand,
                     jnp.array(0, operand.dtype),
@@ -187,7 +189,7 @@ def _projector_subspace(P, H, n, rank, maxiter=2, swap=False):
 
 
 def split_spectrum(H, n, split_point, V0=None):
-  """ The Hermitian matrix `H` is split into two matrices `H_minus`
+  """The Hermitian matrix `H` is split into two matrices `H_minus`
   `H_plus`, respectively sharing its eigenspaces beneath and above
   its `split_point`th eigenvalue.
 
@@ -200,6 +202,7 @@ def split_spectrum(H, n, split_point, V0=None):
     H: The Hermitian matrix to split.
     split_point: The eigenvalue to split along.
     V0: Matrix of isometries to be updated.
+
   Returns:
     H_minus: A Hermitian matrix sharing the eigenvalues of `H` beneath
       `split_point`.
@@ -287,7 +290,7 @@ class _Subproblem(NamedTuple):
 
 @partial(jax.jit, static_argnames=('termination_size', 'subset_by_index'))
 def _eigh_work(H, n, termination_size, subset_by_index):
-  """ The main work loop performing the symmetric eigendecomposition of H.
+  """The main work loop performing the symmetric eigendecomposition of H.
   Each step recursively computes a projector into the space of eigenvalues
   above jnp.mean(jnp.diag(H)). The result of the projections into and out of
   that space, along with the isometries accomplishing these, are then computed.

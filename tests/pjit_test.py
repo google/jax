@@ -1467,7 +1467,6 @@ class CustomPartitionerTest(jtu.JaxTestCase):
     This test is makes sure that the custom partitioner lowering supports
     CallOps.
     """
-
     self.skip_if_custom_partitioning_not_supported()
 
     @custom_partitioning

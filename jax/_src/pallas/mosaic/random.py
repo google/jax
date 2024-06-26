@@ -38,7 +38,6 @@ SUPPORTED_CONVERSION_KEYS = ["rbg", "unsafe_rbg", "pallas_tpu"]
 
 def to_pallas_key(key: jax_prng.PRNGKeyArray) -> jax_prng.PRNGKeyArray:
   """Helper function for converting non-Pallas PRNG keys into Pallas keys."""
-
   # Only allow conversion from RBG -> Pallas keys.
   # There is no technical reason why we cannot support Threefry here, but
   # this reduces the chance of unintended behavior where the pallas PRNG

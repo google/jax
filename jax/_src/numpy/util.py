@@ -281,7 +281,8 @@ def promote_dtypes(*args: ArrayLike) -> list[Array]:
 def promote_dtypes_inexact(*args: ArrayLike) -> list[Array]:
   """Convenience function to apply Numpy argument dtype promotion.
 
-  Promotes arguments to an inexact type."""
+  Promotes arguments to an inexact type.
+  """
   to_dtype, weak_type = dtypes._lattice_result_type(*args)
   to_dtype = dtypes.canonicalize_dtype(to_dtype, allow_extended_dtype=True)  # type: ignore[assignment]
   to_dtype_inexact = dtypes.to_inexact_dtype(to_dtype)
@@ -292,7 +293,8 @@ def promote_dtypes_inexact(*args: ArrayLike) -> list[Array]:
 def promote_dtypes_numeric(*args: ArrayLike) -> list[Array]:
   """Convenience function to apply Numpy argument dtype promotion.
 
-  Promotes arguments to a numeric (non-bool) type."""
+  Promotes arguments to a numeric (non-bool) type.
+  """
   to_dtype, weak_type = dtypes._lattice_result_type(*args)
   to_dtype = dtypes.canonicalize_dtype(to_dtype)
   to_dtype_numeric = dtypes.to_numeric_dtype(to_dtype)
@@ -303,7 +305,8 @@ def promote_dtypes_numeric(*args: ArrayLike) -> list[Array]:
 def promote_dtypes_complex(*args: ArrayLike) -> list[Array]:
   """Convenience function to apply Numpy argument dtype promotion.
 
-  Promotes arguments to a complex type."""
+  Promotes arguments to a complex type.
+  """
   to_dtype, weak_type = dtypes._lattice_result_type(*args)
   to_dtype = dtypes.canonicalize_dtype(to_dtype)
   to_dtype_complex = dtypes.to_complex_dtype(to_dtype)
@@ -391,7 +394,8 @@ def promote_args_numeric(fun_name: str, *args: ArrayLike) -> list[Array]:
 def promote_args_inexact(fun_name: str, *args: ArrayLike) -> list[Array]:
   """Convenience function to apply Numpy argument shape and dtype promotion.
 
-  Promotes non-inexact types to an inexact type."""
+  Promotes non-inexact types to an inexact type.
+  """
   check_arraylike(fun_name, *args)
   _check_no_float0s(fun_name, *args)
   check_for_prngkeys(fun_name, *args)

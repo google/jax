@@ -120,17 +120,15 @@ class Config:
     need JAX flags.
 
     Examples:
+      .. code-block:: python
 
-    ```python
-    from absl import app
-    import jax
-    ...
+        from absl import app
+        import jax
+        ...
 
-    if __name__ == '__main__':
-      jax.config.config_with_absl()
-      app.run(main)
-    ```
-
+        if __name__ == '__main__':
+          jax.config.config_with_absl()
+          app.run(main)
     """
     import absl.flags as absl_FLAGS  # noqa: F401  # pytype: disable=import-error
     from absl import app, flags as absl_flags  # pytype: disable=import-error
@@ -317,7 +315,8 @@ class State(Generic[_T]):
   def _add_hooks(self, update_global_hook, update_thread_local_hook):
     """Private method that adds hooks to an existing context-manager.
 
-    Used to avoid cyclic import dependencies."""
+    Used to avoid cyclic import dependencies.
+    """
     self._update_thread_local_hook = update_thread_local_hook
     self._update_global_hook = update_global_hook
     update_global_hook(self._value)
@@ -373,7 +372,6 @@ def bool_state(
     A contextmanager to control the thread-local state value.
 
   Examples:
-
     ENABLE_FOO = config.bool_state(
         name='jax_enable_foo',
         default=False,

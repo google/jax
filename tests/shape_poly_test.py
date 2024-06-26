@@ -1215,6 +1215,25 @@ class PolyHarness(Harness):
 
   Exports `fun` with shape polymorphism, then checks that the JAX native and
   the exported function produce the same results.
+
+  Args:
+    group_name, name: The name for the harness. See `Harness.__init__`.
+    fun: the function to be converted. See `Harness.__init__`.
+    arg_descriptors: The argument descriptors. See `Harness.__init__`.
+    polymorphic_shapes: For `export.args_specs`.
+    symbolic_constraints: For `export.args_specs`.
+    expect_error: an optional pair of an Exception type and a regular
+      expression to match the expected exception string.
+      We expect this error during tracing and exporting with shape
+      polymorphism.
+    check_result: specifies if we want to check that the result of invoking
+      the shape polymorphic export produces the same result as the
+      native JAX function.
+    tol: the tolerance to use for checking results.
+    limitations: a sequence of Limitation(s), used for obtaining the default
+      tolerance (if `tol` is not specified).
+    override_jax_config_flags: jax.config flags to override for the duration
+      of the test.
   """
   def __init__(self,
                group_name: str, name: str,
@@ -1228,26 +1247,6 @@ class PolyHarness(Harness):
                tol: float | None = None,
                limitations: Sequence[test_harnesses.Limitation] = (),
                override_jax_config_flags: dict[str, Any] = {}):
-    """Args:
-
-      group_name, name: The name for the harness. See `Harness.__init__`.
-      fun: the function to be converted. See `Harness.__init__`.
-      arg_descriptors: The argument descriptors. See `Harness.__init__`.
-      polymorphic_shapes: For `export.args_specs`.
-      symbolic_constraints: For `export.args_specs`.
-      expect_error: an optional pair of an Exception type and a regular
-        expression to match the expected exception string.
-        We expect this error during tracing and exporting with shape
-        polymorphism.
-      check_result: specifies if we want to check that the result of invoking
-        the shape polymorphic export produces the same result as the
-        native JAX function.
-      tol: the tolerance to use for checking results.
-      limitations: a sequence of Limitation(s), used for obtaining the default
-        tolerance (if `tol` is not specified).
-      override_jax_config_flags: jax.config flags to override for the duration
-        of the test.
-    """
     super().__init__(group_name, name, fun, arg_descriptors,
                      dtype=np.float32)
     self.polymorphic_shapes = polymorphic_shapes
@@ -1402,7 +1401,6 @@ class ShapePolyTest(jtu.JaxTestCase):
 
   def test_kwargs(self):
     """Test shape polymorphism for a function with kwargs."""
-
     x = np.ones(3, dtype=np.float32)
     y = np.ones(1, dtype=np.float32)
     def f_jax(x, *, y):
@@ -1508,7 +1506,6 @@ class ShapePolyTest(jtu.JaxTestCase):
   )
   def test_pytree_errors(self, polymorphic_shapes=("b", "b", "b")):
     """Arguments and polymorphic_shapes are not-matching pytrees."""
-
     # Arguments are of the form [([x00, x01], [x10]), dict(a=ya, b=yb)]
     x = np.arange(4, dtype=_f32)
     args = (([x, x], [x]), dict(a=x, b=x))

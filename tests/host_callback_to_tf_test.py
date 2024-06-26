@@ -45,7 +45,8 @@ def call_tf_no_ad(tf_fun: Callable, arg, *, result_shape):
   """The simplest implementation of calling to TF, without AD support.
 
   We must use hcb.call because the TF invocation must happen outside the
-  JAX staged computation."""
+  JAX staged computation.
+  """
 
   def tf_to_numpy(t):
     # Turn the Tensor to NumPy array without copying.

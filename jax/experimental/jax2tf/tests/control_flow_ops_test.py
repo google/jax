@@ -67,7 +67,8 @@ class ControlFlowOpsTest(tf_test_util.JaxToTfTestCase):
                       message="Explicitly requested dtype .* requested in array is not available")
   def test_cond_custom_jvp(self):
     """Conversion of function with custom JVP, inside cond.
-    This exercises the custom_jvp_call_jaxpr primitives."""
+    This exercises the custom_jvp_call_jaxpr primitives.
+    """
     @jax.custom_jvp
     def f(x):
       return x * x
@@ -95,7 +96,8 @@ class ControlFlowOpsTest(tf_test_util.JaxToTfTestCase):
                       message="Explicitly requested dtype .* requested in array is not available")
   def test_cond_custom_vjp(self):
     """Conversion of function with custom VJP, inside cond.
-    This exercises the custom_vjp_call_jaxpr primitives."""
+    This exercises the custom_vjp_call_jaxpr primitives.
+    """
     @jax.custom_vjp
     def f(x):
       return x * x
@@ -182,7 +184,8 @@ class ControlFlowOpsTest(tf_test_util.JaxToTfTestCase):
                       message="Explicitly requested dtype .* requested in array is not available")
   def test_while_custom_jvp(self):
     """Conversion of function with custom JVP, inside while.
-    This exercises the custom_jvp_call_jaxpr primitives."""
+    This exercises the custom_jvp_call_jaxpr primitives.
+    """
     @jax.custom_jvp
     def f(x):
       return x * x
@@ -233,7 +236,8 @@ class ControlFlowOpsTest(tf_test_util.JaxToTfTestCase):
 
   def test_scan_custom_jvp(self):
     """Conversion of function with custom JVP, inside scan.
-    This exercises the custom_jvp_call_jaxpr primitives."""
+    This exercises the custom_jvp_call_jaxpr primitives.
+    """
     @jax.custom_jvp
     def f(x):
       return x * x
@@ -261,7 +265,8 @@ class ControlFlowOpsTest(tf_test_util.JaxToTfTestCase):
 
   def test_scan_custom_vjp(self):
     """Conversion of function with custom VJP, inside scan.
-    This exercises the custom_vjp_call_jaxpr primitives."""
+    This exercises the custom_vjp_call_jaxpr primitives.
+    """
     @jax.custom_vjp
     def f(x):
       return x * x

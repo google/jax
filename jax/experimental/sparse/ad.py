@@ -82,7 +82,6 @@ def value_and_grad(fun: Callable, argnums: int | Sequence[int] = 0,
   gradient is computed in the subspace defined by the array's sparsity pattern.
 
   Examples:
-
     >>> from jax.experimental import sparse
     >>> X = sparse.BCOO.fromdense(jnp.arange(6.))
     >>> y = jnp.ones(6)
@@ -110,7 +109,6 @@ def grad(fun: Callable, argnums: int | Sequence[int] = 0,
   gradient is computed in the subspace defined by the array's sparsity pattern.
 
   Examples:
-
     >>> from jax.experimental import sparse
     >>> X = sparse.BCOO.fromdense(jnp.arange(6.))
     >>> y = jnp.ones(6)

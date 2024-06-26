@@ -68,7 +68,6 @@ def _svd_tall_and_square_input(
     order, `v` is a unitary matrix of shape `n x n`, and
     `a = (u * s) @ v.T.conj()`. For `compute_uv=False`, only `s` is returned.
   """
-
   u_p, h, _, _ = lax.linalg.qdwh(
       a, is_hermitian=hermitian, max_iterations=max_iterations
   )

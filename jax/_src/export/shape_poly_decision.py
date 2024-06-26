@@ -151,7 +151,7 @@ class _DecisionByElimination:
                    cmp: Comparator,
                    e: _DimExpr,
                    debug_str: str | None):
-    """Updates the internal state to reflect "e >= 0". """
+    """Updates the internal state to reflect "e >= 0"."""
     assert _DimExpr._to_constant(e) is None
 
     if (term_factors := e._to_single_term()) is not None:

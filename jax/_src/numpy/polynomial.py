@@ -129,14 +129,14 @@ def polyfit(x: ArrayLike, y: ArrayLike, deg: int, rcond: float | None = None,
 
   .. math::
 
-	   y = p(x) = p[0] x^{deg} + p[1] x^{deg - 1} + ... + p[deg]
+      y = p(x) = p[0] x^{deg} + p[1] x^{deg - 1} + ... + p[deg]
 
   Args:
     x: Array of data points of shape ``(M,)``.
     y: Array of data points of shape ``(M,)`` or ``(M, K)``.
     deg: Degree of the polynomials. It must be specified statically.
     rcond: Relative condition number of the fit. Default value is ``len(x) * eps``.
-       It must be specified statically.
+      It must be specified statically.
     full: Switch that controls the return value. Default is ``False`` which
       restricts the return value to the array of polynomail coefficients ``p``.
       If ``True``, the function returns a tuple ``(p, resids, rank, s, rcond)``.
@@ -302,7 +302,6 @@ def poly(seq_of_zeros: ArrayLike) -> Array:
     output is always promoted to inexact.
 
   Note:
-
     :func:`jax.numpy.poly` differs from :func:`numpy.poly`:
 
     - When the input is a scalar, ``np.poly`` raises a ``TypeError``, whereas
@@ -318,7 +317,6 @@ def poly(seq_of_zeros: ArrayLike) -> Array:
       coefficients.
 
   Example:
-
     Scalar inputs:
 
     >>> jnp.poly(1)
@@ -392,7 +390,6 @@ def polyval(p: ArrayLike, x: ArrayLike, *, unroll: int = 16) -> Array:
     An array of same shape as ``x``.
 
   Note:
-
     The ``unroll`` parameter is JAX specific. It does not affect correctness but
     can have a major impact on performance for evaluating high-order polynomials.
     The parameter controls the number of unrolled steps with ``lax.scan`` inside
@@ -463,7 +460,6 @@ def polyint(p: ArrayLike, m: int = 1, k: int | ArrayLike | None = None) -> Array
     - :func:`jax.numpy.polyval`: Evaluates a polynomial at specific values.
 
   Examples:
-
     The first order integration of the polynomial :math:`12 x^2 + 12 x + 6` is
     :math:`4 x^3 + 6 x^2 + 6 x`.
 
@@ -535,7 +531,6 @@ def polyder(p: ArrayLike, m: int = 1) -> Array:
     - :func:`jax.numpy.polyval`: Evaluates a polynomial at specific values.
 
   Examples:
-
     The first order derivative of the polynomial :math:`2 x^3 - 5 x^2 + 3 x - 1`
     is :math:`6 x^2 - 10 x +3`:
 

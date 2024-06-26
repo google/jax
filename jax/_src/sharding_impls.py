@@ -184,7 +184,6 @@ class NamedSharding(sharding.Sharding):
     spec: A :class:`jax.sharding.PartitionSpec` object.
 
   Examples:
-
     >>> from jax.sharding import Mesh
     >>> from jax.sharding import PartitionSpec as P
     >>> mesh = Mesh(np.array(jax.devices()).reshape(2, 4), ('x', 'y'))
@@ -309,7 +308,6 @@ class SingleDeviceSharding(sharding.Sharding):
     device: A single :py:class:`Device`.
 
   Examples:
-
     >>> single_device_sharding = jax.sharding.SingleDeviceSharding(
     ...     jax.devices()[0])
   """
@@ -1462,7 +1460,6 @@ def local_to_global_shape(
   Returns:
     global_shape with Nones in non-uniform dimensions.
   """
-
   global_shape : list[int | None] = [None] * len(local_shape)
   for i, local_dim in enumerate(local_shape):
     try:

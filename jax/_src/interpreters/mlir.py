@@ -198,7 +198,8 @@ def aval_to_ir_types(aval: core.AbstractValue) -> Sequence[ir.Type]:
   """Converts a JAX aval to zero or more MLIR IR types.
 
   In general, a JAX value may be represented by multiple IR values, so this
-  function returns multiple types."""
+  function returns multiple types.
+  """
   try:
     return ir_type_handlers[type(aval)](aval)
   except KeyError as err:
@@ -213,7 +214,8 @@ def aval_to_ir_type(aval: core.AbstractValue) -> ir.Type:
   """Convenience wrapper around aval_to_ir_types for single types.
 
   For some common cases, e.g. dense arrays, we know JAX values are represented
-  by a single IR value."""
+  by a single IR value.
+  """
   types = aval_to_ir_types(aval)
   if len(types) != 1:
     raise TypeError(f"aval_to_ir_type called on {aval} which corresponds to "
@@ -227,7 +229,8 @@ class ConstantHandler(Protocol):
   def __call__(self, val: Any) -> Sequence[ir.Value]:
     """Builds an IR representation for a constant `val`.
 
-    A JAX value is represented by zero or more IR values."""
+    A JAX value is represented by zero or more IR values.
+    """
 
 _constant_handlers : dict[type, ConstantHandler] = {}
 
@@ -1129,10 +1132,10 @@ def lower_jaxpr_to_fun(
     xla_donated_args: optional sequence of args to set donation annotations.
     api_name: The name of the higher level primitive which should show up in the
       name stack.
+
   Returns:
     MLIR func op
   """
-
   # The first dimension variable may be the platform index
   num_dim_vars = len(ctx.shape_poly_state.dim_vars)
   dim_var_avals = [core.ShapedArray((), dtypes.canonicalize_dtype(np.int64))] * num_dim_vars
@@ -1763,7 +1766,8 @@ def lower_fun(fun: Callable, multiple_results: bool = True) -> Callable:
   """Converts a traceable JAX function `fun` into a lowering rule.
 
   The returned function does not use `avals_out`, so callers may pass any value
-  as `avals_out`."""
+  as `avals_out`.
+  """
   def f_lowered(ctx: LoweringRuleContext, *args, **params):
     f = fun if multiple_results else lambda *args, **kw: (fun(*args, **kw),)
     wrapped_fun = lu.wrap_init(f, params)
@@ -2109,7 +2113,8 @@ def convert_hlo(ctx: LoweringRuleContext, x, aval_in, aval_out):
   """Variant of convert that has HLO semantics.
 
   In particular, treat casts to boolean as x != 0, rather than truncating
-  integer values (b/209440332)."""
+  integer values (b/209440332).
+  """
   if (not dtypes.issubdtype(aval_out.dtype, dtypes.extended) and
       aval_out.dtype == np.dtype(np.bool_)):
     if dtypes.issubdtype(aval_in.dtype, np.inexact):
@@ -2716,7 +2721,6 @@ def reduce_window(
     out_avals: Sequence[core.AbstractValue],
     window_dimensions, window_strides, padding, base_dilation, window_dilation):
   """Builds a ReduceWindowOp, with support for dynamic shapes."""
-
   scalar_types = [aval_to_ir_type(aval) for aval in init_values_avals]
   if any(not core.is_constant_shape(s)
          for s in [window_dimensions, window_dilation, window_strides, base_dilation, *padding]):

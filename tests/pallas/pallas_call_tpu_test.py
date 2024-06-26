@@ -1934,7 +1934,6 @@ class PallasCallWhileLoopTest(PallasTPUTest):
   )
   def test_while_loop_carry_memref(self, shape):
     """Tests a while loop carrying a memref."""
-
     # TODO(hmckenzie): Investigate further why this occurs.
     if shape == (1, 128):
       self.skipTest('memref<1x128> inexplicably doubles to 2x128.')

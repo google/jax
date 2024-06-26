@@ -1102,6 +1102,7 @@ def checkify(f: Callable[..., Out],
       DIV errors by passing the ``float_checks`` set, or for
       example combine multiple sets through set operations
       (``float_checks | user_checks``)
+
   Returns:
     A function which accepts the same arguments as ``fun`` and returns as output
     a pair where the first element is an ``Error`` value, representing the first

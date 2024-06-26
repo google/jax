@@ -317,7 +317,6 @@ def _pad_values_to_avoid_dynamic_slice_oob_shift(value,
 
   unpad=True performs the inverse operation
   """
-
   padding_config = tuple((0, slice_size, 0) for slice_size in slice_sizes)
   if unpad:
     padding_config = tuple((-low, -high, -interior)

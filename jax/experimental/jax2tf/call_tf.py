@@ -120,7 +120,6 @@ def call_tf(
   @jax.custom_vjp
   def make_call(*args_jax):
     """We wrap it all in `make_call` so that we can attach custom VJP."""
-
     args_flat_jax, args_treedef = tree_util.tree_flatten(args_jax)
     # Canonicalize the arguments; e.g., makes them x32 if JAX is in 32-bit mode
     def canonical_arg(v):

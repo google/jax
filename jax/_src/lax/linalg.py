@@ -62,7 +62,7 @@ TFun = TypeVar('TFun', bound=Callable[..., Any])
 # traceables
 
 def cholesky(x: Array, *, symmetrize_input: bool = True) -> Array:
-  """Cholesky decomposition.
+  r"""Cholesky decomposition.
 
   Computes the Cholesky decomposition
 
@@ -102,6 +102,7 @@ def eig(x: ArrayLike, *, compute_left_eigenvectors: bool = True,
     compute_left_eigenvectors: If true, the left eigenvectors will be computed.
     compute_right_eigenvectors: If true, the right eigenvectors will be
       computed.
+
   Returns:
     The eigendecomposition of ``x``, which is a tuple of the form
     ``(w, vl, vr)`` where ``w`` are the eigenvalues, ``vl`` are the left
@@ -684,7 +685,8 @@ def eigh_jacobi(x: ArrayLike, *, lower: bool = True,
                 sort_eigenvalues: bool = True) -> tuple[Array, Array]:
   """Helper Jacobi eigendecomposition implemented by XLA.
 
-  Used as a subroutine of QDWH-eig on TPU."""
+  Used as a subroutine of QDWH-eig on TPU.
+  """
   w, v = eigh_jacobi_p.bind(x, lower=lower, sort_eigenvalues=sort_eigenvalues)
   return w, v
 
@@ -1141,6 +1143,7 @@ def _generic_lu_pivots_to_permutation(swaps, permutation_size):
   Args:
     swaps: an array of shape (..., k) of row swaps to perform
     permutation_size: the size of the output permutation. Should be >= k.
+
   Returns:
     An int32 array of shape (..., m).
   """
@@ -1518,6 +1521,7 @@ def geqrf(a: ArrayLike) -> tuple[Array, Array]:
 
   Args:
     a: an ``[..., m, n]`` batch of matrices, with floating-point or complex type.
+
   Returns:
     An ``(a, taus)`` pair where ``r`` is in the upper triangle of ``a``,
     ``q`` is represented in the lower triangle of ``a`` and in ``taus`` as
@@ -2207,7 +2211,6 @@ def tridiagonal_solve(dl: Array, d: Array, du: Array, b: Array) -> Array:
     A . X = B
 
   Args:
-
     dl: A batch of vectors with shape ``[..., m]``.
       The lower diagonal of A: ``dl[i] := A[i, i-1]`` for i in ``[0,m)``.
       Note that ``dl[0] = 0``.

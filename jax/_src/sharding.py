@@ -133,7 +133,7 @@ class Sharding:
   @functools.cached_property
   def addressable_devices(self) -> set[Device]:
     """The set of devices in the :class:`Sharding` that are addressable by the
-       current process.
+    current process.
     """
     # Add a fast path for single controller runtimes.
     if xb.process_count() == 1:

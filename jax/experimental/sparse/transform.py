@@ -472,7 +472,6 @@ def sparsify(f, use_tracer=False):
   """Experimental sparsification transform.
 
   Examples:
-
     Decorate JAX functions to make them compatible with :class:`jax.experimental.sparse.BCOO`
     matrices:
 

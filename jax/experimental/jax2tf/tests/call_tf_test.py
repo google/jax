@@ -861,7 +861,7 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
 
 
 class RoundTripToJaxTest(tf_test_util.JaxToTfTestCase):
-  "Reloading output of jax2tf into JAX with call_tf"
+  """Reloading output of jax2tf into JAX with call_tf"""
   def setUp(self):
     if tf is None:
       raise unittest.SkipTest("Test requires tensorflow")
@@ -1138,7 +1138,7 @@ class RoundTripToJaxTest(tf_test_util.JaxToTfTestCase):
 
 
 class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
-  "Reloading output of call_tf into TF with jax2tf."
+  """Reloading output of call_tf into TF with jax2tf."""
 
   def setUp(self):
     if tf is None:
@@ -1463,7 +1463,7 @@ class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
 
   @classmethod
   def _walk_stablehlo_operations(cls, op, cb):
-    """walk the stablehlo operation recursive with callback function."""
+    """Walk the stablehlo operation recursive with callback function."""
     cb(op)
     for region in op.operation.regions:
       for block in region:

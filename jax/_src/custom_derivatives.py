@@ -181,7 +181,6 @@ class custom_jvp(Generic[ReturnValue]):
       None.
 
     Examples:
-
       @jax.custom_jvp
       def f(x, y):
         return jnp.sin(x) * y
@@ -213,7 +212,6 @@ class custom_jvp(Generic[ReturnValue]):
       None.
 
     Examples:
-
       @jax.custom_jvp
       def f(x, y):
         return jnp.sin(x) * y
@@ -568,7 +566,6 @@ class custom_vjp(Generic[ReturnValue]):
       None.
 
     Examples:
-
       @jax.custom_vjp
       def f(x, y):
         return jnp.sin(x) * y
@@ -1077,7 +1074,9 @@ def closure_convert(fun: Callable, *example_args) -> tuple[Callable, list[Any]]:
 
   The function ``fun`` must be a pure function.
 
-  Example usage::
+  For example,
+
+  .. code-block:: python
 
     def minimize(objective_fn, x0):
       converted_fn, aux_args = closure_convert(objective_fn, x0)

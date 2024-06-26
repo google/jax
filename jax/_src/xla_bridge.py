@@ -320,7 +320,6 @@ def _check_cuda_versions(raise_on_first_error: bool = False,
       RuntimeError: If the component is not found, or is of unsupported version,
         and if raising the error is not deferred till later.
     """
-
     build_version = get_build_version()
     try:
       version = get_version()
@@ -802,7 +801,7 @@ def is_gpu(platform):
 
 
 def backends_are_initialized() -> bool:
-  "Returns true if backends have already been initialized."
+  """Returns true if backends have already been initialized."""
   with _backend_lock:
     return len(_backends) != 0
 

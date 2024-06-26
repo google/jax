@@ -338,7 +338,8 @@ def cos(x: ArrayLike) -> Array:
 
 def atan2(x: ArrayLike, y: ArrayLike) -> Array:
   r"""Elementwise arc tangent of two variables:
-    :math:`\mathrm{atan}({x \over y})`."""
+  :math:`\mathrm{atan}({x \over y})`.
+  """
   return atan2_p.bind(x, y)
 
 def real(x: ArrayLike) -> Array:
@@ -453,14 +454,16 @@ def max(x: ArrayLike, y: ArrayLike) -> Array:
   r"""Elementwise maximum: :math:`\mathrm{max}(x, y)`
 
   For complex numbers, uses a lexicographic comparison on the
-  `(real, imaginary)` pairs."""
+  `(real, imaginary)` pairs.
+  """
   return max_p.bind(x, y)
 
 def min(x: ArrayLike, y: ArrayLike) -> Array:
   r"""Elementwise minimum:  :math:`\mathrm{min}(x, y)`
 
   For complex numbers, uses a lexicographic comparison on the
-  `(real, imaginary)` pairs."""
+  `(real, imaginary)` pairs.
+  """
   return min_p.bind(x, y)
 
 def shift_left(x: ArrayLike, y: ArrayLike) -> Array:
@@ -991,6 +994,7 @@ def select_n(which: ArrayLike, *cases: ArrayLike) -> Array:
       implementation-defined.
     *cases: a non-empty list of array cases. All must have equal dtypes and
       equal shapes.
+
   Returns:
     An array with shape and dtype equal to the cases, whose values are chosen
     according to ``which``.
@@ -1724,7 +1728,8 @@ standard_naryop = partial(naryop, _input_dtype)
 def _broadcast_translate(op, ctx, avals_in, avals_out, *args):
   """Variant of _standard_translate that performs explicit broadcasting.
 
-  Not all XLA library functions perform their own broadcasting."""
+  Not all XLA library functions perform their own broadcasting.
+  """
   aval_out, = avals_out
   broadcasted_args = []
   for aval_in, arg in zip(avals_in, args):
@@ -4479,7 +4484,8 @@ mlir.register_lowering(create_token_p, _create_token_lowering)
 def after_all(*operands):
   """Merges one or more XLA token values. Experimental.
 
-  Wraps the XLA AfterAll operator."""
+  Wraps the XLA AfterAll operator.
+  """
   return after_all_p.bind(*operands)
 
 def _after_all_abstract_eval(*operands):
@@ -4932,7 +4938,6 @@ class PaddingType(enum.Enum):
 
 def padtype_to_pads(in_shape, window_shape, window_strides, padding):
   """Convert padding string to list of pairs of pad values."""
-
   if isinstance(padding, str):
     mapping = {
         'VALID': PaddingType.VALID,

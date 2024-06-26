@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License
 
-""" Special functions
+"""Special functions
 
 LAX decompositions for special functions into their StableHLO counterparts.
 """
@@ -91,7 +91,8 @@ def erf(x: ArrayLike) -> Array:
 
 def erfc(x: ArrayLike) -> Array:
   r"""Elementwise complementary error function:
-    :math:`\mathrm{erfc}(x) = 1 - \mathrm{erf}(x)`."""
+  :math:`\mathrm{erfc}(x) = 1 - \mathrm{erf}(x)`.
+  """
   return erfc_p.bind(x)
 
 def erf_inv(x: ArrayLike) -> Array:

@@ -299,18 +299,17 @@ def _convert_and_clip_integer(val: ArrayLike, dtype: DType) -> Array:
   Returns:
     equivalent of val in new dtype
 
-  Examples
-  --------
-  Normal integer type conversion will wrap:
+  Examples:
+    Normal integer type conversion will wrap:
 
-  >>> val = jnp.uint32(0xFFFFFFFF)
-  >>> val.astype('int32')
-  Array(-1, dtype=int32)
+    >>> val = jnp.uint32(0xFFFFFFFF)
+    >>> val.astype('int32')
+    Array(-1, dtype=int32)
 
-  This function clips to the values representable in the new type:
+    This function clips to the values representable in the new type:
 
-  >>> _convert_and_clip_integer(val, 'int32')
-  Array(2147483647, dtype=int32)
+    >>> _convert_and_clip_integer(val, 'int32')
+    Array(2147483647, dtype=int32)
   """
   val = val if isinstance(val, Array) else asarray(val)
   dtype = dtypes.canonicalize_dtype(dtype)
@@ -1066,7 +1065,6 @@ def angle(z: ArrayLike, deg: bool = False) -> Array:
     shape as ``z`` of dtype float.
 
   Examples:
-
     If ``z`` is a number
 
     >>> z1 = 2+3j
@@ -2410,7 +2408,6 @@ def nonzero(a: ArrayLike, *, size: int | None = None,
     - :func:`jax.numpy.where`
 
   Examples:
-
     One-dimensional array returns a length-1 tuple of indices:
 
     >>> x = jnp.array([0, 5, 0, 6, 0, 7])

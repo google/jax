@@ -126,6 +126,7 @@ def empty(shape: Shape, dtype: DTypeLike | None=None, index_dtype: DTypeLike = '
     index_dtype: (optional) dtype of the index arrays.
     format: string specifying the matrix format (e.g. ['bcoo']).
     **kwds: additional keywords passed to the format-specific _empty constructor.
+
   Returns:
     mat: empty sparse matrix.
   """

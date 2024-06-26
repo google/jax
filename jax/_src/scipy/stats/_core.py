@@ -162,7 +162,6 @@ def rankdata(
     array of ranks along the specified axis.
 
   Examples:
-
     >>> x = jnp.array([10, 30, 20])
     >>> rankdata(x)
     Array([1., 3., 2.], dtype=float32)

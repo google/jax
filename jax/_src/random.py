@@ -757,6 +757,7 @@ def multivariate_normal(key: KeyArrayLike,
     method: optional, a method to compute the factor of ``cov``.
       Must be one of 'svd', 'eigh', and 'cholesky'. Default 'cholesky'. For
       singular covariance matrices, use 'svd' or 'eigh'.
+
   Returns:
     A random array with the specified dtype and shape given by
     ``shape + mean.shape[-1:]`` if ``shape`` is not None, or else
@@ -2360,7 +2361,7 @@ def lognormal(key: KeyArrayLike,
               sigma: RealArray = np.float32(1),
               shape: Shape | None = None,
               dtype: DTypeLikeFloat = float) -> Array:
-  r""" Sample lognormal random values with given shape and float dtype.
+  r"""Sample lognormal random values with given shape and float dtype.
 
   The values are distributed according to the probability density function:
 
@@ -2621,7 +2622,6 @@ def clone(key):
   this function operates as an identity.
 
   Examples:
-
     >>> import jax
     >>> key = jax.random.key(0)
     >>> data = jax.random.uniform(key)

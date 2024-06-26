@@ -291,7 +291,6 @@ class CClass(_AxisConcat):
     ``jnp.r_``: Concatenates slices, scalars and array-like objects along the first axis.
 
   Examples:
-
     >>> a = jnp.arange(6).reshape((2,3))
     >>> jnp.c_[a,a]
     Array([[0, 1, 2, 0, 1, 2],

@@ -11,11 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""`jax.experimental.rnn`: GPU accelerated RNN
-
-----------------------------------------------
-
-This module provides experimental support to CUDNN-backed LSTM.
+"""This module provides experimental support to CUDNN-backed LSTM.
 
 Currently, the only supported RNN flavor is LSTM with double-bias. We use
 notations and variable names similar to

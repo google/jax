@@ -23,16 +23,14 @@ initialization and update functions, which can be used with ndarrays or
 arbitrarily-nested tuple/list/dicts of ndarrays.
 
 An optimizer is modeled as an ``(init_fun, update_fun, get_params)`` triple of
-functions, where the component functions have these signatures:
-
-::
+functions, where the component functions have these signatures::
 
   init_fun(params)
 
-  Args:
-    params: pytree representing the initial parameters.
+Args:
+  params: pytree representing the initial parameters.
 
-  Returns:
+Returns:
     A pytree representing the initial optimizer state, which includes the
     initial parameters and may also include auxiliary values like initial
     momentum. The optimizer state pytree structure generally differs from that
@@ -42,26 +40,26 @@ functions, where the component functions have these signatures:
 
   update_fun(step, grads, opt_state)
 
-  Args:
-    step: integer representing the step index.
-    grads: a pytree with the same structure as `get_params(opt_state)`
-      representing the gradients to be used in updating the optimizer state.
-    opt_state: a pytree representing the optimizer state to be updated.
+Args:
+  step: integer representing the step index.
+  grads: a pytree with the same structure as `get_params(opt_state)`
+    representing the gradients to be used in updating the optimizer state.
+  opt_state: a pytree representing the optimizer state to be updated.
 
-  Returns:
-    A pytree with the same structure as the `opt_state` argument representing
-    the updated optimizer state.
+Returns:
+  A pytree with the same structure as the `opt_state` argument representing
+  the updated optimizer state.
 
 ::
 
   get_params(opt_state)
 
-  Args:
-    opt_state: pytree representing an optimizer state.
+Args:
+  opt_state: pytree representing an optimizer state.
 
-  Returns:
-    A pytree representing the parameters extracted from `opt_state`, such that
-    the invariant `params == get_params(init_fun(params))` holds true.
+Returns:
+  A pytree representing the parameters extracted from `opt_state`, such that
+  the invariant `params == get_params(init_fun(params))` holds true.
 
 
 Notice that an optimizer implementation has a lot of flexibility in the form of
@@ -614,6 +612,7 @@ def pack_optimizer_state(marked_pytree):
 
   Args:
     marked_pytree: A pytree containing JoinPoint leaves that hold more pytrees.
+
   Returns:
     An equivalent OptimizerState to the input argument.
   """

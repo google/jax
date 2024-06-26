@@ -198,7 +198,6 @@ class JaxPrimitiveTest(tf_test_util.JaxToTfTestCase):
 
     See the doc for instructions.
     """
-
     harnesses = [
         h for h in test_harnesses.all_harnesses
         if h.filter(h, include_jax_unimpl=True)

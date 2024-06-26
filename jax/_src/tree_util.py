@@ -618,7 +618,7 @@ def prefix_errors(prefix_tree: Any, full_tree: Any,
 def equality_errors(
     tree1: Any, tree2: Any, is_leaf: Callable[[Any], bool] | None = None,
 ) -> Iterable[tuple[KeyPath, str, str, str]]:
-  """Helper to describe structural differences between two pytrees.
+  r"""Helper to describe structural differences between two pytrees.
 
   Args:
     tree1, tree2: pytrees to compare.
@@ -1065,6 +1065,7 @@ def tree_flatten_with_path(
   Args:
     tree: a pytree to flatten. If it contains a custom type, it must be
       registered with ``register_pytree_with_keys``.
+
   Returns:
     A pair which the first element is a list of key-leaf pairs, each of
     which contains a leaf and its key path. The second element is a treedef
@@ -1083,6 +1084,7 @@ def tree_leaves_with_path(
   Args:
     tree: a pytree. If it contains a custom type, it must be registered with
       ``register_pytree_with_keys``.
+
   Returns:
     A list of key-leaf pairs, each of which contains a leaf and its key path.
 
@@ -1163,7 +1165,6 @@ def tree_map_with_path(f: Callable[..., Any],
     - :func:`jax.tree_util.tree_flatten_with_path`
     - :func:`jax.tree_util.tree_leaves_with_path`
   """
-
   keypath_leaves, treedef = tree_flatten_with_path(tree, is_leaf)
   keypath_leaves = list(zip(*keypath_leaves))
   all_keypath_leaves = keypath_leaves + [treedef.flatten_up_to(r) for r in rest]

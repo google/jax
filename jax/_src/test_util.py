@@ -194,7 +194,6 @@ def unaccelerate_getattr_deprecation(module, name):
 @contextmanager
 def capture_stdout() -> Generator[Callable[[], str | None], None, None]:
   """Context manager to capture all stdout output."""
-
   # The encoding should also work on windows, the default doesn't necessarily.
   with tempfile.NamedTemporaryFile(mode="w+", delete=True, encoding='utf-8') as f:
     original_stdout = os.dup(sys.stdout.fileno())
@@ -480,7 +479,7 @@ def is_cuda_compute_capability_at_least(capability: str) -> bool:
   return d.compute_capability >= capability
 
 def _get_device_tags():
-  """returns a set of tags defined for the device under test"""
+  """Returns a set of tags defined for the device under test"""
   if is_device_rocm():
     device_tags = {device_under_test(), "rocm"}
   elif is_device_cuda():
@@ -527,7 +526,8 @@ def run_on_devices(*enabled_devices):
 
 def device_supports_buffer_donation():
   """A decorator for test methods to run the test only on devices that support
-  buffer donation."""
+  buffer donation.
+  """
   return _device_filter(
       lambda: test_device_matches(mlir._platforms_with_donation)
   )
@@ -1518,7 +1518,6 @@ def set_env(**kwargs):
   """Context manager to temporarily set/unset one or more environment variables.
 
   Examples:
-
     >>> import os
     >>> os.environ['my_var'] = 'original'
 
@@ -1561,24 +1560,24 @@ def numpy_vecdot(x, y, axis):
 
 def complex_plane_sample(dtype, size_re=10, size_im=None):
   """Return a 2-D array of complex numbers that covers the complex plane
-     with a grid of samples.
+  with a grid of samples.
 
-     The size of the grid is (3 + 2 * size_im) x (3 + 2 * size_re)
-     that includes infinity points, extreme finite points, and the
-     specified number of points from real and imaginary axis.
+  The size of the grid is (3 + 2 * size_im) x (3 + 2 * size_re)
+  that includes infinity points, extreme finite points, and the
+  specified number of points from real and imaginary axis.
 
-     For example:
+  For example:
 
-     >>> print(complex_plane_sample(np.complex64, 0, 3))
-     [[-inf          -infj   0.          -infj  inf          -infj]
-      [-inf-3.4028235e+38j   0.-3.4028235e+38j  inf-3.4028235e+38j]
-      [-inf-2.0000000e+00j   0.-2.0000000e+00j  inf-2.0000000e+00j]
-      [-inf-1.1754944e-38j   0.-1.1754944e-38j  inf-1.1754944e-38j]
-      [-inf+0.0000000e+00j   0.+0.0000000e+00j  inf+0.0000000e+00j]
-      [-inf+1.1754944e-38j   0.+1.1754944e-38j  inf+1.1754944e-38j]
-      [-inf+2.0000000e+00j   0.+2.0000000e+00j  inf+2.0000000e+00j]
-      [-inf+3.4028235e+38j   0.+3.4028235e+38j  inf+3.4028235e+38j]
-      [-inf          +infj   0.          +infj  inf          +infj]]
+  >>> print(complex_plane_sample(np.complex64, 0, 3))
+  [[-inf          -infj   0.          -infj  inf          -infj]
+   [-inf-3.4028235e+38j   0.-3.4028235e+38j  inf-3.4028235e+38j]
+   [-inf-2.0000000e+00j   0.-2.0000000e+00j  inf-2.0000000e+00j]
+   [-inf-1.1754944e-38j   0.-1.1754944e-38j  inf-1.1754944e-38j]
+   [-inf+0.0000000e+00j   0.+0.0000000e+00j  inf+0.0000000e+00j]
+   [-inf+1.1754944e-38j   0.+1.1754944e-38j  inf+1.1754944e-38j]
+   [-inf+2.0000000e+00j   0.+2.0000000e+00j  inf+2.0000000e+00j]
+   [-inf+3.4028235e+38j   0.+3.4028235e+38j  inf+3.4028235e+38j]
+   [-inf          +infj   0.          +infj  inf          +infj]]
 
   """
   if size_im is None:

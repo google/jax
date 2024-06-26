@@ -89,7 +89,8 @@ def _clip(number: ArrayLike,
           min: ArrayLike | None = None, max: ArrayLike | None = None) -> Array:
   """Return an array whose values are limited to a specified range.
 
-  Refer to :func:`jax.numpy.clip` for full documentation."""
+  Refer to :func:`jax.numpy.clip` for full documentation.
+  """
   return lax_numpy.clip(number, min=min, max=max)
 
 
@@ -308,7 +309,8 @@ def _compress_method(a: ArrayLike, condition: ArrayLike,
                      size: int | None = None, fill_value: ArrayLike = 0) -> Array:
   """Return selected slices of this array along given axis.
 
-  Refer to :func:`jax.numpy.compress` for full documentation."""
+  Refer to :func:`jax.numpy.compress` for full documentation.
+  """
   return lax_numpy.compress(condition, a, axis=axis, out=out,
                             size=size, fill_value=fill_value)
 
@@ -388,10 +390,8 @@ class _IndexUpdateHelper:
   By default, JAX assumes that all indices are in-bounds. Alternative out-of-bound
   index semantics can be specified via the ``mode`` parameter (see below).
 
-  Arguments
-  ---------
-  mode : str
-      Specify out-of-bound indexing mode. Options are:
+  Args:
+    mode (str): Specify out-of-bound indexing mode. Options are:
 
       - ``"promise_in_bounds"``: (default) The user promises that indices are in bounds.
         No additional checking will be performed. In practice, this means that
@@ -403,39 +403,35 @@ class _IndexUpdateHelper:
         argument specifies the value that will be returned.
 
         See :class:`jax.lax.GatherScatterMode` for more details.
+    indices_are_sorted (bool): If True, the implementation will assume that the
+      indices passed to ``at[]`` are sorted in ascending order, which can lead to
+      more efficient execution on some backends.
+    unique_indices (bool): If True, the implementation will assume that the indices
+      passed to ``at[]`` are unique, which can result in more efficient execution on
+      some backends.
+    fill_value: Only applies to the ``get()`` method: the fill value to return for
+      out-of-bounds slices when `mode` is ``'fill'``. Ignored otherwise. Defaults to
+      ``NaN`` for inexact types, the largest negative value for signed types, the
+      largest positive value for unsigned types, and ``True`` for booleans.
 
-  indices_are_sorted : bool
-      If True, the implementation will assume that the indices passed to ``at[]``
-      are sorted in ascending order, which can lead to more efficient execution
-      on some backends.
-  unique_indices : bool
-      If True, the implementation will assume that the indices passed to ``at[]``
-      are unique, which can result in more efficient execution on some backends.
-  fill_value : Any
-      Only applies to the ``get()`` method: the fill value to return for out-of-bounds
-      slices when `mode` is ``'fill'``. Ignored otherwise. Defaults to ``NaN`` for
-      inexact types, the largest negative value for signed types, the largest positive
-      value for unsigned types, and ``True`` for booleans.
-
-  Examples
-  --------
-  >>> x = jnp.arange(5.0)
-  >>> x
-  Array([0., 1., 2., 3., 4.], dtype=float32)
-  >>> x.at[2].add(10)
-  Array([ 0.,  1., 12.,  3.,  4.], dtype=float32)
-  >>> x.at[10].add(10)  # out-of-bounds indices are ignored
-  Array([0., 1., 2., 3., 4.], dtype=float32)
-  >>> x.at[20].add(10, mode='clip')
-  Array([ 0.,  1.,  2.,  3., 14.], dtype=float32)
-  >>> x.at[2].get()
-  Array(2., dtype=float32)
-  >>> x.at[20].get()  # out-of-bounds indices clipped
-  Array(4., dtype=float32)
-  >>> x.at[20].get(mode='fill')  # out-of-bounds indices filled with NaN
-  Array(nan, dtype=float32)
-  >>> x.at[20].get(mode='fill', fill_value=-1)  # custom fill value
-  Array(-1., dtype=float32)
+  Examples:
+    >>> x = jnp.arange(5.0)
+    >>> x
+    Array([0., 1., 2., 3., 4.], dtype=float32)
+    >>> x.at[2].add(10)
+    Array([ 0.,  1., 12.,  3.,  4.], dtype=float32)
+    >>> x.at[10].add(10)  # out-of-bounds indices are ignored
+    Array([0., 1., 2., 3., 4.], dtype=float32)
+    >>> x.at[20].add(10, mode='clip')
+    Array([ 0.,  1.,  2.,  3., 14.], dtype=float32)
+    >>> x.at[2].get()
+    Array(2., dtype=float32)
+    >>> x.at[20].get()  # out-of-bounds indices clipped
+    Array(4., dtype=float32)
+    >>> x.at[20].get(mode='fill')  # out-of-bounds indices filled with NaN
+    Array(nan, dtype=float32)
+    >>> x.at[20].get(mode='fill', fill_value=-1)  # custom fill value
+    Array(-1., dtype=float32)
   """
   __slots__ = ("array",)
 

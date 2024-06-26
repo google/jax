@@ -53,8 +53,6 @@ class ConcretizationTypeError(JAXTypeError):
   program is doing operations that are not directly supported by JAX's JIT
   compilation model.
 
-  Examples:
-
   Traced value where static value is expected
     One common cause of this error is using a traced value where a static value
     is required. For example:
@@ -425,8 +423,6 @@ class TracerBoolConversionError(ConcretizationTypeError):
   In some situations, this problem can be easily fixed by marking traced values as
   static; in others, it may indicate that your program is doing operations that are
   not directly supported by JAX's JIT compilation model.
-
-  Examples:
 
   Traced value used in control flow
     One case where this often arises is when a traced value is used in

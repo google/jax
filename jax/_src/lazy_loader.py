@@ -31,7 +31,6 @@ def attach(package_name: str, submodules: Sequence[str]) -> tuple[
   __getattr__, __dir__, __all__ = lazy_loader.attach(__name__, ["sub1", "sub2"])
   ```
   """
-
   __all__: list[str] = list(submodules)
 
   def __getattr__(name: str) -> Any:

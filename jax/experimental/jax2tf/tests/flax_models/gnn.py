@@ -138,7 +138,6 @@ class GraphConvNet(nn.Module):
 
   def pool(self, graphs: jraph.GraphsTuple) -> jraph.GraphsTuple:
     """Pooling operation, taken from Jraph."""
-
     # Equivalent to jnp.sum(n_node), but JIT-able.
     sum_n_node = graphs.nodes.shape[0]
     # To aggregate nodes from each graph to global features,

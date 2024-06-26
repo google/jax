@@ -290,13 +290,15 @@ class _DimTerm:
 
   def to_var(self) -> str | None:
     """Extract the variable name from a term.
-     Return None if the term is not a single variable."""
+    Return None if the term is not a single variable.
+    """
     a = self.to_factor()
     return a.to_var() if a is not None else None
 
   def to_factor(self) -> _DimFactor | None:
     """Extract the single factor from a term.
-     Return None if the term is not a single factor."""
+    Return None if the term is not a single factor.
+    """
     if len(self._factors) > 1: return None
     (f, f_exp), = self._factors
     if f_exp != 1: return None
@@ -531,27 +533,31 @@ class _DimExpr:
 
   def _to_term(self) -> _DimTerm | None:
     """Extract the single term from a symbolic expression.
-    Returns None if the expression is not a single term."""
+    Returns None if the expression is not a single term.
+    """
     if len(self._sorted_terms) > 1: return None
     (t, t_k), = self._sorted_terms
     return t if t_k == 1 else None
 
   def _to_factor(self) -> _DimFactor | None:
     """Extract the factor from a symbolic expression.
-    Returns None if the expression is not a single factor."""
+    Returns None if the expression is not a single factor.
+    """
     t = self._to_term()
     return t.to_factor() if t is not None else None
 
   def _to_var(self) -> str | None:
     """Extract the variable name from a symbolic expression.
-    Returns None if the expression is not a single variable."""
+    Returns None if the expression is not a single variable.
+    """
     mon = self._to_factor()
     return mon.to_var() if mon is not None else None
 
   @staticmethod
   def _to_constant(e: DimSize) -> int | None:
     """Extract the constant from a symbolic expression.
-    Returns None if the expression is not a single constant."""
+    Returns None if the expression is not a single constant.
+    """
     if not isinstance(e, _DimExpr):
       return int(e)
     m, m_c = e._leading_term
@@ -1199,7 +1205,6 @@ def _einsum_contract_path(*operands, **kwargs):
   error if there are more than 1 contractions. Essentially, we just use
   opt_einsum.contract_path to parse the specification.
   """
-
   # Replace the polymorphic shapes with some concrete shapes for calling
   # into opt_einsum.contract_path, because the latter wants to compute the
   # sizes of operands and intermediate results.

@@ -75,6 +75,31 @@ class PolyHarness(Harness):
   given `input_signature` and checks the inferred output shapes to match
   `expected_output_shapes`, then checks that the JAX and the TF functions
   produce the same results.
+
+  Args:
+    group_name, name: The name for the harness. See `Harness.__init__`.
+    fun: the function to be converted, possibly after partial application to
+      static arguments from `arg_descriptors`. See `Harness.__init__`.
+    arg_descriptors: The argument descriptors. See `Harness.__init__`. May
+      be missing, in which case `skip_jax_run` should be `True` and
+      `input_signature` must be present.
+    polymorphic_shapes: For `jax2tf.convert`.
+    polymorphic_constraints: For `jax2tf.convert`.
+    input_signature: For `tf.function.get_concrete_function`. If missing,
+      generated from `polymorphic_shapes`.
+    expected_output_signature: the expected inferred output shape.
+    enable_xla: For `jax2tf.convert`.
+    expect_error: a pair of an Exception type and a regular expression to
+      match the expected exception string.
+    skip_jax_run: If True, then neither the JAX nor the TF functions are
+      executed.
+    check_result: specifies if we want to check that the result of the shape
+      polymorphic conversion produces the same result and the JAX function.
+    tol: the tolerance to use for checking results.
+    limitations: if given, then apply the custom_assert and tolerance from the
+      Jax2TfLimitations.
+    override_jax_config_flags: jax.config flags to override for the duration
+      of the test.
   """
   def __init__(self,
                group_name: str, name: str,
@@ -92,32 +117,6 @@ class PolyHarness(Harness):
                tol: float | None = None,
                limitations: Sequence[Jax2TfLimitation] = (),
                override_jax_config_flags: dict[str, Any] = {}):
-    """Args:
-
-      group_name, name: The name for the harness. See `Harness.__init__`.
-      fun: the function to be converted, possibly after partial application to
-        static arguments from `arg_descriptors`. See `Harness.__init__`.
-      arg_descriptors: The argument descriptors. See `Harness.__init__`. May
-        be missing, in which case `skip_jax_run` should be `True` and
-        `input_signature` must be present.
-      polymorphic_shapes: For `jax2tf.convert`.
-      polymorphic_constraints: For `jax2tf.convert`.
-      input_signature: For `tf.function.get_concrete_function`. If missing,
-        generated from `polymorphic_shapes`.
-      expected_output_signature: the expected inferred output shape.
-      enable_xla: For `jax2tf.convert`.
-      expect_error: a pair of an Exception type and a regular expression to
-        match the expected exception string.
-      skip_jax_run: If True, then neither the JAX nor the TF functions are
-        executed.
-      check_result: specifies if we want to check that the result of the shape
-        polymorphic conversion produces the same result and the JAX function.
-      tol: the tolerance to use for checking results.
-      limitations: if given, then apply the custom_assert and tolerance from the
-        Jax2TfLimitations.
-      override_jax_config_flags: jax.config flags to override for the duration
-        of the test.
-    """
     super().__init__(group_name, name, fun, arg_descriptors,
                      dtype=np.float32)
     self.polymorphic_shapes = polymorphic_shapes
@@ -433,7 +432,6 @@ class ShapePolyTest(tf_test_util.JaxToTfTestCase):
 
   def test_kwargs(self):
     """Test shape polymorphism for a function with kwargs."""
-
     x = np.ones(3, dtype=np.float32)
     y = np.ones(1, dtype=np.float32)
     def f_jax(x, *, y):
@@ -724,7 +722,6 @@ class ShapePolyTest(tf_test_util.JaxToTfTestCase):
   )
   def test_pytree_errors(self, polymorphic_shapes=("b", "b", "b")):
     """Arguments and polymorphic_shapes are not-matching pytrees."""
-
     # Arguments are of the form [([x00, x01], [x10]), dict(a=ya, b=yb)]
     x = np.arange(4, dtype=_f32)
     args = (([x, x], [x]), dict(a=x, b=x))
@@ -1055,7 +1052,6 @@ class ShapePolyTest(tf_test_util.JaxToTfTestCase):
 
   def test_readme_examples(self):
     """Some of the examples from the README."""
-
     jax2tf.convert(lambda x: jnp.reshape(x, (x.shape[0] * x.shape[1],)),
                    polymorphic_shapes=["(b, 4)"])(np.ones((3, 4)))
 

@@ -40,6 +40,7 @@ def main(unused_argv):
     Args:
       cov_func: callable function, maps pairs of data points to scalars.
       xs: array of data points, stacked along the leading dimension.
+
     Returns:
       A 2d array `a` such that `a[i, j] = cov_func(xs[i], xs[j])`.
     """

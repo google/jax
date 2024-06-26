@@ -40,17 +40,16 @@ class LRUCache(CacheInterface):
   Notably, when ``max_size`` is set to -1, the cache eviction
   is disabled, and the LRU cache functions as a normal cache
   without any size limitations.
+
+  Args:
+    path: The path to the cache directory.
+    max_size: The maximum size of the cache in bytes. Caching will be
+      disabled if this value is set to ``0``. A special value of ``-1``
+      indicates no limit, allowing the cache size to grow indefinitely.
+    lock_timeout_secs: (optional) The timeout for acquiring a file lock.
   """
 
   def __init__(self, path: str, *, max_size: int, lock_timeout_secs: float | None = 10):
-    """Args:
-
-      path: The path to the cache directory.
-      max_size: The maximum size of the cache in bytes. Caching will be
-        disabled if this value is set to ``0``. A special value of ``-1``
-        indicates no limit, allowing the cache size to grow indefinitely.
-      lock_timeout_secs: (optional) The timeout for acquiring a file lock.
-    """
     # TODO(ayx): add support for cloud other filesystems such as GCS
     if not self._is_local_filesystem(path):
       raise NotImplementedError("LRUCache only supports local filesystem at this time.")

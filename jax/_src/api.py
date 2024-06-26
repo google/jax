@@ -1008,6 +1008,7 @@ def _possible_downcast(x, example):
 
 def _unravel_array_into_pytree(pytree, axis, example, arr):
   """Unravel an array into a PyTree with a given structure.
+
   Args:
       pytree: The pytree that provides the structure.
       axis: The parameter axis is either -1, 0, or 1.  It controls the
@@ -2866,6 +2867,7 @@ def named_scope(
   Args:
     name: The prefix to use to name all operations created within the name
       scope.
+
   Yields:
     Yields ``None``, but enters a context in which `name` will be appended to
     the active name stack.

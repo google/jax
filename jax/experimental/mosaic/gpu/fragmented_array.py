@@ -47,13 +47,11 @@ class WGSplatFragLayout:
   elementwise operations with all other layouts.
 
   Examples:
+    .. code-block:: python
 
-  To load a value in
-  ```
-  FragmentedArray.splat(memref.load(ref_1d, [1]), (10,20,2))
-  ```
+      FragmentedArray.splat(memref.load(ref_1d, [1]), (10,20,2))
 
-  A shape is always provided for sanity check reasons.
+    A shape is always provided for sanity check reasons.
 
   """
 

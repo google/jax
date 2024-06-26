@@ -58,6 +58,7 @@ class SegmentIds(NamedTuple):
   This condition holds for causal self-attention because in this case segment
   ids form a block diagonal matrix so at least one element in each row is set.
   It is easy to break this condition with non-self-attention configurations.
+
   Attributes:
     q: segment ids along the Q sequence
     kv: segment ids along the KV sequence

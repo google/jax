@@ -1455,7 +1455,6 @@ def cross(x1: ArrayLike, x2: ArrayLike, /, *, axis=-1):
     :func:`jax.numpy.cross`: more flexible cross-product API.
 
   Examples:
-
     Showing that :math:`\hat{x} \times \hat{y} = \hat{z}`:
 
     >>> x = jnp.array([1., 0., 0.])
@@ -2103,7 +2102,6 @@ def cond(x: ArrayLike, p=None):
     :func:`jax.numpy.linalg.norm`
 
   Examples:
-
     Well-conditioned matrix:
 
     >>> x = jnp.array([[1, 2],

@@ -327,7 +327,6 @@ def annotate_function(func: Callable, name: str | None = None,
 
   >>> result = f(jnp.ones((1000, 1000)))
   """
-
   name = name or getattr(func, '__qualname__', None)
   name = name or func.__name__
   @wraps(func)

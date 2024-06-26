@@ -572,7 +572,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   @jtu.sample_product(concurrent=[True, False])
   def test_tap_multiple(self, concurrent=False):
-    """Call id_tap multiple times, concurrently or in sequence. """
+    """Call id_tap multiple times, concurrently or in sequence."""
     if concurrent and jtu.test_device_matches(["cpu", "gpu"]):
       # TODO(necula): if there is device side concurrency, outfeeds from
       # different computations can be interleaved. For example, it seems that
@@ -1555,7 +1555,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   @ignore_jit_of_pmap_warning()
   def test_tap_pmap_pmap_extra(self):
-    """pmap of a pmap surrounded by extra code."""
+    """Pmap of a pmap surrounded by extra code."""
     # A matrix M[ij] = i * 10 + j
     self.supported_only_in_legacy_mode()
     nr_devices = len(local_devices())
@@ -1645,7 +1645,7 @@ class HostCallbackTapTest(jtu.JaxTestCase):
 
   @ignore_jit_of_pmap_warning()
   def test_tap_jit_pmap_extra(self):
-    """jit of a pmap surrounded by extra code."""
+    """Jit of a pmap surrounded by extra code."""
     self.supported_only_in_legacy_mode()
     # A matrix M[ij] = i * 10 + j
     nr_devices = len(local_devices())
@@ -1763,8 +1763,9 @@ class HostCallbackTapTest(jtu.JaxTestCase):
         [33 33 33 33]]""")
 
   def test_tap_scan_custom_jvp(self):
-    """custom JVP, inside scan.
-    This exercises the custom_jvp_call_jaxpr primitives."""
+    """Custom JVP, inside scan.
+    This exercises the custom_jvp_call_jaxpr primitives.
+    """
     self.supported_only_in_legacy_mode()
     @jax.custom_jvp
     def f(x):
@@ -1807,8 +1808,9 @@ class HostCallbackTapTest(jtu.JaxTestCase):
         2.1""", testing_stream.output)
 
   def test_tap_scan_custom_vjp(self):
-    """custom VJP, inside scan.
-    This exercises the custom_vjp_call_jaxpr primitives."""
+    """Custom VJP, inside scan.
+    This exercises the custom_vjp_call_jaxpr primitives.
+    """
     self.supported_only_in_legacy_mode()
     @jax.custom_vjp
     def f(x):
@@ -1894,7 +1896,8 @@ class HostCallbackTapTest(jtu.JaxTestCase):
   def test_tap_error_bad_consumer_id(self):
     """Try to use reserved consumer ID 0.
 
-    Check that we get the proper error from the runtime."""
+    Check that we get the proper error from the runtime.
+    """
     if not hcb._use_outfeed(jtu.device_under_test()):
       raise SkipTest("test works only for outfeed")
     comp = xla_client.XlaBuilder(self._testMethodName)
@@ -2833,8 +2836,9 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
           in (c, d, e, h, i) }""", func, [y])
 
   def test_scan_custom_jvp(self):
-    """custom JVP, inside scan.
-    This exercises the custom_jvp_call_jaxpr primitives."""
+    """Custom JVP, inside scan.
+    This exercises the custom_jvp_call_jaxpr primitives.
+    """
     self.supported_only_in_legacy_mode()
     @jax.custom_jvp
     def f(x):
@@ -2915,8 +2919,9 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
           in (c, h, i) }""", jax.grad(g), [arg])
 
   def test_scan_custom_vjp(self):
-    """custom VJP, inside scan.
-    This exercises the custom_vjp_call_jaxpr primitives."""
+    """Custom VJP, inside scan.
+    This exercises the custom_vjp_call_jaxpr primitives.
+    """
     self.supported_only_in_legacy_mode()
     @jax.custom_vjp
     def f(x):

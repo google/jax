@@ -137,7 +137,6 @@ def map(f: Callable[..., Any],
     ``rest``.
 
   Examples:
-
     >>> import jax
     >>> jax.tree.map(lambda x: x + 1, {"x": 7, "y": 42})
     {'x': 8, 'y': 43}

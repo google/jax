@@ -249,7 +249,6 @@ def sum(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
     - :func:`jax.numpy.min`: Compute the minimum of array elements over given axis.
 
   Examples:
-
     By default, the sum is computed along all the axes.
 
     >>> x = jnp.array([[1, 3, 4, 2],
@@ -415,7 +414,6 @@ def max(a: ArrayLike, axis: Axis = None, out: None = None,
       axis.
 
   Examples:
-
     By default, ``jnp.max`` computes the maximum of elements along all the axes.
 
     >>> x = jnp.array([[9, 3, 4, 5],

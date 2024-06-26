@@ -133,17 +133,16 @@ class _ReusableSavedModelWrapper(tf.train.Checkpoint):
 
   Implements the interface described at
   https://www.tensorflow.org/hub/reusable_saved_models.
+
+  Args:
+    tf_graph: a tf.function taking one argument (the inputs), which can be
+      be tuples/lists/dictionaries of np.ndarray or tensors. The function
+      may have references to the tf.Variables in `param_vars`.
+    param_vars: the parameters, as tuples/lists/dictionaries of tf.Variable,
+      to be saved as the variables of the SavedModel.
   """
 
   def __init__(self, tf_graph, param_vars):
-    """Args:
-
-      tf_graph: a tf.function taking one argument (the inputs), which can be
-         be tuples/lists/dictionaries of np.ndarray or tensors. The function
-         may have references to the tf.Variables in `param_vars`.
-      param_vars: the parameters, as tuples/lists/dictionaries of tf.Variable,
-         to be saved as the variables of the SavedModel.
-    """
     super().__init__()
     # Implement the interface from https://www.tensorflow.org/hub/reusable_saved_models
     self.variables = tf.nest.flatten(param_vars)

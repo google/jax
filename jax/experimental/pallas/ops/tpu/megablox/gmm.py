@@ -340,7 +340,6 @@ def gmm(
   Returns:
     A 2d, jnp.ndarray with shape [m, n].
   """
-
   if existing_out is not None:
     assert isinstance(existing_out, jax.Array)
     expected_dtype = existing_out.dtype

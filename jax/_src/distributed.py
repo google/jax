@@ -180,18 +180,17 @@ def initialize(coordinator_address: str | None = None,
       or if called after the backend is already initialized.
 
   Examples:
+    Suppose there are two GPU processes, and process 0 is the designated coordinator
+    with address ``10.0.0.1:1234``. To initialize the GPU cluster, run the
+    following commands before anything else.
 
-  Suppose there are two GPU processes, and process 0 is the designated coordinator
-  with address ``10.0.0.1:1234``. To initialize the GPU cluster, run the
-  following commands before anything else.
+    On process 0:
 
-  On process 0:
+      >>> jax.distributed.initialize(coordinator_address='10.0.0.1:1234', num_processes=2, process_id=0)  # doctest: +SKIP
 
-  >>> jax.distributed.initialize(coordinator_address='10.0.0.1:1234', num_processes=2, process_id=0)  # doctest: +SKIP
+    On process 1:
 
-  On process 1:
-
-  >>> jax.distributed.initialize(coordinator_address='10.0.0.1:1234', num_processes=2, process_id=1)  # doctest: +SKIP
+      >>> jax.distributed.initialize(coordinator_address='10.0.0.1:1234', num_processes=2, process_id=1)  # doctest: +SKIP
   """
   if xla_bridge.backends_are_initialized():
     raise RuntimeError("jax.distributed.initialize() must be called before "
@@ -204,5 +203,6 @@ def initialize(coordinator_address: str | None = None,
 def shutdown():
   """Shuts down the distributed system.
 
-  Does nothing if the distributed system is not running."""
+  Does nothing if the distributed system is not running.
+  """
   global_state.shutdown()

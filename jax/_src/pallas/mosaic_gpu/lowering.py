@@ -59,7 +59,6 @@ class ModuleContext:
 
   def scratch_view(self, shapes: list[jax.ShapeDtypeStruct]) -> list[ir.Value]:
     """Return memref views into the runtime scrath based on the shapes."""
-
     smem_scratch_bytes = math.prod(ir.MemRefType(self.runtime_smem.type).shape)
     required_scratch_bytes = sum(
         math.prod(sh.shape) * jnp.dtype(sh.dtype).itemsize for sh in shapes

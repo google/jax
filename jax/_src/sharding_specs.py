@@ -150,6 +150,7 @@ def spec_to_indices(shape: Sequence[int],
 def pmap_sharding_spec(nrep, axis_size, sharded_shape: Sequence[int],
                        map_axis: int | None) -> ShardingSpec:
   """Sharding spec for arguments or results of a pmap.
+
   Args:
     nrep: number of local XLA replicas (product of local axis sizes)
     axis_size: local axis size for outer pmap

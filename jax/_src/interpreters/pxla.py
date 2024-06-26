@@ -1431,6 +1431,7 @@ def _axis_groups(mesh_spec, mesh_axes):
     mesh_spec: A sequence of integers representing the mesh shape.
     mesh_axes: A sequence of integers between 0 and `len(mesh_spec)` (exclusive)
       indicating over which axes the collective is performed.
+
   Returns:
     A tuple of replica groups (i.e. tuples containing replica ids).
   """

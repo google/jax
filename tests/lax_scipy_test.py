@@ -491,7 +491,7 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
   def testPolar(
     self, n_zero_sv, degeneracy, geometric_spectrum, max_sv, shape, method,
       side, nonzero_condition_number, dtype, seed):
-    """ Tests jax.scipy.linalg.polar."""
+    """Tests jax.scipy.linalg.polar."""
     if not jtu.test_device_matches(["cpu"]):
       if jnp.dtype(dtype).name in ("bfloat16", "float16"):
         raise unittest.SkipTest("Skip half precision off CPU.")

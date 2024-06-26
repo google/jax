@@ -1974,10 +1974,10 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
 
   @jtu.sample_product(fixed_size=[False, True])
   def testNonScalarRepeats(self, fixed_size):
-    '''
+    """
     Following numpy test suite from `test_repeat` at
     https://github.com/numpy/numpy/blob/main/numpy/core/tests/test_multiarray.py
-    '''
+    """
     tol = 1e-5
 
     def test_single(m, args_maker, repeats, axis):
@@ -2018,9 +2018,9 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
       test_single(m_rect, args_maker, repeats, axis=1)
 
   def testIssue2330(self):
-    '''
+    """
     Make sure return value of jnp.concatenate is a jax.ndarray and is side-effect save
-    '''
+    """
     def attempt_sideeffect(x):
       x = [x]
       x = jnp.concatenate(x)

@@ -2482,6 +2482,7 @@ def with_sharding_constraint(x, shardings):
     x: PyTree of jax.Arrays which will have their shardings constrained
     shardings: PyTree of sharding specifications. Valid values are the same as for
       the ``in_shardings`` argument of :func:`jax.experimental.pjit`.
+
   Returns:
     x_with_shardings: PyTree of jax.Arrays with specified sharding constraints.
 

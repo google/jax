@@ -412,33 +412,32 @@ class GlobalAsyncCheckpointManagerBase(util.StrictABC):
   class allows to maintain that state.
 
   Examples:
+    Below is a simplified training loop:
 
-  Below is a simplified training loop:
+    .. code-block:: python
 
-  ```
-  # Call this at the start of your program.
-  jax.distributed.initialize()
+      # Call this at the start of your program.
+      jax.distributed.initialize()
 
-  manager = GlobalAsyncCheckpointManager()
+      manager = GlobalAsyncCheckpointManager()
 
-  # Restore checkpoint if available or initialize the train_state from
-  # init_fn().
-  train_state = manager.deserialize(...)
+      # Restore checkpoint if available or initialize the train_state from
+      # init_fn().
+      train_state = manager.deserialize(...)
 
-  while ...:
-    if step % num_steps_between_checkpoints == 0:
+      while ...:
+        if step % num_steps_between_checkpoints == 0:
+          manager.serialize(train_state, temp_checkpoint_dir=...,
+                            final_checkpoint_dir=...)
+          train_state = train_step(train_state, input)
+          # This is a non-blocking call.
+          manager.check_for_errors()
+
       manager.serialize(train_state, temp_checkpoint_dir=...,
                         final_checkpoint_dir=...)
-      train_state = train_step(train_state, input)
-      # This is a non-blocking call.
-      manager.check_for_errors()
-
-  manager.serialize(train_state, temp_checkpoint_dir=...,
-                    final_checkpoint_dir=...)
-  # Wait before the end of the program for the checkpoint to finish. This is a
-  # blocking call.
-  manager.wait_until_finished()
-  ```
+      # Wait before the end of the program for the checkpoint to finish. This is a
+      # blocking call.
+      manager.wait_until_finished()
   """
 
   @abc.abstractmethod

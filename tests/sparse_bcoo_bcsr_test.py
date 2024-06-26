@@ -608,7 +608,6 @@ class BCOOTest(sptu.SparseTestCase):
   @jtu.run_on_devices("gpu")
   def test_bcoo_dot_general_oob_and_unsorted_indices_cusparse(self):
     """Tests bcoo dot general with out-of-bound and unsorted indices."""
-
     rhs = jnp.ones((5, 3), dtype=jnp.float32)
 
     # It creates out-of-bound indices when nse > nnz.

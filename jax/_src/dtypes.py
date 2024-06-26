@@ -272,25 +272,23 @@ def scalar_type_of(x: Any) -> type:
 def _scalar_type_to_dtype(typ: type, value: Any = None) -> DType:
   """Return the numpy dtype for the given scalar type.
 
-  Raises
-  ------
-  OverflowError: if `typ` is `int` and the value is too large for int64.
+  Raises:
+    OverflowError: if `typ` is `int` and the value is too large for int64.
 
-  Examples
-  --------
-  >>> _scalar_type_to_dtype(int)
-  dtype('int32')
-  >>> _scalar_type_to_dtype(float)
-  dtype('float32')
-  >>> _scalar_type_to_dtype(complex)
-  dtype('complex64')
-  >>> _scalar_type_to_dtype(int)
-  dtype('int32')
-  >>> _scalar_type_to_dtype(int, 0)
-  dtype('int32')
-  >>> _scalar_type_to_dtype(int, 1 << 63)  # doctest: +IGNORE_EXCEPTION_DETAIL
-  Traceback (most recent call last):
-  OverflowError: Python int 9223372036854775808 too large to convert to int32
+  Examples:
+    >>> _scalar_type_to_dtype(int)
+    dtype('int32')
+    >>> _scalar_type_to_dtype(float)
+    dtype('float32')
+    >>> _scalar_type_to_dtype(complex)
+    dtype('complex64')
+    >>> _scalar_type_to_dtype(int)
+    dtype('int32')
+    >>> _scalar_type_to_dtype(int, 0)
+    dtype('int32')
+    >>> _scalar_type_to_dtype(int, 1 << 63)  # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+    OverflowError: Python int 9223372036854775808 too large to convert to int32
   """
   dtype = canonicalize_dtype(python_scalar_dtypes[typ])
   if typ is int and value is not None:
@@ -787,7 +785,6 @@ def safe_to_cast(input_dtype_or_value: Any,
     path under the current jax_numpy_dtype_promotion setting.
 
   Examples:
-
     >>> safe_to_cast('int32', 'float64')
     True
     >>> safe_to_cast('float64', 'int32')

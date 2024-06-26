@@ -327,7 +327,7 @@ def det(a: ArrayLike, overwrite_a: bool = False, check_finite: bool = True) -> A
     overwrite_a: unused by JAX
     check_finite: unused by JAX
 
-  Returns
+  Returns:
     Determinant of shape ``a.shape[:-2]``
 
   See Also:
@@ -1139,7 +1139,6 @@ def expm(A: ArrayLike, *, upper_triangular: bool = False, max_squarings: int = 1
     :func:`jax.scipy.linalg.expm_frechet`
 
   Examples:
-
     ``expm`` is the matrix exponential, and has similar properties to the more
     familiar scalar exponential. For scalars ``a`` and ``b``, :math:`e^{a + b}
     = e^a e^b`. However, for matrices, this property only holds when ``A`` and
@@ -1669,7 +1668,6 @@ def polar(a: ArrayLike, side: str = 'right', *, method: str = 'qdwh', eps: float
     whether ``side`` is ``"right"`` or ``"left"``, respectively.
 
   Examples:
-
     Polar decomposition of a 3x3 matrix:
 
     >>> a = jnp.array([[1., 2., 3.],

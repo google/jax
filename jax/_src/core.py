@@ -2125,7 +2125,8 @@ def definitely_equal_shape(s1: Shape, s2: Shape) -> bool:
 
 def divide_shape_sizes(s1: Shape, s2: Shape) -> DimSize:
   """Returns an integer "i" s.t., i * size(s2) == size(s1).
-  Raises InconclusiveDimensionOperation if there is no such integer."""
+  Raises InconclusiveDimensionOperation if there is no such integer.
+  """
   sz1 = math.prod(s1)
   sz2 = math.prod(s2)
   if definitely_equal(sz1, sz2):  # Takes care of sz1 and sz2 being 0
@@ -2207,10 +2208,10 @@ def max_dim(d1: DimSize, d2: DimSize) -> DimSize:
 
 def dimension_as_value(d: DimSize):
   """Turns a dimension size into a JAX array.
-     This is the identity function for constant dimensions.
+  This is the identity function for constant dimensions.
 
-     Has the same abstract value as Python constants.
-     """
+  Has the same abstract value as Python constants.
+  """
   if isinstance(d, (int, Tracer, np.int32, np.int64)): return d
   # For shape_poly._DimPolynomial
   if hasattr(d, "dimension_as_value"): return d.dimension_as_value()
@@ -2629,7 +2630,7 @@ def extend_axis_env_nd(axes: Iterable[tuple[AxisName, int]], tag: Any = None):
 
 @contextmanager
 def stash_axis_env():
-  "Promise that a function or with-suite does not depend implicitly on axis env"
+  """Promise that a function or with-suite does not depend implicitly on axis env"""
   # If the promise is broken, then a NameError about an unbound axis name will
   # be raised.
   ts = thread_local_state.trace_state
@@ -3343,7 +3344,7 @@ def _compact_eqn_should_include(k: str, v: Any) -> bool:
   return True
 
 def str_eqn_compact(primitive_name: str, params: dict) -> str:
-  "Compact equation to string conversion used in HLO metadata."
+  """Compact equation to string conversion used in HLO metadata."""
   kvs = " ".join(f"{k}={v}" for k, v in params.items()
                  if _compact_eqn_should_include(k, v))
   return f"{primitive_name}[{kvs}]" if len(kvs) > 0 else primitive_name

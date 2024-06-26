@@ -951,7 +951,6 @@ def ndtri(p: ArrayLike) -> Array:
 
 def _ndtri(p: ArrayLike) -> Array:
   """Implements ndtri core logic."""
-
   # Constants used in piece-wise rational approximations. Taken from the cephes
   # library:
   # https://root.cern.ch/doc/v608/SpecFuncCephesInv_8cxx_source.html
@@ -1403,7 +1402,6 @@ def _gen_recurrence_mask(
   Returns:
     Arrays representing the mask used by the recurrence relations.
   """
-
   # Computes all coefficients.
   m_mat, l_mat = jnp.meshgrid(
     jnp.arange(l_max + 1, dtype=dtype),
@@ -1451,11 +1449,11 @@ def _gen_derivatives(p: Array,
       points.
     x: A vector of type `float32` or `float64` containing the sampled points.
     is_normalized: True if the associated Legendre functions are normalized.
+
   Returns:
     The 3D array representing the derivatives of associated Legendre functions
     of the first kind.
   """
-
   num_m, num_l, num_x = p.shape
 
   # p_{l-1}^m.
@@ -1742,7 +1740,6 @@ def _sph_harm(m: Array,
               phi: Array,
               n_max: int) -> Array:
   """Computes the spherical harmonics."""
-
   cos_colatitude = jnp.cos(phi)
 
   legendre = _gen_associated_legendre(n_max, cos_colatitude, True)
@@ -1795,7 +1792,6 @@ def sph_harm(m: Array,
   Returns:
     A 1D array containing the spherical harmonics at (m, n, theta, phi).
   """
-
   if jnp.isscalar(phi):
     phi = jnp.array([phi])
 
@@ -2397,7 +2393,6 @@ def _poch_z_derivative(z, m):
   Defined in :
   https://functions.wolfram.com/GammaBetaErf/Pochhammer/20/01/01/
   """
-
   return (digamma(z + m) - digamma(z)) * poch(z, m)
 
 
@@ -2406,7 +2401,6 @@ def _poch_m_derivative(z, m):
   Defined in :
   https://functions.wolfram.com/GammaBetaErf/Pochhammer/20/01/02/
   """
-
   return digamma(z + m) * poch(z, m)
 
 
@@ -2422,7 +2416,6 @@ def _hyp1f1_serie(a, b, x):
   See Eq. 3.2 and associated method (a) from PEARSON, OLVER & PORTER 2014
   https://doi.org/10.48550/arXiv.1407.7786
   """
-
   precision = jnp.finfo(x.dtype).eps
 
   def body(state):
@@ -2449,7 +2442,6 @@ def _hyp1f1_asymptotic(a, b, x):
   See Eq. 3.8 and simplification for real inputs from PEARSON, OLVER & PORTER 2014
   https://doi.org/10.48550/arXiv.1407.7786
   """
-
   precision = jnp.finfo(x.dtype).eps
 
   def body(state):
@@ -2478,7 +2470,6 @@ def _hyp1f1_a_derivative(a, b, x):
   Define it as a serie using :
   https://functions.wolfram.com/HypergeometricFunctions/Hypergeometric1F1/20/01/01/
   """
-
   precision = jnp.finfo(x.dtype).eps
 
   def body(state):
@@ -2506,7 +2497,6 @@ def _hyp1f1_b_derivative(a, b, x):
   Define it as a serie using :
   https://functions.wolfram.com/HypergeometricFunctions/Hypergeometric1F1/20/01/02/
   """
-
   precision = jnp.finfo(x.dtype).eps
 
   def body(state):
@@ -2533,7 +2523,6 @@ def _hyp1f1_x_derivative(a, b, x):
   Define it as a serie using :
   https://functions.wolfram.com/HypergeometricFunctions/Hypergeometric1F1/20/01/04/
   """
-
   return a / b * hyp1f1(a + 1, b + 1, x)
 
 

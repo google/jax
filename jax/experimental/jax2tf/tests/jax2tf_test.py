@@ -13,7 +13,8 @@
 # limitations under the License.
 """Tests for JAX2TF converted.
 
-Specific JAX primitive conversion tests are in primitives_test."""
+Specific JAX primitive conversion tests are in primitives_test.
+"""
 import collections
 import contextlib
 import math

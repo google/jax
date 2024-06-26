@@ -122,7 +122,6 @@ def _lobpcg_standard_callable(
     tol: jax.Array | float | None,
     debug: bool = False):
   """Supports generic lobpcg_standard() callable interface."""
-
   # TODO(vladf): support mixed_precision flag, which allows f64 Rayleigh-Ritz
   # with f32 inputs.
 
@@ -326,7 +325,6 @@ def _svqb(X):
     An orthonormal space `V` described by a `(n, k)` array, with trailing
     columns possibly zeroed out if `X` is of low rank.
   """
-
   # In [1] diagonal conditioning is explicit, but by normalizing first
   # we can simplify the formulas a bit, since then diagonal conditioning
   # becomes a no-op.
@@ -383,7 +381,6 @@ def _project_out(basis, U):
     the component of `U` in the complement of `basis`. The nonzero columns
     are mutually orthonormal.
   """
-
   # See Sec. 6.9 of The Symmetric Eigenvalue Problem by Beresford Parlett [1]
   # which motivates two loop iterations for basis subtraction. This
   # "twice is enough" approach is due to Kahan. See also a practical note
@@ -450,7 +447,6 @@ def _rayleigh_ritz_orth(A, S):
     Eigenvectors `V` and eigenvalues `w` satisfying the size-`k` system
     described in this method doc. Note `V` will be full rank, even if `S` isn't.
   """
-
   SAS = _mm(S.T, A(S))
 
   # Solve the projected subsystem.

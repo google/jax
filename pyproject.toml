@@ -115,10 +115,21 @@ ignore = [
     "F841",
     # Raise with from clause inside except block
     "B904",
+    # Less strict docs
+    "D1",    # Missing doctrings
+    "D200",  # One line docstrings
+    "D205",  # Blank line required between summary line and description
+    "D212",  # Multi-line docstring summary should start at the first line
+    "D402",  # First line should not be the function's signature
+    "D405",  # Section name should be properly capitalized
+    "D403",  # First word of the first line should be capitalized
+    "D415",  # First line should end with punctuation
+    "D417",  # Missing argument description
 ]
 select = [
     "B9",
     "C",
+    "D",
     "F",
     "W",
     "YTT",
@@ -127,6 +138,9 @@ select = [
     "E227",
     "E228",
 ]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.lint.mccabe]
 max-complexity = 18
@@ -175,3 +189,10 @@ max-complexity = 18
 "jax/util.py" = ["F401"]
 # F821: Undefined name.
 "jax/numpy/__init__.pyi" = ["F821"]
+# D301: Use `r"""` if any backslashes in a docstring
+"jax/_src/debugger/cli_debugger.py" = ["D301"]
+# Disable docs checks for jax.scipy.sparse because the docstrings are all
+# numpy style
+"jax/_src/scipy/sparse/linalg.py" = ["D"]
+# One test requires a numpy-style docstring
+"tests/lax_numpy_test.py" = ["D416"]

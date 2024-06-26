@@ -963,7 +963,6 @@ def dynamic_update_slice_in_dim(operand: Array | np.ndarray,
     The updated array
 
   Examples:
-
     >>> x = jnp.zeros(6)
     >>> y = jnp.ones(3)
     >>> dynamic_update_slice_in_dim(x, y, 2, axis=0)
@@ -1025,7 +1024,6 @@ def dynamic_update_index_in_dim(operand: Array | np.ndarray,
     The updated array
 
   Examples:
-
     >>> x = jnp.zeros(6)
     >>> y = 1.0
     >>> dynamic_update_index_in_dim(x, y, 2, axis=0)
@@ -1464,7 +1462,6 @@ def _gather_shape_rule(operand, indices, *, dimension_numbers,
   operator and following the outline of the implementation of
   ShapeInference::InferGatherShape in TensorFlow.
   """
-
   offset_dims = dimension_numbers.offset_dims
   collapsed_slice_dims = dimension_numbers.collapsed_slice_dims
   start_index_map = dimension_numbers.start_index_map
@@ -1870,7 +1867,6 @@ def _scatter_shape_rule(operand, indices, updates, *, update_jaxpr,
   operator and following the outline of the implementation of
   ShapeInference::InferScatterShape in TensorFlow.
   """
-
   update_window_dims = dimension_numbers.update_window_dims
   inserted_window_dims = dimension_numbers.inserted_window_dims
   scatter_dims_to_operand_dims = dimension_numbers.scatter_dims_to_operand_dims

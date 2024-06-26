@@ -21,7 +21,8 @@ def print_ir(*prototypes):
   def lower(f):
     """Prints the MLIR IR that results from lowering `f`.
 
-    The arguments to `f` are taken to be arrays shaped like `prototypes`."""
+    The arguments to `f` are taken to be arrays shaped like `prototypes`.
+    """
     inputs = jax.tree.map(np.array, prototypes)
     flat_inputs, _ = jax.tree.flatten(inputs)
     shape_strs = " ".join([f"{x.dtype.name}[{','.join(map(str, x.shape))}]"

@@ -92,6 +92,7 @@ def _promote_weak_typed_inputs(in_vals, in_avals, out_avals):
     in_vals : flattened list of input values.
     in_avals : corresponding list of avals.
     out_avals : list of target output avals.
+
   Returns:
     in_vals_new : flattened list of modified in_vals with no weak types.
     changed : bool; true if in_vals required modification.
@@ -2229,7 +2230,6 @@ def associative_scan(fn: Callable, elems, reverse: bool = False, axis: int = 0):
   # a (small two-down-to-one) reduction step.
   def _scan(elems):
     """Perform scan on `elems`."""
-
     num_elems = elems[0].shape[axis]
 
     if num_elems < 2:

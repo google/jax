@@ -151,7 +151,7 @@ def _filtering_mode() -> str:
   return mode
 
 def api_boundary(fun: C) -> C:
-  '''Wraps ``fun`` to form a boundary for filtering exception tracebacks.
+  """Wraps ``fun`` to form a boundary for filtering exception tracebacks.
 
   When an exception occurs below ``fun``, this appends to it a custom
   ``__cause__`` that carries a filtered traceback. The traceback imitates the
@@ -171,7 +171,7 @@ def api_boundary(fun: C) -> C:
   ``g``. Because the function returned by :func:`~jax.jit` is annotated as an
   :func:`~api_boundary`, such an exception is accompanied by an additional
   traceback that excludes the frames specific to JAX's implementation.
-  '''
+  """
 
   @functools.wraps(fun)
   def reraise_with_filtered_traceback(*args, **kwargs):

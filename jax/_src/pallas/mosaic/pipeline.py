@@ -487,14 +487,14 @@ class Scheduler:
               ):
     """Initializes scheduler.
 
-      Args:
-        step: inner step number.
-        grid: pallas grid for BufferedRefs.
-        grid_offsets: offsets for grid indices (used for megacore).
-        first_cycle: whether this is the first invocation of the pipeline.
-        last_cycle: whether this is the last invocation of the pipeline.
-        init_accumulators: do we zero-initialize accumulator state for this
-          invocation of the pipeline.
+    Args:
+      step: inner step number.
+      grid: pallas grid for BufferedRefs.
+      grid_offsets: offsets for grid indices (used for megacore).
+      first_cycle: whether this is the first invocation of the pipeline.
+      last_cycle: whether this is the last invocation of the pipeline.
+      init_accumulators: do we zero-initialize accumulator state for this
+        invocation of the pipeline.
     """
     self.step = step
     self.grid = grid

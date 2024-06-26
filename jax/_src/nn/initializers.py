@@ -373,12 +373,11 @@ def glorot_uniform(in_axis: int | Sequence[int] = -2,
     An initializer.
 
   Examples:
-
-  >>> import jax, jax.numpy as jnp
-  >>> initializer = jax.nn.initializers.glorot_uniform()
-  >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
-  Array([[ 0.50350785,  0.8088631 ,  0.81566876],
-         [-0.6393332 , -0.6865721 ,  0.11003882]], dtype=float32)
+    >>> import jax, jax.numpy as jnp
+    >>> initializer = jax.nn.initializers.glorot_uniform()
+    >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
+    Array([[ 0.50350785,  0.8088631 ,  0.81566876],
+          [-0.6393332 , -0.6865721 ,  0.11003882]], dtype=float32)
 
   .. _Glorot uniform initializer: http://proceedings.mlr.press/v9/glorot10a.html
   """
@@ -411,12 +410,11 @@ def glorot_normal(in_axis: int | Sequence[int] = -2,
     An initializer.
 
   Examples:
-
-  >>> import jax, jax.numpy as jnp
-  >>> initializer = jax.nn.initializers.glorot_normal()
-  >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
-  Array([[ 0.41770416,  0.75262755,  0.7619329 ],
-         [-0.5516644 , -0.6028657 ,  0.08661086]], dtype=float32)
+    >>> import jax, jax.numpy as jnp
+    >>> initializer = jax.nn.initializers.glorot_normal()
+    >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
+    Array([[ 0.41770416,  0.75262755,  0.7619329 ],
+          [-0.5516644 , -0.6028657 ,  0.08661086]], dtype=float32)
 
   .. _Glorot normal initializer: http://proceedings.mlr.press/v9/glorot10a.html
   """
@@ -449,12 +447,11 @@ def lecun_uniform(in_axis: int | Sequence[int] = -2,
     An initializer.
 
   Examples:
-
-  >>> import jax, jax.numpy as jnp
-  >>> initializer = jax.nn.initializers.lecun_uniform()
-  >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
-  Array([[ 0.56293887,  0.90433645,  0.9119454 ],
-         [-0.71479625, -0.7676109 ,  0.12302713]], dtype=float32)
+    >>> import jax, jax.numpy as jnp
+    >>> initializer = jax.nn.initializers.lecun_uniform()
+    >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
+    Array([[ 0.56293887,  0.90433645,  0.9119454 ],
+          [-0.71479625, -0.7676109 ,  0.12302713]], dtype=float32)
 
   .. _Lecun uniform initializer: https://arxiv.org/abs/1706.02515
   """
@@ -485,12 +482,11 @@ def lecun_normal(in_axis: int | Sequence[int] = -2,
     An initializer.
 
   Examples:
-
-  >>> import jax, jax.numpy as jnp
-  >>> initializer = jax.nn.initializers.lecun_normal()
-  >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
-  Array([[ 0.46700746,  0.8414632 ,  0.8518669 ],
-         [-0.61677957, -0.67402434,  0.09683388]], dtype=float32)
+    >>> import jax, jax.numpy as jnp
+    >>> initializer = jax.nn.initializers.lecun_normal()
+    >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
+    Array([[ 0.46700746,  0.8414632 ,  0.8518669 ],
+          [-0.61677957, -0.67402434,  0.09683388]], dtype=float32)
 
   .. _Lecun normal initializer: https://arxiv.org/abs/1706.02515
   """
@@ -521,12 +517,11 @@ def he_uniform(in_axis: int | Sequence[int] = -2,
     An initializer.
 
   Examples:
-
-  >>> import jax, jax.numpy as jnp
-  >>> initializer = jax.nn.initializers.he_uniform()
-  >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
-  Array([[ 0.79611576,  1.2789248 ,  1.2896855 ],
-         [-1.0108745 , -1.0855657 ,  0.17398663]], dtype=float32)
+    >>> import jax, jax.numpy as jnp
+    >>> initializer = jax.nn.initializers.he_uniform()
+    >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
+    Array([[ 0.79611576,  1.2789248 ,  1.2896855 ],
+          [-1.0108745 , -1.0855657 ,  0.17398663]], dtype=float32)
 
   .. _He uniform initializer: https://arxiv.org/abs/1502.01852
   """
@@ -559,12 +554,11 @@ def he_normal(in_axis: int | Sequence[int] = -2,
     An initializer.
 
   Examples:
-
-  >>> import jax, jax.numpy as jnp
-  >>> initializer = jax.nn.initializers.he_normal()
-  >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
-  Array([[ 0.6604483 ,  1.1900088 ,  1.2047218 ],
-         [-0.87225807, -0.95321447,  0.1369438 ]], dtype=float32)
+    >>> import jax, jax.numpy as jnp
+    >>> initializer = jax.nn.initializers.he_normal()
+    >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
+    Array([[ 0.6604483 ,  1.1900088 ,  1.2047218 ],
+          [-0.87225807, -0.95321447,  0.1369438 ]], dtype=float32)
 
   .. _He normal initializer: https://arxiv.org/abs/1502.01852
   """
@@ -592,12 +586,11 @@ def orthogonal(scale: RealNumeric = 1.0,
     An orthogonal initializer.
 
   Examples:
-
-  >>> import jax, jax.numpy as jnp
-  >>> initializer = jax.nn.initializers.orthogonal()
-  >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
-  Array([[ 3.9026976e-01,  7.2495741e-01, -5.6756169e-01],
-         [ 8.8047469e-01, -4.7409311e-01, -1.3157725e-04]],            dtype=float32)
+    >>> import jax, jax.numpy as jnp
+    >>> initializer = jax.nn.initializers.orthogonal()
+    >>> initializer(jax.random.key(42), (2, 3), jnp.float32)  # doctest: +SKIP
+    Array([[ 3.9026976e-01,  7.2495741e-01, -5.6756169e-01],
+          [ 8.8047469e-01, -4.7409311e-01, -1.3157725e-04]],            dtype=float32)
   """
   def init(key: KeyArray,
            shape: core.Shape,
@@ -635,22 +628,20 @@ def delta_orthogonal(
     be 3D, 4D, or 5D.
 
   Examples:
-
-  >>> import jax, jax.numpy as jnp
-  >>> initializer = jax.nn.initializers.delta_orthogonal()
-  >>> initializer(jax.random.key(42), (3, 3, 3), jnp.float32)  # doctest: +SKIP
-  Array([[[ 0.        ,  0.        ,  0.        ],
-          [ 0.        ,  0.        ,  0.        ],
-          [ 0.        ,  0.        ,  0.        ]],
-  <BLANKLINE>
-         [[ 0.27858758, -0.7949833 , -0.53887904],
-          [ 0.9120717 ,  0.04322892,  0.40774566],
-          [-0.30085585, -0.6050892 ,  0.73712474]],
-  <BLANKLINE>
-         [[ 0.        ,  0.        ,  0.        ],
-          [ 0.        ,  0.        ,  0.        ],
-          [ 0.        ,  0.        ,  0.        ]]], dtype=float32)
-
+    >>> import jax, jax.numpy as jnp
+    >>> initializer = jax.nn.initializers.delta_orthogonal()
+    >>> initializer(jax.random.key(42), (3, 3, 3), jnp.float32)  # doctest: +SKIP
+    Array([[[ 0.        ,  0.        ,  0.        ],
+            [ 0.        ,  0.        ,  0.        ],
+            [ 0.        ,  0.        ,  0.        ]],
+    <BLANKLINE>
+          [[ 0.27858758, -0.7949833 , -0.53887904],
+            [ 0.9120717 ,  0.04322892,  0.40774566],
+            [-0.30085585, -0.6050892 ,  0.73712474]],
+    <BLANKLINE>
+          [[ 0.        ,  0.        ,  0.        ],
+            [ 0.        ,  0.        ,  0.        ],
+            [ 0.        ,  0.        ,  0.        ]]], dtype=float32)
 
   .. _delta orthogonal initializer: https://arxiv.org/abs/1806.05393
   """

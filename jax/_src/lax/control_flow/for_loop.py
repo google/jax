@@ -137,6 +137,7 @@ def for_loop(nsteps: int | Sequence[int],
       `for` primitive, how many iterations to unroll within a single iteration
       of a loop. Higher values may speed up execution time at the cost of longer
       compilation time.
+
   Returns:
     A Pytree of values representing the output of the for loop.
   """

@@ -411,7 +411,6 @@ def _broadcast_input_output_aliases(
   mapped. If the input is mapped, but on a different axis, we tranpose the input
   to match the output.
   """
-
   args_ = list(args)
   dims_ = list(dims)
   for input_index, _ in input_output_aliases:
@@ -451,7 +450,6 @@ def _batch_with_explicit_loop(
   to the current iteration index and dynamic_updates an (initially empty) output
   allocation.
   """
-
   if not dims:
     raise NotImplementedError("vmapping pallas_call with no arguments.")
 

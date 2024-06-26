@@ -145,7 +145,6 @@ class Mesh(contextlib.ContextDecorator):
       rank of ``devices``.
 
   Examples:
-
     >>> from jax.experimental.pjit import pjit
     >>> from jax.sharding import Mesh
     >>> from jax.sharding import PartitionSpec as P

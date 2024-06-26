@@ -331,6 +331,7 @@ def _bcsr_todense(data: ArrayLike, indices: ArrayLike, indptr: ArrayLike, *,
       of the matrix, which is equal to
       ``batch_dims + 2(sparse_dims) + block_dims`` where
       ``len(sparse_dims) == 2``.
+
   Returns:
     mat : array with specified shape and dtype matching ``data``
   """

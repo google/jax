@@ -645,6 +645,7 @@ def make_async_remote_copy(src_ref, dst_ref, send_sem, recv_sem, device_id,
     recv_sem: The semaphore on the destination device.
     device_id: The device id of the destination device.
     device_id_type: The type of the device id.
+
   Returns:
     An AsyncCopyDescriptor.
   """
