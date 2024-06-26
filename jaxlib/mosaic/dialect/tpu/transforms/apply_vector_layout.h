@@ -63,8 +63,7 @@ LogicalResult applyLayoutOp(RewriteContext &ctx, Operation &op);
 //   A new MLIR vector value, laid out as requested by dst.
 FailureOr<TypedValue<VectorType>> relayout(OpBuilder &builder,
                                            TypedValue<VectorType> v,
-                                           VectorLayout src,
-                                           const VectorLayout &dst,
+                                           VectorLayout src, VectorLayout dst,
                                            std::array<int64_t, 2> target_shape);
 
 }  // namespace mlir::tpu
