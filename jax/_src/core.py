@@ -260,13 +260,21 @@ def jaxpr_as_fun(closed_jaxpr: ClosedJaxpr, *args):
 
 
 class JaxprEqnContext:
+  attributes: dict[str, str | int | bool] | None
 
-  def __init__(self, compute_type: str | None, threefry_partitionable: bool):
+  def __init__(
+      self,
+      compute_type: str | None,
+      threefry_partitionable: bool,
+      attributes: dict[str, str | int | bool] | None,
+  ):
     self.compute_type = compute_type
     self.threefry_partitionable = threefry_partitionable
+    self.attributes = attributes
     self._managers = [
         (compute_on.extend_compute_type, self.compute_type),
         (config.threefry_partitionable.__call__, self.threefry_partitionable),
+        (add_attributes, self.attributes)
     ]
 
   @property
@@ -274,12 +282,21 @@ class JaxprEqnContext:
   def manager(self):
     with ExitStack() as stack:
       for manager, val in self._managers:
-        stack.enter_context(manager(val))
+        if manager is add_attributes:
+          if val:
+            stack.enter_context(manager(**val))
+          else:
+            stack.enter_context(manager())
+        else:
+          stack.enter_context(manager(val))
       yield
 
   def __repr__(self):
-    return (f"JaxprEqnContext(compute_type={self.compute_type},"
-            f"threefry_partitionable={self.threefry_partitionable})")
+    return (
+        f"JaxprEqnContext(compute_type={self.compute_type},"
+        f"threefry_partitionable={self.threefry_partitionable}),"
+        f"attributes={self.attributes}"
+    )
 
 
 class JaxprEqn(NamedTuple):
@@ -320,8 +337,11 @@ class JaxprEqn(NamedTuple):
 def new_jaxpr_eqn(invars, outvars, primitive, params, effects, source_info=None,
                   ctx=None):
   source_info = source_info or source_info_util.new_source_info()
-  ctx = ctx or JaxprEqnContext(compute_on.current_compute_type(),
-                               config.threefry_partitionable.value)
+  ctx = ctx or JaxprEqnContext(
+      compute_on.current_compute_type(),
+      config.threefry_partitionable.value,
+      thread_local_attributes.val,
+  )
   if config.enable_checks.value:
     assert all(isinstance(x, (Var, Literal)) for x in  invars)
     assert all(isinstance(v,  Var)           for v in outvars)
@@ -1020,6 +1040,41 @@ AxisEnvFrame = namedtuple('AxisEnvFrame', ['name', 'size', 'main_trace'])
 AxisName = Hashable
 
 no_axis_name = object()
+
+
+class Attributes(threading.local):
+  val: dict[str, str]
+
+  def __init__(self):
+    self.val = {}
+
+
+thread_local_attributes = Attributes()
+
+
+@contextmanager
+def add_attributes(**kwargs: str | None):
+  new_attributes = thread_local_attributes.val.copy()
+  new_attributes.update(**kwargs)
+  prev_attributes, thread_local_attributes.val = (
+      thread_local_attributes.val,
+      new_attributes,
+  )
+  config.update_thread_local_jit_state(
+      attributes_context_manager=tuple(
+          (v, k) for k, v in sorted(new_attributes.items())
+      )
+  )
+  try:
+    yield
+  finally:
+    thread_local_attributes.val = prev_attributes
+    config.update_thread_local_jit_state(
+        attributes_context_manager=tuple(
+            (v, k) for k, v in sorted(prev_attributes.items())
+        )
+    )
+
 
 class TraceState:
   trace_stack: TraceStack
@@ -3226,6 +3281,7 @@ class JaxprPpSettings(NamedTuple):
   name_stack: bool = False
   custom_pp_eqn_rules: bool = True
   print_effects: bool = False
+  print_attributes: bool = False
 
 def _encode_digits_alphabetic(n: int) -> str:
   if n == -1:
@@ -3318,6 +3374,9 @@ def _pp_eqn(eqn, context, settings, params=None) -> pp.Doc:
   if params is None:
     params = sorted(eqn.params)
   name_stack_annotation = f'[{eqn.source_info.name_stack}]' if settings.name_stack else None
+  attributes_annotation = (
+      f"[{eqn.ctx.attributes}]" if settings.print_attributes else None
+  )
   lhs = pp_vars(eqn.outvars, context, print_shapes=settings.print_shapes)
   rhs = [pp.text(eqn.primitive.name, annotation=name_stack_annotation),
          pp_kv_pairs([(p, eqn.params[p]) for p in params], context, settings),

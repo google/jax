@@ -1518,6 +1518,14 @@ jax_test(
     ],
 )
 
+jax_test(
+    name = "frontend_attributes_test",
+    srcs = ["frontend_attributes_test.py"],
+    deps = [
+        "//jax:experimental",
+    ],
+)
+
 py_test(
     name = "pretty_printer_test",
     srcs = ["pretty_printer_test.py"],

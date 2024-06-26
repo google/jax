@@ -1928,6 +1928,7 @@ def _pjit_lowering(ctx, *args, name, jaxpr, in_shardings,
                              ir.FlatSymbolRefAttr.get(func.name.value),
                              mlir.flatten_lowering_ir_args(args))
   mlir.wrap_compute_type_in_place(ctx, call)
+  mlir.wrap_attributes_in_place(ctx, call)
   out_nodes = unflatten(call.results, map(len, output_types))
   tokens, out_nodes = split_list(out_nodes, [len(effects)])
   tokens_out = ctx.tokens_in.update_tokens(mlir.TokenSet(zip(effects, tokens)))

@@ -898,8 +898,11 @@ def new_eqn_recipe(in_tracers: Sequence[JaxprTracer],
     assert ("donated_invars" in params and
             len(params["donated_invars"]) == len(params["call_jaxpr"].invars))
   out_avals = [core.raise_to_shaped(t.aval) for t in out_tracers]
-  ctx = ctx or JaxprEqnContext(compute_on.current_compute_type(),
-                               config.threefry_partitionable.value)
+  ctx = ctx or JaxprEqnContext(
+      compute_on.current_compute_type(),
+      config.threefry_partitionable.value,
+      core.thread_local_attributes.val,
+  )
   return JaxprEqnRecipe(object(), tuple(in_tracers), map(ref, out_tracers),
                         out_avals, primitive, params, effects, source_info,
                         ctx)
@@ -1262,7 +1265,8 @@ def _partial_eval_jaxpr_custom_cached(
             outvars_copy, resvars, device_put_p,
             dict(devices=[TransferToMemoryKind(policy.dst)], srcs=[None]),
             set(), source_info_util.new_source_info(),
-            JaxprEqnContext(None, False))
+            JaxprEqnContext(None, False, None),
+        )
         known_eqns.append(offload_eqn)
         # resvars are known and available in the backward jaxpr.
         map(partial(write, False, True), resvars)
@@ -1271,7 +1275,8 @@ def _partial_eval_jaxpr_custom_cached(
             resvars, eqn.outvars, device_put_p,  # type: ignore
             dict(devices=[TransferToMemoryKind(policy.src)], srcs=[None]),
             set(), source_info_util.new_source_info(),
-            JaxprEqnContext(None, False))
+            JaxprEqnContext(None, False, None),
+        )
         staged_eqns.append(reload_eqn)
         # outvars are known and available in the backward jaxpr.
         map(partial(write, False, True), eqn.outvars)

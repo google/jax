@@ -25,3 +25,4 @@ from jax._src.callback import (
 from jax._src.earray import (
     EArray as EArray
 )
+from jax._src.core import add_attributes as attributes
