@@ -244,7 +244,7 @@ class ArrayAPISmokeTest(absltest.TestCase):
   def test_array_namespace_method(self):
     x = array_api.arange(20)
     self.assertIsInstance(x, jax.Array)
-    self.assertIs(x.__array_namespace__(), array_api)
+    self.assertIs(x.__array_namespace__(), jax.numpy)
 
 class ArrayAPIInspectionUtilsTest(jtu.JaxTestCase):
 

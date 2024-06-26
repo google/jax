@@ -445,6 +445,11 @@ from jax._src.numpy.ufunc_api import (
 
 from jax._src.numpy.vectorize import vectorize as vectorize
 
+from jax._src.numpy._version import __array_api_version__
+from jax._src.numpy.util import (
+    __array_namespace_info__ as __array_namespace_info__,
+)
+
 # Dynamically register numpy-style methods on JAX arrays.
 from jax._src.numpy.array_methods import register_jax_array_methods
 register_jax_array_methods()

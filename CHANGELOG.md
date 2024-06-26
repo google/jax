@@ -38,6 +38,10 @@ Remember to align the itemized text with the first line of an item within a list
     and will now live in `jax.export`.
     See the [documentation](https://jax.readthedocs.io/en/latest/export/index.html).
 
+* New Functionality
+  * The {mod}`jax.numpy` module is now compliant with the Python array API
+    2023 standard.
+
 * Deprecations
   * Internal pretty-printing tools `jax.core.pp_*` are deprecated, and will be removed
     in a future release.

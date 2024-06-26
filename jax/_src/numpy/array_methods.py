@@ -45,6 +45,7 @@ from jax._src.numpy import util
 from jax._src.ops import scatter
 from jax._src.typing import Array, ArrayLike, DimSize, DTypeLike, Shape
 from jax._src.util import safe_zip, safe_map
+from jax._src.numpy._version import __array_api_version__
 
 map, unsafe_map = safe_map, map
 zip, unsafe_zip = safe_zip, zip
@@ -56,6 +57,21 @@ zip, unsafe_zip = safe_zip, zip
 # operator overloads mainly just forward calls to the corresponding lax_numpy
 # functions, which can themselves handle instances from any of these classes.
 
+def _array_namespace(arr: ArrayLike, /, *, api_version: None | str = None):
+  if api_version is not None and api_version != __array_api_version__:
+    raise ValueError(f"{api_version=!r} is not available; "
+                     f"available versions are: {[__array_api_version__]}")
+  return jax.numpy
+
+def _to_device(arr: ArrayLike, device: xc.Device | Sharding | None, *,
+               stream: int | Any | None = None):
+  if stream is not None:
+    raise NotImplementedError("stream argument of array.to_device()")
+  return jax.device_put(arr, device)
+
+def _device(arr: Array) -> Sharding:
+  """Length of one array element in bytes."""
+  return arr.sharding
 
 def _astype(arr: ArrayLike, dtype: DTypeLike, copy: bool = False, device: xc.Device | Sharding | None = None) -> Array:
   """Copy the array and cast to a specified dtype.
@@ -658,6 +674,7 @@ _array_operators = {
 }
 
 _array_methods = {
+  "__array_namespace__": _array_namespace,
   "all": reductions.all,
   "any": reductions.any,
   "argmax": lax_numpy.argmax,
@@ -694,6 +711,7 @@ _array_methods = {
   "sum": reductions.sum,
   "swapaxes": lax_numpy.swapaxes,
   "take": lax_numpy.take,
+  "to_device": _to_device,
   "trace": lax_numpy.trace,
   "transpose": _transpose,
   "var": reductions.var,
@@ -718,6 +736,7 @@ _array_properties = {
   "nbytes": _nbytes,
   "itemsize": _itemsize,
   "at": _IndexUpdateHelper,
+  "device": _device,
 }
 
 def _set_shaped_array_attributes(shaped_array):

@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from functools import partial
 import re
 import textwrap
-from typing import Any, Callable, NamedTuple, TypeVar
+from typing import Any, Callable, NamedTuple, TypeVar, Tuple
 
 import warnings
 
@@ -28,6 +28,9 @@ from jax._src import dtypes
 from jax._src.lax import lax
 from jax._src.util import safe_zip, safe_map
 from jax._src.typing import Array, ArrayLike, DimSize, DType, DTypeLike, Shape
+from jax._src.sharding import Sharding
+from jax._src.lib import xla_client as xc
+from jax._src import xla_bridge
 
 import numpy as np
 
@@ -453,3 +456,66 @@ def _where(condition: ArrayLike, x: ArrayLike, y: ArrayLike) -> Array:
   except:
     is_always_empty = False  # can fail with dynamic shapes
   return lax.select(condition_arr, x_arr, y_arr) if not is_always_empty else x_arr
+
+class __array_namespace_info__:
+
+  def __init__(self):
+    self._capabilities = {
+      "boolean indexing": True,
+      "data-dependent shapes": False,
+    }
+
+
+  def _build_dtype_dict(self):
+    array_api_types = {
+      "bool", "int8", "int16",
+      "int32", "uint8", "uint16",
+      "uint32", "float32", "complex64"
+    }
+    if config.enable_x64.value:
+      array_api_types |= {"int64", "uint64", "float64", "complex128"}
+    return {category: {t.name: t for t in types if t.name in array_api_types}
+            for category, types in dtypes._dtype_kinds.items()}
+
+  def default_device(self):
+    # By default JAX arrays are uncommitted (device=None), meaning that
+    # JAX is free to choose the most efficient device placement.
+    return None
+
+  def devices(self):
+    return xla_bridge.devices()
+
+  def capabilities(self):
+    return self._capabilities
+
+  def default_dtypes(self, *, device: xc.Device | Sharding | None = None):
+    # Array API supported dtypes are device-independent in JAX
+    del device
+    default_dtypes = {
+      "real floating": "f",
+      "complex floating": "c",
+      "integral": "i",
+      "indexing": "i",
+    }
+    return {
+      dtype_name: dtypes.canonicalize_dtype(
+        dtypes._default_types.get(kind)
+      ) for dtype_name, kind in default_dtypes.items()
+    }
+
+  def dtypes(
+      self, *,
+      device: xc.Device | Sharding | None = None,
+      kind: str | Tuple[str, ...] | None = None):
+    # Array API supported dtypes are device-independent in JAX
+    del device
+    data_types = self._build_dtype_dict()
+    if kind is None:
+      out_dict = data_types["numeric"] | data_types["bool"]
+    elif isinstance(kind, tuple):
+      out_dict = {}
+      for _kind in kind:
+        out_dict |= data_types[_kind]
+    else:
+      out_dict = data_types[kind]
+    return out_dict
