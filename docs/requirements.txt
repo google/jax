@@ -8,6 +8,9 @@ sphinx-design
 sphinxext-rediraffe
 myst-nb>=1.0.0
 
+# Used for checking PR labels
+requests
+
 # Packages used for CI tests.
 flatbuffers
 pytest

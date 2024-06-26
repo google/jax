@@ -39,6 +39,31 @@ sys.path.insert(0, os.path.abspath('..'))
 # Unfortunately, this workaround makes Sphinx drop module-level documentation.
 # See https://github.com/google/jax/issues/3452.
 
+# By default we do a "full docs build" where we execute the notebooks, and
+# generate the API docs, but we skip some expensive steps when building the
+# a pull request preview on Read the Docs. If that PR has the "full docs build"
+# label, then we do still do the full build.
+full_docs_build = True
+if os.environ.get("READTHEDOCS_VERSION_TYPE", "") == "external":
+  print("Executing a PR preview on Read the Docs")
+  pr_number = os.environ.get("READTHEDOCS_VERSION", "")
+  if pr_number:
+    import requests
+
+    print(f"Fetching labels for PR #{pr_number}")
+    url = f"https://api.github.com/repos/google/jax/issues/{pr_number}/labels"
+    r = requests.get(url)
+    if r.status_code == requests.codes.ok:
+      labels = r.json()
+      print(f"Labels: {', '.join(a.get('name', '') for a in labels)}")
+      full_docs_build = any(a.get("name", "") == "full docs build" for a in labels)
+      if full_docs_build:
+        print("Running a full docs build")
+      else:
+        print("Skipping execution of notebooks and API docs")
+    else:
+      print("Failed to get PR labels; running full docs build")
+
 # -- Project information -----------------------------------------------------
 
 project = 'JAX'
@@ -129,6 +154,12 @@ exclude_patterns = [
     'autodidax.md',
     'sharded-computation.md',
 ]
+if not full_docs_build:
+  exclude_patterns += ['jax.rst', 'jax.*.rst', 'jax_internal_api.rst']
+  suppress_warnings += [
+      'toc.excluded',
+      'ref.ref',  # 'Undefined label' warning
+  ]
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = None
@@ -189,9 +220,9 @@ html_css_files = [
 # -- Options for myst ----------------------------------------------
 myst_heading_anchors = 3  # auto-generate 3 levels of heading anchors
 myst_enable_extensions = ['dollarmath']
-nb_execution_mode = "force"
 nb_execution_allow_errors = False
 nb_merge_streams = True
+nb_execution_mode = "force" if full_docs_build else "off"
 
 # Notebook cell execution timeout; defaults to 30.
 nb_execution_timeout = 100

@@ -177,4 +177,4 @@ jobs:
         pip install -r docs/requirements.txt
     - name: Render documentation
       run: |
-        sphinx-build --color -W --keep-going -b html -D nb_execution_mode=off docs docs/build/html
+        sphinx-build --color -W --keep-going -b html docs docs/build/html
