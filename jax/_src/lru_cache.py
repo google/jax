@@ -92,23 +92,23 @@ class LRUCache(CacheInterface):
     if not key:
       raise ValueError("key cannot be empty")
 
-    cache_file = self.path / f"{key}{_CACHE_SUFFIX}"
-    atime_file = self.path / f"{key}{_ATIME_SUFFIX}"
+    cache_path = self.path / f"{key}{_CACHE_SUFFIX}"
+    atime_path = self.path / f"{key}{_ATIME_SUFFIX}"
 
     if self.eviction_enabled:
       self.lock.acquire(timeout=self.lock_timeout_secs)
 
     try:
-      if not cache_file.exists():
+      if not cache_path.exists():
         logger.debug(f"Cache miss for key: {key!r}")
         return None
 
       logger.debug(f"Cache hit for key: {key!r}")
 
-      val = cache_file.read_bytes()
+      val = cache_path.read_bytes()
 
       timestamp = time.time_ns().to_bytes(8, "little")
-      atime_file.write_bytes(timestamp)
+      atime_path.write_bytes(timestamp)
 
       return val
 
@@ -136,22 +136,22 @@ class LRUCache(CacheInterface):
       warnings.warn(msg)
       return
 
-    cache_file = self.path / f"{key}{_CACHE_SUFFIX}"
-    atime_file = self.path / f"{key}{_ATIME_SUFFIX}"
+    cache_path = self.path / f"{key}{_CACHE_SUFFIX}"
+    atime_path = self.path / f"{key}{_ATIME_SUFFIX}"
 
     if self.eviction_enabled:
       self.lock.acquire(timeout=self.lock_timeout_secs)
 
     try:
-      if cache_file.exists():
+      if cache_path.exists():
         return
 
       self._evict_if_needed(additional_size=len(val))
 
-      cache_file.write_bytes(val)
+      cache_path.write_bytes(val)
 
       timestamp = time.time_ns().to_bytes(8, "little")
-      atime_file.write_bytes(timestamp)
+      atime_path.write_bytes(timestamp)
 
     finally:
       if self.eviction_enabled:
@@ -172,15 +172,15 @@ class LRUCache(CacheInterface):
     # a priority queue, each element is a tuple `(file_atime, key, file_size)`
     h: list[tuple[int, str, int]] = []
     dir_size = 0
-    for cache_file in self.path.glob(f"*{_CACHE_SUFFIX}"):
-      if not cache_file.is_file():
+    for cache_path in self.path.glob(f"*{_CACHE_SUFFIX}"):
+      if not cache_path.is_file():
         continue
 
-      file_size = cache_file.stat().st_size
+      file_size = cache_path.stat().st_size
 
-      key = cache_file.name.removesuffix(_CACHE_SUFFIX)
-      atime_file = self.path / f"{key}{_ATIME_SUFFIX}"
-      file_atime = int.from_bytes(atime_file.read_bytes(), "little")
+      key = cache_path.name.removesuffix(_CACHE_SUFFIX)
+      atime_path = self.path / f"{key}{_ATIME_SUFFIX}"
+      file_atime = int.from_bytes(atime_path.read_bytes(), "little")
 
       dir_size += file_size
       heapq.heappush(h, (file_atime, key, file_size))
@@ -195,11 +195,11 @@ class LRUCache(CacheInterface):
              f"target cache size {target_size} bytes")
       logger.debug(msg)
 
-      cache_file = self.path / f"{key}{_CACHE_SUFFIX}"
-      atime_file = self.path / f"{key}{_ATIME_SUFFIX}"
+      cache_path = self.path / f"{key}{_CACHE_SUFFIX}"
+      atime_path = self.path / f"{key}{_ATIME_SUFFIX}"
 
-      cache_file.unlink()
-      atime_file.unlink()
+      cache_path.unlink()
+      atime_path.unlink()
 
       dir_size -= file_size
 
