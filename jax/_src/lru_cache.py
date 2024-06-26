@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 _CACHE_SUFFIX = "-cache.bin"
-_ATIME_SUFFIX = "-atime.txt"
+_ATIME_SUFFIX = "-atime.bin"
 
 
 class LRUCache(CacheInterface):
@@ -107,8 +107,8 @@ class LRUCache(CacheInterface):
 
       val = cache_file.read_bytes()
 
-      timestamp = time.time_ns()
-      atime_file.write_text(str(timestamp))
+      timestamp = time.time_ns().to_bytes(8, "little")
+      atime_file.write_bytes(timestamp)
 
       return val
 
@@ -150,8 +150,8 @@ class LRUCache(CacheInterface):
 
       cache_file.write_bytes(val)
 
-      timestamp = time.time_ns()
-      atime_file.write_text(str(timestamp))
+      timestamp = time.time_ns().to_bytes(8, "little")
+      atime_file.write_bytes(timestamp)
 
     finally:
       if self.eviction_enabled:
@@ -180,7 +180,7 @@ class LRUCache(CacheInterface):
 
       key = cache_file.name.removesuffix(_CACHE_SUFFIX)
       atime_file = self.path / f"{key}{_ATIME_SUFFIX}"
-      file_atime = int(atime_file.read_text())
+      file_atime = int.from_bytes(atime_file.read_bytes(), "little")
 
       dir_size += file_size
       heapq.heappush(h, (file_atime, key, file_size))
