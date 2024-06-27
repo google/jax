@@ -191,9 +191,8 @@ class LRUCache(CacheInterface):
     while dir_size > target_size:
       file_atime, key, file_size = heapq.heappop(h)
 
-      msg = (f"Evicting cache entry {key!r}: file size {file_size} bytes, "
-             f"target cache size {target_size} bytes")
-      logger.debug(msg)
+      logger.debug("Evicting cache entry %r: file size %d bytes, "
+                   "target cache size %d bytes", key, file_size, target_size)
 
       cache_path = self.path / f"{key}{_CACHE_SUFFIX}"
       atime_path = self.path / f"{key}{_ATIME_SUFFIX}"
