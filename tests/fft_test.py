@@ -346,13 +346,16 @@ class FftTest(jtu.JaxTestCase):
     dtype=all_dtypes,
     size=[9, 10, 101, 102],
     d=[0.1, 2.],
+    device=[None, -1],
   )
-  def testFftfreq(self, size, d, dtype):
+  def testFftfreq(self, size, d, dtype, device):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: (rng([size], dtype),)
     jnp_op = jnp.fft.fftfreq
     np_op = np.fft.fftfreq
-    jnp_fn = lambda a: jnp_op(size, d=d)
+    if device is not None:
+      device = jax.devices()[device]
+    jnp_fn = lambda a: jnp_op(size, d=d, device=device)
     np_fn = lambda a: np_op(size, d=d)
     # Numpy promotes to complex128 aggressively.
     self._CheckAgainstNumpy(np_fn, jnp_fn, args_maker, check_dtypes=False,
@@ -362,6 +365,10 @@ class FftTest(jtu.JaxTestCase):
     if dtype in inexact_dtypes:
       tol = 0.15  # TODO(skye): can we be more precise?
       jtu.check_grads(jnp_fn, args_maker(), order=2, atol=tol, rtol=tol)
+    # Test device
+    if device is not None:
+      out = jnp_fn(args_maker())
+      self.assertEqual(out.devices(), {device})
 
   @jtu.sample_product(n=[[0, 1, 2]])
   def testFftfreqErrors(self, n):
@@ -384,13 +391,16 @@ class FftTest(jtu.JaxTestCase):
     dtype=all_dtypes,
     size=[9, 10, 101, 102],
     d=[0.1, 2.],
+    device=[None, -1],
   )
-  def testRfftfreq(self, size, d, dtype):
+  def testRfftfreq(self, size, d, dtype, device):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: (rng([size], dtype),)
     jnp_op = jnp.fft.rfftfreq
     np_op = np.fft.rfftfreq
-    jnp_fn = lambda a: jnp_op(size, d=d)
+    if device is not None:
+      device = jax.devices()[device]
+    jnp_fn = lambda a: jnp_op(size, d=d, device=device)
     np_fn = lambda a: np_op(size, d=d)
     # Numpy promotes to complex128 aggressively.
     self._CheckAgainstNumpy(np_fn, jnp_fn, args_maker, check_dtypes=False,
@@ -400,6 +410,10 @@ class FftTest(jtu.JaxTestCase):
     if dtype in inexact_dtypes:
       tol = 0.15  # TODO(skye): can we be more precise?
       jtu.check_grads(jnp_fn, args_maker(), order=2, atol=tol, rtol=tol)
+    # Test device
+    if device is not None:
+      out = jnp_fn(args_maker())
+      self.assertEqual(out.devices(), {device})
 
   @jtu.sample_product(n=[[0, 1, 2]])
   def testRfftfreqErrors(self, n):
