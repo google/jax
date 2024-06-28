@@ -56,9 +56,9 @@ def apply_over_axes(
     func: Callable, a: ArrayLike, axes: Sequence[int]
 ) -> Array: ...
 def arange(
-    start: DimSize,
-    stop: DimSize | None = ...,
-    step: DimSize | None = ...,
+    start: ArrayLike | DimSize,
+    stop: ArrayLike | DimSize | None = ...,
+    step: ArrayLike | None = ...,
     dtype: DTypeLike | None = ..., *,
     device: _Device | _Sharding | None = ...,
 ) -> Array: ...
