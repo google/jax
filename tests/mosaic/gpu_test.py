@@ -84,32 +84,21 @@ def copy(src: ir.Value, dst: ir.Value, swizzle: int | None = None):
     def body(*idx):
       dst_idx = idx
       if swizzle is not None:
-        if swizzle != 128:
-          raise NotImplementedError("Only swizzle 128B implemented")
-        # TODO(apaszke): This can probably be cleaned up.
-        # But it works and it's test-only, so it doesn't matter much.
-        # After all, swizzle should just be an xor of row and linear idx,
-        # adjusted for the bytewidth.
+        assert swizzle.bit_count() == 1
         bytes_per_element = bytewidth(src_ty.element_type)
-        elems_per_tile = 1024 // bytes_per_element
-        elems_per_row = elems_per_tile // 8
-        elems_per_group = 16 // bytes_per_element
         linear_idx = c(0, index)
         for stride, i in zip(dyn_strides, idx):
           linear_idx = arith.addi(linear_idx, arith.muli(i, stride))
-        tile_offset = arith.remui(linear_idx, c(elems_per_tile, index))
-        linear_tile_start = arith.subi(linear_idx, tile_offset)
-        row = arith.divui(tile_offset, c(elems_per_row, index))
-        row_offset = arith.remui(tile_offset, c(elems_per_row, index))
-        src_group = arith.divui(row_offset, c(elems_per_group, index))
-        group_offset = arith.remui(row_offset, c(elems_per_group, index))
-        dst_group = arith.xori(src_group, row)
-        dst_linear_idx = mlir_sum([
-            linear_tile_start,
-            arith.muli(row, c(elems_per_row, index)),
-            arith.muli(dst_group, c(elems_per_group, index)),
-            group_offset,
-        ])
+        # Swizzle pattern repeats every 128 bytes.
+        swizzle_src = arith.remui(
+            arith.divui(linear_idx, c(128 // bytes_per_element, index)),
+            c(swizzle // 16, index),
+        )
+        # Swizzle happens in groups of 16 bytes.
+        swizzle_shift = 4 - (bytes_per_element.bit_length() - 1)
+        dst_linear_idx = arith.xori(
+            linear_idx, arith.shli(swizzle_src, c(swizzle_shift, index))
+        )
         dst_idx = [
             arith.remui(arith.divui(dst_linear_idx, stride), c(bound, index))
             for stride, bound in zip(dyn_strides, shape)
@@ -482,9 +471,10 @@ class WGMMATest(TestCase):
       n=(64, 128, 192),
       k_steps=(1, 2),
       tma_inputs=(False, True),
+      swizzle=(32, 64, 128),
       jax_out_dtype=(jnp.float16, jnp.float32),
   )
-  def test_wgmma(
+  def test_wgmma_basic(
       self,
       m,
       n,
@@ -493,10 +483,15 @@ class WGMMATest(TestCase):
       lhs_transpose,
       rhs_transpose,
       tma_inputs,
+      swizzle,
       jax_out_dtype,
   ):
     if jax_out_dtype == jnp.float16 and in_mlir_dtype_cls is not ir.F16Type:
       raise self.skipTest("Only f16 input is supported for f16 output.")
+    if swizzle != 128 and lhs_transpose:
+      raise self.skipTest("Transpose only supported in 128B swizzled WGMMA")
+    if swizzle != 128 and not tma_inputs:
+      raise self.skipTest("Copy with non-128B swizzles not implemented")
 
     in_mlir_dtype = in_mlir_dtype_cls.get()
     out_mlir_dtype = mlir.dtype_to_ir_type(jnp.dtype(jax_out_dtype))
@@ -518,7 +513,7 @@ class WGMMATest(TestCase):
         raise NotImplementedError(in_mlir_dtype)
     else:
       raise NotImplementedError(in_mlir_dtype)
-    nk_tile = 128 // bytewidth(in_mlir_dtype)
+    nk_tile = swizzle // bytewidth(in_mlir_dtype)
     k = nk_tile * k_steps
     assert m % 64 == 0 and n % nk_tile == 0
     index = ir.IndexType.get()
@@ -542,14 +537,14 @@ class WGMMATest(TestCase):
         ctx.async_copy(
             src_ref=lhs,
             dst_ref=lhs_smem,
-            swizzle=128,
+            swizzle=swizzle,
             gmem_transform=lhs_transform,
             barrier=barriers[0],
         )
         ctx.async_copy(
             src_ref=rhs,
             dst_ref=rhs_smem,
-            swizzle=128,
+            swizzle=swizzle,
             gmem_transform=rhs_transform,
             barrier=barriers[1],
         )
@@ -567,7 +562,7 @@ class WGMMATest(TestCase):
             copy(
                 src=memref_slice(lhs, lhs_slice),
                 dst=memref_slice(lhs_smem, (mi, ki)),
-                swizzle=128,
+                swizzle=swizzle,
             )
         for ki in range(k // nk_tile):
           k_slice = ds(c(ki * nk_tile, index), nk_tile)
@@ -578,12 +573,12 @@ class WGMMATest(TestCase):
             copy(
                 src=memref_slice(rhs, rhs_slice),
                 dst=memref_slice(rhs_smem, (ki, ni)),
-                swizzle=128,
+                swizzle=swizzle,
             )
       init_acc = mgpu.WGMMAAccumulator.zero(m=m, n=n, dtype=out_mlir_dtype)
       acc = mgpu.wgmma(
           init_acc, lhs_smem, rhs_smem,
-          a_order=lhs_order, b_order=rhs_order,
+          a_order=lhs_order, b_order=rhs_order, swizzle=swizzle,
       )
       nvvm.wgmma_commit_group_sync_aligned()
       nvvm.wgmma_wait_group_sync_aligned(0)
@@ -708,16 +703,17 @@ class BarrierTest(TestCase):
     )()
     np.testing.assert_array_equal(y, np.full_like(y, 3, dtype=np.int32))
 
+
 class TMATest(TestCase):
 
   @parameterized.product(
-      swizzle=(None, 128),
-      shape=((64, 64), (5, 64), (2, 3, 5, 64)),
+      swizzle=(None, 32, 64, 128),
+      shape=((64, None), (5, None), (2, 3, 5, None)),
       dtype=(jnp.float16, jnp.float32),
   )
-  def test_tma_load(self, swizzle, shape, dtype):
-    if dtype == jnp.float32:
-      shape = (*shape[:-1], shape[-1] // 2)
+  def test_tma_load_basic(self, swizzle, shape, dtype):
+    minor_size = 64 if swizzle is None else swizzle // jnp.dtype(dtype).itemsize
+    shape = (*shape[:-1], minor_size)
     i1 = ir.IntegerType.get_signless(1)
     def kernel(ctx, src, dst, tmp):
       barrier = BarrierArray(1)[0]
@@ -734,9 +730,11 @@ class TMATest(TestCase):
       dtype=(jnp.float16, jnp.float32),
   )
   def test_tma_load_tiled(self, swizzle, shape, dtype):
+    # TODO(apaszke): ptxas seems to freeze when generating code for copy with
+    # swizzle 32 and 64.
     i1 = ir.IntegerType.get_signless(1)
     index = ir.IndexType.get()
-    tiling = (32, 128 // jnp.dtype(dtype).itemsize)
+    tiling = (32, (swizzle or 128) // jnp.dtype(dtype).itemsize)
     tiled_shape = tile_shape(shape, tiling)[:len(shape)]
     def kernel(ctx, src, dst, tmp):
       barrier = BarrierArray(1)[0]
@@ -766,9 +764,10 @@ class TMATest(TestCase):
       dtype=(jnp.float16, jnp.float32),
   )
   def test_tma_squeeze_indexing(self, swizzle, dtype):
-    shape = (4, 5, 64)
-    if dtype == jnp.float32:
-      shape = (*shape[:-1], shape[-1] // 2)
+    # TODO(apaszke): ptxas seems to freeze when generating code for copy with
+    # swizzle 32 and 64.
+    minor_size = 64 if swizzle is None else swizzle // jnp.dtype(dtype).itemsize
+    shape = (4, 5, minor_size)
     def kernel(ctx, src, dst, tmp):
       barrier = BarrierArray(1)[0]
       for i in range(4):
@@ -804,13 +803,13 @@ class TMATest(TestCase):
     np.testing.assert_array_equal(y, x)
 
   @parameterized.product(
-      swizzle=(None, 128),
-      shape=((64, 64), (5, 64), (2, 3, 5, 64)),
+      swizzle=(None, 32, 64, 128),
+      shape=((64, None), (5, None), (2, 3, 5, None)),
       dtype=(jnp.float16, jnp.float32),
   )
   def test_tma_store(self, swizzle, shape, dtype):
-    if dtype == jnp.float32:
-      shape = (*shape[:-1], shape[-1] // 2)
+    minor_size = 64 if swizzle is None else swizzle // jnp.dtype(dtype).itemsize
+    shape = (*shape[:-1], minor_size)
     def kernel(ctx, src, dst, tmp):
       copy(src, tmp, swizzle=swizzle)
       ctx.async_copy(src_ref=tmp, dst_ref=dst, swizzle=swizzle)
