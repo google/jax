@@ -3205,9 +3205,13 @@ https://jax.readthedocs.io/en/latest/faq.html).
 
 deprecations.register("jax-numpy-array-none")
 
-@util.implements(np.array, lax_description=_ARRAY_DOC)
+@util.implements(np.array, lax_description=_ARRAY_DOC, extra_params="""
+device: optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+  to which the created array will be committed.
+""")
 def array(object: Any, dtype: DTypeLike | None = None, copy: bool = True,
-          order: str | None = "K", ndmin: int = 0) -> Array:
+          order: str | None = "K", ndmin: int = 0,
+          *, device: xc.Device | Sharding | None = None) -> Array:
   if order is not None and order != "K":
     raise NotImplementedError("Only implemented for order='K'")
 
@@ -3223,8 +3227,8 @@ def array(object: Any, dtype: DTypeLike | None = None, copy: bool = True,
   # Use device_put to avoid a copy for ndarray inputs.
   if (not copy and isinstance(object, np.ndarray) and
       (dtype is None or dtype == object.dtype) and (ndmin <= object.ndim)):
-    # Keep the output uncommitted.
-    return jax.device_put(object)
+    # Keep the output uncommitted if device is None.
+    return jax.device_put(object, device=device)
 
   # For Python scalar literals, call coerce_to_array to catch any overflow
   # errors. We don't use dtypes.is_python_scalar because we don't want this
@@ -3304,7 +3308,8 @@ def array(object: Any, dtype: DTypeLike | None = None, copy: bool = True,
     out = np.array(object) if copy else np.asarray(object)
   else:
     raise TypeError(f"Unexpected input type for array: {type(object)}")
-
+  if device is not None:
+    out = jax.device_put(out, device=device)
   out_array: Array = lax_internal._convert_element_type(
       out, dtype, weak_type=weak_type)
   if ndmin > ndim(out_array):
@@ -3326,6 +3331,9 @@ This is implemented via :func:`jax.lax.convert_element_type`, which may
 have slightly different behavior than :func:`numpy.astype` in some cases.
 In particular, the details of float-to-int and int-to-float casts are
 implementation dependent.
+""", extra_params="""
+device: optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+  to which the created array will be committed.
 """)
 def astype(x: ArrayLike, dtype: DTypeLike | None,
            /, *, copy: bool = False,
@@ -3365,9 +3373,13 @@ def _place_array(x, device=None, copy=None):
   return x
 
 
-@util.implements(np.asarray, lax_description=_ARRAY_DOC)
+@util.implements(np.asarray, lax_description=_ARRAY_DOC, extra_params="""
+device: optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+  to which the created array will be committed.
+""")
 def asarray(a: Any, dtype: DTypeLike | None = None, order: str | None = None,
-            *, copy: bool | None = None) -> Array:
+            *, copy: bool | None = None,
+            device: xc.Device | Sharding | None = None) -> Array:
   # For copy=False, the array API specifies that we raise a ValueError if the input supports
   # the buffer protocol but a copy is required. Since array() supports the buffer protocol
   # via numpy, this is only the case when the default device is not 'cpu'
@@ -3380,7 +3392,7 @@ def asarray(a: Any, dtype: DTypeLike | None = None, order: str | None = None,
   dtypes.check_user_dtype_supported(dtype, "asarray")
   if dtype is not None:
     dtype = dtypes.canonicalize_dtype(dtype, allow_extended_dtype=True)  # type: ignore[assignment]
-  return array(a, dtype=dtype, copy=bool(copy), order=order)
+  return array(a, dtype=dtype, copy=bool(copy), order=order, device=device)
 
 
 @util.implements(np.copy, lax_description=_ARRAY_DOC)
@@ -3956,10 +3968,8 @@ def identity(n: DimSize, dtype: DTypeLike | None = None) -> Array:
    ``(jnp.arange(-600, 600) * .01).astype(jnp.bfloat16)`` to generate a sequence in a higher precision
    and then convert it to the desired lower precision.
 """, extra_params="""
-device : :py:class:`Device`, :py:class:`Sharding`, optional
-  The (optional) :py:class:`Device`, :py:class:`Sharding`,
-  representing the device(s) to which created array should be
-  transferred. If given, then the result is committed to the device(s).
+device: optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+  to which the created array will be committed.
 """
 )
 def arange(start: DimSize, stop: DimSize | None = None,
@@ -4041,30 +4051,44 @@ def _arange_dynamic(
 def linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
              endpoint: bool = True, retstep: Literal[False] = False,
              dtype: DTypeLike | None = None,
-             axis: int = 0) -> Array: ...
+             axis: int = 0,
+             *, device: xc.Device | Sharding | None = None) -> Array: ...
 @overload
 def linspace(start: ArrayLike, stop: ArrayLike, num: int,
              endpoint: bool, retstep: Literal[True],
              dtype: DTypeLike | None = None,
-             axis: int = 0) -> tuple[Array, Array]: ...
+             axis: int = 0,
+             *, device: xc.Device | Sharding | None = None) -> tuple[Array, Array]: ...
 @overload
 def linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
              endpoint: bool = True, *, retstep: Literal[True],
              dtype: DTypeLike | None = None,
-             axis: int = 0) -> tuple[Array, Array]: ...
+             axis: int = 0,
+             device: xc.Device | Sharding | None = None) -> tuple[Array, Array]: ...
 @overload
 def linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
              endpoint: bool = True, retstep: bool = False,
              dtype: DTypeLike | None = None,
-             axis: int = 0) -> Array | tuple[Array, Array]: ...
-@util.implements(np.linspace)
+             axis: int = 0,
+             *, device: xc.Device | Sharding | None = None) -> Array | tuple[Array, Array]: ...
+@util.implements(np.linspace, extra_params="""
+device: optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+  to which the created array will be committed.
+""")
 def linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
              endpoint: bool = True, retstep: bool = False,
              dtype: DTypeLike | None = None,
-             axis: int = 0) -> Array | tuple[Array, Array]:
+             axis: int = 0,
+             *, device: xc.Device | Sharding | None = None) -> Array | tuple[Array, Array]:
   num = core.concrete_or_error(operator.index, num, "'num' argument of jnp.linspace")
   axis = core.concrete_or_error(operator.index, axis, "'axis' argument of jnp.linspace")
-  return _linspace(start, stop, num, endpoint, retstep, dtype, axis)
+
+  # TODO(vfdev-5): optimize putting the array directly on the device specified
+  # instead of putting it on default device and then on the specific device
+  output = _linspace(start, stop, num, endpoint, retstep, dtype, axis)
+  if device is not None:
+    return jax.device_put(output, device=device)
+  return output
 
 @partial(jit, static_argnames=('num', 'endpoint', 'retstep', 'dtype', 'axis'))
 def _linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
