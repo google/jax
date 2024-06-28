@@ -194,6 +194,8 @@ async def transfer_shard_to_host(shard: array.Shard) -> np.ndarray:
     sharding = jax.sharding.SingleDeviceSharding(shard.device,
         memory_kind="pinned_host")
     data = jax.device_put(data, sharding)
+    # Allow other transfers to be scheduled simultaneously
+    await asyncio.sleep(0)
   return np.array(data, copy=False)
 
 
