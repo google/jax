@@ -902,37 +902,44 @@ def dot_product_attention(
         not return_probs
     ), "Implementation `cudnn` doesn't support return_probs=True."
 
-  if implementation in ('xla', None):
-    encoded, probs = _dot_product_attention_xla(
-        query, key, value, bias, mask, is_causal=is_causal, scale=scale_val
-    )
-  elif implementation == 'cudnn':
-    mask_type = MaskType.CAUSAL if is_causal else MaskType.NO_MASK
-    # Convert bool mask to float mask for addition
-    if mask is not None:
-      assert mask.dtype == jnp.bool_
-      large_negative_number = _get_large_negative(query.dtype)
-      mask = jnp.where(mask, jnp.zeros((), query.dtype),
-                       large_negative_number)
-
-    # Prepare the bias for cudnn flash attention:
-    #   We should never use the mask argument of cudnn, because it is
-    #   multiplicative and thus the masked values (i.e. the zeros) will
-    #   still take part in the following softmax. So, we need to use the bias
-    #   argument for the mask to ensure the masked values are very small.
-    # TODO(kaixih@nvidia): The logic should be moved to the internal of
-    # cudnn_dot_product_attention.
-    if bias is None:
-      bias = mask
-    else:
+  match implementation:
+    case 'xla':
+      encoded, probs = _dot_product_attention_xla(
+          query, key, value, bias, mask, is_causal=is_causal, scale=scale_val
+      )
+    case 'cudnn':
+      mask_type = MaskType.CAUSAL if is_causal else MaskType.NO_MASK
+      # Convert bool mask to float mask for addition
       if mask is not None:
-        bias = bias + mask
+        assert mask.dtype == jnp.bool_
+        large_negative_number = _get_large_negative(query.dtype)
+        mask = jnp.where(mask, jnp.zeros((), query.dtype),
+                         large_negative_number)
 
-    encoded = cudnn_dot_product_attention(
-        query, key, value, bias, mask=None, scale=scale_val, mask_type=mask_type
-    )
-  else:
-    raise ValueError(f"Unsupported implementation option: {implementation}")
+      # Prepare the bias for cudnn flash attention:
+      #   We should never use the mask argument of cudnn, because it is
+      #   multiplicative and thus the masked values (i.e. the zeros) will
+      #   still take part in the following softmax. So, we need to use the bias
+      #   argument for the mask to ensure the masked values are very small.
+      # TODO(kaixih@nvidia): The logic should be moved to the internal of
+      # cudnn_dot_product_attention.
+      if bias is None:
+        bias = mask
+      else:
+        if mask is not None:
+          bias = bias + mask
+
+      encoded = cudnn_dot_product_attention(
+          query, key, value, bias, mask=None, scale=scale_val, mask_type=mask_type
+      )
+    case None:
+      # TODO(kaixih@nvidia) Defaults to XLA for now. Will automatically select
+      # best backend.
+      encoded, probs = _dot_product_attention_xla(
+          query, key, value, bias, mask, is_causal=is_causal, scale=scale_val
+      )
+    case _:
+      raise ValueError(f"Unsupported implementation option: {implementation}")
 
   if return_probs:
     return encoded, probs
