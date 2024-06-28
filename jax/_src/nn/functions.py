@@ -830,7 +830,7 @@ def dot_product_attention(
     *,
     scale: float | None = None,
     is_causal: bool = False,
-    implementation: str = 'xla',
+    implementation: str | None = 'xla',
     return_probs: bool = False) -> Union[Array, tuple[Array, Array], str]:
   r"""Scaled dot product attention function.
 
@@ -864,12 +864,13 @@ def dot_product_attention(
     scale: scale for the logits. If None, the scale will be set to 1 divided by
            the square root of query's head dimension (i.e. H).
     is_causal: If true, causal attention will be applied. Note, some
-               implemntations like `xla` will generate a mask tensor and apply
+               implementations like `xla` will generate a mask tensor and apply
                it to the logits, but other implementations like `cudnn` will
                avoid computing the unmasked regions.
-    implementation: A string to control which implementation to use. Supported
-                    strings are `xla` (default), `cudnn` (cuDNN flash
-                    attention).
+    implementation: A string to control which implementation backend to use.
+                    Supported strings are `xla`, `cudnn` (cuDNN flash
+                    attention). It defaults to `None`, which will automatically
+                    select the best available backend.
     return_probs: If True, then return a `(out, probs)` tuple, where `out` is
                   the attention output and `probs` is the softmax result.
 
@@ -901,7 +902,7 @@ def dot_product_attention(
         not return_probs
     ), "Implementation `cudnn` doesn't support return_probs=True."
 
-  if implementation == 'xla':
+  if implementation in ('xla', None):
     encoded, probs = _dot_product_attention_xla(
         query, key, value, bias, mask, is_causal=is_causal, scale=scale_val
     )
