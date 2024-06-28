@@ -909,10 +909,10 @@ def dot_product_attention(
     mask_type = MaskType.CAUSAL if is_causal else MaskType.NO_MASK
     # Convert bool mask to float mask for addition
     if mask is not None:
-      if mask.dtype == jnp.bool_:
-        large_negative_number = _get_large_negative(query.dtype)
-        mask = jnp.where(mask, jnp.zeros((), query.dtype),
-                         large_negative_number)
+      assert mask.dtype == jnp.bool_
+      large_negative_number = _get_large_negative(query.dtype)
+      mask = jnp.where(mask, jnp.zeros((), query.dtype),
+                       large_negative_number)
 
     # Prepare the bias for cudnn flash attention:
     #   We should never use the mask argument of cudnn, because it is
