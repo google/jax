@@ -831,7 +831,7 @@ def dot_product_attention(
     scale: float | None = None,
     is_causal: bool = False,
     implementation: str | None = 'xla',
-    return_probs: bool = False) -> Union[Array, tuple[Array, Array], str]:
+    return_probs: bool = False) -> Array | tuple[Array, Array]:
   r"""Scaled dot product attention function.
 
   Computes the attention function on Query, Key, and Value tensors:
@@ -878,6 +878,11 @@ def dot_product_attention(
     An array of the attention output with the same shape of :code:`query`; Or a
     tuple of the attention output and the intermediate softmax result if
     `return_probs` is True.
+
+  Raises:
+    ValueError: if the `implementation` is not a supported option from
+                ['xla', 'cudnn', None].
+
   """
   def _assert_has_shape(t: ArrayLike, shape: Sequence[int]) -> None:
     assert t.ndim == len(shape)
