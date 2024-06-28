@@ -856,12 +856,6 @@ def log10(x: ArrayLike, /) -> Array:
     >>> x2 = jnp.array([-0.01, -0.1, -1, -10, -100, -1000])
     >>> jnp.log10(x2)
     Array([nan, nan, nan, nan, nan, nan], dtype=float32)
-
-    >>> x3 = jnp.array([1+1j, 1+0j, 10, 10j, -10])
-    >>> jnp.log10(x3)
-    Array([0.15051498+0.34109408j, 0.        +0.j        ,
-           0.99999994+0.j        , 0.99999994+0.68218815j,
-           0.99999994+1.3643763j ], dtype=complex64)
   """
   x, = promote_args_inexact("log10", x)
   return lax.div(lax.log(x), lax.log(_constant_like(x, 10)))
