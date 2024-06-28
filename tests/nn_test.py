@@ -67,7 +67,7 @@ class NNFunctionsTest(jtu.JaxTestCase):
 
     out_ref = sdpa_xla(Q, K, V, bias)
     out_ans = sdpa_cudnn(Q, K, V, bias)
-    self.assertAllClose(out_ref, out_ans, atol=0.2, rtol=0.2)
+    self.assertAllClose(out_ref, out_ans, atol=.01, rtol=.01)
 
   @parameterized.parameters([
       [jnp.bfloat16, False],
@@ -100,7 +100,7 @@ class NNFunctionsTest(jtu.JaxTestCase):
     sdpa_cudnn = partial(sdpa, implementation='cudnn')
     _, sdpa_vjp_cudnn = jax.vjp(sdpa_cudnn, Q, K, V, bias)
     dQ_ans, dK_ans, dV_ans, dbias_ans = sdpa_vjp_cudnn(grad)
-    rtol, atol = (.02, .02)
+    rtol, atol = (.01, .01)
     self.assertAllClose(dQ_ref, dQ_ans, rtol=rtol, atol=atol)
     self.assertAllClose(dK_ref, dK_ans, rtol=rtol, atol=atol)
     self.assertAllClose(dV_ref, dV_ans, rtol=rtol, atol=atol)
@@ -130,16 +130,15 @@ class NNFunctionsTest(jtu.JaxTestCase):
 
     out_ref = sdpa(Q, K, V, bias, is_causal=True, implementation='xla')
 
-    atol = .02 if use_bias else .01
     # Test cudnn with runtime generated causal mask
     out_ans = sdpa(Q, K, V, bias, is_causal=True, implementation='cudnn')
-    self.assertAllClose(out_ref, out_ans, atol=atol)
+    self.assertAllClose(out_ref, out_ans, atol=.01)
 
     # Test cudnn with user-provided causal mask
     causal_mask = _get_causal_mask(T, Q.dtype)
     combined_bias = (bias + causal_mask) if use_bias else causal_mask
     out_ans = sdpa(Q, K, V, combined_bias, implementation='cudnn')
-    self.assertAllClose(out_ref, out_ans, atol=atol)
+    self.assertAllClose(out_ref, out_ans, atol=.01)
 
   @parameterized.parameters([
       [jnp.bfloat16, False],
@@ -177,7 +176,7 @@ class NNFunctionsTest(jtu.JaxTestCase):
     combined_bias = (bias + causal_mask) if use_bias else causal_mask
     _, sdpa_vjp_cudnn1 = jax.vjp(sdpa_cudnn1, Q, K, V, combined_bias, None)
 
-    rtol, atol = (.02, .02)
+    rtol, atol = (.01, .01)
     sdpa_fns = [sdpa_vjp_cudnn0, sdpa_vjp_cudnn1]
     for sdpa_fn in sdpa_fns:
       dQ_ans, dK_ans, dV_ans, dbias_ans, _ = sdpa_fn(grad)
@@ -185,7 +184,7 @@ class NNFunctionsTest(jtu.JaxTestCase):
       self.assertAllClose(dK_ref, dK_ans, rtol=rtol, atol=atol)
       self.assertAllClose(dV_ref, dV_ans, rtol=rtol, atol=atol)
       if use_bias:
-        self.assertAllClose(dbias_ref, dbias_ans, rtol=0.04, atol=atol)
+        self.assertAllClose(dbias_ref, dbias_ans, rtol=.03, atol=atol)
 
   @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def testSoftplusGrad(self):
