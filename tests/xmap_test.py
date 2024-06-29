@@ -1440,6 +1440,13 @@ class PDotTests(XMapTestCase):
     self.assertAllClose(lhs_bar, expected_lhs, check_dtypes=False)
     self.assertAllClose(rhs_bar, expected_rhs, check_dtypes=False)
 
+  def test_xeinsum_error(self):
+    with self.assertRaisesRegex(ValueError, "Output axes should be unique"):
+      lax.xeinsum("{i,j}->{j,i,j}", jnp.zeros((2, 2)))
+    with self.assertRaisesRegex(ValueError,
+                                "Output subscripts should be unique"):
+      lax.xeinsum("ij->jij", jnp.zeros((2, 2)))
+
   def test_xeinsum_vector_dot(self):
     rng = self.rng()
     x = rng.randn(3)
