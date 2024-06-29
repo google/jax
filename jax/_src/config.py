@@ -1677,3 +1677,8 @@ pmap_no_rank_reduction = bool_state(
         "If True, pmap shards have a the same rank as their enclosing array."
     )
 )
+
+rbg_remat_unsafe = define_bool_state(
+    name='jax_rbg_remat_unsafe',
+    default=False,
+    help=('Allows unsafe combination of jax.remat and rbg / unsafe_rbg PRNGs.'))
