@@ -760,7 +760,7 @@ def _flatten_bwd(in_tree, in_avals, out_trees, *args):
     raise TypeError(msg.format(in_tree2, in_tree)) from None
   results = []
   for kp, a, ct in zip(keypaths, in_avals, cts_in_flat):
-    if ct is zero or a != a.at_least_vspace():
+    if ct is zero:
       results.append(Zero(a.at_least_vspace()))
     elif type(ct) is SymbolicZero:
       if not core.typecompat(a.at_least_vspace(), a_ := ct.aval):
@@ -789,9 +789,7 @@ def _flatten_bwd(in_tree, in_avals, out_trees, *args):
 # TODO(mattjj): remove both these exceptions to cotangent compatibility check
 def _temporary_dtype_exception(a, a_) -> bool:
   if isinstance(a, core.ShapedArray) and isinstance(a_, core.ShapedArray):
-    return (a.shape == a_.shape and
-            (dtypes.issubdtype(a_.dtype, dtypes.extended) or
-             dtypes.issubdtype(a.dtype, dtypes.np.inexact)))
+    return a.shape == a_.shape
   return False
 
 # TODO(mattjj): remove both these exceptions to cotangent compatibility check
