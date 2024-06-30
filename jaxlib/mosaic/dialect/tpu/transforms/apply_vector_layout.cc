@@ -2741,7 +2741,7 @@ LogicalResult vector_load_rule(RewriteContext &ctx, Operation &op,
   const VectorLayout &layout_out = *layouts_out.front();
   ImplicitLocOpBuilder builder(op.getLoc(), &op);
   auto load_op = cast<vector::LoadOp>(op);
-  const auto memref_ty = cast<MemRefType>(load_op.getBase().getType());
+  const MemRefType memref_ty = load_op.getBase().getType();
   const auto vty = cast<VectorType>(load_op.getResult().getType());
   FAILUREOR_ASSIGN_OR_RETURN(
       VectorType target_ty,
@@ -2763,11 +2763,20 @@ LogicalResult vector_load_rule(RewriteContext &ctx, Operation &op,
   if (memref_tiling != layout_out.tiling() &&
       !(memref_tiling[0] == 1 && layout_out.tiling()[0] == 1 &&
         memref_tiling[1] % layout_out.tiling()[1] == 0)) {
-    // Now we can handle the case when tiling is (1, TARGET_SHAPE.lanes).
-    // TODO(b/295393167): need to support strided load for bitwidth < 32.
-    if (layout_out.bitwidth() != 32 ||
-        layout_out.tiling() != std::array<int64_t, 2>{1, ctx.target_shape[1]}) {
-      return op.emitOpError("Not implemented");
+    if (layout_out.bitwidth() == 32 &&
+        layout_out.tiling() == std::array<int64_t, 2>{1, ctx.target_shape[1]}) {
+      // Okay, we use strided loads when output tiling is (1, target_shape[1]).
+      // TODO(b/295393167): need to support strided load for bitwidth < 32.
+    } else if (*(memref_ty.getShape().end() - 1) <= memref_tiling[1] &&
+               layout_out.tiling()[1] == memref_tiling[1]) {
+      // Okay, memory layout degenerates to regular layout and we can load into
+      // any tiling.
+      // TODO(DO NOT SUBMIT): Check offsets too?
+    } else {
+      return op.emitOpError(
+                 "Not implemented: Unhandled mismatch between memory and "
+                 "vector tilings: ")
+             << memref_tiling << " vs. " << layout_out.tiling();
     }
   }
   // TODO(apaszke): Check that loads are from vmem!
@@ -3918,6 +3927,7 @@ LogicalResult vector_store_rule(RewriteContext &ctx, Operation &op,
   ImplicitLocOpBuilder builder(op.getLoc(), &op);
   vector::StoreOp store_op = cast<vector::StoreOp>(op);
   const VectorType ty = store_op.getValueToStore().getType();
+  const MemRefType memref_ty = store_op.getBase().getType();
   const VectorLayout &to_store_layout = *layouts_in.front();
   if (!ty.getRank()) {
     return op.emitOpError("Not implemented: scalar stores to vmem");
@@ -3936,11 +3946,20 @@ LogicalResult vector_store_rule(RewriteContext &ctx, Operation &op,
   if (memref_tiling != to_store_layout.tiling() &&
       !(memref_tiling[0] == 1 && to_store_layout.tiling()[0] == 1 &&
         memref_tiling[1] % to_store_layout.tiling()[1] == 0)) {
-    // Now we can handle the case when tiling is (1, TARGET_SHAPE.lanes).
-    // TODO(b/295393167): need to support strided store for bitwidth < 32.
-    if (to_store_layout.bitwidth() != 32 ||
-        to_store_layout.tiling() != Tiling{1, ctx.target_shape[1]}) {
-      return op.emitOpError("Not implemented");
+    if (to_store_layout.bitwidth() == 32 &&
+        to_store_layout.tiling() == std::array<int64_t, 2>{1, ctx.target_shape[1]}) {
+      // Okay, we use strided stores when output tiling is (1, target_shape[1]).
+      // TODO(b/295393167): need to support strided store for bitwidth < 32.
+    } else if (*(memref_ty.getShape().end() - 1) <= memref_tiling[1] &&
+               to_store_layout.tiling()[1] == memref_tiling[1]) {
+      // Okay, memory layout degenerates to regular layout and we can store from
+      // any tiling.
+      // TODO(DO NOT SUBMIT): Check offsets too?
+    } else {
+      return op.emitOpError(
+                 "Not implemented: Unhandled mismatch between memory and "
+                 "vector tilings: ")
+             << memref_tiling << " vs. " << to_store_layout.tiling();
     }
   }
 

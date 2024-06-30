@@ -1138,22 +1138,39 @@ class VectorLayoutInferer {
       setLayout(op, in_layout,
                 VectorLayout(bitwidth, {0, tile_offsets[0] % lane_tiling},
                              {1, lane_tiling}, ImplicitDim::kSecondMinor));
+      return success();
     } else {  // rank >= 2
       TPU_CHECK_OP(tiling.size() == 2, "Expected 2D tiling in 2D+ loads");
       CHECK_EQ(tile_offsets.size(), 2);
-      std::array<std::optional<int64_t>, 2> offsets;
       const auto tile_src_shape = src_ty.getShape().take_back(2);
       const auto tile_res_shape = res_ty.getShape().take_back(2);
       const int64_t num_sublanes = tile_res_shape[0];
       // For now, we focus on tilings that span full sublanes.
       TPU_CHECK_OP(tiling[1] == target_shape_[1],
                    "Unsupported tiling for 2d load");
-      // We can load starting from any row if the source has few columns,
-      // because the tiling structure degenerates to regular layout there.
-      // There is also no extra need for alignment if we load a single sublane.
+      const std::array<int64_t, 2> native_tiling = nativeTiling(bitwidth);
+      if (tile_src_shape[1] <= tiling[1]) {
+        // The tiling structure of the source degenerates to a (maybe padded)
+        // regular layout, that is, one with a single column of tiles.
+        // If memory tiling is (n, m), then any (k, m) memory tiling is
+        // equivalent for this shape (except for trailing padding).
+        // Assuming memory tiling matches vector native tiling on the minor
+        // dimension (this is not true of 1D tilings of packed types), we can
+        // use native tiling for the most compact representation and least
+        // amount of loads (or at least as good as other tilings).
+        // We can also load starting from any sublane (still need to align
+        // offset within the sublane for packed types).
+        CHECK_EQ(tiling[1], native_tiling[1]);
+        setLayout(
+            op, in_layout,
+            VectorLayout(bitwidth, {tile_offsets[0] % packing, tile_offsets[1]},
+                         native_tiling, ImplicitDim::kNone));
+        return success();
+      }
+      // No extra need for alignment if we load a single sublane.
       // TODO(apaszke): Also no need to align if we don't exceed the base chunk!
-      if (bitwidth == 32 &&
-          (tile_src_shape[1] <= target_shape_[1] || num_sublanes == 1)) {
+      std::array<std::optional<int64_t>, 2> offsets;
+      if (bitwidth == 32 && num_sublanes == 1) {
         offsets[0] = 0;
       } else {
         offsets[0] = tile_offsets[0];
@@ -1169,16 +1186,19 @@ class VectorLayoutInferer {
         setLayout(op, in_layout,
                   VectorLayout(bitwidth, offsets, {1, layout_tiling[1]},
                                ImplicitDim::kNone));
+        return success();
       } else if (num_sublanes == 1 && bitwidth == 32 &&
                  tiling == target_shape_) {
         // We can use replicated loads if we're only loading a single sublane.
         setLayout(op, in_layout,
                   VectorLayout(bitwidth, {std::nullopt, offsets[1]},
                                layout_tiling, ImplicitDim::kNone));
+        return success();
       } else {
         setLayout(
             op, in_layout,
             VectorLayout(bitwidth, offsets, layout_tiling, ImplicitDim::kNone));
+        return success();
       }
     }
     return success();
@@ -1448,6 +1468,9 @@ class VectorLayoutInferer {
     auto store_ty = op.getValueToStore().getType();
     TPU_CHECK_OP(ref_ty.getRank() == store_ty.getRank(),
                  "memref and vector rank mismatch");
+    const Layout maybe_src_layout = getLayout(op.getValueToStore());
+    TPU_CHECK_OP(maybe_src_layout.has_value(), "missing vector layout");
+    const VectorLayout &src_layout = *maybe_src_layout;
     int64_t rank = ref_ty.getRank();
     int8_t bitwidth = store_ty.getElementTypeBitWidth();
     if (kNativeBitwidth % bitwidth != 0) {
@@ -1495,35 +1518,63 @@ class VectorLayoutInferer {
     } else {  // rank >= 2  // NOLINT(readability-else-after-return)
       TPU_CHECK_OP(tiling.size() == 2, "Expected 2D tiling in 2D+ store");
       CHECK_EQ(tile_offsets.size(), 2);
-      std::array<std::optional<int64_t>, 2> offsets;
       const auto tile_ref_shape = ref_ty.getShape().take_back(2);
       const auto tile_store_shape = store_ty.getShape().take_back(2);
       const int64_t num_sublanes = tile_store_shape[0];
       // For now, we focus on tilings that span full sublanes.
       TPU_CHECK_OP(tiling[1] == target_shape_[1],
                    "Unsupported tiling for 2d store");
-      // We can store starting from any row if the source has few columns,
-      // because the tiling structure degenerates to regular layout there.
-      // There is also no extra need for alignment if we store a single sublane.
-      // TODO(apaszke): Also no need to align if we don't exceed the base chunk!
-      if (bitwidth == 32 &&
-          (tile_ref_shape[1] <= target_shape_[1] || num_sublanes == 1)) {
-        offsets[0] = 0;
+      const std::array<int64_t, 2> native_tiling = nativeTiling(bitwidth);
+      if (tile_ref_shape[1] <= tiling[1]) {
+        // The tiling structure of the source degenerates to a (maybe padded)
+        // regular layout, that is, one with a single column of tiles.
+        // If memory tiling is (n, m), then any (k, m) memory tiling is
+        // equivalent for this shape (except for trailing padding).
+        // We can store using any vector tiling that matches the memory tiling
+        // on the minor dimension. Native tiling is the most compact form but
+        // it's better to store directly than to retile, so we just use the
+        // source tiling.
+        // We can also store starting from any sublane (still need to align
+        // offset within the sublane for packed types).
+        if (src_layout.tiling()[1] == tiling[1] &&
+            (!src_layout.offsets()[0].has_value() ||
+             *src_layout.offsets()[0] % packing == tile_offsets[0] % packing) &&
+            src_layout.implicit_dim() == ImplicitDim::kNone) {
+          store_layout =
+              VectorLayout(bitwidth, {src_layout.offsets()[0], tile_offsets[1]},
+                           src_layout.tiling(), ImplicitDim::kNone);
+        } else {
+          // Try to default to native tiling
+          // TODO(tlongeri): Not sure if this is the right thing to do but it
+          //                 currently is probably better than falling through
+          //                 to other cases given that none of them take the
+          //                 source layout into account.
+          store_layout = VectorLayout(
+              bitwidth, {tile_offsets[0] % packing, tile_offsets[1]},
+              native_tiling, ImplicitDim::kNone);
+        }
       } else {
-        offsets[0] = tile_offsets[0];
-      }
-      offsets[1] = tile_offsets[1];
-      if (num_sublanes == 1 && bitwidth == 32 &&
-          tiling[1] == target_shape_[1] &&
-          tile_store_shape[1] > target_shape_[1]) {
-        // We can strided store sublanes if we're storing a single sublane for
-        // multiple times. Enabling this helps store one entire row to memref
-        // more efficiently.
-        store_layout = VectorLayout(store_ty.getElementTypeBitWidth(), offsets,
-                                    {1, tiling[1]}, ImplicitDim::kNone);
-      } else {
-        store_layout = VectorLayout(store_ty.getElementTypeBitWidth(), offsets,
-                                    {tiling[0], tiling[1]}, ImplicitDim::kNone);
+      // No extra need for alignment if we load a single sublane.
+        // TODO(apaszke): Also no need to align if we don't exceed the base chunk!
+        std::array<std::optional<int64_t>, 2> offsets;
+        if (bitwidth == 32 && num_sublanes == 1) {
+          offsets[0] = 0;
+        } else {
+          offsets[0] = tile_offsets[0];
+        }
+        offsets[1] = tile_offsets[1];
+        if (num_sublanes == 1 && bitwidth == 32 &&
+            tiling[1] == target_shape_[1] &&
+            tile_store_shape[1] > target_shape_[1]) {
+          // We can strided store sublanes if we're storing a single sublane for
+          // multiple times. Enabling this helps store one entire row to memref
+          // more efficiently.
+          store_layout = VectorLayout(store_ty.getElementTypeBitWidth(), offsets,
+                                      {1, tiling[1]}, ImplicitDim::kNone);
+        } else {
+          store_layout = VectorLayout(store_ty.getElementTypeBitWidth(), offsets,
+                                      {tiling[0], tiling[1]}, ImplicitDim::kNone);
+        }
       }
     }
     SmallVector<Layout, 5> in_layout{store_layout};
