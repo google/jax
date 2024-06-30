@@ -137,7 +137,7 @@ class JaxArrayTest(jtu.JaxTestCase):
       self.assertEqual(s.data.aval,
                        core.ShapedArray(expected_shard_shape, s.data.dtype))
       self.assertArraysEqual(s.data, global_input_data[s.index])
-      self.assertArraysEqual(s.data, arr.addressable_data(i))
+      self.assertArraysEqual(s.data, i.data)
 
     for g, l in safe_zip(arr.global_shards, arr.addressable_shards):
       self.assertEqual(g.device, l.device)
@@ -151,8 +151,8 @@ class JaxArrayTest(jtu.JaxTestCase):
     shape = (8, 2)
     s = jax.sharding.NamedSharding(global_mesh, P(None))
     arr, inp_data = create_array(shape, s)
-    for i in range(len(arr)):
-      self.assertArraysEqual(inp_data, arr.addressable_data(i))
+    for _ in range(len(arr)):
+      self.assertArraysEqual(inp_data, arr.fully_replicated_shard)
 
   def test_array_delete(self):
     global_mesh = jtu.create_global_mesh((4, 2), ('x', 'y'))
@@ -600,7 +600,7 @@ class JaxArrayTest(jtu.JaxTestCase):
       self.assertIsInstance(a.data, array.ArrayImpl)
 
     x = jnp.array([1, 2, 3])
-    self.assertIsInstance(x.addressable_data(0), array.ArrayImpl)
+    self.assertIsInstance(x.fully_replicated_shard, array.ArrayImpl)
 
   def test_array_not_hashable(self):
     x = jnp.arange(4)
@@ -772,7 +772,7 @@ class JaxArrayTest(jtu.JaxTestCase):
     self.assertEqual(fs.shape, inp_shape)
     self.assertTrue(dispatch.is_single_device_sharding(fs.sharding))
     self.assertArraysEqual(fs, inp_data)
-    self.assertArraysEqual(arr.addressable_data(0), inp_data)
+    self.assertArraysEqual(arr.fully_replicated_shard, inp_data)
 
   def test_shard_array_to_fully_replicated(self):
     global_mesh = jtu.create_global_mesh((4, 2), ('x', 'y'))

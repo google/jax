@@ -80,6 +80,16 @@ class Array(abc.ABC):
 
   @property
   @abc.abstractmethod
+  def full_replicated_shard(self) -> Array:
+    """Returns a single device jax.Array from a global fully replicated jax.Array.
+    
+    Raises an error if jax.Array is not fully replicated. To access
+    addressable shards if the jax.Array is not fully replicated, use
+    `.addressable_shards`.
+    """
+
+  @property
+  @abc.abstractmethod
   def addressable_shards(self) -> Sequence[Shard]:
     """List of addressable shards."""
 

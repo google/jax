@@ -506,6 +506,23 @@ class ArrayImpl(basearray.Array):
       return self._fully_replicated_shard()
     return self._arrays[index]
 
+  @property
+  def full_replicated_shard(self) -> ArrayImpl:
+    """Returns a single device jax.Array from a global fully replicated jax.Array.
+    
+    Raises an error if jax.Array is not fully replicated. To access
+    addressable shards if the jax.Array is not fully replicated, use
+    `.addressable_shards`.
+    """
+    self._check_if_deleted()
+    if not self.is_fully_replicated:
+      raise ValueError(
+          "`fully_replicated_shard` is only valid for a jax.Array that is fully"
+          " replicated. You should use this to get a single device jax.Array"
+          " from a fully replicated jax.Array. Use `.addressable_shards` if the"
+          " jax.Array is not fully replicated,")
+    return self._fully_replicated_shard()
+
   @functools.cached_property
   def addressable_shards(self) -> Sequence[Shard]:
     self._check_if_deleted()
