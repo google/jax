@@ -18,12 +18,13 @@ limitations under the License.
 //
 // To build a HloModule,
 //
-// $ python3 jax/tools/jax_to_hlo.py \
+// $ python3 jax/tools/jax_to_ir.py \
 // --fn examples.jax_cpp.prog.fn \
 // --input_shapes '[("x", "f32[2,2]"), ("y", "f32[2,2]")]' \
 // --constants '{"z": 2.0}' \
-// --hlo_text_dest /tmp/fn_hlo.txt \
-// --hlo_proto_dest /tmp/fn_hlo.pb
+// --ir_format HLO \
+// --ir_human_dest /tmp/fn_hlo.txt \
+// --ir_dest /tmp/fn_hlo.pb
 //
 // To load and run the HloModule,
 //
