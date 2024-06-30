@@ -44,11 +44,13 @@ def _dtype(x):
 _default_tolerance = {
   _dtypes.float0: 0,
   np.dtype(np.bool_): 0,
+  np.dtype(_dtypes.int2): 0,
   np.dtype(_dtypes.int4): 0,
   np.dtype(np.int8): 0,
   np.dtype(np.int16): 0,
   np.dtype(np.int32): 0,
   np.dtype(np.int64): 0,
+  np.dtype(_dtypes.uint2): 0,
   np.dtype(_dtypes.uint4): 0,
   np.dtype(np.uint8): 0,
   np.dtype(np.uint16): 0,
@@ -104,14 +106,14 @@ def _assert_numpy_allclose(a, b, atol=None, rtol=None, err_msg=''):
   def maybe_upcast(x):
     if x.dtype in custom_float_dtypes:
       return x.astype(np.float32)
-    # TODO(reedwm): Upcasting int4 to int8 will no longer be neccessary once
+    # TODO(reedwm): Upcasting int2/int4 to int8 will no longer be necessary once
     # ml_dtypes has a stable release with commit
     # https://github.com/jax-ml/ml_dtypes/commit/348fd3704306cae97f617c38045cee6bc416bf10.
     # Remove these checks once JAX depends on a version on ml_dtypes with that
     # commit.
-    if x.dtype == _dtypes.int4:
+    if x.dtype in (_dtypes.int2,_dtypes.int4):
       return x.astype(np.int8)
-    if x.dtype == _dtypes.uint4:
+    if x.dtype in (_dtypes.uint2, _dtypes.uint4):
       return x.astype(np.uint8)
     return x
 

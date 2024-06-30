@@ -246,6 +246,11 @@ _DT = {
     'f16': jnp.float16, 'f32': jnp.float32, 'f64': jnp.float64,
     'c64': jnp.complex64, 'c128': jnp.complex128
 }
+if hasattr(jnp, 'int2'):
+  _DT['s2'] = jnp.int2
+if hasattr(jnp, 'uint2'):
+  _DT['u2'] = jnp.uint2
+
 _SHAPE_RE = re.compile(f"^({'|'.join(_DT)})\\[\\s*(\\d*[\\s*,\\d+]*)\\s*\\]$")
 
 

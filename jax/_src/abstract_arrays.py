@@ -40,6 +40,11 @@ numpy_scalar_types: set[type] = {  # pylint: disable=g-bare-generic
     np.bool_, np.longlong, np.intc,
 } | {np.dtype(dt).type for dt in dtypes._float_types}
 
+if dtypes.int2 is not None:
+  assert dtypes.uint2 is not None
+  numpy_scalar_types.add(dtypes.int2)
+  numpy_scalar_types.add(dtypes.uint2)
+
 array_types: set[type] = {np.ndarray} | numpy_scalar_types  # pylint: disable=g-bare-generic
 
 def canonical_concrete_aval(val, weak_type=None):

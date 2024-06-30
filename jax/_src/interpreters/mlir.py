@@ -165,6 +165,17 @@ _dtype_to_ir_type : dict[np.dtype, Callable[[], ir.Type]] = {
   np.dtype(np.complex128): lambda: ir.ComplexType.get(ir.F64Type.get()),
 }
 
+
+if dtypes.int2 is not None:
+  assert dtypes.uint2 is not None
+  _dtype_to_ir_type[np.dtype(dtypes.int2)] = partial(
+      ir.IntegerType.get_signless, 2
+  )
+  _dtype_to_ir_type[np.dtype(dtypes.uint2)] = partial(
+      ir.IntegerType.get_unsigned, 2
+  )
+
+
 def dtype_to_ir_type(dtype: core.bint | np.dtype | np.generic) -> ir.Type:
   if isinstance(dtype, core.bint):
     # TODO Support different-size underlying dtypes to take advantage of the

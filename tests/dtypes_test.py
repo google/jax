@@ -45,9 +45,14 @@ np_unsigned_dtypes = [np.dtype('uint8'), np.dtype('uint16'), np.dtype('uint32'),
                      np.dtype('uint64')]
 unsigned_dtypes = list(np_unsigned_dtypes)
 
-int4_dtypes = [np.dtype('int4'), np.dtype('uint4')]
+intn_dtypes = [np.dtype('int4'), np.dtype('uint4')]
 signed_dtypes += [np.dtype('int4')]
 unsigned_dtypes += [np.dtype('uint4')]
+if dtypes.int2 is not None:
+  assert dtypes.uint2 is not None
+  intn_dtypes[:0] = [np.dtype('int2'), np.dtype('uint2')]
+  signed_dtypes[:0] = [np.dtype('int2')]
+  unsigned_dtypes[:0] = [np.dtype('uint2')]
 
 np_float_dtypes = [np.dtype('float16'), np.dtype('float32'),
                    np.dtype('float64')]
@@ -224,7 +229,7 @@ class DtypesTest(jtu.JaxTestCase):
       # TODO(zhangqiaorjc): Consider more dtype promotion rules for fp8.
       if t1 in fp8_dtypes:
         continue
-      if t1 in int4_dtypes:
+      if t1 in intn_dtypes:
         continue
       self.assertEqual(np.dtype(np.complex128),
                        dtypes.promote_types(t1, np.complex128))
@@ -233,7 +238,7 @@ class DtypesTest(jtu.JaxTestCase):
         # TODO(zhangqiaorjc): Consider more dtype promotion rules for fp8.
         if t2 in fp8_dtypes:
           continue
-        if t2 in int4_dtypes:
+        if t2 in intn_dtypes:
           continue
         # Symmetry
         self.assertEqual(dtypes.promote_types(t1, t2),
@@ -249,7 +254,7 @@ class DtypesTest(jtu.JaxTestCase):
         # TODO(zhangqiaorjc): Consider more dtype promotion rules for fp8.
         if t in fp8_dtypes:
           continue
-        if t in int4_dtypes or i in int4_dtypes:
+        if t in intn_dtypes or i in intn_dtypes:
           continue
         self.assertEqual(t, dtypes.promote_types(t, i))
 
@@ -319,14 +324,14 @@ class DtypesTest(jtu.JaxTestCase):
       self.assertFalse(dtypes.issubdtype(dt, np.float64))
       self.assertFalse(dtypes.issubdtype(np.generic, dt))
 
-  @parameterized.product(dtype=int4_dtypes)
-  def testIsSubdtypeInt4(self, dtype):
-    if dtype == 'int4':
+  @parameterized.product(dtype=intn_dtypes)
+  def testIsSubdtypeIntN(self, dtype):
+    if dtype in ('int2', 'int4'):
       int_category = np.signedinteger
-    elif dtype == 'uint4':
+    elif dtype in ('uint2', 'uint4'):
       int_category = np.unsignedinteger
     else:
-      raise ValueError("Unexpected dtype: {dtype}")
+      raise ValueError(f'Unexpected dtype: {dtype}')
     for dt in [dtype, np.dtype(dtype), str(np.dtype(dtype))]:
       self.assertTrue(dtypes.issubdtype(dt, dt))
       self.assertTrue(dtypes.issubdtype(dt, np.dtype(dtype)))
@@ -802,7 +807,7 @@ class TestPromotionTables(jtu.JaxTestCase):
   )
   def testUnaryPromotion(self, dtype, weak_type):
     # Regression test for https://github.com/google/jax/issues/6051
-    if dtype in int4_dtypes:
+    if dtype in intn_dtypes:
       self.skipTest("XLA support for int4 is incomplete.")
     x = lax_internal._convert_element_type(0, dtype, weak_type=weak_type)
     if weak_type:
@@ -823,12 +828,14 @@ class TestPromotionTables(jtu.JaxTestCase):
 
   @jax.numpy_dtype_promotion('standard')
   @jtu.run_on_devices("tpu")
-  def testInt4PromotionError(self):
-    for dtype in int4_dtypes:
+  def testInt2PromotionError(self):
+    for dtype in intn_dtypes:
       x = jnp.array(1, dtype=dtype)
       y = jnp.array(1, dtype='int32')
-      with self.assertRaisesRegex(dtypes.TypePromotionError,
-                                  ".*4-bit integers do not support implicit promotion"):
+      with self.assertRaisesRegex(
+          dtypes.TypePromotionError,
+          '.*[24]-bit integers do not support implicit promotion',
+      ):
         x + y
 
   @jtu.sample_product(
@@ -839,7 +846,7 @@ class TestPromotionTables(jtu.JaxTestCase):
   def testBinaryNonPromotion(self, dtype, weak_type, promotion):
     if dtype in fp8_dtypes:
       self.skipTest("XLA support for float8 is incomplete.")
-    if dtype in int4_dtypes:
+    if dtype in intn_dtypes:
       self.skipTest("XLA support for int4 is incomplete.")
     # Regression test for https://github.com/google/jax/issues/6051
     x = lax_internal._convert_element_type(0, dtype, weak_type=weak_type)
@@ -869,7 +876,7 @@ class TestPromotionTables(jtu.JaxTestCase):
     for weak_type in [True, False]
   )
   def testArrayRepr(self, dtype, weak_type):
-    if dtype in int4_dtypes and not jtu.test_device_matches(["tpu"]):
+    if dtype in intn_dtypes and not jtu.test_device_matches(['tpu']):
       self.skipTest("XLA support for int4 is incomplete.")
     val = lax_internal._convert_element_type(0, dtype, weak_type=weak_type)
     rep = repr(val)
