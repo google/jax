@@ -59,7 +59,7 @@ export JAX_ROCM_VERSION=${rocm_version//./}
 #Build and install wheel
 python3 ./build/build.py --enable_rocm --build_gpu_plugin --gpu_plugin_rocm_version=60 --rocm_path=${ROCM_PATH} --bazel_options=--override_repository=xla=${XLA_CLONE_DIR}
 
-JAX_RELEASE=1 python -m build
+JAX_RELEASE=1 python3 -m build
 pip3 install --force-reinstall dist/*.whl  # installs jaxlib (includes XLA)
 
 #This is for CI to read without having to start the container again
