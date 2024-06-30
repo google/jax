@@ -387,7 +387,7 @@ class Literal:
 
   def __repr__(self):
     if hasattr(self, 'hash'):
-      return f'{self.val}'
+      return f'{self.val}:{self.aval.str_short(short_dtypes=True)}'
     else:
       return f'Literal(val={self.val})'
 
