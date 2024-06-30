@@ -108,7 +108,7 @@ build:rocm_plugin --define=xla_python_enable_gpu=false
 build:cuda --linkopt=-Wl,--disable-new-dtags
 
 build:cuda_clang --@local_config_cuda//:cuda_compiler=clang
-build:cuda_clang --action_env=CLANG_CUDA_COMPILER_PATH="/usr/lib/llvm-17/bin/clang"
+build:cuda_clang --action_env=CLANG_CUDA_COMPILER_PATH="/usr/lib/llvm-18/bin/clang"
 build:cuda_clang --action_env=TF_CUDA_CLANG="1"
 # Disable clang extention that rejects type definitions within offsetof.
 # This was added in clang-16 by https://reviews.llvm.org/D133574.
