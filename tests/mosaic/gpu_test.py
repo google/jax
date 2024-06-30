@@ -863,7 +863,10 @@ class FragmentedArrayTest(TestCase):
         np.testing.assert_array_equal(result, np_op(ref_x, ref_rhs))
 
   @parameterized.product(
-      ops=((lambda x: mgpu.FragmentedArray.exp(x), np.exp),),
+      ops=((lambda x: mgpu.FragmentedArray.exp(x), np.exp),
+           (mgpu.gelu, jax.nn.gelu),
+           (mgpu.relu, jax.nn.relu),
+           (mgpu.sigmoid, jax.nn.sigmoid)),
       m=(64, 128),
       n=(8, 16, 32, 64, 80, 128, 256),
   )
