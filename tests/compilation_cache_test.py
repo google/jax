@@ -416,15 +416,18 @@ class CompilationCacheTest(CompilationCacheTestCase):
 
   def test_backend_serialization_deserialization(self):
     backend = xla_bridge.get_backend()
-    executable = (
+    computation = str(
         jax.jit(lambda x, y: x + y)
         .lower(np.array(1.), np.array(1.))
-        .compile()
-        .runtime_executable()
+        .compiler_ir()
     )
+    compile_options = compiler.get_compile_options(
+        num_replicas=1, num_partitions=1
+    )
+    executable = backend.compile(computation, compile_options)
     serialized_executable = backend.serialize_executable(executable)
     deserialized_executable = backend.deserialize_executable(
-        serialized_executable, None)
+        serialized_executable, compile_options)
     self.assertEqual(
         executable.fingerprint, deserialized_executable.fingerprint)
 
