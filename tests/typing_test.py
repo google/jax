@@ -74,6 +74,10 @@ class TypingTest(jtu.JaxTestCase):
     out5: typing.DType = dtypelike_to_dtype(HasDType("float32"))
     self.assertEqual(out5, float32_dtype)
 
+  def testSupportsDTypeInstance(self) -> None:
+    self.assertFalse(isinstance(np.dtype(float), typing.SupportsDType))
+    self.assertTrue(isinstance(np.float32, typing.SupportsDType))
+
   def testArrayLike(self) -> None:
     out1: typing.Array = arraylike_to_array(jnp.arange(4))
     self.assertArraysEqual(out1, jnp.arange(4))
