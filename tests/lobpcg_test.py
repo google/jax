@@ -30,6 +30,7 @@ import scipy.linalg as sla
 import scipy.sparse as sps
 
 import jax
+from jax._src import config
 from jax._src import test_util as jtu
 from jax.experimental.sparse import linalg, bcoo
 import jax.numpy as jnp
@@ -406,13 +407,14 @@ class F32LobpcgTest(LobpcgTest):
     self.checkApproxEigs(matrix_name, jnp.float32)
 
 
-@jtu.with_config(jax_enable_x64=True)
 class F64LobpcgTest(LobpcgTest):
 
   def setUp(self):
     # TODO(phawkins): investigate this failure
     if jtu.test_device_matches(["gpu"]):
       raise unittest.SkipTest("Test is failing on CUDA gpus")
+    if not config.enable_x64.value:
+      raise unittest.SkipTest("Test requires X64")
     super().setUp()
 
   @parameterized.named_parameters(_make_concrete_cases(f64=True))
