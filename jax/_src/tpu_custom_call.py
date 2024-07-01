@@ -251,7 +251,8 @@ def _lower_tpu_kernel(
 ) -> ir.Module:
   """Runs MLIR passes lowering the given module to an MLIR module.
 
-  Uses Python versions of infer-memref-layout and apply-vector-layout.
+  Uses Python versions of canonicalize-mosaic,infer-memref-layout and 
+    apply-vector-layout.
 
   Args:
     module: The MLIR module to lower.
@@ -318,6 +319,13 @@ def _lower_tpu_kernel(
         raise ValueError(
             f"Unrecognized on-device check categories: {', '.join(checks)}"
         )
+
+    pipeline = [
+        "func.func(tpu-canonicalize-mosaic{})",
+    ]
+    pipeline = PassManager.parse(f"builtin.module({','.join(pipeline)})")
+    pipeline.run(module.operation)
+    dump_mlir(module, "post-canonicalize-mosaic")
 
     pipeline = [
         "func.func(tpu-infer-vector-layout{sublane-count=8 lane-count=128})",

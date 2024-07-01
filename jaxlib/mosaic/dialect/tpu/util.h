@@ -4,6 +4,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <sstream>
+#include <string>
 #include <type_traits>
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -81,6 +83,21 @@ inline arith::ConstantOp IdxConst(int64_t idx, OpBuilder &builder,
                                   Location loc) {
   return builder.create<arith::ConstantOp>(loc, builder.getIndexType(),
                                            builder.getIndexAttr(idx));
+}
+
+// Debug only util.
+template <typename T>
+std::string shapeToString(const T &shape) {
+  std::ostringstream os;
+  os << "(";
+  for (auto it = shape.begin(); it != shape.end(); ++it) {
+    if (it != shape.begin()) {
+      os << ",";
+    }
+    os << *it;
+  }
+  os << ")";
+  return os.str();
 }
 
 }  // namespace mlir::tpu
