@@ -982,9 +982,17 @@ def _pbroadcast_lowering(ctx, x, *, axis_name, source):
   def source_to_front(group):
     return [group[source]] + list(group[:source]) + list(group[source + 1:])
   replica_groups = [source_to_front(group) for group in replica_groups]
-  channel = ctx.module_context.new_channel()
+  axis_context = ctx.module_context.axis_context
+  is_manual = (
+      isinstance(axis_context, sharding_impls.SPMDAxisContext)
+      and axis_context.manual_axes
+  )
+  other_args = dict()
+  if is_manual:
+    channel = ctx.module_context.new_channel()
+    other_args['channel_handle'] = hlo.ChannelHandle.get(channel, mlir.DEVICE_TO_DEVICE_TYPE)
   return hlo.CollectiveBroadcastOp(
-      x, replica_groups=_replica_groups_hlo(replica_groups)).results
+      x, replica_groups=_replica_groups_hlo(replica_groups), **other_args).results
 
 pbroadcast_p = core.AxisPrimitive('pbroadcast')
 pbroadcast_p.def_abstract_eval(lambda x, **params: raise_to_shaped(x))
