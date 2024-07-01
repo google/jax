@@ -103,6 +103,11 @@ SCAN_IMPLS_WITH_FOR = [
     (scan_with_remat_for, 'for_loop_remat'),
 ]
 
+MAP_IMPLS = [
+  (lax.map, 'unroll1'),
+  (partial(lax.map, unroll=2), 'unroll2'),
+]
+
 def while_loop_new_checkpoint(cond_fun, body_fun, init_val):
   return new_checkpoint(partial(lax.while_loop, cond_fun, body_fun))(init_val)
 
@@ -2095,18 +2100,47 @@ class LaxControlFlowTest(jtu.JaxTestCase):
     f = partial(lax.scan, lambda c, x: (c + lax.psum(x, "i") , c), 0.)
     jax.pmap(f, axis_name="i")(jnp.ones((num_devices, 4)))  # doesn't crash
 
-  def testMap(self):
+  @parameterized.named_parameters(
+      {"testcase_name": "_imp={}".format(map_name), "_map": map_impl}
+      for map_impl, map_name in MAP_IMPLS)
+  def testMap(self, _map):
     f = lambda x: x ** 2
     xs = jnp.arange(10)
     expected = xs ** 2
-    actual = lax.map(f, xs)
+    actual = _map(f, xs)
     self.assertAllClose(actual, expected)
 
-  def testMapEmpty(self):
+  @parameterized.named_parameters(
+      {"testcase_name": "_imp={}".format(map_name), "_map": map_impl}
+      for map_impl, map_name in MAP_IMPLS)
+  def testMapEmpty(self, _map):
     # https://github.com/google/jax/issues/2412
-    ans = lax.map(lambda x: x * x, jnp.array([]))
+    ans = _map(lambda x: x * x, jnp.array([]))
     expected = jnp.array([])
     self.assertAllClose(ans, expected)
+
+  def test_map_unroll(self):
+    d = jnp.ones(2)
+    def f(a):
+      assert a.shape == (3,)
+      b = jnp.cos(jnp.sum(jnp.sin(a)) + jnp.sum(d))
+      assert b.shape == ()
+      return b
+
+    xs = jnp.ones((5, 3))
+
+    _map = lambda xs: lax.map(f, xs)
+    map_unrolled = lambda xs: lax.map(f, xs, unroll=2)
+
+    # jaxprs should be the same size
+    self.assertEqual(
+        len(str(jax.make_jaxpr(_map)(xs))),
+        len(str(jax.make_jaxpr(map_unrolled)(xs))))
+
+    # but HLO should grow due to unrolling
+    self.assertLess(
+        len(str(jax.xla_computation(_map)(xs).as_hlo_text())),
+        len(str(jax.xla_computation(map_unrolled)(xs).as_hlo_text())))
 
   def testCaching(self):
     def cond(x):

@@ -2080,7 +2080,7 @@ def fori_loop(lower, upper, body_fun, init_val,
 ### map and miscellaneous rules
 
 @api_boundary
-def map(f, xs):
+def map(f: Callable[[X], Y], xs: X, unroll: int = 1):
   """Map a function over leading array axes.
 
   Like Python's builtin map, except inputs and outputs are in the form of
@@ -2103,12 +2103,15 @@ def map(f, xs):
     f: a Python function to apply element-wise over the first axis or axes of
       ``xs``.
     xs: values over which to map along the leading axis.
+    unroll: optional positive int specifying, in the underlying operation of the
+      scan primitive, how many scan iterations to unroll within a single
+      iteration of a loop.
 
   Returns:
     Mapped values.
   """
   g = lambda _, x: ((), f(x))
-  _, ys = scan(g, (), xs)
+  _, ys = scan(g, (), xs, unroll=unroll)
   return ys
 
 def _rng_bit_generator_batching_rule(batched_args, batch_dims, *, shape, dtype, algorithm):
