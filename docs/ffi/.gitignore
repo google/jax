@@ -1,0 +1,5 @@
+CMake*
+cmake*
+Makefile
+*.so
+*.dylib
