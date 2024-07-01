@@ -320,6 +320,7 @@ py_extension(
         "@pybind11",
         "@stablehlo//:reference_api",
         "@stablehlo//:stablehlo_capi_headers",
+        "@stablehlo//:stablehlo_passes",
         "@stablehlo//:stablehlo_portable_api",
         "@stablehlo//:stablehlo_serialization",
     ],
