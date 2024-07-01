@@ -49,15 +49,12 @@ DOCKER_CONTEXT_PATH="${SCRIPT_DIR}"
 KEEP_IMAGE="--rm"
 KEEP_CONTAINER="--rm"
 PYTHON_VERSION="3.10.0"
-ROCM_VERSION="6.0.0" #Point to latest release
+ROCM_VERSION="6.1.0" #Point to latest release
 BASE_DOCKER="ubuntu:20.04"
 CUSTOM_INSTALL=""
-#BASE_DOCKER="compute-artifactory.amd.com:5000/rocm-plus-docker/compute-rocm-rel-6.0:91-ubuntu-20.04-stg2"
-#CUSTOM_INSTALL="custom_install_dummy.sh"
-#ROCM_PATH="/opt/rocm-5.6.0"
 POSITIONAL_ARGS=()
 
-RUNTIME_FLAG=1
+RUNTIME_FLAG=0
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -86,11 +83,10 @@ while [[ $# -gt 0 ]]; do
       ROCM_VERSION="$2"
       shift 2
       ;;
-    #--rocm_path)
-    #  ROCM_PATH="$2"
-    #  shift 2
-    #  ;;
-
+    --rocm_path)
+      ROCM_PATH="$2"
+      shift 2
+      ;;
     *)
       POSITIONAL_ARGS+=("$1")
       shift
@@ -138,15 +134,18 @@ echo "Python Version (${PYTHON_VERSION})"
 if [[ "${RUNTIME_FLAG}" -eq 1  ]]; then
   echo "Building (runtime) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
   docker build --target rt_build --tag ${DOCKER_IMG_NAME} \
-        --build-arg PYTHON_VERSION=$PYTHON_VERSION  --build-arg ROCM_VERSION=$ROCM_VERSION \
-        --build-arg CUSTOM_INSTALL=$CUSTOM_INSTALL \
+        --build-arg PYTHON_VERSION=$PYTHON_VERSION \
+        --build-arg ROCM_VERSION=$ROCM_VERSION \
         --build-arg BASE_DOCKER=$BASE_DOCKER \
+        --build-arg CUSTOM_INSTALL=$CUSTOM_INSTALL \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"
 else
-  echo "Building (CI) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
-  docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
+  echo "Building (build) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
+  docker build --target b_build --tag ${DOCKER_IMG_NAME} \
         --build-arg PYTHON_VERSION=$PYTHON_VERSION \
+        --build-arg ROCM_VERSION=$ROCM_VERSION \
         --build-arg BASE_DOCKER=$BASE_DOCKER \
+        --build-arg CUSTOM_INSTALL=$CUSTOM_INSTALL \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"  
 fi
 
