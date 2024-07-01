@@ -222,44 +222,12 @@ def _global_to_local_aval(global_aval, mesh, pspec):
                                    global_aval)
 
 
-def host_local_array_to_global_array_impl(
-    arr: Any, *, global_mesh: jax.sharding.Mesh, pspec: Any):
-  if pspec is None:
-    raise ValueError(
-        '`None` is not a valid input to the pspecs argument. Please use '
-        'jax.sharding.PartitionSpec() if you wanted to replicate your input.')
-  # If the Array is not fully addressable i.e. not host local, return it.
-  if isinstance(arr, array.ArrayImpl) and not arr.is_fully_addressable:
-    return arr
-  if isinstance(arr, array.ArrayImpl) and isinstance(
-      arr.sharding, jax.sharding.PmapSharding):
-    arr = np.array(arr)
-
-  local_sharding = jax.sharding.NamedSharding(global_mesh.local_mesh, pspec)
-
-  # If the input is a concrete jax.Array and the input array sharding
-  # matches the `local_sharding`, then there's no need to reshard and create
-  # copies.
-  if (isinstance(arr, array.ArrayImpl) and
-      arr.sharding.is_equivalent_to(local_sharding, arr.ndim)):
-    arrays = [x.data for x in arr.addressable_shards]
-  else:
-    arr = xla.canonicalize_dtype(arr)
-    arrays = [
-        arr[index]
-        for d, index in local_sharding.devices_indices_map(arr.shape).items()]
-
-  global_aval = _local_to_global_aval(
-      core.ShapedArray(arr.shape, arr.dtype), global_mesh, pspec)
-
-  return pxla.batched_device_put(
-      global_aval, jax.sharding.NamedSharding(global_mesh, pspec),
-      arrays, list(global_mesh.local_mesh.devices.flat))
-
-
 def host_local_array_to_global_array(
     local_inputs: Any, global_mesh: jax.sharding.Mesh, pspecs: Any):
   r"""Converts a host local value to a globally sharded jax.Array.
+
+  Under the hood this function uses jax.make_array_from_host_local_data to
+  create a jax.Array, but it has a few compatibility quirks.
 
   This function takes host-local data (which might be different
   across hosts), and populates a global array with this data, where each
@@ -271,7 +239,8 @@ def host_local_array_to_global_array(
   >>> global_mesh = jax.sharding.Mesh(jax.devices(), 'x')
   >>> pspecs = jax.sharding.PartitionSpec('x')
   >>> host_id = jax.process_index()
-  >>> arr = host_local_array_to_global_array(np.arange(4) * host_id, mesh, pspecs)  # NB: assumes jax.local_device_count() divides 4.   # doctest: +SKIP
+  >>> arr = host_local_array_to_global_array(np.arange(4) * host_id, mesh,
+  pspecs)  # NB: assumes jax.local_device_count() divides 4.   # doctest: +SKIP
 
   The resulting array will have the shape (4 * num_processes) and will
   have distributed value of: (0, 1, 2, 3, 0, 2, 4, 6, 0, 3, 6, 9, ... ),
@@ -280,10 +249,13 @@ def host_local_array_to_global_array(
 
   Similarly:
 
-  >>> mesh = jax.sharding.Mesh(np.array(jax.devices()).reshape(jax.process_count(), jax.local_device_count()), ['host', 'dev'])
+  >>> mesh =
+  jax.sharding.Mesh(np.array(jax.devices()).reshape(jax.process_count(),
+  jax.local_device_count()), ['host', 'dev'])
   >>> pspecs = jax.sharding.PartitionSpec('host')
   >>> host_id = jax.process_index()
-  >>> arr = host_local_array_to_global_array(np.arange(4) * host_id, mesh, pspecs)  # doctest: +SKIP
+  >>> arr = host_local_array_to_global_array(np.arange(4) * host_id, mesh,
+  pspecs)  # doctest: +SKIP
 
   will create the same distributed value (0, 1, 2, 3, 0, 2, 4, 6, ...),
   however each slice np.arange(4) * i will be *replicated* across corresponding
@@ -293,7 +265,8 @@ def host_local_array_to_global_array(
   replication across all axes, then this snippet:
 
   >>> pspecs = jax.sharding.PartitionSpec()
-  >>> arr = host_local_array_to_global_array(np.arange(4), mesh, pspecs)  # doctest: +SKIP
+  >>> arr = host_local_array_to_global_array(np.arange(4), mesh, pspecs)  #
+  doctest: +SKIP
 
   will have the shape (4,) and the value (0, 1, 2, 3) will be replicated
   across all hosts and devices.
@@ -314,12 +287,16 @@ def host_local_array_to_global_array(
 
   >>> from jax.experimental import multihost_utils # doctest: +SKIP
   >>>
-  >>> global_inputs = multihost_utils.host_local_array_to_global_array(host_local_inputs, global_mesh, in_pspecs) # doctest: +SKIP
+  >>> global_inputs =
+  multihost_utils.host_local_array_to_global_array(host_local_inputs,
+  global_mesh, in_pspecs) # doctest: +SKIP
   >>>
   >>> with mesh: # doctest: +SKIP
   >>>   global_out = pjitted_fun(global_inputs) # doctest: +SKIP
   >>>
-  >>> host_local_output = multihost_utils.global_array_to_host_local_array(global_out, mesh, out_pspecs) # doctest: +SKIP
+  >>> host_local_output =
+  multihost_utils.global_array_to_host_local_array(global_out, mesh, out_pspecs)
+  # doctest: +SKIP
 
   Please note ths function requires global mesh to be a continuous mesh, meaning
   that  devices that belong to each host should form a subcube in this mesh.
@@ -330,54 +307,53 @@ def host_local_array_to_global_array(
   Args:
     local_inputs: A Pytree of host local values.
     global_mesh: A jax.sharding.Mesh object. The mesh must be a contiguous mesh,
-    that is all hosts' devices must form a subcube in this mesh.
+      that is all hosts' devices must form a subcube in this mesh.
     pspecs: A Pytree of jax.sharding.PartitionSpec's.
 
   Returns:
     A pytree of global arrays.
   """
+
+  def make_array(inp, in_spec):
+    if in_spec is None:
+      raise ValueError(
+          '`None` is not a valid input to the pspecs argument. Please use '
+          'jax.sharding.PartitionSpec() if you wanted to replicate your input.'
+      )
+    out_sharding = jax.sharding.NamedSharding(global_mesh, in_spec)
+    # If the Array is not fully addressable i.e. not host local, return it.
+    # NOTE: we return original sharding in this case.
+    if isinstance(inp, array.ArrayImpl) and not inp.is_fully_addressable:
+      return inp
+    if isinstance(inp, array.ArrayImpl) and isinstance(
+        inp.sharding, jax.sharding.PmapSharding
+    ):
+      inp = np.array(inp)
+    # If the input is a concrete jax.Array and the input array sharding
+    # matches the `local_sharding`, then there's no need to reshard and create
+    # copies.
+    local_sharding = jax.sharding.NamedSharding(global_mesh.local_mesh, in_spec)
+    if isinstance(inp, array.ArrayImpl) and inp.sharding.is_equivalent_to(
+        local_sharding, inp.ndim
+    ):
+      arrays = [x.data for x in inp.addressable_shards]
+      shape = sharding_impls.local_to_global_shape(out_sharding, inp.shape)
+      return jax.make_array_from_single_device_arrays(
+          shape, out_sharding, arrays
+      )
+
+    return jax.make_array_from_process_local_data(
+        sharding=out_sharding, local_data=inp
+    )
+
   flat_inps, in_tree = tree_flatten(local_inputs)
   in_pspecs = _flatten_pspecs('input pspecs', in_tree,
                               pjit_lib.hashable_pytree(pspecs))
+  print(pspecs, in_pspecs)
   out_flat = [
-      host_local_array_to_global_array_p.bind(inp, global_mesh=global_mesh,
-                                              pspec=in_spec)
-      for inp, in_spec in safe_zip(flat_inps, in_pspecs)
+      make_array(inp, pspec) for inp, pspec in safe_zip(flat_inps, in_pspecs)
   ]
   return tree_unflatten(in_tree, out_flat)
-
-host_local_array_to_global_array_p = core.Primitive('host_local_array_to_global_array')
-host_local_array_to_global_array_p.def_impl(host_local_array_to_global_array_impl)
-
-def ltg_abstract_eval(arr, *, global_mesh, pspec):
-  return _local_to_global_aval(
-      core.ShapedArray(arr.shape, arr.dtype), global_mesh, pspec)
-host_local_array_to_global_array_p.def_abstract_eval(ltg_abstract_eval)
-
-ad.deflinear2(host_local_array_to_global_array_p,
-              lambda ct, _, **params: (
-                  host_local_array_to_global_array_p.bind(ct, **params),))
-
-def ltg_batcher(insert_axis, spmd_axis_name, axis_size,
-                axis_name, main_type, vals_in, dims_in,
-                global_mesh, pspec):
-  x, = vals_in
-  d, = dims_in
-  new_parts = None if spmd_axis_name is None else spmd_axis_name
-  new_pspec = list(pspec)
-  new_pspec.insert(d, new_parts)
-  new_pspec = P(*new_pspec)
-  y = host_local_array_to_global_array_p.bind(
-      x, global_mesh=global_mesh, pspec=new_pspec)
-  return y, d
-batching.spmd_axis_primitive_batchers[host_local_array_to_global_array_p] = partial(
-    ltg_batcher, False)
-batching.axis_primitive_batchers[host_local_array_to_global_array_p] = partial(
-    ltg_batcher, False, None)
-
-def _ltg_lowering(ctx, x, *, global_mesh, pspec):
-  return [x]
-mlir.register_lowering(host_local_array_to_global_array_p, _ltg_lowering)
 
 
 def global_array_to_host_local_array_impl(
