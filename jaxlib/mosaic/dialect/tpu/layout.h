@@ -263,12 +263,19 @@ class VectorLayout {
   }
 
   // How many tiles fit in each vector register.
-  int64_t tilesPerVreg(const std::array<int64_t, 2> target_shape) const {
-    const int64_t tile_elems = tiling_[0] * tiling_[1];
-    const int64_t vreg_capacity = packing() * target_shape[0] * target_shape[1];
+  static int64_t tilesPerVreg(const int8_t bitwidth,
+                              const std::array<int64_t, 2> tiling,
+                              const std::array<int64_t, 2> target_shape) {
+    const int packing = 32 / bitwidth;
+    const int64_t tile_elems = tiling[0] * tiling[1];
+    const int64_t vreg_capacity = packing * target_shape[0] * target_shape[1];
     const auto [tiles_per_vreg, rem] = std::div(vreg_capacity, tile_elems);
     CHECK_EQ(rem, 0);
     return tiles_per_vreg;
+  }
+
+  int64_t tilesPerVreg(const std::array<int64_t, 2> target_shape) const {
+    return tilesPerVreg(bitwidth_, tiling_, target_shape);
   }
 
   int64_t sublanesPerTile(const std::array<int64_t, 2> target_shape) const {
@@ -282,8 +289,15 @@ class VectorLayout {
   //
   // We never reuse the same vector register to store data of multiple rows,
   // so only the minormost dimension can increase.
+  static std::array<int64_t, 2> vregSlice(
+      const int8_t bitwidth, const std::array<int64_t, 2> tiling,
+      const std::array<int64_t, 2> target_shape) {
+    return {tiling[0],
+            tilesPerVreg(bitwidth, tiling, target_shape) * tiling[1]};
+  }
+
   std::array<int64_t, 2> vregSlice(std::array<int64_t, 2> target_shape) const {
-    return {tiling_[0], tilesPerVreg(target_shape) * tiling_[1]};
+    return vregSlice(bitwidth_, tiling_, target_shape);
   }
 
   template <typename T>

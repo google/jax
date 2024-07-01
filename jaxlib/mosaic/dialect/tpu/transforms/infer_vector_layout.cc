@@ -1448,6 +1448,9 @@ class VectorLayoutInferer {
     auto store_ty = op.getValueToStore().getType();
     TPU_CHECK_OP(ref_ty.getRank() == store_ty.getRank(),
                  "memref and vector rank mismatch");
+    const Layout maybe_src_layout = getLayout(op.getValueToStore());
+    TPU_CHECK_OP(maybe_src_layout.has_value(), "missing vector layout");
+    const VectorLayout &src_layout = *maybe_src_layout;
     int64_t rank = ref_ty.getRank();
     int8_t bitwidth = store_ty.getElementTypeBitWidth();
     if (kNativeBitwidth % bitwidth != 0) {
@@ -1495,33 +1498,61 @@ class VectorLayoutInferer {
     } else {  // rank >= 2  // NOLINT(readability-else-after-return)
       TPU_CHECK_OP(tiling.size() == 2, "Expected 2D tiling in 2D+ store");
       CHECK_EQ(tile_offsets.size(), 2);
-      std::array<std::optional<int64_t>, 2> offsets;
       const auto tile_ref_shape = ref_ty.getShape().take_back(2);
       const auto tile_store_shape = store_ty.getShape().take_back(2);
       const int64_t num_sublanes = tile_store_shape[0];
       // For now, we focus on tilings that span full sublanes.
       TPU_CHECK_OP(tiling[1] == target_shape_[1],
                    "Unsupported tiling for 2d store");
-      // We can store starting from any row if the source has few columns,
-      // because the tiling structure degenerates to regular layout there.
-      // There is also no extra need for alignment if we store a single sublane.
-      // TODO(apaszke): Also no need to align if we don't exceed the base chunk!
-      if (bitwidth == 32 &&
-          (tile_ref_shape[1] <= target_shape_[1] || num_sublanes == 1)) {
-        offsets[0] = 0;
-      } else {
-        offsets[0] = tile_offsets[0];
-      }
-      offsets[1] = tile_offsets[1];
+
       if (num_sublanes == 1 && bitwidth == 32 &&
           tiling[1] == target_shape_[1] &&
           tile_store_shape[1] > target_shape_[1]) {
         // We can strided store sublanes if we're storing a single sublane for
         // multiple times. Enabling this helps store one entire row to memref
         // more efficiently.
-        store_layout = VectorLayout(store_ty.getElementTypeBitWidth(), offsets,
-                                    {1, tiling[1]}, ImplicitDim::kNone);
+        store_layout = VectorLayout(store_ty.getElementTypeBitWidth(),
+                                    {0, tile_offsets[1]}, {1, tiling[1]},
+                                    ImplicitDim::kNone);
       } else {
+        // For now, here we only support storing from vreg tiling that matches
+        // memory tiling. Assume that's the tiling we infer, going forward.
+        const std::array<int64_t, 2> vreg_slice = VectorLayout::vregSlice(
+            bitwidth, {tiling[0], tiling[1]}, target_shape_);
+
+        // Offsets don't always have to match exactly.
+        // TODO(tlongeri): Sometimes, even if we have the freedom to pick any
+        //                 offset, it may be worth it to shift to reduce the
+        //                 number of vregs we have to store.
+        std::array<std::optional<int64_t>, 2> offsets;
+        // TODO(tlongeri): Support replicated offsets in store. For now we just
+        //                 set them to match memory.
+        offsets[0] =
+            src_layout.offsets()[0].value_or(tile_offsets[0]) % vreg_slice[0];
+        offsets[1] =
+            src_layout.offsets()[1].value_or(tile_offsets[1]) % vreg_slice[1];
+        // Sublane offsets don't necessarily have to match. However, note we
+        // currently only have support for doing one contiguous store per vreg.
+        if (bitwidth == 32 &&
+            (tile_ref_shape[1] <= tiling[1] || num_sublanes == 1)) {
+          // We can store starting from any row if the source has few columns,
+          // because the tiling structure degenerates to regular layout there.
+          // There is also no extra need for alignment if we store a single
+          // sublane.
+          // TODO(apaszke): Also no need to align if we don't exceed the base
+          //                chunk!
+        } else {
+          offsets[0] = tile_offsets[0];
+        }
+        // Lane offsets *within* tile must always match, otherwise sublanes will
+        // not be congruent (assuming tiles are one sublane horizontally, which
+        // is true of the tilings we support).
+        if (*offsets[1] % tiling[1] != tile_offsets[1]) {
+          // If we have to shift lanes, then might as well pick the smallest
+          // allowable offset since it always results in the smallest padding
+          // and number of vregs.
+          offsets[1] = tile_offsets[1];
+        }
         store_layout = VectorLayout(store_ty.getElementTypeBitWidth(), offsets,
                                     {tiling[0], tiling[1]}, ImplicitDim::kNone);
       }
