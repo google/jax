@@ -1288,39 +1288,66 @@ class VectorLayoutInferer {
   LogicalResult infer(vector::ShapeCastOp op) {
     auto src_ty = op.getSourceVectorType();
     auto src_shape = src_ty.getShape();
-    int64_t src_rank = src_ty.getRank();
     auto res_ty = op.getResultVectorType();
     auto res_shape = res_ty.getShape();
-    int64_t res_rank = res_ty.getRank();
     auto some_src_layout = getLayout(op.getSource());
     TPU_CHECK_OP(some_src_layout, "missing vector layout");
     auto layout = *some_src_layout;
     const unsigned bitwidth = src_ty.getElementTypeBitWidth();
+    const std::array<int64_t, 2> native_tiling = nativeTiling(bitwidth);
+    const std::array<int64_t, 2> src_tiled_ishape =
+        layout.getImplicitTiledDims(src_shape, 1);
     const std::array<int64_t, 2> vreg_slice = layout.vregSlice(target_shape_);
-    if (layout.implicit_dim() == ImplicitDim::kNone) {
-      // Nothing changes in the last two dims.
-      if (res_rank >= 2 && src_shape.take_back(2) == res_shape.take_back(2)) {
-        setLayout(op, layout, layout);
+
+    // TODO(tlongeri): Be smarter about trying implicit dims. We should probably
+    // only add them when folding dimensions, and remove them when unfolding.
+    SmallVector<ImplicitDim, 3> candidate_implicit_dims;
+    if (res_shape.size() >= 2) {
+      candidate_implicit_dims.push_back(ImplicitDim::kNone);
+    }
+    if (!res_shape.empty()) {
+      candidate_implicit_dims.push_back(ImplicitDim::kSecondMinor);
+      candidate_implicit_dims.push_back(ImplicitDim::kMinor);
+    }
+    // TODO(b/340625465): Add case with both implicit dims once we support it.
+
+    // See if we can get implicit tiled dimensions to match. This is always a
+    // no-op.
+    for (const ImplicitDim implicit_dim : candidate_implicit_dims) {
+      const std::array<int64_t, 2> res_tiled_ishape =
+          VectorLayout::getImplicitTiledDims(implicit_dim, res_shape, 1);
+      if (src_tiled_ishape == res_tiled_ishape) {
+        // Nothing changes in the tiled dimensions
+        setLayout(op, layout,
+                  VectorLayout(layout.bitwidth(), layout.offsets(),
+                               layout.tiling(), implicit_dim));
         return success();
       }
-      // Sublane (un)tiling.
-      if (res_rank >= 2 && *(src_shape.end() - 1) == *(res_shape.end() - 1) &&
-          *(src_shape.end() - 2) % vreg_slice[0] == 0 &&
-          *(res_shape.end() - 2) % vreg_slice[0] == 0) {
+    }
+
+    // See if we can do sublane or lane (un)folding.
+    for (const ImplicitDim implicit_dim : candidate_implicit_dims) {
+      const std::array<int64_t, 2> res_tiled_ishape =
+          VectorLayout::getImplicitTiledDims(implicit_dim, res_shape, 1);
+      // Sublane (un)folding.
+      if (src_tiled_ishape[1] == res_tiled_ishape[1] &&
+          src_tiled_ishape[0] % vreg_slice[0] == 0 &&
+          res_tiled_ishape[0] % vreg_slice[0] == 0) {
         // TODO(b/343808585): We shouldn't force second minor offset to 0 when
         //                    unfolding, it's still a no-op, but we need to add
         //                    support in apply-vector-layout.
-        layout = VectorLayout(layout.bitwidth(), {0, layout.offsets()[1]},
-                              layout.tiling(), layout.implicit_dim());
-        setLayout(op, layout, layout);
+        const LayoutOffsets offsets = {0, layout.offsets()[1]};
+        setLayout(op,
+                  VectorLayout(layout.bitwidth(), offsets, layout.tiling(),
+                               layout.implicit_dim()),
+                  VectorLayout(layout.bitwidth(), offsets, layout.tiling(),
+                               implicit_dim));
         return success();
       }
-      const auto native_tiling = nativeTiling(bitwidth);
-      // Lane (un)tiling.
-      if (src_ty.getDimSize(src_ty.getRank() - 1) !=
-              res_shape[res_shape.size() - 1] &&
-          src_ty.getDimSize(src_ty.getRank() - 1) % layout.tiling()[1] == 0 &&
-          res_shape[res_shape.size() - 1] % layout.tiling()[1] == 0) {
+      // Lane (un)folding.
+      if (src_tiled_ishape[1] != res_tiled_ishape[1] &&
+          src_tiled_ishape[1] % layout.tiling()[1] == 0 &&
+          res_tiled_ishape[1] % layout.tiling()[1] == 0) {
         const int packing = kNativeBitwidth / bitwidth;
         const auto elements_per_vreg = native_tiling[0] * native_tiling[1];
         // When we shapecast from input shape
@@ -1328,17 +1355,17 @@ class VectorLayoutInferer {
         // (..., target_shape_[1]), the reshape becomes no-op when input is
         // densely packed with tiling (1, target_shape_[1] * packing) and output
         // has the native tiling.
-        if (*(res_shape.end() - 1) == target_shape_[1] &&
-            *(res_shape.end() - 2) % native_tiling[0] == 0 &&
-            *(src_shape.end() - 1) % elements_per_vreg == 0) {
+        if (res_tiled_ishape[1] == target_shape_[1] &&
+            res_tiled_ishape[0] % native_tiling[0] == 0 &&
+            src_tiled_ishape[1] % elements_per_vreg == 0) {
           // Inferring in_layout to have tiling (1, 128 * packing) triggers any
           // necessary relayout before shapecast.
-          setLayout(
-              op,
-              VectorLayout(layout.bitwidth(), {0, 0},
-                           {1, target_shape_[1] * packing}, ImplicitDim::kNone),
-              VectorLayout(layout.bitwidth(), {0, 0}, native_tiling,
-                           ImplicitDim::kNone));
+          setLayout(op,
+                    VectorLayout(layout.bitwidth(), {0, 0},
+                                 {1, target_shape_[1] * packing},
+                                 layout.implicit_dim()),
+                    VectorLayout(layout.bitwidth(), {0, 0}, native_tiling,
+                                 implicit_dim));
           return success();
         }
 
@@ -1346,98 +1373,32 @@ class VectorLayoutInferer {
         // shape (..., m * target_shape_[1] * packing), the reshape becomes
         // no-op when input has the native tiling and output is densely packed
         // with tiling (1, target_shape_[1] * packing).
-        if (*(src_shape.end() - 1) == target_shape_[1] &&
-            *(src_shape.end() - 2) % native_tiling[0] == 0 &&
-            *(res_shape.end() - 1) % elements_per_vreg == 0) {
-          setLayout(op,
-                    VectorLayout(layout.bitwidth(), {0, 0}, native_tiling,
-                                 ImplicitDim::kNone),
-                    VectorLayout(layout.bitwidth(), {0, 0},
-                                 {1, target_shape_[1] * packing},
-                                 ImplicitDim::kNone));
+        if (src_tiled_ishape[1] == target_shape_[1] &&
+            src_tiled_ishape[0] % native_tiling[0] == 0 &&
+            res_tiled_ishape[1] % elements_per_vreg == 0) {
+          setLayout(
+              op,
+              VectorLayout(layout.bitwidth(), {0, 0}, native_tiling,
+                           layout.implicit_dim()),
+              VectorLayout(layout.bitwidth(), {0, 0},
+                           {1, target_shape_[1] * packing}, implicit_dim));
           return success();
         }
+      }
+    }
 
-        // TODO(b/299253805): support shapecast along lane for other cases.
-        op.emitOpError("unsupported shape cast");
-        return failure();
-      }
-      if (layout.tiling() != native_tiling) {
-        layout = VectorLayout(bitwidth, layout.offsets(), native_tiling,
-                              layout.implicit_dim());
-      }
-      TPU_CHECK_OP(src_ty.getRank() >= 2,
-                   "expected 2D+ operand with 2D layout");
-      ArrayRef<int64_t> layout_shape = src_ty.getShape().take_back(2);
-      if (res_ty.getRank() >= 2) {
-        // Squeeze out the sublane dim.
-        if (layout_shape[0] == 1 &&
-            res_shape.back() == src_shape.back()) {
-          setLayout(op, layout,
-                    VectorLayout(bitwidth, layout.offsets(), layout.tiling(),
-                                 ImplicitDim::kSecondMinor));
-          return success();
-        }
-        // Insert a singleton lane dimension. The old lane dimension ends up
-        // in the sublane dimension. Other axes can be reshaped arbitrarily.
-        if (src_ty.getElementTypeBitWidth() == kNativeBitwidth &&
-            src_shape.back() == res_shape[res_shape.size() - 2] &&
-            res_shape.back() == 1) {
-          setLayout(op, layout,
-                    VectorLayout(kNativeBitwidth, {0, std::nullopt},
-                                 default_tiling_, ImplicitDim::kNone));
-          return success();
-        }
-      } else if (res_ty.getRank() == 1) {
-        // All dimensions have been folded into a single one
-
-        // Squeeze all but minor dimension
-        if (res_ty.getShape().back() == layout_shape[1]) {
-          // The condition implies that everything apart from the minor
-          // dimension is 1 in the source.
-          setLayout(op, layout,
-                    VectorLayout(bitwidth, layout.offsets(), layout.tiling(),
-                                 ImplicitDim::kSecondMinor));
-          return success();
-        }
-        // Squeeze all but second minor dimension
-        if (res_ty.getShape().back() == layout_shape[0]) {
-          // The condition implies that everything apart from the second minor
-          // dimension is 1 in the source
-          setLayout(op, layout,
-                    VectorLayout(kNativeBitwidth, layout.offsets(),
-                                 layout.tiling(), ImplicitDim::kMinor));
-          return success();
-        }
-        // TODO(b/340625465): Add case where layout_shape is (1, 1) and we fold
-        //                    batch dimensions once we support 0-D layouts.
-      }
-    } else {
-      // Nothing changes in the last dim.
-      if (res_ty.getRank() >= 1 && src_shape.back() == res_shape.back()) {
-        setLayout(op, layout, layout);
-        return success();
-      }
-      // Insert a singleton innermost dim.
-      if (res_ty.getRank() == src_ty.getRank() + 1 &&
-          src_ty.getDimSize(src_rank - 1) == res_ty.getDimSize(res_rank - 2) &&
-          res_ty.getDimSize(res_rank - 1) == 1) {
-        if (layout.implicit_dim() == ImplicitDim::kMinor) {
-          setLayout(op, layout,
-                    VectorLayout(bitwidth, layout.offsets(), layout.tiling(),
-                                 ImplicitDim::kNone));
-        } else {
-          TPU_CHECK_OP(bitwidth == kNativeBitwidth,
-                       "Insertion of minor dim that is not a no-op only "
-                       "supported for 32-bit types");
-          TPU_CHECK_OP(layout.implicit_dim() == ImplicitDim::kSecondMinor,
-                       "unexpected implicit dim value");
-          setLayout(op, layout,
-                    VectorLayout(bitwidth, {0, std::nullopt}, default_tiling_,
-                                 ImplicitDim::kNone));
-        }
-        return success();
-      }
+    // Try adding a singleton innermost dim to the actual *implicit* shape.
+    if (res_shape.size() >= 2 &&
+        res_shape.take_back(2) == ArrayRef<int64_t>({src_tiled_ishape[1], 1})) {
+      TPU_CHECK_OP(bitwidth == kNativeBitwidth,
+                   "Insertion of minor dim that is not a no-op only "
+                   "supported for 32-bit types");
+      setLayout(op,
+                VectorLayout(layout.bitwidth(), layout.offsets(), native_tiling,
+                             layout.implicit_dim()),
+                VectorLayout(layout.bitwidth(), {0, std::nullopt},
+                             native_tiling, ImplicitDim::kNone));
+      return success();
     }
     op.emitOpError("unsupported shape cast");
     return failure();

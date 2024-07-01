@@ -3779,55 +3779,44 @@ LogicalResult vector_shape_cast_rule(RewriteContext &ctx, Operation &op,
     no_op = true;
   } else if (  // Fold or unfold sublane dim, but keeping a whole number of
                // vregs.
-      layout_in.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
-      layout_out.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
       layout_in.offsets()[0] == 0 &&
       layout_in.offsets() == layout_out.offsets() &&
       layout_in.tiling() == layout_out.tiling() &&
-      *(dst_shape.end() - 1) == *(src_shape.end() - 1) &&
-      *(dst_shape.end() - 2) % dst_vreg_slice[0] == 0 &&
-      *(src_shape.end() - 2) % src_vreg_slice[0] == 0) {
+      dst_tiled_dims[1] == src_tiled_dims[1] &&
+      dst_tiled_dims[0] % dst_vreg_slice[0] == 0 &&
+      dst_tiled_dims[0] % src_vreg_slice[0] == 0) {
     no_op = true;
-  } else if (layout_in.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
-             layout_out.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
-             layout_in.offsets() == layout_out.offsets() &&
+  } else if (layout_in.offsets() == layout_out.offsets() &&
              layout_in.offsets() == LayoutOffsets{0, 0} &&
              layout_in.tiling()[0] == 1 &&
              layout_out.hasNativeTiling(ctx.target_shape) &&
-             *(dst_shape.end() - 1) == dst_vreg_slice[1] &&
-             *(dst_shape.end() - 2) % dst_vreg_slice[0] == 0 &&
-             *(src_shape.end() - 1) % src_vreg_slice[1] == 0) {
+             dst_tiled_dims[1] == dst_vreg_slice[1] &&
+             dst_tiled_dims[0] % dst_vreg_slice[0] == 0 &&
+             src_tiled_dims[1] % src_vreg_slice[1] == 0) {
     // Shapecast (..., m * 128 * packing) -> (..., 128).
     no_op = true;
-  } else if (layout_in.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
-             layout_out.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
-             layout_in.offsets() == LayoutOffsets{0, 0} &&
+  } else if (layout_in.offsets() == LayoutOffsets{0, 0} &&
              layout_out.offsets() == LayoutOffsets{0, 0} &&
              layout_in.hasNativeTiling(ctx.target_shape) &&
              layout_out.tiling()[0] == 1 &&
-             *(src_shape.end() - 1) == src_vreg_slice[1] &&
-             *(src_shape.end() - 2) % src_vreg_slice[0] == 0 &&
-             *(dst_shape.end() - 1) % dst_vreg_slice[1] == 0) {
+             src_tiled_dims[1] == src_vreg_slice[1] &&
+             src_tiled_dims[0] % src_vreg_slice[0] == 0 &&
+             dst_tiled_dims[1] % dst_vreg_slice[1] == 0) {
     // Shapecast (..., 128) -> (..., m * 128 * packing).
     no_op = true;
   }
   FAILUREOR_ASSIGN_OR_RETURN(
       xla::Array<Value> src_vregs,
       disassemble(builder, layout_in, shape_cast_op.getSource(),
-                  ctx.target_shape));
+                  ctx.target_shape, /*use_implicit_shape=*/true));
   auto getDstVregs = [&]() -> FailureOr<xla::Array<Value>> {
     if (no_op) {
       xla::Array<Value> dst_vregs_local = src_vregs;
       dst_vregs_local.Reshape(
-          layout_out.tileArrayShape(dst_shape, ctx.target_shape));
+          layout_out.tileArrayImplicitShape(dst_shape, ctx.target_shape));
       return dst_vregs_local;
-    } else if (dst_shape.take_back(2) ==
-                   ArrayRef<int64_t>{src_shape.back(), 1} &&
+    } else if (dst_tiled_dims == std::array<int64_t, 2>{src_tiled_dims[1], 1} &&
                layout_in.bitwidth() == 32 &&
-               (layout_in.implicit_dim() == VectorLayout::ImplicitDim::kNone ||
-                layout_in.implicit_dim() ==
-                    VectorLayout::ImplicitDim::kSecondMinor) &&
-               layout_out.implicit_dim() == VectorLayout::ImplicitDim::kNone &&
                layout_in.hasNativeTiling(ctx.target_shape) &&
                layout_in.tiling() == layout_out.tiling() &&
                layout_in.offsets()[0].value_or(0) == 0 &&
@@ -3836,21 +3825,11 @@ LogicalResult vector_shape_cast_rule(RewriteContext &ctx, Operation &op,
                // replicated result
     ) {
       // First, insert the new singleton lane dimension.
-      SmallVector<int64_t> s(src_shape);
+      SmallVector<int64_t> s = layout_in.implicitShape(src_shape);
       s.push_back(1);
-      xla::Array<Value> dst_vregs_local(
-          layout_out.tileArrayShape(s, ctx.target_shape));
-      if (layout_in.implicit_dim() == VectorLayout::ImplicitDim::kSecondMinor) {
-        // Make the sublane dimension explicit.
-        SmallVector<int64_t> new_src_vregs_shape(
-            toArrayRef(src_vregs.dimensions()));
-        new_src_vregs_shape.insert(new_src_vregs_shape.end() - 1, 1);
-        src_vregs.Reshape(new_src_vregs_shape);
-        SmallVector<int64_t> new_dst_vregs_shape(
-            toArrayRef(dst_vregs_local.dimensions()));
-        new_dst_vregs_shape.insert(new_dst_vregs_shape.end() - 2, 1);
-        dst_vregs_local.Reshape(new_dst_vregs_shape);
-      }
+      xla::Array<Value> dst_vregs_local(layout_out.tileArrayShape(
+          /*src_is_implicit=*/true, /*res_is_implicit=*/true, std::move(s),
+          ctx.target_shape));
       TPU_ASSERT_EQ_OP(dst_vregs_local.dimensions().back(),
                        1);  // We're inserting a singleton dimension
       dst_vregs_local.Each(
@@ -3891,9 +3870,9 @@ LogicalResult vector_shape_cast_rule(RewriteContext &ctx, Operation &op,
           *dst_vreg = dst_vregs_local(first_row_idx);
         });
       }
-      // Now, permute the major axes of the vreg array.
+      // Now, reshape the major axes of the vreg array.
       dst_vregs_local.Reshape(
-          layout_out.tileArrayShape(dst_shape, ctx.target_shape));
+          layout_out.tileArrayImplicitShape(dst_shape, ctx.target_shape));
       return dst_vregs_local;
     } else {
       return shape_cast_op.emitOpError(
@@ -3902,8 +3881,9 @@ LogicalResult vector_shape_cast_rule(RewriteContext &ctx, Operation &op,
     }
   };
   FAILUREOR_ASSIGN_OR_RETURN(const xla::Array<Value> dst_vregs, getDstVregs());
-  shape_cast_op->replaceAllUsesWith(
-      assemble(builder, dst_ty, layout_out, dst_vregs, ctx.target_shape));
+  shape_cast_op->replaceAllUsesWith(assemble(builder, dst_ty, layout_out,
+                                             dst_vregs, ctx.target_shape,
+                                             /*use_implicit_shape=*/true));
   shape_cast_op->erase();
   return success();
 }

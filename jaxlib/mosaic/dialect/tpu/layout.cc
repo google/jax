@@ -25,6 +25,7 @@ limitations under the License.
 #include <ostream>
 #include <string>
 #include <tuple>
+#include <utility>
 
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/STLExtras.h"
@@ -445,28 +446,25 @@ SmallVector<int64_t> VectorLayout::implicitShape(
   return implicit_shape;
 }
 
-SmallVector<int64_t> VectorLayout::tileArrayImplicitShape(
-    const ArrayRef<int64_t> shape,
+SmallVector<int64_t> VectorLayout::tileArrayShape(
+    const bool src_is_implicit, const bool res_is_implicit,
+    SmallVector<int64_t>&& src_shape,
     const std::array<int64_t, 2> target_shape) const {
   const std::array<int64_t, 2> vreg_slice = vregSlice(target_shape);
-  SmallVector<int64_t> tiles_shape = implicitShape(shape);
-  tiles_shape[tiles_shape.size() - 2] = llvm::divideCeil(
-      offsets_[0].value_or(0) + tiles_shape[tiles_shape.size() - 2],
-      vreg_slice[0]);
-  tiles_shape[tiles_shape.size() - 1] = llvm::divideCeil(
-      offsets_[1].value_or(0) + tiles_shape[tiles_shape.size() - 1],
-      vreg_slice[1]);
-  return tiles_shape;
-}
-
-SmallVector<int64_t> VectorLayout::tileArrayShape(
-    const ArrayRef<int64_t> shape,
-    const std::array<int64_t, 2> target_shape) const {
-  SmallVector<int64_t> tiles_shape =
-      tileArrayImplicitShape(shape, target_shape);
-  // Remove the implicit dimension --- it's always of size 1.
-  eraseImplicit(tiles_shape);
-  return tiles_shape;
+  if (!src_is_implicit) {
+    CHECK_GE(src_shape.size(), layout_rank());
+    insertImplicit<int64_t>(src_shape, 1);
+  }
+  int64_t& second_minor = *(src_shape.end() - 2);
+  int64_t& minor = *(src_shape.end() - 1);
+  second_minor =
+      llvm::divideCeil(offsets_[0].value_or(0) + second_minor, vreg_slice[0]);
+  minor = llvm::divideCeil(offsets_[1].value_or(0) + minor, vreg_slice[1]);
+  if (!res_is_implicit) {
+    CHECK_GE(src_shape.size(), 2);
+    eraseImplicit(src_shape);
+  }
+  return std::move(src_shape);
 }
 
 std::unique_ptr<VRegDataBounds> VectorLayout::tileDataBounds(

@@ -240,13 +240,8 @@ class VectorLayout {
     }
   }
 
-  int8_t bitwidth() const { return bitwidth_; }
-  const LayoutOffsets &offsets() const { return offsets_; }
-  const std::array<int64_t, 2> &tiling() const { return tiling_; }
-  ImplicitDim implicit_dim() const { return implicit_dim_; }
-  int packing() const { return 32 / bitwidth_; }
-  int num_implicit_dims() const {
-    switch (implicit_dim_) {
+  static int num_implicit_dims(const ImplicitDim implicit_dim) {
+    switch (implicit_dim) {
       case ImplicitDim::kNone:
         return 0;
       case ImplicitDim::kMinor:
@@ -254,8 +249,19 @@ class VectorLayout {
         return 1;
     }
   }
-  // The number of minormost dimensions tiled by this layout.
-  int layout_rank() const { return 2 - num_implicit_dims(); }
+
+  // The number of non-implicit dimensions that are tiled.
+  static int layout_rank(const ImplicitDim implicit_dim) {
+    return 2 - num_implicit_dims(implicit_dim);
+  }
+
+  int8_t bitwidth() const { return bitwidth_; }
+  const LayoutOffsets &offsets() const { return offsets_; }
+  const std::array<int64_t, 2> &tiling() const { return tiling_; }
+  ImplicitDim implicit_dim() const { return implicit_dim_; }
+  int packing() const { return 32 / bitwidth_; }
+  int num_implicit_dims() const { return num_implicit_dims(implicit_dim_); }
+  int layout_rank() const { return layout_rank(implicit_dim_); }
 
   bool operator==(const VectorLayout &other) const;
   bool operator!=(const VectorLayout &other) const {
@@ -313,6 +319,20 @@ class VectorLayout {
     }
   }
 
+  static std::array<int64_t, 2> getImplicitTiledDims(
+      const ImplicitDim implicit_dim, const ArrayRef<int64_t> arr,
+      const int64_t implicit_value) {
+    CHECK_GE(arr.size(), layout_rank(implicit_dim));
+    switch (implicit_dim) {
+      case ImplicitDim::kNone:
+        return {*(arr.end() - 2), *(arr.end() - 1)};
+      case ImplicitDim::kMinor:
+        return {*(arr.end() - 1), implicit_value};
+      case ImplicitDim::kSecondMinor:
+        return {implicit_value, *(arr.end() - 1)};
+    }
+  }
+
   // Returns the value of the tiled (2 minormost) dimensions of the given array
   // with implicit dims inserted.
   //
@@ -323,23 +343,11 @@ class VectorLayout {
   //   return {*(vec.end() - 2), *(vec.end() - 1)};
   std::array<int64_t, 2> getImplicitTiledDims(
       const ArrayRef<int64_t> arr, const int64_t implicit_value) const {
-    CHECK_GE(arr.size(), layout_rank());
-    switch (implicit_dim_) {
-      case ImplicitDim::kNone:
-        return {*(arr.end() - 2), *(arr.end() - 1)};
-      case ImplicitDim::kMinor:
-        return {*(arr.end() - 1), implicit_value};
-      case ImplicitDim::kSecondMinor:
-        return {implicit_value, *(arr.end() - 1)};
-    }
+    return getImplicitTiledDims(implicit_dim_, arr, implicit_value);
   }
 
   SmallVector<int64_t> implicitShape(ArrayRef<int64_t> shape) const;
 
-  SmallVector<int64_t> tileArrayImplicitShape(
-      ArrayRef<int64_t> shape, std::array<int64_t, 2> target_shape) const;
-
- public:
   // Returns the shape of ndarray of vregs needed to represent a value.
   //
   // All but the last two dimensions are unrolled over vregs. In the last two
@@ -350,9 +358,31 @@ class VectorLayout {
   // minimize the number of vregs.
   //
   // Args:
-  //   shape: The shape of the full vector this layout applies to.
+  //   src_is_implicit: If true, the input shape already has implicit dimensions
+  //     inserted.
+  //   res_is_implicit: If true, the output shape will have implicit dimensions
+  //     inserted.
+  //   shape: The shape of the full vector this layout applies to, possibly
+  //     with implicit dimensions inserted.
   SmallVector<int64_t> tileArrayShape(
-      ArrayRef<int64_t> shape, std::array<int64_t, 2> target_shape) const;
+      bool src_is_implicit, bool res_is_implicit, ArrayRef<int64_t> shape,
+      std::array<int64_t, 2> target_shape) const {
+    return tileArrayShape(src_is_implicit, res_is_implicit,
+                          SmallVector<int64_t>(shape), target_shape);
+  }
+  SmallVector<int64_t> tileArrayShape(
+      bool src_is_implicit, bool res_is_implicit, SmallVector<int64_t> &&shape,
+      std::array<int64_t, 2> target_shape) const;
+
+  SmallVector<int64_t> tileArrayImplicitShape(
+      ArrayRef<int64_t> shape, std::array<int64_t, 2> target_shape) const {
+    return tileArrayShape(false, true, shape, target_shape);
+  }
+
+  SmallVector<int64_t> tileArrayShape(
+      ArrayRef<int64_t> shape, std::array<int64_t, 2> target_shape) const {
+    return tileArrayShape(false, false, shape, target_shape);
+  }
 
   // Returns the bounds of the given tile that hold useful data.
   //
