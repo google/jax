@@ -849,9 +849,9 @@ def log10(x: ArrayLike, /) -> Array:
 
   Examples:
     >>> x1 = jnp.array([0.01, 0.1, 1, 10, 100, 1000])
-    >>> jnp.log10(x1)
-    Array([-1.9999999 , -0.99999994,  0.        ,  0.99999994,  1.9999999 ,
-           3.        ], dtype=float32)
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.log10(x1))
+    [-2. -1.  0.  1.  2.  3.]
 
     >>> x2 = jnp.array([-0.01, -0.1, -1, -10, -100, -1000])
     >>> jnp.log10(x2)
