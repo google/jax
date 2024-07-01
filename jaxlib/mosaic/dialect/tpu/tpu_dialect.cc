@@ -23,6 +23,7 @@ limitations under the License.
 #include <vector>
 
 #include "llvm/ADT/TypeSwitch.h"  // IWYU pragma: keep.
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
@@ -32,7 +33,6 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "absl/hash/hash.h"
-#include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"
 #include "jaxlib/mosaic/dialect/tpu/tpu_dialect.cc.inc"
 #include "jaxlib/mosaic/dialect/tpu/tpu_enums.cc.inc"
 #include "xla/layout.h"

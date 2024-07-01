@@ -16,10 +16,10 @@ limitations under the License.
 #ifndef JAXLIB_MOSAIC_GPU_PASS_BOILERPLATE_H_
 #define JAXLIB_MOSAIC_GPU_PASS_BOILERPLATE_H_
 
-#include "mlir/include/mlir/IR/DialectRegistry.h"
-#include "mlir/include/mlir/Pass/Pass.h"
-#include "mlir/include/mlir/Support/LLVM.h"
-#include "mlir/include/mlir/Support/TypeID.h"
+#include "third_party/llvm/llvm-project/mlir/include/mlir/IR/DialectRegistry.h"
+#include "third_party/llvm/llvm-project/mlir/include/mlir/Pass/Pass.h"
+#include "third_party/llvm/llvm-project/mlir/include/mlir/Support/LLVM.h"
+#include "third_party/llvm/llvm-project/mlir/include/mlir/Support/TypeID.h"
 namespace mosaic {
 namespace gpu {
 

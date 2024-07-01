@@ -22,14 +22,13 @@ limitations under the License.
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Pass/Pass.h"  // IWYU pragma: keep
 #include "mlir/Support/LLVM.h"
-#include "mlir/include/mlir/IR/OpDefinition.h"
-#include "mlir/include/mlir/IR/OperationSupport.h"
-#include "mlir/include/mlir/Support/LogicalResult.h"
+#include "mlir/Support/LogicalResult.h"
 #include "jaxlib/mosaic/dialect/tpu/tpu_dialect.h"
 
 namespace mlir::tpu {
