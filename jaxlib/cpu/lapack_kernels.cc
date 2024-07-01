@@ -134,6 +134,7 @@ REGISTER_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::Side);
 REGISTER_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::Transpose);
 REGISTER_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::Diag);
 REGISTER_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::UpLo);
+REGISTER_CHAR_ENUM_ATTR_DECODING(jax::svd::ComputationMode);
 
 #undef REGISTER_CHAR_ENUM_ATTR_DECODING
 
@@ -591,6 +592,165 @@ template struct RealGesdd<float>;
 template struct RealGesdd<double>;
 template struct ComplexGesdd<std::complex<float>>;
 template struct ComplexGesdd<std::complex<double>>;
+
+// FFI Kernel
+
+namespace internal {
+
+template <ffi::DataType dtype>
+using RealBufferForComplexOrNull =
+    std::conditional_t<ffi::IsComplexType<dtype>(),
+                       ffi::ResultBuffer<ffi::ToReal(dtype)>, std::nullptr_t>;
+
+template <ffi::DataType dtype>
+static ffi::Error SvdKernel(
+    ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out,
+    ffi::ResultBuffer<ffi::ToReal(dtype)> singular_values,
+    ffi::ResultBuffer<dtype> u, ffi::ResultBuffer<dtype> vt,
+    ffi::ResultBuffer<LapackIntDtype> info,
+    ffi::ResultBuffer<LapackIntDtype> iwork, ffi::ResultBuffer<dtype> work,
+    svd::ComputationMode mode, RealBufferForComplexOrNull<dtype> rwork) {
+  if (mode == svd::ComputationMode::kComputeVtOverwriteXPartialU) [[unlikely]] {
+    return ffi::Error(
+        XLA_FFI_Error_Code_UNIMPLEMENTED,
+        "Current implementation does not support this computation mode");
+  }
+  auto [batch_count, x_rows, x_cols] = SplitBatch2D(x.dimensions);
+  auto* x_out_data = x_out->data;
+  auto* singular_values_data = singular_values->data;
+  auto* u_data = u->data;
+  auto* vt_data = vt->data;
+  auto* info_data = info->data;
+  auto* iwork_data = iwork->data;
+  auto* work_data = work->data;
+
+  CopyIfDiffBuffer(x, x_out);
+
+  auto x_rows_v = CastNoOverflow<lapack_int>(x_rows);
+  auto x_cols_v = CastNoOverflow<lapack_int>(x_cols);
+  auto mode_v = static_cast<char>(mode);
+  auto workspace_dim_v = CastNoOverflow<lapack_int>(work->dimensions.back());
+  auto x_leading_dim_v = x_rows_v;
+  auto u_leading_dim_v = x_rows_v;
+
+  auto u_dims = u->dimensions.last(2);
+  auto vt_dims = vt->dimensions.last(2);
+  auto vt_leading_dim_v = CastNoOverflow<lapack_int>(vt_dims.front());
+
+  const int64_t x_out_step{x_rows * x_cols};
+  const int64_t singular_values_step{singular_values->dimensions.back()};
+  const int64_t u_step{u_dims.front() * u_dims.back()};
+  const int64_t vt_step{vt_leading_dim_v * vt_dims.back()};
+
+  for (int64_t i = 0; i < batch_count; ++i) {
+    if constexpr (ffi::IsComplexType<dtype>()) {
+      svd::SVDType<dtype>::fn(&mode_v, &x_rows_v, &x_cols_v, x_out_data,
+                              &x_leading_dim_v, singular_values_data, u_data,
+                              &u_leading_dim_v, vt_data, &vt_leading_dim_v,
+                              work_data, &workspace_dim_v, rwork->data,
+                              iwork_data, info_data);
+    } else {
+      svd::SVDType<dtype>::fn(&mode_v, &x_rows_v, &x_cols_v, x_out_data,
+                              &x_leading_dim_v, singular_values_data, u_data,
+                              &u_leading_dim_v, vt_data, &vt_leading_dim_v,
+                              work_data, &workspace_dim_v, iwork_data,
+                              info_data);
+    }
+    x_out_data += x_out_step;
+    singular_values_data += singular_values_step;
+    u_data += u_step;
+    vt_data += vt_step;
+    ++info_data;
+  }
+  return ffi::Error::Success();
+}
+
+template <ffi::DataType dtype>
+static int64_t SvdGetWorkspaceSize(lapack_int x_rows, lapack_int x_cols,
+                                   svd::ComputationMode mode) {
+  ffi::NativeType<dtype> optimal_size = {};
+  lapack_int info = 0;
+  lapack_int workspace_query = -1;
+
+  auto mode_v = static_cast<char>(mode);
+  auto x_leading_dim_v = x_rows;
+  auto u_leading_dim_v = x_rows;
+  auto vt_leading_dim_v = mode == svd::ComputationMode::kComputeFullUVt
+
+                              ? x_cols
+                              : std::min(x_rows, x_cols);
+  if constexpr (ffi::IsComplexType<dtype>()) {
+    svd::SVDType<dtype>::fn(
+        &mode_v, &x_rows, &x_cols, nullptr, &x_leading_dim_v, nullptr, nullptr,
+        &u_leading_dim_v, nullptr, &vt_leading_dim_v, &optimal_size,
+        &workspace_query, nullptr, nullptr, &info);
+  } else {
+    svd::SVDType<dtype>::fn(&mode_v, &x_rows, &x_cols, nullptr,
+                            &x_leading_dim_v, nullptr, nullptr,
+                            &u_leading_dim_v, nullptr, &vt_leading_dim_v,
+                            &optimal_size, &workspace_query, nullptr, &info);
+  }
+  return info == 0 ? static_cast<int64_t>(std::real(optimal_size)) : -1;
+}
+
+}  // namespace internal
+
+template <ffi::DataType dtype>
+ffi::Error SingularValueDecomposition<dtype>::Kernel(
+    ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out,
+    ffi::ResultBuffer<dtype> singular_values, ffi::ResultBuffer<dtype> u,
+    ffi::ResultBuffer<dtype> vt, ffi::ResultBuffer<LapackIntDtype> info,
+    ffi::ResultBuffer<LapackIntDtype> iwork, ffi::ResultBuffer<dtype> work,
+    svd::ComputationMode mode) {
+  return internal::SvdKernel<dtype>(x, x_out, singular_values, u, vt, info,
+                                    iwork, work, mode, nullptr);
+}
+
+template <ffi::DataType dtype>
+ffi::Error SingularValueDecompositionComplex<dtype>::Kernel(
+    ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out,
+    ffi::ResultBuffer<ffi::ToReal(dtype)> singular_values,
+    ffi::ResultBuffer<dtype> u, ffi::ResultBuffer<dtype> vt,
+    ffi::ResultBuffer<LapackIntDtype> info,
+    ffi::ResultBuffer<ffi::ToReal(dtype)> rwork,
+    ffi::ResultBuffer<LapackIntDtype> iwork, ffi::ResultBuffer<dtype> work,
+    svd::ComputationMode mode) {
+  return internal::SvdKernel<dtype>(x, x_out, singular_values, u, vt, info,
+                                    iwork, work, mode, rwork);
+}
+
+template <ffi::DataType dtype>
+int64_t SingularValueDecomposition<dtype>::GetWorkspaceSize(
+    lapack_int x_rows, lapack_int x_cols, svd::ComputationMode mode) {
+  return internal::SvdGetWorkspaceSize<dtype>(x_rows, x_cols, mode);
+}
+
+template <ffi::DataType dtype>
+int64_t SingularValueDecompositionComplex<dtype>::GetWorkspaceSize(
+    lapack_int x_rows, lapack_int x_cols, svd::ComputationMode mode) {
+  return internal::SvdGetWorkspaceSize<dtype>(x_rows, x_cols, mode);
+}
+
+lapack_int svd::GetRealWorkspaceSize(int64_t x_rows, int64_t x_cols,
+                                     svd::ComputationMode mode) {
+  const auto min_dim = std::min(x_rows, x_cols);
+  if (!ComputesUV(mode)) {
+    return CastNoOverflow<lapack_int>(7 * min_dim);
+  }
+  const auto max_dim = std::max(x_rows, x_cols);
+  return CastNoOverflow<lapack_int>(
+      std::max(5 * min_dim * min_dim + 5 * min_dim,
+               2 * max_dim * min_dim + 2 * min_dim * min_dim + min_dim));
+}
+
+lapack_int svd::GetIntWorkspaceSize(int64_t x_rows, int64_t x_cols) {
+  return CastNoOverflow<lapack_int>(8 * std::min(x_rows, x_cols));
+}
+
+template struct SingularValueDecomposition<ffi::DataType::F32>;
+template struct SingularValueDecomposition<ffi::DataType::F64>;
+template struct SingularValueDecompositionComplex<ffi::DataType::C64>;
+template struct SingularValueDecompositionComplex<ffi::DataType::C128>;
 
 //== Eigenvalues and eigenvectors ==//
 

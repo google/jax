@@ -42,6 +42,23 @@ struct MatrixParams {
   };
 };
 
+namespace svd {
+
+enum class ComputationMode : char {
+  kComputeFullUVt = 'A',  // Compute U and VT
+  kComputeMinUVt = 'S',   // Compute min(M, N) columns of U and rows of VT
+  kComputeVtOverwriteXPartialU = 'O',  // Compute VT, overwrite X
+                                       // with partial U
+  kNoComputeUVt = 'N',                 // Do not compute U or VT
+};
+
+inline bool ComputesUV(ComputationMode mode) {
+  return mode == ComputationMode::kComputeFullUVt ||
+         mode == ComputationMode::kComputeMinUVt;
+}
+
+}  // namespace svd
+
 template <typename KernelType>
 void AssignKernelFn(void* func) {
   KernelType::fn = reinterpret_cast<typename KernelType::FnType*>(func);
@@ -67,6 +84,7 @@ DEFINE_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::Side);
 DEFINE_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::UpLo);
 DEFINE_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::Transpose);
 DEFINE_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::Diag);
+DEFINE_CHAR_ENUM_ATTR_DECODING(jax::svd::ComputationMode);
 
 #undef DEFINE_CHAR_ENUM_ATTR_DECODING
 
@@ -208,6 +226,73 @@ struct ComplexGesdd {
   static int64_t Workspace(lapack_int m, lapack_int n, bool job_opt_compute_uv,
                            bool job_opt_full_matrices);
 };
+
+// FFI Kernel
+
+template <::xla::ffi::DataType dtype>
+struct SingularValueDecomposition {
+  static_assert(!::xla::ffi::IsComplexType<dtype>(),
+                "There exists a separate implementation for Complex types");
+  using ValueType = ::xla::ffi::NativeType<dtype>;
+  using FnType = void(char* jobz, lapack_int* m, lapack_int* n, ValueType* a,
+                      lapack_int* lda, ValueType* s, ValueType* u,
+                      lapack_int* ldu, ValueType* vt, lapack_int* ldvt,
+                      ValueType* work, lapack_int* lwork, lapack_int* iwork,
+                      lapack_int* info);
+
+  inline static FnType* fn = nullptr;
+
+  static ::xla::ffi::Error Kernel(
+      ::xla::ffi::Buffer<dtype> x, ::xla::ffi::ResultBuffer<dtype> x_out,
+      ::xla::ffi::ResultBuffer<dtype> singular_values,
+      ::xla::ffi::ResultBuffer<dtype> u, ::xla::ffi::ResultBuffer<dtype> vt,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> iwork,
+      ::xla::ffi::ResultBuffer<dtype> work, svd::ComputationMode mode);
+
+  static int64_t GetWorkspaceSize(lapack_int x_rows, lapack_int x_cols,
+                                  svd::ComputationMode mode);
+};
+
+template <::xla::ffi::DataType dtype>
+struct SingularValueDecompositionComplex {
+  static_assert(::xla::ffi::IsComplexType<dtype>());
+
+  using ValueType = ::xla::ffi::NativeType<dtype>;
+  using RealType = ::xla::ffi::NativeType<::xla::ffi::ToReal(dtype)>;
+  using FnType = void(char* jobz, lapack_int* m, lapack_int* n, ValueType* a,
+                      lapack_int* lda, RealType* s, ValueType* u,
+                      lapack_int* ldu, ValueType* vt, lapack_int* ldvt,
+                      ValueType* work, lapack_int* lwork, RealType* rwork,
+                      lapack_int* iwork, lapack_int* info);
+
+  inline static FnType* fn = nullptr;
+
+  static ::xla::ffi::Error Kernel(
+      ::xla::ffi::Buffer<dtype> x, ::xla::ffi::ResultBuffer<dtype> x_out,
+      ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> singular_values,
+      ::xla::ffi::ResultBuffer<dtype> u, ::xla::ffi::ResultBuffer<dtype> vt,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info,
+      ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> rwork,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> iwork,
+      ::xla::ffi::ResultBuffer<dtype> work, svd::ComputationMode mode);
+
+  static int64_t GetWorkspaceSize(lapack_int x_rows, lapack_int x_cols,
+                                  svd::ComputationMode mode);
+};
+
+namespace svd {
+
+template <::xla::ffi::DataType dtype>
+using SVDType = std::conditional_t<::xla::ffi::IsComplexType<dtype>(),
+                                   SingularValueDecompositionComplex<dtype>,
+                                   SingularValueDecomposition<dtype>>;
+
+lapack_int GetIntWorkspaceSize(int64_t x_rows, int64_t x_cols);
+lapack_int GetRealWorkspaceSize(int64_t x_rows, int64_t x_cols,
+                                ComputationMode mode);
+
+}  // namespace svd
 
 //== Eigenvalues and eigenvectors ==//
 

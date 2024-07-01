@@ -28,6 +28,31 @@ namespace nb = nanobind;
 
 using ::xla::ffi::DataType;
 
+svd::ComputationMode GetSvdComputationMode(bool job_opt_compute_uv,
+                                           bool job_opt_full_matrices) {
+  if (!job_opt_compute_uv) {
+    return svd::ComputationMode::kNoComputeUVt;
+  } else if (!job_opt_full_matrices) {
+    return svd::ComputationMode::kComputeMinUVt;
+  }
+  return svd::ComputationMode::kComputeFullUVt;
+}
+
+template <DataType dtype>
+int64_t GesddGetWorkspaceSize(lapack_int m, lapack_int n,
+                              bool job_opt_compute_uv,
+                              bool job_opt_full_matrices) {
+  svd::ComputationMode mode =
+      GetSvdComputationMode(job_opt_compute_uv, job_opt_full_matrices);
+  return svd::SVDType<dtype>::GetWorkspaceSize(m, n, mode);
+};
+
+lapack_int GesddGetRealWorkspaceSize(lapack_int m, lapack_int n,
+                                     bool job_opt_compute_uv) {
+  svd::ComputationMode mode = GetSvdComputationMode(job_opt_compute_uv, true);
+  return svd::GetRealWorkspaceSize(m, n, mode);
+}
+
 void GetLapackKernelsFromScipy() {
   static bool initialized = false;  // Protected by GIL
   if (initialized) return;
@@ -83,6 +108,10 @@ void GetLapackKernelsFromScipy() {
   AssignKernelFn<RealGesdd<double>>(lapack_ptr("dgesdd"));
   AssignKernelFn<ComplexGesdd<std::complex<float>>>(lapack_ptr("cgesdd"));
   AssignKernelFn<ComplexGesdd<std::complex<double>>>(lapack_ptr("zgesdd"));
+  AssignKernelFn<svd::SVDType<DataType::F32>>(lapack_ptr("sgesdd"));
+  AssignKernelFn<svd::SVDType<DataType::F64>>(lapack_ptr("dgesdd"));
+  AssignKernelFn<svd::SVDType<DataType::C64>>(lapack_ptr("cgesdd"));
+  AssignKernelFn<svd::SVDType<DataType::C128>>(lapack_ptr("zgesdd"));
 
   AssignKernelFn<RealSyevd<float>>(lapack_ptr("ssyevd"));
   AssignKernelFn<RealSyevd<double>>(lapack_ptr("dsyevd"));
@@ -190,6 +219,10 @@ nb::dict Registrations() {
   dict["lapack_dpotrf_ffi"] = EncapsulateFunction(lapack_dpotrf_ffi);
   dict["lapack_cpotrf_ffi"] = EncapsulateFunction(lapack_cpotrf_ffi);
   dict["lapack_zpotrf_ffi"] = EncapsulateFunction(lapack_zpotrf_ffi);
+  dict["lapack_sgesdd_ffi"] = EncapsulateFunction(lapack_sgesdd_ffi);
+  dict["lapack_dgesdd_ffi"] = EncapsulateFunction(lapack_dgesdd_ffi);
+  dict["lapack_cgesdd_ffi"] = EncapsulateFunction(lapack_cgesdd_ffi);
+  dict["lapack_zgesdd_ffi"] = EncapsulateFunction(lapack_zgesdd_ffi);
 
   return dict;
 }
@@ -198,6 +231,14 @@ NB_MODULE(_lapack, m) {
   // Populates the LAPACK kernels from scipy on first call.
   m.def("initialize", GetLapackKernelsFromScipy);
   m.def("registrations", &Registrations);
+  // Submodules
+  auto svd = m.def_submodule("svd");
+  // Enums
+  nb::enum_<svd::ComputationMode>(svd, "ComputationMode")
+      // kComputeVtOverwriteXPartialU is not implemented
+      .value("kComputeFullUVt", svd::ComputationMode::kComputeFullUVt)
+      .value("kComputeMinUVt", svd::ComputationMode::kComputeMinUVt)
+      .value("kNoComputeUVt", svd::ComputationMode::kNoComputeUVt);
 
   // Old-style LAPACK Workspace Size Queries
   m.def("lapack_sgeqrf_workspace", &Geqrf<float>::Workspace, nb::arg("m"),
@@ -252,6 +293,19 @@ NB_MODULE(_lapack, m) {
         nb::arg("lda"), nb::arg("n"));
   m.def("lapack_zhetrd_workspace", &Sytrd<std::complex<double>>::Workspace,
         nb::arg("lda"), nb::arg("n"));
+  // FFI Kernel LAPACK Workspace Size Queries
+  m.def("gesdd_iwork_size_ffi", &svd::GetIntWorkspaceSize, nb::arg("m"),
+        nb::arg("n"));
+  m.def("sgesdd_work_size_ffi", &svd::SVDType<DataType::F32>::GetWorkspaceSize,
+        nb::arg("m"), nb::arg("n"), nb::arg("mode"));
+  m.def("dgesdd_work_size_ffi", &svd::SVDType<DataType::F64>::GetWorkspaceSize,
+        nb::arg("m"), nb::arg("n"), nb::arg("mode"));
+  m.def("gesdd_rwork_size_ffi", &svd::GetRealWorkspaceSize, nb::arg("m"),
+        nb::arg("n"), nb::arg("mode"));
+  m.def("cgesdd_work_size_ffi", &svd::SVDType<DataType::C64>::GetWorkspaceSize,
+        nb::arg("m"), nb::arg("n"), nb::arg("mode"));
+  m.def("zgesdd_work_size_ffi", &svd::SVDType<DataType::C128>::GetWorkspaceSize,
+        nb::arg("m"), nb::arg("n"), nb::arg("mode"));
 }
 
 }  // namespace

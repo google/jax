@@ -51,10 +51,10 @@ jax::CholeskyFactorization<ffi::DataType::F64>::FnType dpotrf_;
 jax::CholeskyFactorization<ffi::DataType::C64>::FnType cpotrf_;
 jax::CholeskyFactorization<ffi::DataType::C128>::FnType zpotrf_;
 
-jax::RealGesdd<float>::FnType sgesdd_;
-jax::RealGesdd<double>::FnType dgesdd_;
-jax::ComplexGesdd<std::complex<float>>::FnType cgesdd_;
-jax::ComplexGesdd<std::complex<double>>::FnType zgesdd_;
+jax::SingularValueDecomposition<ffi::DataType::F32>::FnType sgesdd_;
+jax::SingularValueDecomposition<ffi::DataType::F64>::FnType dgesdd_;
+jax::SingularValueDecompositionComplex<ffi::DataType::C64>::FnType cgesdd_;
+jax::SingularValueDecompositionComplex<ffi::DataType::C128>::FnType zgesdd_;
 
 jax::RealSyevd<float>::FnType ssyevd_;
 jax::RealSyevd<double>::FnType dsyevd_;
@@ -114,6 +114,24 @@ static_assert(
 static_assert(
     std::is_same_v<jax::CholeskyFactorization<ffi::DataType::C128>::FnType,
                    jax::Potrf<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SingularValueDecomposition<ffi::DataType::F32>::FnType,
+                   jax::RealGesdd<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SingularValueDecomposition<ffi::DataType::F64>::FnType,
+                   jax::RealGesdd<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::SingularValueDecompositionComplex<ffi::DataType::C64>::FnType,
+        jax::ComplexGesdd<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::SingularValueDecompositionComplex<ffi::DataType::C128>::FnType,
+        jax::ComplexGesdd<std::complex<double>>::FnType>,
     JAX_KERNEL_FNTYPE_MISMATCH_MSG);
 
 #undef JAX_KERNEL_FNTYPE_MISMATCH_MSG
@@ -185,6 +203,13 @@ static auto init = []() -> int {
   AssignKernelFn<CholeskyFactorization<ffi::DataType::F64>>(dpotrf_);
   AssignKernelFn<CholeskyFactorization<ffi::DataType::C64>>(cpotrf_);
   AssignKernelFn<CholeskyFactorization<ffi::DataType::C128>>(zpotrf_);
+
+  AssignKernelFn<SingularValueDecomposition<ffi::DataType::F32>>(sgesdd_);
+  AssignKernelFn<SingularValueDecomposition<ffi::DataType::F64>>(dgesdd_);
+  AssignKernelFn<SingularValueDecompositionComplex<ffi::DataType::C64>>(
+      cgesdd_);
+  AssignKernelFn<SingularValueDecompositionComplex<ffi::DataType::C128>>(
+      zgesdd_);
 
   return 0;
 }();
