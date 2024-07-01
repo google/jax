@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import os
 
 import numpy as np
 from absl.testing import absltest, parameterized
 
 import jax
+from jax import lax
 import jax.extend as jex
 import jax.numpy as jnp
 
@@ -99,7 +101,7 @@ class FfiTest(jtu.JaxTestCase):
   @parameterized.parameters(
       [True, int(1), float(5.0),
        np.int32(-5), np.float32(0.5)])
-  def testIrAttribute(sel, value):
+  def testIrAttribute(self, value):
     with mlir.make_ir_context(), ir.Location.unknown():
       const = mlir.ir_constant(value)
       attr = ffi._ir_attribute(value)
@@ -115,6 +117,59 @@ class FfiTest(jtu.JaxTestCase):
     # parameters, but we should probably actually check the emitted HLO.
     func = jax.jit(lambda *args: prim.bind(*args, param=param))
     func.lower(jnp.linspace(0, 5, 10))
+
+  @jtu.sample_product(
+    shape=[(1,), (4,), (5,)],
+    dtype=(np.int32,),
+  )
+  @jtu.run_on_devices("gpu")
+  def testFfiCall(self, shape, dtype):
+    pivots_size = shape[-1]
+    permutation_size = 2 * pivots_size
+    pivots = jnp.arange(permutation_size - 1, pivots_size - 1, -1, dtype=dtype)
+    pivots = jnp.broadcast_to(pivots, shape)
+    expected = lax.linalg.lu_pivots_to_permutation(pivots, permutation_size)
+    actual = ffi_call_lu_pivots_to_permutation(pivots, permutation_size)
+    self.assertArraysEqual(actual, expected)
+
+  @jtu.sample_product(
+      shape=[(1,), (4,), (5,)],
+      dtype=(np.int32,),
+  )
+  @jtu.run_on_devices("gpu")
+  def testFfiCallBatching(self, shape, dtype):
+    # TODO(dfm): Add a test for `vectorized = True`.
+    shape = (10,) + shape
+    pivots_size = shape[-1]
+    permutation_size = 2 * pivots_size
+    pivots = jnp.arange(permutation_size - 1, pivots_size - 1, -1, dtype=dtype)
+    pivots = jnp.broadcast_to(pivots, shape)
+    expected = lax.linalg.lu_pivots_to_permutation(pivots, permutation_size)
+    actual = jax.vmap(
+        lambda x: ffi_call_lu_pivots_to_permutation(x, permutation_size)
+    )(pivots)
+    self.assertArraysEqual(actual, expected)
+
+
+# TODO(dfm): For now this test uses the `cu_lu_pivots_to_permutation`
+# custom call target because that's the only one in jaxlib that uses the
+# new FFI interface. Once more are available, consider using something that
+# can be run on multiple platforms.
+def ffi_call_lu_pivots_to_permutation(pivots, permutation_size):
+  dims = pivots.shape
+  batch_size = math.prod(dims[:-1])
+  pivot_size = dims[-1]
+  return jex.ffi.ffi_call(
+      "cu_lu_pivots_to_permutation",
+      jax.ShapeDtypeStruct(
+          shape=dims[:-1] + (permutation_size,),
+          dtype=pivots.dtype,
+      ),
+      pivots,
+      batch_size=np.int64(batch_size),
+      pivot_size=np.int32(pivot_size),
+      permutation_size=np.int32(permutation_size),
+  )
 
 
 if __name__ == "__main__":
