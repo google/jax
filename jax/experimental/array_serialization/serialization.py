@@ -29,6 +29,7 @@ from typing import Any
 
 import jax
 from jax._src import array
+from jax._src import config
 from jax._src import distributed
 from jax._src import sharding
 from jax._src import sharding_impls
@@ -184,6 +185,20 @@ class _LimitInFlightBytes:
       self._cv.notify_all()
 
 
+async def transfer_shard_to_host(shard: array.Shard) -> np.ndarray:
+  data = shard.data
+  has_pinned_host = any(
+      m.kind == "pinned_host" for m in shard.device.addressable_memories())
+  if config.enable_memories.value and has_pinned_host:
+    # If available, transfer to pinned host memory
+    sharding = jax.sharding.SingleDeviceSharding(shard.device,
+        memory_kind="pinned_host")
+    data = jax.device_put(data, sharding)
+    # Allow other transfers to be scheduled simultaneously
+    await asyncio.sleep(0)
+  return np.array(data, copy=False)
+
+
 async def async_serialize(
     arr_inp,
     tensorstore_spec,
@@ -255,7 +270,8 @@ async def async_serialize(
 
   async def _write_array(shard):
     if shard.replica_id == replica_id:
-      write_future = t[shard.index].write(shard.data)
+      data = await transfer_shard_to_host(shard)
+      write_future = t[shard.index].write(data)
       if commit_future is not None:
         assert isinstance(commit_future, list)
         commit_future.append(write_future.commit)

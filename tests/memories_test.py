@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 import copy
 import functools
 import math
@@ -33,6 +34,7 @@ from jax._src.sharding import common_devices_indices_map
 from jax._src.sharding_impls import (NamedSharding, PositionalSharding,
                                      SingleDeviceSharding, GSPMDSharding,
                                      TransferToMemoryKind, PartitionSpec as P)
+from jax.experimental.array_serialization import serialization
 from jax.experimental.compute_on import compute_on
 from jax.experimental.shard_map import shard_map
 import numpy as np
@@ -1419,6 +1421,20 @@ class ActivationOffloadingTest(jtu.JaxTestCase):
     if compiled_stats is not None:
       if jtu.pjrt_c_api_version_at_least(0, 43):
         self.assertGreater(compiled_stats.host_temp_size_in_bytes, 0)
+
+
+@jtu.with_config(jax_enable_memories=True)
+class TransferShardTest(jtu.JaxTestCase):
+
+  def test_transfer_shard_to_host(self):
+    np_inp = np.arange(16).reshape((4, 4))
+    sharding = SingleDeviceSharding(jax.devices()[0], memory_kind="device")
+    arr = jax.device_put(np_inp, sharding)
+    shard = arr.addressable_shards[0]
+
+    np_out = asyncio.run(serialization.transfer_shard_to_host(shard))
+
+    self.assertArraysEqual(np_out, np_inp)
 
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())
