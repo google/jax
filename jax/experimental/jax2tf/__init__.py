@@ -20,4 +20,7 @@ from jax.experimental.jax2tf.jax2tf import (
   DisabledSafetyCheck as DisabledSafetyCheck,
   PolyShape as PolyShape  # TODO: deprecate
 )
-from jax.experimental.jax2tf.call_tf import call_tf as call_tf
+from jax.experimental.jax2tf.call_tf import (
+    call_tf as call_tf,
+    calculate_polymorphic_output_shapes as calculate_polymorphic_output_shapes,
+)

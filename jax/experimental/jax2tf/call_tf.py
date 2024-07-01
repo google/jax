@@ -40,6 +40,7 @@ from jax._src import ad_util
 from jax._src import core
 from jax._src import effects
 from jax._src import util
+from jax._src.export import shape_poly
 from jax._src.lib import xla_client
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import func as func_dialect
@@ -321,6 +322,67 @@ def check_tf_result(idx: int, r_tf: TfVal, r_aval: core.ShapedArray | None) -> T
   # At this point tf.ensure_shape does not do much, it should never throw an
   # error, albeit it may refine the shape a bit.
   return tf.ensure_shape(r_tf, r_aval_shape_tf)
+
+
+def calculate_polymorphic_output_shapes(
+    input_arg_kwarg_shapes, output_shapes, *args, **kwargs
+):
+  """Calculates concrete output shapes from polymorphic input/output shapes.
+
+  In order to trace TensorFlow functions called using `jax2tf.call_tf` with
+  polymorphic inputs, we need to know the concrete output shapes.
+  This function evaluates abstract input/output shapes and solves the concrete
+  output shapes for a set of concrete inputs.
+
+  Example:
+    jax_fn = lambda x: jnp.stack([x, x], axis=0)
+    tf_func = jax2tf.convert(jax_fn, polymorphic_shapes=('(b, ...)',))
+
+    inputs = jnp.ones((4, 2048))
+    input_shapes = export.symbolic_args_specs([inputs], '(b, ...)')
+    output_shapes = jax.eval_shape(jax_fn, *input_shapes)
+
+    @jax.jit
+    def exported(x):
+      eval_shapes = jax2tf.calculate_polymorphic_output_shapes(
+          input_shapes, output_shapes, x)
+      return jax2tf.call_tf(tf_func, output_shape_dtype=eval_shapes)(x)
+    _ = exported(inputs)
+
+  Args:
+    input_arg_kwarg_shapes: Abstract input shapes to solve.
+    output_shape_dtypes: Abstract output shapes to solve.
+    *args: Positional input args used to calculate the concrete outputs.
+    **kwargs: Keyword args used to calculate the concrete outputs.
+  """
+
+  input_leaves, input_tree_def = tree_util.tree_flatten(input_arg_kwarg_shapes)
+  solution, shape_constraints, synth_dim_vars = shape_poly.solve_dim_vars(
+      tuple(input_leaves), args_kwargs_tree=input_tree_def
+  )
+
+  flat_args_kwargs, _ = tree_util.tree_flatten([args, kwargs])
+
+  # Generate input symbol (e.g. args[0][1]) to value lookup.
+  input_to_value = {
+      symbol: flat_args_kwargs[arg_idx].shape[dim_idx]
+      for (symbol, arg_idx, dim_idx) in synth_dim_vars
+  }
+  input_eval = shape_poly.CachingShapeEvaluator(**input_to_value)
+  shape_constraints.shape_assertions(input_eval)
+
+  # Next, take the poly shape "solution" and evaluate using the input_to_value
+  # evaluator.
+  resolved_symbols = tree_util.tree_map(input_eval.evaluate, solution)
+  evaluator = shape_poly.CachingShapeEvaluator(**resolved_symbols)
+
+  return tree_util.tree_map(
+      lambda x: jax.ShapeDtypeStruct(
+          [evaluator.evaluate(s) for s in x.shape],
+          x.dtype,
+      ),
+      output_shapes,
+  )
 
 
 call_tf_p = core.Primitive("call_tf")
