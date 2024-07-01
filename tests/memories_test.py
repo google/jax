@@ -888,6 +888,7 @@ class ComputeOffload(jtu.BufferDonationTestCase):
     self.assertArraysEqual(g(arr), all_true)
 
   def test_scan_offload(self):
+    FLAGS.xla_enable_hlo_unstacker = False
     np_inp = jnp.arange(4096).reshape(16, 16, 16)
 
     @jax.jit
