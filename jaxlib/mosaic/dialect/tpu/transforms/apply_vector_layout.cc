@@ -3568,6 +3568,11 @@ LogicalResult vector_multi_reduction_rule(RewriteContext &ctx, Operation &op,
           builder.getF32Type(),
           APFloat::getInf(APFloat::IEEEsingle(), /*Negative=*/true));
     } break;
+    case vector::CombiningKind::MINIMUMF: {
+      neutral = builder.getFloatAttr(
+          builder.getF32Type(),
+          APFloat::getInf(APFloat::IEEEsingle(), /*Negative=*/false));
+    } break;
     default:
       return multi_reduction_op.emitOpError(
           "Not implemented: unsupported kind");
@@ -3660,6 +3665,9 @@ LogicalResult vector_multi_reduction_rule(RewriteContext &ctx, Operation &op,
     case vector::CombiningKind::MAXIMUMF:
       tpu_kind = tpu::ReductionKind::MAX;
       break;
+    case vector::CombiningKind::MINIMUMF:
+      tpu_kind = tpu::ReductionKind::MIN;
+      break;
     default:
       return multi_reduction_op.emitOpError(
           "Not implemented: unsupported reduction kind");
@@ -3714,6 +3722,10 @@ LogicalResult vector_multi_reduction_rule(RewriteContext &ctx, Operation &op,
                     break;
                   case tpu::ReductionKind::MAX:
                     acc_vreg = builder.create<arith::MaximumFOp>(
+                        vreg.getLoc(), *acc_vreg, vreg);
+                    break;
+                  case tpu::ReductionKind::MIN:
+                    acc_vreg = builder.create<arith::MinimumFOp>(
                         vreg.getLoc(), *acc_vreg, vreg);
                     break;
                 }

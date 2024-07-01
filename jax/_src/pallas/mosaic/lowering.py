@@ -1114,72 +1114,124 @@ def _multiple_of_lowering_rule(ctx: LoweringRuleContext, val, *, values):
 lowering_rules[primitives.multiple_of_p] = _multiple_of_lowering_rule
 
 
-def _reduce_max_lowering_rule(ctx: LoweringRuleContext, x, *, axes):
-  (x_aval,) = ctx.avals_in
-  if not ctx.avals_out[0].shape:
-    raise NotImplementedError(
-        "Cannot lower reductions to scalar. Reduce to one element vector"
-        " instead, using keepdims=True."
-    )
+def reduce_lowering_rule(reduce_fn, type_to_kind, type_to_identity):
+  def _lowering_rule(ctx: LoweringRuleContext, x, *, axes):
+    (x_aval,) = ctx.avals_in
+    if not ctx.avals_out[0].shape:
+      # If reducing to a scalar, we reduce recursively by reducing along
+      # each dimension individually and squeezing. This avoids the
+      # materialization of any scalar-shaped tensors which would need
+      # to be placed into scalar registers explicitly.
+      def _proxy_fun(val, *, axes):
+        # Mosaic compilation errors when attempting to reduce over all axes in
+        # order. However, it works when we reduce backwards from the last axis.
+        for ax in sorted(axes)[::-1]:
+          val = reduce_fn(val, axis=ax, keepdims=True)
+        # Squeeze lowers to vector.ExtractOp which will place the final
+        # value in a scalar register.
+        return jnp.squeeze(val)
+      proxy_lowering = lower_fun(
+          _proxy_fun, multiple_results=False)
+      return proxy_lowering(ctx, x, axes=axes)
 
-  out_type = aval_to_ir_type(ctx.avals_out[0])
-  if jnp.issubdtype(x_aval.dtype, jnp.floating):
-    kind = vector.CombiningKind.MAXIMUMF
-    val = ir.FloatAttr.get(ir.F32Type.get(), float("-inf"))
+    if jnp.issubdtype(x_aval.dtype, jnp.floating):
+      kind = type_to_kind[jnp.floating]
+      val = type_to_identity[jnp.floating]
+      val = ir.FloatAttr.get(ir.F32Type.get(), val)
+    elif jnp.issubdtype(x_aval.dtype, jnp.signedinteger):
+      raise NotImplementedError("Reductions over integers not implemented.")
+    elif jnp.issubdtype(x_aval.dtype, jnp.unsignedinteger):
+      raise NotImplementedError("Reductions over integers not implemented.")
+    else:
+      raise NotImplementedError(
+          f"Reduction over {x_aval.dtype} not implemented.")
+    out_type = aval_to_ir_type(ctx.avals_out[0])
     identity = ir.DenseElementsAttr.get_splat(out_type, val)
-  elif jnp.issubdtype(x_aval.dtype, jnp.signedinteger):
-    kind = ir.Attribute.parse("#vector.kind<maxsi>")
-    raise NotImplementedError
-  elif jnp.issubdtype(x_aval.dtype, jnp.unsignedinteger):
-    kind = ir.Attribute.parse("#vector.kind<maxui>")
-    raise NotImplementedError
-  acc = arith.ConstantOp(out_type, identity)
-  op = vector.MultiDimReductionOp(
-      kind,
-      x,
-      acc,
-      ir.ArrayAttr.get(
-          [ir.IntegerAttr.get(ir.IntegerType.get_signless(64), a) for a in axes]
-      ),
-  )
-  return op.result
+    acc = arith.ConstantOp(out_type, identity)
+    op = vector.MultiDimReductionOp(
+        kind,
+        x,
+        acc,
+        ir.ArrayAttr.get(
+            [ir.IntegerAttr.get(ir.IntegerType.get_signless(64), a) for a in axes]
+        ),
+    )
+    return op.result
+  return _lowering_rule
 
 
+REDUCE_MAX_KINDS = {
+    jnp.floating: vector.CombiningKind.MAXIMUMF,
+    jnp.signedinteger: vector.CombiningKind.MAXSI,
+    jnp.unsignedinteger: vector.CombiningKind.MAXUI,
+}
+REDUCE_MAX_IDENTITY = {
+    jnp.floating: float("-inf"),
+    jnp.signedinteger: np.iinfo(np.int32).min,
+}
+_reduce_max_lowering_rule = reduce_lowering_rule(
+    jnp.max, REDUCE_MAX_KINDS, REDUCE_MAX_IDENTITY)
 lowering_rules[lax.reduce_max_p] = _reduce_max_lowering_rule
 
 
-def _reduce_sum_lowering_rule(ctx: LoweringRuleContext, x, *, axes):
-  (x_aval,) = ctx.avals_in
-  if not ctx.avals_out[0].shape:
-    raise NotImplementedError(
-        "Cannot lower reductions to scalar. Reduce to one element vector"
-        " instead, using keepdims=True."
-    )
-
-  out_type = aval_to_ir_type(ctx.avals_out[0])
-  if jnp.issubdtype(x_aval.dtype, jnp.floating):
-    kind = ir.Attribute.parse("#vector.kind<add>")
-    val = ir.FloatAttr.get(ir.F32Type.get(), 0.0)
-    identity = ir.DenseElementsAttr.get_splat(out_type, val)
-  elif jnp.issubdtype(x_aval.dtype, jnp.signedinteger):
-    kind = ir.Attribute.parse("#vector.kind<add>")
-    raise NotImplementedError
-  elif jnp.issubdtype(x_aval.dtype, jnp.unsignedinteger):
-    kind = ir.Attribute.parse("#vector.kind<add>")
-    raise NotImplementedError
-  acc = arith.ConstantOp(out_type, identity)
-  op = vector.MultiDimReductionOp(
-      kind,
-      x,
-      acc,
-      ir.ArrayAttr.get(
-          [ir.IntegerAttr.get(ir.IntegerType.get_signless(64), a) for a in axes]
-      ),
-  )
-  return op.result
+REDUCE_MIN_KINDS = {
+    jnp.floating: vector.CombiningKind.MINIMUMF,
+    jnp.signedinteger: vector.CombiningKind.MINSI,
+    jnp.unsignedinteger: vector.CombiningKind.MINUI,
+}
+REDUCE_MIN_IDENTITY = {
+    jnp.floating: float("inf"),
+    jnp.signedinteger: np.iinfo(np.int32).max,
+}
+_reduce_min_lowering_rule = reduce_lowering_rule(
+    jnp.min, REDUCE_MIN_KINDS, REDUCE_MIN_IDENTITY)
+lowering_rules[lax.reduce_min_p] = _reduce_min_lowering_rule
 
 
+REDUCE_SUM_KINDS = {
+    jnp.floating: vector.CombiningKind.ADD,
+    jnp.signedinteger: vector.CombiningKind.ADD,
+    jnp.unsignedinteger: vector.CombiningKind.ADD,
+}
+REDUCE_SUM_IDENTITY = {
+    jnp.floating: 0.0,
+    jnp.signedinteger: 0,
+}
+_reduce_sum_lowering_rule = reduce_lowering_rule(
+    jnp.sum, REDUCE_SUM_KINDS, REDUCE_SUM_IDENTITY)
 lowering_rules[lax.reduce_sum_p] = _reduce_sum_lowering_rule
+
+
+def _reduce_and_lowering_rule(ctx: LoweringRuleContext, x, *, axes):
+  def _proxy_reduce(arg, *, axes):
+    # Mosaic currently only supports float reductions, so we cast the boolean
+    # arg to a float and use reduce_min to implement reduce_and.
+    # TODO(justinfu): Implement this logic in Mosaic MultiDimReductionOp
+    # instead.
+    float_arg = jnp.where(arg, 1.0, 0.0)
+    a = jnp.min(float_arg, axis=axes)
+    return a > 0.0
+  proxy_lowering = lower_fun(
+      _proxy_reduce, multiple_results=False)
+  return proxy_lowering(ctx, x, axes=axes)
+
+lowering_rules[lax.reduce_and_p] = _reduce_and_lowering_rule
+
+
+def _reduce_or_lowering_rule(ctx: LoweringRuleContext, x, *, axes):
+  def _proxy_reduce(arg, *, axes):
+    # Mosaic currently only supports float reductions, so we cast the boolean
+    # arg to a float and use reduce_max to implement reduce_or.
+    # TODO(justinfu): Implement this logic in Mosaic MultiDimReductionOp
+    # instead.
+    float_arg = jnp.where(arg, 1.0, 0.0)
+    a = jnp.max(float_arg, axis=axes)
+    return a > 0.0
+  proxy_lowering = lower_fun(
+      _proxy_reduce, multiple_results=False)
+  return proxy_lowering(ctx, x, axes=axes)
+
+lowering_rules[lax.reduce_or_p] = _reduce_or_lowering_rule
 
 
 def _broadcast_in_dim_lowering_rule(
@@ -1187,6 +1239,21 @@ def _broadcast_in_dim_lowering_rule(
 ):
   (aval_in,) = ctx.avals_in
   (aval_out,) = ctx.avals_out
+
+  if jnp.issubdtype(aval_in.dtype, jnp.bool_):
+    # Direct broadcasts for bools are not supported in Mosaic due to booleans
+    # living in mask registers and broadcast operating on vregs. Broadcast as an
+    # integer instead and cast back to a bool.
+    # TODO(justinfu): Implement this logic in Mosaic BroadcastOp instead.
+    def _proxy_fun(val, *, shape, broadcast_dimensions):
+      int_val = jnp.where(val, 1, 0)
+      bcast_val = jax.lax.broadcast_in_dim(int_val, shape, broadcast_dimensions)
+      return bcast_val == 1
+    proxy_lowering = lower_fun(
+        _proxy_fun, multiple_results=False)
+    return proxy_lowering(
+        ctx, val, shape=shape, broadcast_dimensions=broadcast_dimensions)
+
   if broadcast_dimensions:
     out_shape_list = [1] * len(shape)
     for i, s in zip(broadcast_dimensions, aval_in.shape):
