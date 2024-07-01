@@ -53,3 +53,19 @@ py_library_providing_imports_info(
     data = [":pjrt_c_api_gpu_plugin"],
     lib_rule = pytype_library,
 )
+
+config_setting(
+    name = "disable_jaxlib_for_cpu_build",
+    flag_values = {
+        "//jax:build_jaxlib": "False",
+        "@local_config_cuda//:enable_cuda": "False",
+    },
+)
+
+config_setting(
+    name = "disable_jaxlib_for_cuda12_build",
+    flag_values = {
+        "//jax:build_jaxlib": "False",
+        "@local_config_cuda//:enable_cuda": "True",
+    },
+)
