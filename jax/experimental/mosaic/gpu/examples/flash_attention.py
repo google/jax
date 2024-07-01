@@ -120,7 +120,7 @@ def build_kernel(
   f32 = ir.F32Type.get()
 
   grid = block_partition.num_chunks
-  block = (wgs_per_block * 128, 1, 1)
+  block = (3 * 128, 1, 1)
   tiling = (64, 64)
   qo_scratch = jax.ShapeDtypeStruct(
       (compute_wgs_per_block, *tile_shape((blocks.q, head_dim), tiling)),
@@ -361,8 +361,12 @@ def build_kernel(
       out_gmem,
       smem_scratch,
   ):
-    barriers = BarrierArray(blocks.stages + wgs_per_block)
+    k_barriers = BarrierArray(blocks.stages)
+    v_barriers = BarrierArray(blocks.stages)
+    q_barriers = BarrierArray(wgs_per_block)
+    k_consumed_barrier, v_consumed_barrier = BarrierArray(2, arrival_count=256)
     schedule_barrier = BarrierArray(1, arrival_count=256)[0]
+    @ctx.named_region("Schedule barrier")
     def perform_schedule_barrier():
       schedule_barrier.arrive()
       schedule_barrier.wait()
@@ -372,7 +376,6 @@ def build_kernel(
 
     @contextlib.contextmanager
     def only_wg(idx):
-      i32 = ir.IntegerType.get_signless(32)
       is_wg = arith.cmpi(arith.CmpIPredicate.eq, wg_idx, c(idx, i32))
       with ir.InsertionPoint(scf.IfOp(is_wg).then_block):
         yield
@@ -388,153 +391,177 @@ def build_kernel(
     )
     del batch_idx
 
-    q_barrier = arith.addi(c(blocks.stages), arith.index_cast(index, wg_idx))
-    with ctx.named_region("Q TMA start"):
-      ctx.async_copy(
-          src_ref=q_gmem,
-          gmem_slice=(q_head_idx, ds(q_seq_base, blocks.q)),
-          gmem_transform=mosaic_gpu.TileTransform(tiling),
-          dst_ref=qo_smem,
-          barrier=barriers[q_barrier],
-          swizzle=128,
+    loop_partition = Partition1D(kv_seq_len, chunk_size=blocks.kv)
+    if_compute = scf.IfOp(
+        arith.cmpi(arith.CmpIPredicate.ne, wg_idx, c(2, i32)), hasElse=True
+    )
+    with ir.InsertionPoint(if_compute.then_block):
+      nvvm.setmaxregister(232, nvvm.SetMaxRegisterAction.increase)
+      with ctx.named_region("Q TMA start"):
+        ctx.async_copy(
+            src_ref=q_gmem,
+            gmem_slice=(q_head_idx, ds(q_seq_base, blocks.q)),
+            gmem_transform=mosaic_gpu.TileTransform(tiling),
+            dst_ref=qo_smem,
+            barrier=q_barriers[wg_idx],
+            swizzle=128,
+        )
+
+      with ctx.named_region("Q TMA wait"):
+        q_barriers[wg_idx].wait()
+
+      m_i = FragmentedArray.splat(
+          c(-jnp.inf, f32), shape=(blocks.q,), layout=WGMMA_ROW_LAYOUT
+      )
+      l_i = FragmentedArray.splat(
+          c(0, f32), shape=(blocks.q,), layout=WGMMA_ROW_LAYOUT
+      )
+      acc = FragmentedArray.splat(
+          c(0, f32), shape=(blocks.q, head_dim), layout=WGMMA_LAYOUT
       )
 
-    kv_head_idx = arith.divui(q_head_idx, c(q_heads_per_kv_head))
+      k_barriers[c(0)].wait()
 
-    def kv_copy_init(slot, kv_seq_base):
+      with only_wg(1):
+        perform_schedule_barrier()
+
+      @fori(c(loop_partition.num_chunks), (acc, m_i, l_i))
+      def kv_loop(kv_step, carry):
+        acc, m_i, l_i = carry
+        slot = arith.remui(kv_step, c(blocks.stages))
+
+        with ctx.named_region("QK issue"):
+          # TODO(apaszke): Support WGMMA without an initial accumulator.
+          qk_acc = WGMMAAccumulator.zero(blocks.q, blocks.kv)
+          q, k = qo_smem, memref_slice(k_smem, slot)
+          qk_acc = wgmma(qk_acc, q, k, b_order=WGMMALayout.COL_MAJOR)
+          nvvm.wgmma_commit_group_sync_aligned()
+
+        perform_schedule_barrier()
+
+        with ctx.named_region("QK wait"):
+          nvvm.wgmma_wait_group_sync_aligned(0)
+          k_consumed_barrier.arrive()
+          qk = qk_acc.value
+
+        with ctx.named_region("Softmax"):
+          m_ij = m_i.max(qk.reduce(arith.maximumf, axis=1))
+          alpha = exp(m_i - m_ij)
+          m_i = m_ij
+          p = exp(qk - m_ij.broadcast_minor(blocks.kv))
+          acc *= alpha.broadcast_minor(head_dim)
+          l_i *= alpha
+          p16 = p.astype(f16)
+
+        with ctx.named_region("V TMA wait"):
+          v_barriers[slot].wait()
+
+        perform_schedule_barrier()
+
+        # This is quite suprising, but it seems like warp shuffles cannot
+        # run simutaneously with the WGMMA. For that reason we include it as
+        # part of the TensorCore critical section and not the ALU section.
+        with ctx.named_region("Softmax reduction"):
+          l_i += p.reduce(arith.addf, axis=1)
+
+        with ctx.named_region("PV issue"):
+          v = memref_slice(v_smem, slot)
+          acc_update = WGMMAAccumulator.from_registers(acc)
+          acc_update = wgmma(acc_update, p16, v)
+          nvvm.wgmma_commit_group_sync_aligned()
+
+        # We hide the barrier overhead by overlapping it with the PV matmul.
+        with ctx.named_region("K TMA wait"):
+          wait_step = arith.addi(kv_step, c(1))
+          wait_slot = arith.remui(wait_step, c(blocks.stages))
+          wait_step_in_bounds = arith.cmpi(
+              arith.CmpIPredicate.slt, wait_step, c(loop_partition.num_chunks)
+          )
+          with ir.InsertionPoint(scf.IfOp(wait_step_in_bounds).then_block):
+            k_barriers[wait_slot].wait()
+            scf.yield_([])
+
+        with ctx.named_region("PV wait"):
+          nvvm.wgmma_wait_group_sync_aligned(0)
+          v_consumed_barrier.arrive()
+          acc = acc_update.value
+
+        return acc, m_i, l_i
+
+      with only_wg(0):
+        perform_schedule_barrier()
+
+      acc, m_i, l_i = kv_loop.results
+      del m_i
+      # TODO(apaszke): Invert and multiply to avoid expensive divisions.
+      acc /= l_i.broadcast_minor(head_dim)
+
+      with ctx.named_region("Acc store"):
+        acc.astype(f16).store_tiled(qo_smem, swizzle=128)
+        gpu.barrier()
+        nvvm.fence_proxy(
+            nvvm.ProxyKind.async_shared, space=nvvm.SharedSpace.shared_cta
+        )  # Make sure the store is visible to the TMA.
+
+      with ctx.named_region("GMEM store"):
+        ctx.async_copy(
+            src_ref=qo_smem,
+            dst_ref=out_gmem,
+            gmem_slice=(q_head_idx, ds(q_seq_base, blocks.q)),
+            gmem_transform=mosaic_gpu.TileTransform(tiling),
+            swizzle=128,
+        )
+        ctx.await_async_copy(0)
+
+      scf.yield_([])
+    with ir.InsertionPoint(if_compute.else_block):
+      nvvm.setmaxregister(40, nvvm.SetMaxRegisterAction.decrease)
       with single_thread(per_block=False):
-        txcount = c(2 * blocks.kv * head_dim * bytewidth(f16))
-        nvgpu.mbarrier_arrive_expect_tx(barriers.value, txcount, slot)
         k_tr = (
             mosaic_gpu.TileTransform(tiling),
             mosaic_gpu.TransposeTransform((0, 2, 1, 3, 4)),
         )
         v_tr = mosaic_gpu.TileTransform(tiling)
-        for smem, gmem, t in ((k_smem, k_gmem, k_tr), (v_smem, v_gmem, v_tr)):
+        kv_head_idx = arith.divui(q_head_idx, c(q_heads_per_kv_head))
+        def start_kv_copy(slot, kv_seq_base, smem, gmem, barrier, transform):
           ctx.async_copy(
-              dst_ref=memref_slice(smem, slot),
-              src_ref=gmem,
-              gmem_slice=(kv_head_idx, ds(kv_seq_base, blocks.kv)),
-              gmem_transform=t,
-              barrier=barriers[slot],
-              arrive=False,
-              uniform=False,
-              swizzle=128,
+                dst_ref=memref_slice(smem, slot),
+                src_ref=gmem,
+                gmem_slice=(kv_head_idx, ds(kv_seq_base, blocks.kv)),
+                gmem_transform=transform,
+                barrier=barrier,
+                uniform=False,
+                swizzle=128,
+            )
+        def start_k_copy(slot, kv_seq_base):
+          return start_kv_copy(
+              slot, kv_seq_base, k_smem, k_gmem, k_barriers[slot], k_tr
+          )
+        def start_v_copy(slot, kv_seq_base):
+          return start_kv_copy(
+              slot, kv_seq_base, v_smem, v_gmem, v_barriers[slot], v_tr
           )
 
-    loop_partition = Partition1D(kv_seq_len, chunk_size=blocks.kv)
-    with only_wg(1), ctx.named_region("KV TMA warmup"):
-      for i in range(blocks.stages - 1):
-        kv_copy_init(c(i), loop_partition.get_base(c(i)))
+        with ctx.named_region("KV TMA warmup"):
+          for i in range(blocks.stages):
+            start_k_copy(c(i), loop_partition.get_base(c(i)))
+            start_v_copy(c(i), loop_partition.get_base(c(i)))
 
-    with ctx.named_region("Q TMA wait"):
-      barriers[q_barrier].wait()
-
-    m_i = FragmentedArray.splat(
-        c(-jnp.inf, f32), shape=(blocks.q,), layout=WGMMA_ROW_LAYOUT
-    )
-    l_i = FragmentedArray.splat(
-        c(0, f32), shape=(blocks.q,), layout=WGMMA_ROW_LAYOUT
-    )
-    acc = FragmentedArray.splat(
-        c(0, f32), shape=(blocks.q, head_dim), layout=WGMMA_LAYOUT
-    )
-
-    with only_wg(1):
-      perform_schedule_barrier()
-
-    with only_wg(0):
-      barriers[c(0)].wait()
-
-    @fori(c(loop_partition.num_chunks), (acc, m_i, l_i))
-    def kv_loop(kv_step, carry):
-      acc, m_i, l_i = carry
-      slot = arith.remui(kv_step, c(blocks.stages))
-
-      with ctx.named_region("QK issue"):
-        # TODO(apaszke): Support WGMMA without an initial accumulator.
-        qk_acc = WGMMAAccumulator.zero(blocks.q, blocks.kv)
-        q, k = qo_smem, memref_slice(k_smem, slot)
-        qk_acc = wgmma(qk_acc, q, k, b_order=WGMMALayout.COL_MAJOR)
-        nvvm.wgmma_commit_group_sync_aligned()
-
-      # We hide the TMA overhead by overlapping it with the QK matmul.
-      with only_wg(1), ctx.named_region("KV TMA start"):
-        tma_step = arith.addi(kv_step, c(blocks.stages - 1))
-        tma_slot = arith.remui(tma_step, c(blocks.stages))
-        tma_step_in_bounds = arith.cmpi(
-            arith.CmpIPredicate.slt, tma_step, c(loop_partition.num_chunks)
-        )
-        if_op = scf.IfOp(tma_step_in_bounds)
-        with ir.InsertionPoint(if_op.then_block):
-          kv_copy_init(tma_slot, loop_partition.get_base(tma_step))
-          scf.yield_([])
-
-      perform_schedule_barrier()
-
-      with ctx.named_region("QK wait"):
-        nvvm.wgmma_wait_group_sync_aligned(0)
-        qk = qk_acc.value
-
-      with ctx.named_region("Softmax"):
-        m_ij = m_i.max(qk.reduce(arith.maximumf, axis=1))
-        alpha = exp(m_i - m_ij)
-        m_i = m_ij
-        p = exp(qk - m_ij.broadcast_minor(blocks.kv))
-        acc *= alpha.broadcast_minor(head_dim)
-        l_i *= alpha
-        l_i += p.reduce(arith.addf, axis=1)
-        p = p.astype(f16)
-
-      perform_schedule_barrier()
-
-      with ctx.named_region("PV issue"):
-        v = memref_slice(v_smem, slot)
-        acc_update = WGMMAAccumulator.from_registers(acc)
-        acc_update = wgmma(acc_update, p, v)
-        nvvm.wgmma_commit_group_sync_aligned()
-
-      # We hide the barrier overhead by overlapping it with the PV matmul.
-      with only_wg(0), ctx.named_region("KV TMA wait"):
-        wait_step = arith.addi(kv_step, c(1))
-        wait_slot = arith.remui(wait_step, c(blocks.stages))
-        wait_step_in_bounds = arith.cmpi(
-            arith.CmpIPredicate.slt, wait_step, c(loop_partition.num_chunks)
-        )
-        with ir.InsertionPoint(scf.IfOp(wait_step_in_bounds).then_block):
-          barriers[wait_slot].wait()
-          scf.yield_([])
-
-      with ctx.named_region("PV wait"):
-        nvvm.wgmma_wait_group_sync_aligned(0)
-        acc = acc_update.value
-
-      return acc, m_i, l_i
-
-    with only_wg(0):
-      perform_schedule_barrier()
-
-    acc, m_i, l_i = kv_loop.results
-    del m_i
-    # TODO(apaszke): Invert and multiply to avoid expensive divisions.
-    acc /= l_i.broadcast_minor(head_dim)
-
-    with ctx.named_region("Acc store"):
-      acc.astype(f16).store_tiled(qo_smem, swizzle=128)
-      gpu.barrier()
-      nvvm.fence_proxy(
-          nvvm.ProxyKind.async_shared, space=nvvm.SharedSpace.shared_cta
-      )  # Make sure the store is visible to the TMA.
-
-    with ctx.named_region("GMEM store"):
-      ctx.async_copy(
-          src_ref=qo_smem,
-          dst_ref=out_gmem,
-          gmem_slice=(q_head_idx, ds(q_seq_base, blocks.q)),
-          gmem_transform=mosaic_gpu.TileTransform(tiling),
-          swizzle=128,
-      )
-      ctx.await_async_copy(0)
+        @fori(c(loop_partition.num_chunks - blocks.stages), None)
+        def _kv_loop_memory(kv_step, _):
+          tma_step = arith.addi(kv_step, c(blocks.stages))
+          tma_slot = arith.remui(kv_step, c(blocks.stages))
+          with ctx.named_region("K consumed barrier"):
+            k_consumed_barrier.wait()
+          start_k_copy(tma_slot, loop_partition.get_base(tma_step))
+          with ctx.named_region("V consumed barrier"):
+            v_consumed_barrier.wait()
+          start_v_copy(tma_slot, loop_partition.get_base(tma_step))
+        @fori(c(blocks.stages), None)
+        def _kv_loop_memory(i, _):
+          k_consumed_barrier.wait()
+          v_consumed_barrier.wait()
+      scf.yield_([])
 
   match impl:
     case Implementation.TWO_COMPUTE_WG:

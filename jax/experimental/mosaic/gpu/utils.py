@@ -104,6 +104,7 @@ def c(val: int | float, ty):
 
 
 def debug_print(fmt, *args, uniform=True):
+  # return
   type_formats = []
   new_args = []
   for arg in args:
