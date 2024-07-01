@@ -386,9 +386,23 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
     theta = 0.0
     phi = jnp.pi
 
-    expected = lsp_special.sph_harm(m, n, theta, phi, n_max)
+    actual = lsp_special.sph_harm(m, n, theta, phi, n_max)
 
-    actual = osp_special.sph_harm(m, n, theta, phi)
+    expected = osp_special.sph_harm(m, n, theta, phi)
+
+    self.assertAllClose(actual, expected, rtol=1e-8, atol=9e-5)
+
+  @jax.numpy_dtype_promotion('standard')  # This test explicitly exercises dtype promotion
+  def testSphHarmAccuracyZeroOrderOneDegreeMultipleCoordinates(self):
+    theta = jnp.arange(5, dtype=jnp.float32)
+    phi = jnp.array(3) * jnp.pi / 4
+    m = 0
+    n = 1
+    n_max = 1
+
+    actual = lsp_special.sph_harm(m, n, theta, phi, n_max)
+
+    expected = osp_special.sph_harm(m, n, theta, phi)
 
     self.assertAllClose(actual, expected, rtol=1e-8, atol=9e-5)
 
@@ -399,9 +413,8 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
     phi = jnp.array([2.3])
     n_max = 0
 
-    expected = jnp.array([1.0 / jnp.sqrt(4.0 * np.pi)])
-    actual = jnp.real(
-        lsp_special.sph_harm(jnp.array([0]), jnp.array([0]), theta, phi, n_max))
+    expected = osp_special.sph_harm(jnp.array([0]), jnp.array([0]), theta, phi)
+    actual = lsp_special.sph_harm(jnp.array([0]), jnp.array([0]), theta, phi, n_max)
 
     self.assertAllClose(actual, expected, rtol=1.1e-7, atol=3e-8)
 
@@ -412,9 +425,8 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
     phi = jnp.array([3.1])
     n_max = 1
 
-    expected = jnp.sqrt(3.0 / (4.0 * np.pi)) * jnp.cos(phi)
-    actual = jnp.real(
-        lsp_special.sph_harm(jnp.array([0]), jnp.array([1]), theta, phi, n_max))
+    expected = osp_special.sph_harm(jnp.array([0]), jnp.array([1]), theta, phi)
+    actual = lsp_special.sph_harm(jnp.array([0]), jnp.array([1]), theta, phi, n_max)
 
     self.assertAllClose(actual, expected, rtol=2e-7, atol=6e-8)
 
@@ -425,8 +437,7 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
     phi = jnp.array([2.5])
     n_max = 1
 
-    expected = (-1.0 / 2.0 * jnp.sqrt(3.0 / (2.0 * np.pi)) *
-                jnp.sin(phi) * jnp.exp(1j * theta))
+    expected = osp_special.sph_harm(jnp.array([1]), jnp.array([1]), theta, phi)
     actual = lsp_special.sph_harm(
         jnp.array([1]), jnp.array([1]), theta, phi, n_max)
 
