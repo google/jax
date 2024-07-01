@@ -126,18 +126,39 @@ class LaxBackedScipySignalTests(jtu.JaxTestCase):
 
   @jtu.sample_product(
     mode=['full', 'same', 'valid'],
+    boundary = ['fill', 'wrap'],
     op=['convolve2d', 'correlate2d'],
     dtype=default_dtypes,
     xshape=twodim_shapes,
     yshape=twodim_shapes,
   )
-  def testConvolutions2D(self, xshape, yshape, dtype, mode, op):
+  def testConvolutions2D(self, xshape, yshape, dtype, mode, boundary, op):
     jsp_op = getattr(jsp_signal, op)
     osp_op = getattr(osp_signal, op)
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(xshape, dtype), rng(yshape, dtype)]
-    osp_fun = partial(osp_op, mode=mode)
-    jsp_fun = partial(jsp_op, mode=mode, precision=lax.Precision.HIGHEST)
+    osp_fun = partial(osp_op, mode=mode, boundary=boundary)
+    jsp_fun = partial(jsp_op, mode=mode, boundary=boundary, precision=lax.Precision.HIGHEST)
+    tol = {np.float16: 1e-2, np.float32: 1e-2, np.float64: 1e-12, np.complex64: 1e-2, np.complex128: 1e-12}
+    self._CheckAgainstNumpy(osp_fun, jsp_fun, args_maker, check_dtypes=False,
+                            tol=tol)
+    self._CompileAndCheck(jsp_fun, args_maker, rtol=tol, atol=tol)
+
+  @jtu.sample_product(
+    mode=['full', 'same'],
+    boundary = ['fill', 'wrap'],
+    op=['convolve2d', 'correlate2d'],
+    dtype=default_dtypes,
+    xshape=[(3, 4), (5, 2), (4, 6)],
+    yshape=[(4, 3), (2, 5), (5, 4)],
+  )
+  def testConvolutions2DNotValidMode(self, xshape, yshape, dtype, mode, boundary, op):
+    jsp_op = getattr(jsp_signal, op)
+    osp_op = getattr(osp_signal, op)
+    rng = jtu.rand_default(self.rng())
+    args_maker = lambda: [rng(xshape, dtype), rng(yshape, dtype)]
+    osp_fun = partial(osp_op, mode=mode, boundary=boundary)
+    jsp_fun = partial(jsp_op, mode=mode, boundary=boundary, precision=lax.Precision.HIGHEST)
     tol = {np.float16: 1e-2, np.float32: 1e-2, np.float64: 1e-12, np.complex64: 1e-2, np.complex128: 1e-12}
     self._CheckAgainstNumpy(osp_fun, jsp_fun, args_maker, check_dtypes=False,
                             tol=tol)
