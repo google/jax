@@ -1976,13 +1976,24 @@ LogicalResult tpu_bitcast_rule(RewriteContext &ctx, Operation &op,
       !layout_out.hasNativeTiling(ctx.target_shape)) {
     return op.emitOpError("Not implemented: unsupported tiling");
   }
-  if (layout_in.offsets() != LayoutOffsets{0, 0} ||
-      layout_out.offsets() != LayoutOffsets{0, 0}) {
-    return op.emitOpError("Not implemented: unsupported offsets");
+  if (layout_in.bitwidth() != layout_out.bitwidth()) {
+    if (layout_in.offsets()[0].value_or(0) != 0) {
+      return op.emitOpError(
+          "Not implemented: unsupported bitcast with an offset on the second "
+          "minormost dimension");
+    }
+    if (layout_in.implicit_dim() == VectorLayout::ImplicitDim::kSecondMinor) {
+      return op.emitOpError(
+          "Not implemented: unsupported bitcast with an implicit dim on the "
+          "second minormost dimension");
+    }
   }
-  if (layout_in.implicit_dim() != VectorLayout::ImplicitDim::kNone ||
-      layout_out.implicit_dim() != VectorLayout::ImplicitDim::kNone) {
-    return op.emitOpError("Not implemented: unsupported implicit dim");
+  if (layout_in.offsets() != layout_out.offsets()) {
+    return op.emitOpError("Expected same offsets for input and output layout");
+  }
+  if (layout_in.implicit_dim() != layout_out.implicit_dim()) {
+    return op.emitOpError(
+        "Expected same implicit dim for input and output layout");
   }
   ImplicitLocOpBuilder builder(op.getLoc(), &op);
   auto bitcast_op = cast<tpu::BitcastOp>(op);

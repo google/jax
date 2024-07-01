@@ -853,24 +853,23 @@ class VectorLayoutInferer {
   }
 
   LogicalResult infer(tpu::BitcastOp op) {
-    auto src_layout = getLayout(op.getInput());
-    LayoutOffsets src_offsets = src_layout->offsets();
-    if (src_offsets[0].value_or(0) || src_offsets[1].value_or(0)) {
-      NYI("unsupported bitcast with offsets");
-    }
-    if (src_layout->implicit_dim() != ImplicitDim::kNone) {
-      NYI("unsupported bitcast with an implicit dim");
-    }
-    // Check if input and output have same bit size.
     auto in_ty = dyn_cast<VectorType>(op.getInput().getType());
     auto out_ty = dyn_cast<VectorType>(op.getOutput().getType());
     auto in_bitwidth = in_ty.getElementTypeBitWidth();
     auto out_bitwidth = out_ty.getElementTypeBitWidth();
+    auto src_layout = getLayout(op.getInput());
+    LayoutOffsets src_offsets = src_layout->offsets();
+    if (in_bitwidth != out_bitwidth) {
+      if (src_offsets[0].value_or(0)) {
+        NYI("unsupported bitcast with offsets on second minormost dimension");
+      }
+      if (src_layout->implicit_dim() == ImplicitDim::kSecondMinor) {
+        NYI("unsupported bitcast with an implicit dim on second minormost "
+            "dimension");
+      }
+    }
     TPU_CHECK_OP(in_ty && out_ty && in_ty.getRank() == out_ty.getRank(),
                  "Input and output have different rank");
-    if (out_ty.getRank() < 2) {
-      NYI("Support bitcast with 1D vector");
-    }
     for (int i = 0; i < in_ty.getRank(); ++i) {
       auto in_dim = in_ty.getDimSize(i);
       auto out_dim = out_ty.getDimSize(i);
@@ -888,11 +887,16 @@ class VectorLayoutInferer {
       TPU_CHECK_OP(in_dim == out_dim,
                    "Input and output have incompatible shape");
     }
-    setLayout(op,
-              VectorLayout(in_bitwidth, src_offsets, nativeTiling(in_bitwidth),
-                           ImplicitDim::kNone),
-              VectorLayout(out_bitwidth, src_offsets,
-                           nativeTiling(out_bitwidth), ImplicitDim::kNone));
+    // TODO(b/348485035): Instead of forcing to native tiling, bitcast should
+    // keep the input tiling and infer bitcastable tiling for output. For
+    // example, it is valid to bitcast vector<8x128xi32> with tile (1, 128) to
+    // vector<8x128xbf16> with tile (2, 128).
+    setLayout(
+        op,
+        VectorLayout(in_bitwidth, src_offsets, nativeTiling(in_bitwidth),
+                     src_layout->implicit_dim()),
+        VectorLayout(out_bitwidth, src_offsets, nativeTiling(out_bitwidth),
+                     src_layout->implicit_dim()));
     return success();
   }
 
