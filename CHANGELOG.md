@@ -18,6 +18,10 @@ Remember to align the itemized text with the first line of an item within a list
   * `libdevice.10.bc` is no longer bundled with CUDA wheels. It must be
     installed either as a part of local CUDA installation, or via NVIDIA's CUDA
     pip wheels.
+* Deprecations
+  * Removed a number of previously-deprecated internal APIs related to
+    polymorphic shapes. From {mod}`jax.core`: removed `canonicalize_shape`,
+    `dimension_as_value`, `definitely_equal`, and `symbolic_equal_dim`.
 
 ## jaxlib 0.4.31
 

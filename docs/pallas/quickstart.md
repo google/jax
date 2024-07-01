@@ -53,7 +53,7 @@ def add_vectors_kernel(x_ref, y_ref, o_ref):
 
 Let's dissect this function a bit. Unlike most JAX functions you've probably written,
 it does not take in `jax.Array`s as inputs and doesn't return any values.
-Instead it takes in *`Ref`* objects as inputs. Note that we also don't have any outputs
+Instead, it takes in *`Ref`* objects as inputs. Note that we also don't have any outputs
 but we are given an `o_ref`, which corresponds to the desired output.
 
 **Reading from `Ref`s**
@@ -133,7 +133,7 @@ Part of writing Pallas kernels is thinking about how to take big arrays that
 live in high-bandwidth memory (HBM, also known as DRAM) and expressing computations
 that operate on "blocks" of those arrays that can fit in SRAM.
 
-### Grids
+### Grids by example
 
 To automatically "carve" up the inputs and outputs, you provide a `grid` and
 `BlockSpec`s to `pallas_call`.
@@ -170,10 +170,10 @@ def iota_kernel(o_ref):
 We now execute it using `pallas_call` with an additional `grid` argument.
 
 ```{code-cell} ipython3
-def iota(len: int):
+def iota(size: int):
   return pl.pallas_call(iota_kernel,
-                        out_shape=jax.ShapeDtypeStruct((len,), jnp.int32),
-                        grid=(len,))()
+                        out_shape=jax.ShapeDtypeStruct((size,), jnp.int32),
+                        grid=(size,))()
 iota(8)
 ```
 
@@ -187,9 +187,11 @@ operations like matrix multiplications really quickly.
 On TPUs, programs are executed in a combination of parallel and sequential
 (depending on the architecture) so there are slightly different considerations.
 
+You can read more details at {ref}`pallas_grid`.
+
 +++
 
-### Block specs
+### Block specs by example
 
 +++
 
@@ -278,6 +280,8 @@ For `y`, we use a transposed version `BlockSpec(lambda i, j: (0, j), (1024, 512)
 Finally, for `z` we use `BlockSpec(lambda i, j: (i, j), (512, 512))`.
 
 These `BlockSpec`s are passed into `pallas_call` via `in_specs` and `out_specs`.
+
+For more detail on `BlockSpec`s see {ref}`pallas_blockspec`.
 
 Underneath the hood, `pallas_call` will automatically carve up your inputs and
 outputs into `Ref`s for each block that will be passed into the kernel.

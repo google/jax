@@ -33,11 +33,18 @@ import sys
 
 sys.path.insert(0, os.path.abspath('..'))
 
-
-# Currently type aliases are expanded. We tried a workaround along the lines of:
+# Workaround to avoid expanding type aliases. See:
 # https://github.com/sphinx-doc/sphinx/issues/6518#issuecomment-589613836
-# Unfortunately, this workaround makes Sphinx drop module-level documentation.
-# See https://github.com/google/jax/issues/3452.
+from typing import ForwardRef
+
+def _do_not_evaluate_in_jax(
+    self, globalns, *args, _evaluate=ForwardRef._evaluate,
+):
+  if globalns.get('__name__', '').startswith('jax'):
+    return self
+  return _evaluate(self, globalns, *args)
+
+ForwardRef._evaluate = _do_not_evaluate_in_jax
 
 # -- Project information -----------------------------------------------------
 
@@ -315,6 +322,8 @@ def linkcode_resolve(domain, info):
     return None
   if not info['fullname']:
     return None
+  if info['module'].split(".")[0] != 'jax':
+     return None
   try:
     mod = sys.modules.get(info['module'])
     obj = operator.attrgetter(info['fullname'])(mod)

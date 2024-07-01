@@ -640,3 +640,24 @@ Note that the following will succeed:
 
 ```
 
+(shape_poly_debugging)=
+## Debugging
+
+First, see the {ref}`export_debugging` documentation.
+Additionally, you can debug the shape refinement, which is
+invoked at compilation time for modules that have dimension variables or multi-platform
+support.
+
+If there is an error during shape refinement, you can set the `JAX_DUMP_IR_TO`
+environment variable to see a dump of the HLO module before
+shape refinement (named `..._before_refine_polymorphic_shapes.mlir`).
+This module should already have static input shapes.
+
+To enable the logging of all stages of shape refinement you can set the
+environment variable `TF_CPP_VMODULE=refine_polymorphic_shapes=3` in OSS
+(inside Google, you pass `--vmodule=refine_polymorphic_shapes=3`):
+
+```shell
+# Log from python
+JAX_DUMP_IR_TO=/tmp/export.dumps/ TF_CPP_VMODULE=refine_polymorphic_shapes=3 python tests/shape_poly_test.py ShapePolyTest.test_simple_unary -v=3
+```

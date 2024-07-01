@@ -1,3 +1,5 @@
+<!--* freshness: { owner: "necula" reviewed: "2024-06-26" } *-->
+
 # Exporting and serializing staged-out computations
 
 The {ref}`ahead-of-time-lowering` APIs produce
@@ -17,6 +19,8 @@ at a later time. This would allow you to:
   * archive a snapshot of a JAX function, e.g., to be able to
     reproduce later your results. **Note:** check out the [compatibility
     guarantees](#compatibility-guarantees) for this use case.
+
+For more details see the {mod}`jax.export` API reference.
 
 Here is an example:
 
@@ -170,6 +174,12 @@ and external users should:
 The compatibility guarantees do not apply if you bypass the `jax.export` APIs
 to obtain the StableHLO code.
 
+In order to ensure forward compatibility, when we change the JAX lowering rules
+to use a new custom call target, JAX will refrain for 3 weeks to use the new
+target. To use the latest lowering rules, you can pass the
+`--jax_export_ignore_forward_compatibility=1` configuration flag
+or the `JAX_EXPORT_IGNORE_FORWARD_COMPATIBILITY=1` environment variable.
+
 Only a subset of custom calls are guaranteed stable and have
 compatibility guarantees ([see list](https://github.com/search?q=repo%3Agoogle%2Fjax%20_CUSTOM_CALL_TARGETS_GUARANTEED_STABLE&type=code)).
 We continuously
@@ -213,6 +223,9 @@ ValueError: Cannot serialize code with custom calls whose targets have no compat
 ...    disabled_checks=[export.DisabledSafetyCheck.custom_call("my_new_prim")])(1.)
 
 ```
+
+See {ref}`export_ensuring_compat` for developer information regarding
+ensuring compatibility.
 
 ## Cross-platform and multi-platform export
 
@@ -469,7 +482,7 @@ As of June 2024, all function exported with version 9
 
 At any given time, the export APIs may support a range
 of calling convention versions. You can control which calling convention
-version to use using the `--jax-export-calling-convention-version` flag
+version to use using the `--jax_export_calling_convention_version` flag
 or the `JAX_EXPORT_CALLING_CONVENTION_VERSION` environment variable:
 
 ```python
@@ -631,10 +644,138 @@ We list here a history of the calling convention version numbers:
     and the default since February 1st, 2024 (JAX 0.4.24).
     This is the only supported version as of 27th of March, 2024.
 
+## Developer documentation
+
+(export_debugging)=
+### Debugging
+
+You can log the exported modules, with somewhat different flags in OSS versus
+in Google. In OSS you can do the following:
+
+```shell
+# Log from python
+python tests/export_test.py JaxExportTest.test_basic -v=3
+# Or, log from pytest to /tmp/mylog.txt
+pytest tests/export_test.py -k test_basic --log-level=3 --log-file=/tmp/mylog.txt
+```
+
+You will see a log line of the form:
+```shell
+I0619 10:54:18.978733 8299482112 _export.py:606] Exported JAX function: fun_name=sin version=9 lowering_platforms=('cpu',) disabled_checks=()
+I0619 10:54:18.978767 8299482112 _export.py:607] Define JAX_DUMP_IR_TO to dump the module.
+```
+
+If you set the environment variable `JAX_DUMP_IR_TO` to a directory, the exported (and the JIT compiled) HLO
+modules will be saved there.
+
+```shell
+JAX_DUMP_IR_TO=/tmp/export.dumps pytest tests/export_test.py -k test_basic --log-level=3 --log-file=/tmp/mylog.txt
+INFO     absl:_export.py:606 Exported JAX function: fun_name=sin version=9 lowering_platforms=('cpu',) disabled_checks=()
+INFO     absl:_export.py:607 The module was dumped to jax_ir0_jit_sin_export.mlir.
+```
+
+You will see both the exported modules (named `..._export.mlir`
+and the JIT compiled modules (named `..._compile.mlir`):
+```shell
+$ ls -l /tmp/export.dumps/
+total 32
+-rw-rw-r--@ 1 necula  wheel  2316 Jun 19 11:04 jax_ir0_jit_sin_export.mlir
+-rw-rw-r--@ 1 necula  wheel  2279 Jun 19 11:04 jax_ir1_jit_sin_compile.mlir
+-rw-rw-r--@ 1 necula  wheel  3377 Jun 19 11:04 jax_ir2_jit_call_exported_compile.mlir
+-rw-rw-r--@ 1 necula  wheel  2333 Jun 19 11:04 jax_ir3_jit_my_fun_export.mlir
+```
+
+Inside Google, you can turn on logging by using the `--vmodule` argument to
+specify the logging levels for different modules,
+e.g., `--vmodule=_export=3`.
+
+
+(export_ensuring_compat)=
+### Ensuring forward and backward compatibility
+
+This section discusses the process JAX developers
+should use to ensure the [compatibility guarantees](#compatibility-guarantees).
+
+One complication is that external users install JAX and jaxlib
+in separate packages,
+and users often end up using an older jaxlib than JAX.
+We observe that the custom calls live in the jaxlib, and only the jaxlib is relevant
+for a consumer of an exported artifact.
+To simplify the process, we are setting the expectation for external users
+that the compatibility window is defined in terms of jaxlib releases,
+and it is their responsibility to ensure that they export with a new jaxlib
+even if JAX would function with an older version.
+
+Thus, we care only about jaxlib releases.
+We can start a backward-compatibility deprecation clock when we make a jaxlib release,
+even if we don’t force it to be the minimum allowed version.
+
+Let’s say that we need to add, delete, or change the semantics of a
+custom call target `T` used by the JAX lowering rules.
+Here is a possible chronology (for changing custom call targets
+that live in jaxlib):
+
+  1. Day “D - 1”, before the change. Say that the active internal JAX version is `0.4.31`
+     (the version of the next JAX and jaxlib releases).
+     The JAX lowering rules use a custom call `T`.
+  2. Day “D”, we add the new custom call target `T_NEW`.
+    We should create a new custom call target, and clean up the old
+    target roughly after 6 months, rather than updating `T` in place:
+       * See the example [PR #20997](https://github.com/google/jax/pull/20997)
+         implementing the steps below.
+       * We add the custom call target `T_NEW`.
+       * We change the JAX lowering rules that were previous using `T`,
+         to use `T_NEW`, conditionally as follows:
+
+        ```python
+        from jax._src import config
+        from jax._src.lib import version as jaxlib_version
+
+        def my_lowering_rule(ctx: LoweringRuleContext, ...):
+          lowering_parameters = ctx.module_context.lowering_parameters
+          forward_compat_mode = (lowering_parameters.for_export and
+                                 not lowering_parameters.export_ignore_forward_compatibility)
+          if forward_compat_mode or jaxlib_version < (0, 4, 31):
+            # this is the old lowering, using target T, while we
+            # are in forward compatibility mode for T, or we
+            # are in OSS and are using an old jaxlib.
+            return hlo.custom_call("T", ...)
+          else:
+            # This is the new lowering, using target T_NEW, for
+            # when we use a jaxlib with version `>= (0, 4, 31)`
+            # (or when this is internal usage), and also we are
+            # in JIT mode.
+            return hlo.custom_call("T_NEW", ...)
+        ```
+       * Note that the forward compatibility mode is always false in JIT mode
+         or if the user passes `--jax_export_ignore_forward_compatibility=true`
+       * We add `T_NEW` to the list of
+         [`_CUSTOM_CALL_TARGETS_GUARANTEED_STABLE`](https://github.com/search?q=repo%3Agoogle%2Fjax++%22_CUSTOM_CALL_TARGETS_GUARANTEED_STABLE+%3D%22+path%3A_export.py&amp%3Btype=code&type=code)
+         in `_export.py`.
+  3. Day “D + 21” (end of forward compatibility window; can be even later than 21 days):
+    We remove the `forward_compat_mode` in the lowering code, so now exporting
+    will start using the new custom call target `T_NEW` as long as we are using a new `jaxlib`.
+       * We add a backwards compatibility test for `T_NEW`.
+  4. Day "RELEASE > D" (the first JAX release date after `D`, when we release version `0.4.31`):
+    we start the clock for the 6 months backwards compatibility.
+    Note that this is relevant only if `T` is among the custom call targets for which
+    we already guarantee stability, i.e., are listed in
+    [`_CUSTOM_CALL_TARGETS_GUARANTEED_STABLE`](https://github.com/search?q=repo%3Agoogle%2Fjax++%22_CUSTOM_CALL_TARGETS_GUARANTEED_STABLE+%3D%22+path%3A_export.py&amp%3Btype=code&type=code).
+      * If `RELEASE` is in the forward compatibility window `[D, D + 21]` and if
+        we make `RELEASE` the minimum allowed jaxlib version then we can
+        remove the `jaxlib_version < (0, 4, 31)` conditional in the
+        JIT branch.
+  5. Day “RELEASE + 180” (end of backward compatibility window,
+    can be even later than 180 days): By now, we must have bumped
+    the minimum jaxlib so that the lowering conditional `jaxlib_version < (0, 4, 31)`
+    was already removed and JAX lowering cannot generate custom calls to `T`.
+      * We remove the C++ implementation of the old custom call target `T`.
+      * We remove also the backwards compatibility test for `T`
 
 ## Migration guide from jax.experimental.export
 
-On June 14, 2024 we deprecated the `jax.experimental.export` APIs
+On June 18, 2024 (JAX version 0.4.30)
+we deprecated the `jax.experimental.export` APIs
 in favor of `jax.export` APIs. There have been some minor changes:
 
   * `jax.experimental.export.export`:
@@ -656,5 +797,3 @@ in favor of `jax.export` APIs. There have been some minor changes:
      * `uses_shape_polymorphism` is now `uses_global_constants`
      * `mlir_module_serialization_version` is now `calling_convention_version`
      * `lowering_platforms` is now `platforms`.
-
-

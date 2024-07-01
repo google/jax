@@ -103,12 +103,6 @@ def c(val: int | float, ty):
   return arith.constant(ty, attr)
 
 
-def get_tensormap_descriptor(**attrs):
-  return ir.Type.parse(
-      f"!nvgpu.tensormap.descriptor<{', '.join(k + '=' + v for k, v in attrs.items())}>"
-  )
-
-
 def debug_print(fmt, *args, uniform=True):
   type_formats = []
   new_args = []
@@ -527,8 +521,11 @@ class BarrierArray:
       yield self[offset]
 
   def __getitem__(self, offset: ir.Value | int):
+    index = ir.IndexType.get()
     if isinstance(offset, int):
-      offset = c(offset, ir.IndexType.get())
+      offset = c(offset, index)
+    if ir.IntegerType.isinstance(offset.type):
+      offset = arith.index_castui(index, offset)
     return Barrier(self, offset)
 
 
@@ -753,3 +750,35 @@ def warp_tree_reduce(value, op, group_size):
     result = op(result, other_result)
 
   return result
+
+
+def memref_ptr(memref_arg, memory_space=None):
+  i64 = ir.IntegerType.get_signless(64)
+  memref_ty = ir.MemRefType(memref_arg.type)
+  if len(memref_ty.shape) == 0:
+    raise NotImplementedError
+  elem_bytewidth = bytewidth(memref_ty.element_type)
+  rank = len(memref_ty.shape)
+  # TODO: Read out memory space from memref
+  space = "" if memory_space is None else "<" + str(memory_space) + ">"
+  ptr_ty = ir.Type.parse("!llvm.ptr" + space)
+  desc_ty = ir.Type.parse(
+      f"!llvm.struct<({ptr_ty}, {ptr_ty}, i64, array<{rank} x i64>,"
+      f" array<{rank} x i64>)>"
+  )
+  desc = builtin.UnrealizedConversionCastOp([desc_ty], [memref_arg])
+  aligned_ptr = llvm.extractvalue(ptr_ty, desc, [1])
+  offset_elems = llvm.extractvalue(i64, desc, [2])
+  offset_bytes = llvm.mul(
+      offset_elems,
+      c(elem_bytewidth, i64),
+      overflow_flags=llvm.IntegerOverflowFlags.none,
+  )
+  return llvm.inttoptr(
+      ptr_ty,
+      llvm.add(
+          llvm.ptrtoint(i64, aligned_ptr),
+          offset_bytes,
+          overflow_flags=llvm.IntegerOverflowFlags.none,
+      ),
+  )

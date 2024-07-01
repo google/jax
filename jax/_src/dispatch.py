@@ -40,6 +40,7 @@ from jax._src import util
 from jax._src import xla_bridge as xb
 from jax._src.interpreters import ad
 from jax._src.interpreters import batching
+from jax._src.abstract_arrays import array_types
 from jax._src.interpreters import mlir
 from jax._src.interpreters import xla
 from jax._src.interpreters import pxla
@@ -364,7 +365,8 @@ def _mcjax_reshard(x, target_sharding):
 
   new_x = array.make_array_from_single_device_arrays(
       x.shape,
-      GSPMDSharding(target_sharding._device_assignment, new_hlo_sharding),
+      GSPMDSharding(target_sharding._device_assignment, new_hlo_sharding,
+                    memory_kind=target_sharding.memory_kind),
       x._arrays,
   )
 
@@ -398,25 +400,33 @@ class _DeferredShardArg:
 
 def _device_put_sharding_impl(x, aval, device):
   from jax._src import array
+  from jax.experimental import multihost_utils
 
   if isinstance(device, Sharding):
     s = device
     if getattr(x, 'sharding', None) == s and getattr(x, '_committed', False):
       return x
+
     if (not s.is_fully_addressable and
         isinstance(x, array.ArrayImpl) and not x.is_fully_addressable):
-      # This has to be XLACompatible because _mcjax_reshard will run a
-      # XLA computation.
       assert isinstance(s, Sharding)
       return _mcjax_reshard(x, s)
+
     if not s.is_fully_addressable:
+      if ((isinstance(x, array.ArrayImpl) and not x._committed) or
+          type(x) in array_types):
+        # TODO(yashkatariya): Move this check to `jit`.
+        multihost_utils.assert_equal(
+            x, fail_message=(
+                f"{type(x)} passed to device_put is not the same on each"
+                " process. Make sure you are passing the same value of"
+                f" {type(x)} on each process."))
+        return api.jit(_identity_fn, out_shardings=s)(x)
       # TODO(yashkatariya,mattjj): Link to a doc about McJAX and jax.Array.
       raise ValueError(
           "device_put's second argument must be a Device or a Sharding which"
-          f" represents addressable devices, but got {s}. You are probably"
-          " trying to use device_put in multi-controller JAX which is not"
-          " supported. Please use jax.make_array_from_single_device_arrays API"
-          " or pass device or Sharding which represents addressable devices.")
+          f" represents addressable devices, but got {s}. Please pass device or"
+          " Sharding which represents addressable devices.")
     return _DeferredShardArg(x, s, aval, True)
 
   # Only `Device` exists below. `Sharding` instance is handled above.

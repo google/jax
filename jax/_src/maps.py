@@ -1816,6 +1816,7 @@ def _fix_inferred_spmd_sharding(jaxpr, resource_env, gen_fresh_name = None):
           [tmpvar], [outvar], sharding_constraint_p,
           dict(resource_env=resource_env,
                sharding=gspmd_sharding,
+               layout=None,
                unconstrained_dims=unconstrained_dims),
           set(),
           eqn.source_info, eqn.ctx))

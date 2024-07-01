@@ -39,7 +39,10 @@ for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
 
 if _cuda_prng:
   for _name, _value in _cuda_prng.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="CUDA")
+    # TODO(b/338022728): remove after 6 months, always api_version=1
+    api_version = 1 if "_ffi" in _name else 0
+    xla_client.register_custom_call_target(_name, _value, platform="CUDA",
+                                           api_version=api_version)
 
 for rocm_module_name in [".rocm", "jax_rocm60_plugin"]:
   try:
@@ -53,19 +56,24 @@ for rocm_module_name in [".rocm", "jax_rocm60_plugin"]:
 
 if _hip_prng:
   for _name, _value in _hip_prng.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="ROCM")
+    # TODO(b/338022728): remove after 6 months, always api_version=1
+    api_version = 1 if "_ffi" in _name else 0
+    xla_client.register_custom_call_target(_name, _value, platform="ROCM",
+                                           api_version=api_version)
 
 _prod = lambda xs: functools.reduce(operator.mul, xs, 1)
 
-def _threefry2x32_lowering(prng, platform, keys, data,
+# TODO(b/338022728): forward_compatibility_mode=False after 3 weeks.
+def _threefry2x32_lowering(prng, platform: str, keys, data,
                            length: int | ir.Value | None = None,
-                           output_shape: ir.Value | None = None):
+                           output_shape: ir.Value | None = None,
+                           forward_compatibility_mode: bool = True):
   """ThreeFry2x32 kernel for GPU.
 
   In presence of dynamic shapes, `length` is an `ir.Value` and `output_shape`
   is a 1D tensor describing the shape of the two outputs.
   """
-  if not prng:
+  if forward_compatibility_mode and not prng:
     raise GpuLibNotLinkedError()
   assert len(keys) == 2, keys
   assert len(data) == 2, data
@@ -82,28 +90,37 @@ def _threefry2x32_lowering(prng, platform, keys, data,
   operand_layouts = [layout] * 4
   operands = [keys[0], keys[1], data[0], data[1]]
 
-  if length is None:
+  if forward_compatibility_mode and length is None:
     length = _prod(dims)
 
+  opaque = {}  # Use if not forward_compatibility_mode to trigger the FFI (v4).
   if isinstance(length, int):
-    opaque = prng.threefry2x32_descriptor(length)
+    if forward_compatibility_mode:
+      opaque = prng.threefry2x32_descriptor(length)
     result_shapes = None
   else:
     assert output_shape is not None
-    opaque = prng.threefry2x32_descriptor(-1)
-    assert (ir.RankedTensorType(length.type).element_type ==
-            ir.IntegerType.get_signless(64)), length
-    assert (ir.RankedTensorType(length.type).shape ==
-            [1]), (length, ir.RankedTensorType(length.type).shape)
-    # Pass the length, which will be used by the custom call target since the
-    # static length in the descriptor is -1.
-    operands.append(length)
-    operand_layouts.append((0,))
+    if forward_compatibility_mode:
+      opaque = prng.threefry2x32_descriptor(-1)
+      assert (ir.RankedTensorType(length.type).element_type ==  # type: ignore[attribute-error]
+              ir.IntegerType.get_signless(64)), length
+      assert (ir.RankedTensorType(length.type).shape ==  # type: ignore[attribute-error]
+              [1]), (length, ir.RankedTensorType(length.type).shape)  # type: ignore[attribute-error]
+      # Pass the length, which will be used by the custom call target since the
+      # static length in the descriptor is -1.
+      operands.append(length)
+      operand_layouts.append((0,))
     # We also need to pass separately the shapes of the outputs.
     result_shapes = [output_shape, output_shape]
 
+  custom_call_target = (
+      f"{platform}_threefry2x32"
+      if forward_compatibility_mode
+      else f"{platform}_threefry2x32_ffi"
+  )
   return custom_call(
-      f"{platform}_threefry2x32",
+      custom_call_target,
+      api_version=(2 if forward_compatibility_mode else 4),
       result_types=[typ, typ],
       operands=operands,
       backend_config=opaque,

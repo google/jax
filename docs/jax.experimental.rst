@@ -28,6 +28,7 @@ Experimental Modules
     jax.experimental.mesh_utils
     jax.experimental.serialize_executable
     jax.experimental.shard_map
+    jax.experimental.pallas
 
 Experimental APIs
 -----------------

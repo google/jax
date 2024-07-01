@@ -2488,6 +2488,9 @@ def with_sharding_constraint(x, shardings):
   .. _Distributed arrays and automatic parallelization: https://jax.readthedocs.io/en/latest/notebooks/Distributed_arrays_and_automatic_parallelization.html
   """
   x_flat, tree = tree_flatten(x)
+
+  layouts, shardings = _split_layout_and_sharding(shardings)
+
   user_shardings = prepare_axis_resources(
       shardings, "shardings", allow_unconstrained_dims=True)
   del shardings
@@ -2495,6 +2498,10 @@ def with_sharding_constraint(x, shardings):
   user_shardings_flat = tuple(
       flatten_axes("with_sharding_constraint shardings", tree, user_shardings))
   del user_shardings
+
+  user_layouts_flat = tuple(
+      flatten_axes("with_sharding_constraint layouts", tree, layouts))
+  del layouts
 
   resource_env = mesh_lib.thread_resources.env
   mesh = resource_env.physical_mesh
@@ -2511,19 +2518,27 @@ def with_sharding_constraint(x, shardings):
       shardings_flat, x_flat, None, "with_sharding_constraint arguments",
       allow_uneven_sharding=True)
 
-  outs = [sharding_constraint_p.bind(xf, sharding=s,
+  outs = [sharding_constraint_p.bind(xf, sharding=s, layout=l,
                                      resource_env=resource_env,
                                      unconstrained_dims=ud)
-          for xf, s, ud in zip(x_flat, shardings_flat, unconstrained_dims)]
+          for xf, s, l, ud in zip(x_flat, shardings_flat, user_layouts_flat,
+                                  unconstrained_dims)]
   return tree_unflatten(tree, outs)
 
 def _identity_fn(x): return x
 
-def _sharding_constraint_impl(x, sharding, resource_env, unconstrained_dims):
-  if hasattr(x, 'sharding') and x.sharding.is_equivalent_to(sharding, x.ndim):
-    return x
-  # Run a jit here to raise good errors when device assignment don't match.
-  return api.jit(_identity_fn, out_shardings=sharding)(x)
+def _sharding_constraint_impl(x, sharding, layout, resource_env,
+                              unconstrained_dims):
+  if layout is None:
+    if hasattr(x, 'sharding') and x.sharding.is_equivalent_to(sharding, x.ndim):
+      return x
+    # Run a jit here to raise good errors when device assignment don't match.
+    return api.jit(_identity_fn, out_shardings=sharding)(x)
+  else:
+    if (hasattr(x, 'layout') and x.layout.device_local_layout == layout and
+        x.sharding.is_equivalent_to(sharding, x.ndim)):
+      return x
+    return api.jit(_identity_fn, out_shardings=Layout(layout, sharding))(x)
 
 
 sharding_constraint_p = core.Primitive("sharding_constraint")
@@ -2532,7 +2547,7 @@ sharding_constraint_p.def_abstract_eval(lambda x, **_: x)
 ad.deflinear2(sharding_constraint_p,
               lambda ct, _, **params: (sharding_constraint_p.bind(ct, **params),))
 
-def _sharding_constraint_hlo_lowering(ctx, x_node, *, sharding,
+def _sharding_constraint_hlo_lowering(ctx, x_node, *, sharding, layout,
                                       resource_env, unconstrained_dims):
   aval, = ctx.avals_in
   out_aval, = ctx.avals_out
@@ -2547,19 +2562,19 @@ def _sharding_constraint_hlo_lowering(ctx, x_node, *, sharding,
         sharding._to_xla_hlo_sharding(aval.ndim), mesh)[0]
     sharding = NamedSharding._from_parsed_pspec(
         mesh, parsed_pspec, _manual_axes=axis_ctx.manual_axes)
-  return [
-      mlir.wrap_with_sharding_op(ctx,
-          x_node, out_aval,
-          sharding._to_xla_hlo_sharding(aval.ndim).to_proto(),
-          unspecified_dims=unconstrained_dims)
-  ]
+  out = mlir.wrap_with_sharding_op(
+      ctx, x_node, out_aval, sharding._to_xla_hlo_sharding(aval.ndim).to_proto(),
+      unspecified_dims=unconstrained_dims)
+  if layout is not None:
+    out = mlir.wrap_with_layout_op(ctx, out, out_aval, layout, aval)
+  return [out]
 mlir.register_lowering(sharding_constraint_p,
                        _sharding_constraint_hlo_lowering)
 
 
-def _sharding_constraint_batcher(insert_axis, spmd_axis_name, axis_size,
-                                 axis_name, main_type, vals_in, dims_in,
-                                 sharding, resource_env, unconstrained_dims):
+def _sharding_constraint_batcher(
+    insert_axis, spmd_axis_name, axis_size, axis_name, main_type, vals_in,
+    dims_in, sharding, layout, resource_env, unconstrained_dims):
   if spmd_axis_name is not None and isinstance(sharding, NamedSharding):
     used = {n for ns in sharding.spec
             for n in (ns if isinstance(ns, tuple) else (ns,))}
@@ -2586,9 +2601,14 @@ def _sharding_constraint_batcher(insert_axis, spmd_axis_name, axis_size,
     vmapped_sharding = NamedSharding(
         vmapped_sharding.mesh, PartitionSpec(*new_spec))
 
+  # TODO(yashkatariya): Figure out layouts should change under vmap.
+  if layout is not None:
+    raise NotImplementedError
+
   y = sharding_constraint_p.bind(
       x,
       sharding=vmapped_sharding,
+      layout=layout,
       resource_env=resource_env,
       unconstrained_dims=unconstrained_dims)
   return y, d

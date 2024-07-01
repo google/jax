@@ -13,7 +13,7 @@ kernelspec:
 
 +++ {"id": "teoJ_fUwlu0l"}
 
-# Pipelining and `BlockSpec`s
+# Pipelining
 
 <!--* freshness: { reviewed: '2024-04-08' } *-->
 
@@ -204,66 +204,21 @@ executing kernels that would be a pain to implement manually.
 Fear not! Pallas offers an API for expressing pipelines without too much
 boilerplate, namely through `grid`s and `BlockSpec`s.
 
-+++ {"id": "x-LQKu8HwED7"}
-
-### `grid`, a.k.a. kernels in a loop
-
 See how in the above pipelined example, we are executing the same logic
 multiple times: steps 3-5 and 8-10 both execute the same operations,
 only on different inputs.
-The generalized version of this is a loop in which the same kernel is
-executed multiple times.
-`pallas_call` provides an option to do exactly that.
+The {func}`jax.experimental.pallas.pallas_call` provides a way to
+execute a kernel multiple times, by using the `grid` argument.
+See {ref}`pallas_grid`.
 
-The number of iterations in the loop is specified via the `grid` argument
-to `pallas_call`. Conceptually:
-```python
-pl.pallas_call(some_kernel, grid=n)(...)
-```
-maps to
-```python
-for i in range(n):
-  # do HBM -> VMEM copies
-  some_kernel(...)
-  # do VMEM -> HBM copies
-```
-Grids can be generalized to be multi-dimensional, corresponding to nested
-loops. For example,
+We also use {class}`jax.experimental.pallas.BlockSpec` to specify
+how to construct the input of each kernel invocation.
+See {ref}`pallas_blockspec`.
 
-```python
-pl.pallas_call(some_kernel, grid=(n, m))(...)
-```
-is equivalent to
-```python
-for i in range(n):
-  for j in range(m):
-    # do HBM -> VMEM copies
-    some_kernel(...)
-    # do VMEM -> HBM copies
-```
-This generalizes to any tuple of integers (a length `d` grid will correspond
-to `d` nested loops).
-
-+++ {"id": "hRLr5JeyyEwM"}
-
-### `BlockSpec`, a.k.a. how to chunk up inputs
-
-+++ {"id": "miWgPkytyIIa"}
-
-The next piece of information we need to provide Pallas in order to
-automatically pipeline our computation is information on how to chunk it up.
-Specifically, we need to provide a mapping between *the iteration of the loop*
-to *which block of our inputs and outputs to be operated on*.
-A `BlockSpec` is exactly these two pieces of information.
-
-First we pick a `block_shape` for our inputs.
 In the pipelining example above, we had `(512, 512)`-shaped arrays and
 split them along the leading dimension into two `(256, 512)`-shaped arrays.
-In this pipeline, our `block_shape` would be `(256, 512)`.
-
-We then provide an `index_map` function that maps the iteration space to the
-blocks.
-Specifically, in the aforementioned pipeline, on the 1st iteration we'd
+In this pipeline, our `BlockSpec.block_shape` would be `(256, 512)`.
+On the 1st iteration we'd
 like to select `x1` and on the second iteration we'd like to use `x2`.
 This can be expressed with the following `index_map`:
 

@@ -1521,7 +1521,7 @@ def prune_closed_jaxpr_outputs(
 ) -> ClosedJaxpr:
   return _prune_closed_jaxpr_outputs(jaxpr, tuple(used_outputs))
 
-@weakref_lru_cache
+@partial(weakref_lru_cache, trace_context_in_key=False)
 def _prune_closed_jaxpr_outputs(
     jaxpr: ClosedJaxpr, used_outputs: tuple[bool, ...]
 ) -> ClosedJaxpr:

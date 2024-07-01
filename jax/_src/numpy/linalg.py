@@ -403,7 +403,7 @@ def matrix_rank(
   by the number of singular values greater than the specified tolerance.
 
   Args:
-    a: array of shape ``(..., M, N)`` whose rank is to be computed.
+    M: array of shape ``(..., N, K)`` whose rank is to be computed.
     rtol: optional array of shape ``(...)`` specifying the tolerance. Singular values
       smaller than `rtol * largest_singular_value` are considered to be zero. If
       ``rtol`` is None (the default), a reasonable default is chosen based the

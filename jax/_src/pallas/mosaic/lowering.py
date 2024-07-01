@@ -71,7 +71,7 @@ TPUMemorySpace = tpu_core.TPUMemorySpace
 VMEM = tpu_core.TPUMemorySpace.VMEM
 SMEM = tpu_core.TPUMemorySpace.SMEM
 
-# The value interpreter as a dynamic dimension by MLIR.
+# The value interpreted as a dynamic dimension by MLIR.
 MLIR_DYNAMIC = -9223372036854775808
 
 partial = functools.partial

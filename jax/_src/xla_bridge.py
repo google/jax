@@ -366,7 +366,7 @@ def _check_cuda_versions(raise_on_first_error: bool = False,
       # versions:
       # https://docs.nvidia.com/deeplearning/cudnn/developer-guide/index.html#api-compat
       scale_for_comparison=100,
-      min_supported_version=8900
+      min_supported_version=9000
   )
   _version_check("cuFFT", cuda_versions.cufft_get_version,
                  cuda_versions.cufft_build_version,

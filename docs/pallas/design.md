@@ -286,9 +286,10 @@ The signature of `pallas_call` is as follows:
 ```python
 def pallas_call(
     kernel: Callable,
+    out_shape: Sequence[jax.ShapeDtypeStruct],
+    *,
     in_specs: Sequence[Spec],
     out_specs: Sequence[Spec],
-    out_shapes: Sequence[jax.ShapeDtypeStruct],
     grid: Optional[Tuple[int, ...]] = None) -> Callable:
   ...
 ```
@@ -303,9 +304,9 @@ information about how the kernel will be scheduled on the accelerator.
 The (rough) semantics for `pallas_call` are as follows:
 
 ```python
-def pallas_call(kernel, in_specs, out_specs, out_shapes, grid):
+def pallas_call(kernel, out_shape, *, in_specs, out_specs, grid):
   def execute(*args):
-    outputs = map(empty_ref, out_shapes)
+    outputs = map(empty_ref, out_shape)
     grid_indices = map(range, grid)
     for indices in itertools.product(*grid_indices): # Could run in parallel!
       local_inputs = [in_spec.transform(arg, indices) for arg, in_spec in

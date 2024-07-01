@@ -458,7 +458,9 @@ def export_back_compat(
     traced = wrapped_fun_jax.trace(*args_specs, **kwargs_specs)
     lowered = traced.lower(
         lowering_platforms=actual_lowering_platforms,
-        _private_parameters=mlir.LoweringParameters(for_export=True))
+        _private_parameters=mlir.LoweringParameters(
+            for_export=True,
+            export_ignore_forward_compatibility=config.export_ignore_forward_compatibility.value))
     return _export_lowered(
         lowered, traced.jaxpr, traced.fun_name,
         disabled_checks=disabled_checks,
@@ -541,7 +543,9 @@ def export(
     traced = fun_jit.trace(*args_specs, **kwargs_specs)
     lowered = traced.lower(
         lowering_platforms=actual_lowering_platforms,
-        _private_parameters=mlir.LoweringParameters(for_export=True))
+        _private_parameters=mlir.LoweringParameters(
+            for_export=True,
+            export_ignore_forward_compatibility=config.export_ignore_forward_compatibility.value))
     return _export_lowered(
         lowered, traced.jaxpr, traced.fun_name,
         disabled_checks=disabled_checks)
@@ -600,12 +604,11 @@ def _export_lowered(
 
   # Log and then check the module.
   if logging.vlog_is_on(3):
-    logmsg = (f"version={version} "
-              f"lowering_platforms={lowering.compile_args['platforms']} "
+    logmsg = (f"fun_name={fun_name} version={version} "
+              f"lowering_platforms={lowering._platforms} "  # type: ignore[unused-ignore,attribute-error]
               f"disabled_checks={disabled_checks}")
-    logging.info("Lowered JAX module: %s\n", logmsg)
-    if dumped_to := mlir.dump_module_to_file(mlir_module, "export"):
-      logging.info("Dumped the exported MLIR module to %s", dumped_to)
+    logging.info("Exported JAX function: %s\n", logmsg)
+    logging.info(mlir.dump_module_message(mlir_module, "export"))
 
   _check_module(mlir_module,
                 disabled_checks=disabled_checks)
@@ -812,6 +815,7 @@ def _wrap_main_func(
           lowering_parameters=mlir.LoweringParameters(
               global_constant_computation=True,
               for_export=True,
+              export_ignore_forward_compatibility=config.export_ignore_forward_compatibility.value,
           ))
       ctx = mlir.LoweringRuleContext(
         module_context=module_context,
@@ -918,7 +922,7 @@ def _check_lowering(lowering) -> None:
 # Their backwards compatibility is tested by back_compat_test.py.
 _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
     "Sharding", "SPMDFullToShardShape", "SPMDShardToFullShape",
-    "cu_threefry2x32",
+    "cu_threefry2x32", "cu_threefry2x32_ffi",
     "__gpu$xla.gpu.triton",  # Pallas call on GPU
     # cholesky on CPU
     "lapack_spotrf", "lapack_dpotrf", "lapack_cpotrf", "lapack_zpotrf",

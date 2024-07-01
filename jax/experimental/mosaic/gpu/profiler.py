@@ -21,7 +21,6 @@ import math
 
 import jax
 from jax._src.interpreters import mlir
-from jax._src.lib import mosaic_gpu as mosaic_gpu_lib
 from jax._src.lib import xla_client
 import jax.numpy as jnp
 from jaxlib.mlir import ir
@@ -33,14 +32,21 @@ import numpy as np
 
 from .utils import *  # noqa: F403
 
+
+try:
+  from jax._src.lib import mosaic_gpu as mosaic_gpu_lib
+
+  xla_client.register_custom_call_target(
+      "mosaic_gpu_record_event",
+      mosaic_gpu_lib._mosaic_gpu_ext._record_event_capsule(),
+      platform="CUDA",
+  )
+except ImportError:
+  pass
+
 # ruff: noqa: F405
 # mypy: ignore-errors
 
-xla_client.register_custom_call_target(
-    "mosaic_gpu_record_event",
-    mosaic_gpu_lib._mosaic_gpu_ext._record_event_capsule(),
-    platform="CUDA",
-)
 
 record_event_p = jax.core.Primitive("record_event")
 record_event_p.multiple_results = True

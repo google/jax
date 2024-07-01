@@ -482,9 +482,10 @@ class WGMMATest(TestCase):
       n=(64, 128, 192),
       k_steps=(1, 2),
       tma_inputs=(False, True),
+      swizzle=(32, 64, 128),
       jax_out_dtype=(jnp.float16, jnp.float32),
   )
-  def test_wgmma(
+  def test_wgmma_basic(
       self,
       m,
       n,
@@ -493,10 +494,15 @@ class WGMMATest(TestCase):
       lhs_transpose,
       rhs_transpose,
       tma_inputs,
+      swizzle,
       jax_out_dtype,
   ):
     if jax_out_dtype == jnp.float16 and in_mlir_dtype_cls is not ir.F16Type:
       raise self.skipTest("Only f16 input is supported for f16 output.")
+    if swizzle != 128 and lhs_transpose:
+      raise self.skipTest("Transpose only supported in 128B swizzled WGMMA")
+    if swizzle != 128 and not tma_inputs:
+      raise self.skipTest("Copy with non-128B swizzles not implemented")
 
     in_mlir_dtype = in_mlir_dtype_cls.get()
     out_mlir_dtype = mlir.dtype_to_ir_type(jnp.dtype(jax_out_dtype))
@@ -518,7 +524,7 @@ class WGMMATest(TestCase):
         raise NotImplementedError(in_mlir_dtype)
     else:
       raise NotImplementedError(in_mlir_dtype)
-    nk_tile = 128 // bytewidth(in_mlir_dtype)
+    nk_tile = swizzle // bytewidth(in_mlir_dtype)
     k = nk_tile * k_steps
     assert m % 64 == 0 and n % nk_tile == 0
     index = ir.IndexType.get()
@@ -542,14 +548,14 @@ class WGMMATest(TestCase):
         ctx.async_copy(
             src_ref=lhs,
             dst_ref=lhs_smem,
-            swizzle=128,
+            swizzle=swizzle,
             gmem_transform=lhs_transform,
             barrier=barriers[0],
         )
         ctx.async_copy(
             src_ref=rhs,
             dst_ref=rhs_smem,
-            swizzle=128,
+            swizzle=swizzle,
             gmem_transform=rhs_transform,
             barrier=barriers[1],
         )
@@ -567,7 +573,7 @@ class WGMMATest(TestCase):
             copy(
                 src=memref_slice(lhs, lhs_slice),
                 dst=memref_slice(lhs_smem, (mi, ki)),
-                swizzle=128,
+                swizzle=swizzle,
             )
         for ki in range(k // nk_tile):
           k_slice = ds(c(ki * nk_tile, index), nk_tile)
@@ -578,12 +584,12 @@ class WGMMATest(TestCase):
             copy(
                 src=memref_slice(rhs, rhs_slice),
                 dst=memref_slice(rhs_smem, (ki, ni)),
-                swizzle=128,
+                swizzle=swizzle,
             )
       init_acc = mgpu.WGMMAAccumulator.zero(m=m, n=n, dtype=out_mlir_dtype)
       acc = mgpu.wgmma(
           init_acc, lhs_smem, rhs_smem,
-          a_order=lhs_order, b_order=rhs_order,
+          a_order=lhs_order, b_order=rhs_order, swizzle=swizzle,
       )
       nvvm.wgmma_commit_group_sync_aligned()
       nvvm.wgmma_wait_group_sync_aligned(0)
@@ -715,7 +721,7 @@ class TMATest(TestCase):
       shape=((64, 64), (5, 64), (2, 3, 5, 64)),
       dtype=(jnp.float16, jnp.float32),
   )
-  def test_tma_load(self, swizzle, shape, dtype):
+  def test_tma_load_basic(self, swizzle, shape, dtype):
     if dtype == jnp.float32:
       shape = (*shape[:-1], shape[-1] // 2)
     i1 = ir.IntegerType.get_signless(1)

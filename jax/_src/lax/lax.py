@@ -1778,7 +1778,7 @@ def broadcast_hlo(
     if aval.shape != aval_out.shape:
       assert len(aval.shape) <= len(aval_out.shape), (aval, aval_out)
       dims = mlir.dense_int_array(
-          range(len(aval_out.shape) - len(aval.shape), len(aval_out.shape)))
+          list(range(len(aval_out.shape) - len(aval.shape), len(aval_out.shape))))
       if any(isinstance(d, ir.Value) for d in aval_out.shape):
         arg = hlo.dynamic_broadcast_in_dim(
             mlir.aval_to_ir_type(aval_out), arg,

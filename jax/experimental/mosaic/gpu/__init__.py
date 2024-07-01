@@ -38,7 +38,6 @@ from jaxlib.mlir.dialects import func
 from jaxlib.mlir.dialects import gpu
 from jaxlib.mlir.dialects import llvm
 from jaxlib.mlir.dialects import memref
-from jaxlib.mlir.dialects import nvgpu
 from jaxlib.mlir.dialects import nvvm
 from jaxlib.mlir.passmanager import PassManager
 import numpy as np
@@ -272,20 +271,8 @@ class LaunchContext:
       transformed_slice_shape: tuple[int, ...],
       swizzle: int | None,
   ):
-    index = ir.IndexType.get()
-    ref_ty = ir.MemRefType(ref.type)
     tma_desc_key = (ref, transformed_slice_shape, swizzle, gmem_transform)
     if (tma_desc := self.tma_descriptors.get(tma_desc_key, None)) is None:
-      swizzle_str = f"swizzle_{swizzle}b" if swizzle is not None else "none"
-      default_tensor_map_attrs = dict(
-          swizzle=swizzle_str, l2promo="none", oob="zero", interleave="none"
-      )
-      tensor_map_ty = utils.get_tensormap_descriptor(
-          tensor=(
-              f"memref<{'x'.join(map(str, transformed_slice_shape))}x{ref_ty.element_type}, 3>"
-          ),
-          **default_tensor_map_attrs,
-      )
       with ir.InsertionPoint(self.launch_op):
         for t in gmem_transform:
           ref = t.apply(ref)
@@ -318,9 +305,7 @@ class LaunchContext:
       def cast_tma_desc(device_ptr):
         # TODO(apaszke): Investigate why prefetching can cause launch failures
         # nvvm.prefetch_tensormap(device_ptr)
-        return builtin.unrealized_conversion_cast(
-            [tensor_map_ty], [device_ptr]
-        )
+        return device_ptr
       tma_desc = self._alloc_scratch(
           TMA_DESCRIPTOR_BYTES,
           alignment=TMA_DESCRIPTOR_ALIGNMENT,
@@ -343,6 +328,7 @@ class LaunchContext:
       uniform: bool = True,
   ):
     index = ir.IndexType.get()
+    i32 = ir.IntegerType.get_signless(32)
     smem = ir.Attribute.parse("#gpu.address_space<workgroup>")
     src_ref_ty = ir.MemRefType(src_ref.type)
     dst_ref_ty = ir.MemRefType(dst_ref.type)
@@ -401,8 +387,10 @@ class LaunchContext:
         gmem_ref, gmem_transform, slice_shape, swizzle,
     )
 
-    # nvgpu TMA instructions expect reversed indices...
-    rev_dyn_based_indices = reversed(dyn_base_indices)
+    # We constuct TMA descriptors in column-major order.
+    rev_dyn_base_indices = [
+        arith.index_cast(i32, idx) for idx in reversed(dyn_base_indices)
+    ]
 
     uniform_ctx = (
         functools.partial(mgpu.single_thread, per_block=False)
@@ -410,30 +398,32 @@ class LaunchContext:
         else contextlib.nullcontext
     )
 
+    rank = len(slice_shape)
+    if rank > 5:  # TODO: apaszke - Implement stride compression
+      raise ValueError("Async copies only support striding up to 5 dimensions")
+    smem_ptr = utils.memref_ptr(smem_ref, memory_space=3)
     if gmem_ref is src_ref:
+      assert barrier is not None  # for pytype
+      slice_bytes = c(np.prod(slice_shape) * mgpu.bytewidth(element_type), i32)
+      barrier_ptr = barrier.get_ptr()
       with uniform_ctx():
-        assert barrier is not None  # for pytype
-        barrier_group = barrier.barrier_array.value
-        barrier_idx = barrier.offset
         if arrive:
-          slice_bytes = c(
-              np.prod(slice_shape) * mgpu.bytewidth(element_type), index
-          )
-          nvgpu.mbarrier_arrive_expect_tx(
-              barrier_group, slice_bytes, barrier_idx
-          )
-        nvgpu.tma_async_load(
-            smem_ref, barrier_group, tma_desc, rev_dyn_based_indices, barrier_idx
+          nvvm.mbarrier_arrive_expect_tx_shared(barrier_ptr, slice_bytes)
+        nvvm.cp_async_bulk_tensor_shared_cluster_global(
+            smem_ptr, tma_desc, rev_dyn_base_indices, barrier_ptr, []
         )
     else:
       with uniform_ctx():
-        nvgpu.tma_async_store(smem_ref, tma_desc, rev_dyn_based_indices)
+        nvvm.cp_async_bulk_tensor_global_shared_cta(
+            tma_desc, smem_ptr, rev_dyn_base_indices
+        )
         nvvm.cp_async_bulk_commit_group()
 
   def await_async_copy(
       self, allow_groups: int, await_read_only: bool = False
   ):
     nvvm.cp_async_bulk_wait_group(allow_groups, read=await_read_only)
+    # TODO(apaszke): Use a warpgroup barrier!!!
     gpu.barrier()  # Groups are supposedly tracked per-thread
 
 

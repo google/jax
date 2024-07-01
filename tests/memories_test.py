@@ -54,23 +54,10 @@ def _create_inputs(shape, pspec, mem_kind=None):
   return mesh, s, np_inp, inp
 
 
-# Tests TODO
-# * wsc with memory_kinds
-# * shard_map
-# * AOT
-# * autodiff tests (jtu.check_grads)
-# * scan tests
-# * jaxpr checks for primitive running on different mem kinds
-# * nested jit
-
-
 @jtu.with_config(jax_enable_memories=True)
 class ShardingMemoriesTest(jtu.JaxTestCase):
 
   def setUp(self):
-    # TODO(b/311021572)
-    if jtu.is_cloud_tpu():
-      self.skipTest("Experimental feature not yet implemented on Cloud TPU")
     super().setUp()
     if jtu.test_device_matches(["cpu"]):
       self._default_memory_kind = "unpinned_host"
@@ -688,7 +675,40 @@ class ComputeOffload(jtu.BufferDonationTestCase):
       return y * 3
 
     out2 = h(inp)
-    self.assertArraysEqual(out, inp * 6)
+    self.assertArraysEqual(out2, inp * 6)
+    self.assertEqual(out2.sharding.memory_kind, 'pinned_host')
+
+  def test_compute_on_reduction(self):
+    out_s = SingleDeviceSharding(jax.devices()[0], memory_kind='pinned_host')
+
+    @compute_on('device_host')
+    @jax.jit
+    def g(x):
+      # Reduction generates multiple host computations (inside a single host
+      # computation module): the main one and a reduction body.
+      return jnp.sum(x)
+
+    @jax.jit
+    def f(x):
+      y = g(x)
+      z = jnp.sum(x)
+      return y * z
+
+    inp = jnp.arange(8)
+    out = f(inp)
+    self.assertArraysEqual(out, np.sum(inp) * np.sum(inp))
+
+    lowered_text = f.lower(jnp.arange(8)).as_text()
+    self.assertIn('_xla_compute_type', lowered_text)
+
+    @functools.partial(jax.jit, out_shardings=out_s)
+    def h(x):
+      y = g(x)
+      z = jnp.sum(x)
+      return y * z
+
+    out2 = h(inp)
+    self.assertArraysEqual(out2, np.sum(inp) * np.sum(inp))
     self.assertEqual(out2.sharding.memory_kind, 'pinned_host')
 
   def test_nested_compute_error(self):
@@ -1185,6 +1205,37 @@ class ComputeOffload(jtu.BufferDonationTestCase):
     out = jax.jit(shard_map(f, mesh=mesh, in_specs=P('x', 'y'),
                             out_specs=P('x', 'y')))(arr)
     self.assertArraysEqual(out, np_inp * 24)
+
+  def test_qr_decomposition_offload(self):
+    shape = (3, 3)
+    dtype = np.float32
+    operand = jnp.reshape(jnp.arange(math.prod(shape), dtype=dtype), shape)
+
+    @compute_on("device_host")
+    @jax.jit
+    def g(x):
+      return lax.linalg.qr(x, full_matrices=True)
+
+    @jax.jit
+    def f(x):
+      x, _ = lax.linalg.qr(x, full_matrices=True)
+      x, _ = g(x)
+      return x
+
+    out = f(operand)  # doesn't crash
+    lowered_text = f.lower(operand).as_text()
+    self.assertIn('@lapack_sgeqrf', lowered_text)
+    self.assertIn('@Qr', lowered_text)
+
+    @jax.jit
+    def h(x):
+      x, _ = lax.linalg.qr(x, full_matrices=True)
+      x, _ = lax.linalg.qr(x, full_matrices=True)
+      return x
+
+    expected_out = h(operand)
+
+    self.assertArraysAllClose(out, expected_out, rtol=1e-3)
 
 
 @jtu.with_config(jax_enable_memories=True)

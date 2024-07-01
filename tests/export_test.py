@@ -396,23 +396,38 @@ class JaxExportTest(jtu.JaxTestCase):
     # Test that we propagate properly the LoweringParameters.for_export
     test_primitive = core.Primitive("_test_primitive_for_export")
     test_primitive.def_abstract_eval(lambda in_aval: in_aval)
+    # Store here the context for lowering
+    context = {}
     def test_primitive_lowering(ctx, arg):
-      if ctx.module_context.lowering_parameters.for_export:
-        raise ValueError("Lowering for export not supported")
+      context["for_export"] = ctx.module_context.lowering_parameters.for_export
+      context["export_ignore_forward_compatibility"] = ctx.module_context.lowering_parameters.export_ignore_forward_compatibility
       return mlir.hlo.AddOp(arg, arg).results
 
     mlir.register_lowering(test_primitive, test_primitive_lowering)
     self.addCleanup(lambda: mlir.register_lowering(test_primitive, None))
 
-    f = test_primitive.bind
+    f = jax.jit(test_primitive.bind)
     a = np.arange(3, dtype=np.float32)
-    res = jax.jit(f)(a)  # Works with JIT
+    context.clear()
+    res = f(a)  # Works with JIT
     self.assertAllClose(res, a + a)
-    jax.jit(f).lower(a)  # Works with most AOT
-
-    with self.assertRaisesRegex(ValueError,
-        "Lowering for export not supported"):
-      export.export(jax.jit(f))(a)
+    self.assertEqual(context,
+                     dict(for_export=False,
+                          export_ignore_forward_compatibility=False))
+    context.clear()
+    f.lower(a)  # Works with most AOT
+    # The above was cached
+    self.assertEqual(context, {})
+    _ = export.export(f)(a)
+    self.assertEqual(context,
+                     dict(for_export=True,
+                          export_ignore_forward_compatibility=False))
+    context.clear()
+    with config.export_ignore_forward_compatibility(True):
+      _ = export.export(f)(a)
+      self.assertEqual(context,
+                       dict(for_export=True,
+                            export_ignore_forward_compatibility=True))
 
   def test_grad(self):
     f = lambda x: jnp.sum(jnp.sin(x))

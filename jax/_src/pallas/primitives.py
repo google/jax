@@ -49,7 +49,15 @@ zip, unsafe_zip = util.safe_zip, zip
 program_id_p = jax_core.Primitive("program_id")
 
 def program_id(axis: int) -> jax.Array:
-  """Returns the kernel execution position along the given axis of the grid."""
+  """Returns the kernel execution position along the given axis of the grid.
+
+  For example, with a 2D `grid` in the kernel execution corresponding to the
+  grid coordinates `(1, 2)`,
+  `program_id(axis=0)` returns `1` and `program_id(axis=1)` returns `2`.
+
+  Args:
+    axis: the axis of the grid along which to count the program.
+  """
   return program_id_p.bind(axis=axis)
 
 def program_id_bind(*, axis: int):

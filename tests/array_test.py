@@ -314,24 +314,28 @@ class JaxArrayTest(jtu.JaxTestCase):
     self.assertTrue(dispatch.is_single_device_sharding(out.sharding))
 
   def test_wrong_num_arrays(self):
+    if jax.device_count() < 4:
+      self.skipTest('Requires more than 4 devices')
     shape = (8, 2)
-    mesh = jtu.create_global_mesh((4, 2), ('x', 'y'))
-    devices = jax.local_devices()[:8] # Taking up to 8 devices
+    mesh = jtu.create_global_mesh((1, 2), ('x', 'y'))
+    devices = jax.local_devices()[:2]  # Taking up to 2 devices
     s = jax.sharding.NamedSharding(mesh, P('x', 'y'))
     inp_data = np.arange(math.prod(shape), dtype=np.float32).reshape(shape)
     di_map = s.devices_indices_map(shape)
     bufs = [jax.device_put(inp_data[di_map[d]], d) for d in devices]
     with self.assertRaisesRegex(
         ValueError,
-        r'Expected 8 per-device arrays \(this is how many devices are addressable '
-        r'by the sharding\), but got 4'):
-      array.ArrayImpl(core.ShapedArray(shape, np.float32), s, bufs[:4], committed=True)
+        r'Expected 2 per-device arrays \(this is how many devices are addressable '
+        r'by the sharding\), but got 1'):
+      array.ArrayImpl(core.ShapedArray(shape, np.float32), s, bufs[:1], committed=True)
 
+    for buf, d in zip(list(bufs), jax.local_devices()[2:4]):
+      bufs.append(jax.device_put(buf, d))
     with self.assertRaisesRegex(
         ValueError,
-        r'Expected 8 per-device arrays \(this is how many devices are addressable '
-        r'by the sharding\), but got 16'):
-      array.ArrayImpl(core.ShapedArray(shape, np.float32), s, bufs + bufs, committed=True)
+        r'Expected 2 per-device arrays \(this is how many devices are addressable '
+        r'by the sharding\), but got 4'):
+      array.ArrayImpl(core.ShapedArray(shape, np.float32), s, bufs, committed=True)
 
   def test_arrays_not_in_device_assignment(self):
     if jax.device_count() < 4:
@@ -351,21 +355,6 @@ class JaxArrayTest(jtu.JaxTestCase):
         "in the sharding."):
       array.ArrayImpl(core.ShapedArray(shape, np.float32), s, bufs, committed=True)
 
-  def test_more_devices_in_sharding_than_arrays(self):
-    shape = (8, 2)
-    mesh = jtu.create_global_mesh((1, 2), ('x', 'y'))
-    # Sharding device ids = {0, 1}
-    s = jax.sharding.NamedSharding(mesh, P('x'))
-    inp_data = np.arange(math.prod(shape), dtype=np.float32).reshape(shape)
-    # _arrays device ids = {0, 0}
-    bufs = [jax.device_put(inp_data, jax.devices()[0]) for _ in range(2)]
-    with self.assertRaisesRegex(
-        ValueError,
-        "Addressable devices and per-device arrays devices do not match. "
-        r"Sharding contains devices \{1\} that are not present in per-device "
-        "arrays."):
-      array.ArrayImpl(core.ShapedArray(shape, np.float32), s, bufs, committed=True)
-
   def test_different_devices_in_arrays_than_sharding(self):
     if jax.device_count() < 3:
       self.skipTest('Requires more than 3 devices')
@@ -382,6 +371,22 @@ class JaxArrayTest(jtu.JaxTestCase):
         r"Sharding contains devices \{2\} that are not present in per-device "
         r"arrays. Per-device arrays contain devices \{0\} that are not present "
         "in the sharding."):
+      array.ArrayImpl(core.ShapedArray(shape, np.float32), s, bufs, committed=True)
+
+  def test_duplicated_devices_in_arrays(self):
+    if xc._version <= 274:
+      self.skipTest('Test requires jaxlib version 275')
+    shape = (8, 2)
+    mesh = jtu.create_global_mesh((1, 2), ('x', 'y'))
+    # Sharding device ids = {0, 1}
+    s = jax.sharding.NamedSharding(mesh, P('x'))
+    inp_data = np.arange(math.prod(shape), dtype=np.float32).reshape(shape)
+    # _arrays device ids = {0, 2}
+    bufs = [jax.device_put(inp_data, jax.devices()[0]) for _ in range(2)]
+    with self.assertRaisesRegex(
+        ValueError,
+        'When making an array from single-device arrays, the input arrays must'
+        ' be from distinct devices'):
       array.ArrayImpl(core.ShapedArray(shape, np.float32), s, bufs, committed=True)
 
   @parameterized.named_parameters(
@@ -1324,7 +1329,7 @@ class RngShardingTest(jtu.JaxTestCase):
     s = jax.sharding.NamedSharding(mesh, pspec)
 
     n = math.prod(global_shape)
-    global_x = jnp.arange(n).astype('uint32').reshape(global_shape)
+    global_x = np.arange(n).astype('uint32').reshape(global_shape)
     x = array.make_array_from_callback(global_x.shape, s, lambda i: global_x[i])
 
     # check computation is fully partitioned and without any communication

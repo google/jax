@@ -181,7 +181,6 @@ py_library(
     ] + jax_internal_export_back_compat_test_util_visibility,
     deps = [
         ":jax",
-        "//jax/experimental/export",
     ] + py_deps("numpy"),
 )
 
@@ -800,10 +799,11 @@ pytype_strict_library(
     name = "layout",
     srcs = ["_src/layout.py"],
     deps = [
+        ":dtypes",
         ":sharding",
         ":sharding_impls",
         "//jax/_src/lib",
-    ],
+    ] + py_deps("numpy"),
 )
 
 pytype_strict_library(

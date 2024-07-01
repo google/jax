@@ -14,9 +14,9 @@
 
 import contextlib
 import math
-import re
 from absl.testing import absltest
 import numpy as np
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -35,15 +35,6 @@ def setUpModule():
 
 def tearDownModule():
   _exit_stack.close()
-
-
-pattern = re.compile(r"\{(.*?):")
-
-# Extract minor_to_major from str(layout) because layout doesn't have a
-# minor_to_major property yet.
-def extract_minor_to_major(l):
-  match = re.search(pattern, str(l))
-  return tuple(int(i) for i in match.groups()[0].split(','))
 
 
 class LayoutTest(jtu.JaxTestCase):
@@ -79,8 +70,8 @@ class LayoutTest(jtu.JaxTestCase):
     self.assertEmpty(kw_layouts)
 
     for i, o in zip(arg_layouts, compiled_apply.output_layouts()):
-      self.assertEqual(extract_minor_to_major(i),
-                       extract_minor_to_major(o)[::-1])
+      self.assertEqual(i.device_local_layout.major_to_minor,
+                       o.device_local_layout.major_to_minor[::-1])
 
     init_compiled = jax.jit(
         init, out_shardings=arg_layouts).lower(sds1, sds2).compile()
@@ -108,10 +99,10 @@ class LayoutTest(jtu.JaxTestCase):
     self.assertEqual(apply_out[0].layout, compiled_apply.output_layouts()[0])
     self.assertEqual(apply_out[1].layout, compiled_apply.output_layouts()[1])
 
-    self.assertTupleEqual(extract_minor_to_major(apply_out[0].layout),
-                          extract_minor_to_major(init_out[0].layout)[::-1])
-    self.assertTupleEqual(extract_minor_to_major(apply_out[1].layout),
-                          extract_minor_to_major(init_out[1].layout)[::-1])
+    self.assertTupleEqual(apply_out[0].layout.device_local_layout.major_to_minor,
+                          init_out[0].layout.device_local_layout.major_to_minor[::-1])
+    self.assertTupleEqual(apply_out[1].layout.device_local_layout.major_to_minor,
+                          init_out[1].layout.device_local_layout.major_to_minor[::-1])
 
     self.assertArraysEqual(init_out[0], np_inp1 * 2)
     self.assertArraysEqual(init_out[1], np_inp2 * 2)
@@ -135,18 +126,22 @@ class LayoutTest(jtu.JaxTestCase):
     out = compiled(arr)
 
     self.assertTupleEqual(
-        extract_minor_to_major(compiled.input_layouts()[0][0]), (2, 1, 0))
+        compiled.input_layouts()[0][0].device_local_layout.major_to_minor[::-1],
+        (2, 1, 0))
     self.assertTupleEqual(
-        extract_minor_to_major(compiled.output_layouts()), (2, 1, 0))
+        compiled.output_layouts().device_local_layout.major_to_minor[::-1],
+        (2, 1, 0))
     self.assertArraysEqual(out, np_inp.T)
     self.assertEqual(out.sharding, NamedSharding(mesh, P(None, 'y', 'x')))
 
     compiled_auto = jax.jit(f, in_shardings=Layout(DLL.AUTO),
                             out_shardings=Layout(DLL.AUTO)).lower(sds).compile()
     self.assertTupleEqual(
-        extract_minor_to_major(compiled_auto.input_layouts()[0][0]), (2, 1, 0))
+        compiled_auto.input_layouts()[0][0].device_local_layout.major_to_minor[::-1],
+        (2, 1, 0))
     self.assertTupleEqual(
-        extract_minor_to_major(compiled_auto.output_layouts()), (0, 1, 2))
+        compiled_auto.output_layouts().device_local_layout.major_to_minor[::-1],
+        (0, 1, 2))
 
     with self.assertRaisesRegex(
         ValueError, "jax.jit` does not accept device-local layouts directly"):
@@ -166,9 +161,11 @@ class LayoutTest(jtu.JaxTestCase):
     compiled = jax.jit(f, in_shardings=Layout(),
                        out_shardings=Layout(DLL.AUTO)).lower(arr).compile()
     self.assertTupleEqual(
-        extract_minor_to_major(compiled.input_layouts()[0][0]), (1, 0))
+        compiled.input_layouts()[0][0].device_local_layout.major_to_minor[::-1],
+        (1, 0))
     self.assertTupleEqual(
-        extract_minor_to_major(compiled.output_layouts()), (0, 1))
+        compiled.output_layouts().device_local_layout.major_to_minor[::-1],
+        (0, 1))
 
     out = compiled(arr)
     self.assertArraysEqual(out, np_inp.T)
@@ -185,9 +182,11 @@ class LayoutTest(jtu.JaxTestCase):
                        out_shardings=Layout(DLL.AUTO, s)).lower(np_inp).compile()
     out = compiled(np_inp)
     self.assertTupleEqual(
-        extract_minor_to_major(compiled.input_layouts()[0][0]), (1, 0))
+        compiled.input_layouts()[0][0].device_local_layout.major_to_minor[::-1],
+        (1, 0))
     self.assertTupleEqual(
-        extract_minor_to_major(compiled.output_layouts()), (0, 1))
+        compiled.output_layouts().device_local_layout.major_to_minor[::-1],
+        (0, 1))
     self.assertArraysEqual(out, np_inp.T)
     self.assertEqual(out.sharding, s)
 
@@ -357,6 +356,64 @@ class LayoutTest(jtu.JaxTestCase):
         TypeError, 'sharding should be an instance of `jax.sharding`'):
       jax.make_array_from_callback(
           np_inp.shape, Layout(None, None), lambda idx: np_inp[idx])
+
+  def test_wsc_concrete_layout(self):
+    mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
+    shape = (128, 128)
+    s = NamedSharding(mesh, P('x'))
+    np_inp = np.arange(math.prod(shape)).reshape(shape)
+    arr = jax.device_put(np_inp, s)
+
+    # Create a custom layout instead of using `arr.layout` to test the API.
+    custom_dll = DLL(major_to_minor=(0, 1), tiling=((8, 128),))
+
+    # We need AUTO so that XLA can override the entry computation layout set.
+    # TODO(yashkatariya): Expose a config that sets out_shardings to AUTO by
+    # default instead of `None` i.e. default layout and let the compiler choose
+    # the layout or try setting it to AUTO by default and see if there is chaos.
+    @partial(jax.jit, out_shardings=Layout(DLL.AUTO))
+    def f(x):
+      y = x.T
+      # Constrain `y` to the original layout of `arr` because without it,
+      # the layout of `y` would be the transpose of `arr`.
+      return jax.lax.with_sharding_constraint(y, Layout(custom_dll, s))
+
+    out = f(arr)
+    self.assertEqual(out.layout, Layout(custom_dll, s))
+    self.assertEqual(out.layout, arr.layout)
+    self.assertArraysEqual(out, np_inp.T)
+
+  def test_wsc_concrete_layout_bfloat16(self):
+    mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
+    shape = (128, 128)
+    s = NamedSharding(mesh, P('x'))
+    inp = jnp.arange(math.prod(shape), dtype=jnp.bfloat16).reshape(shape)
+    arr = jax.device_put(inp, s)
+
+    # Create a custom layout instead of using `arr.layout` to test the API.
+    custom_dll = DLL(major_to_minor=(0, 1), tiling=((8, 128), (2, 1)))
+
+    @partial(jax.jit, out_shardings=Layout(DLL.AUTO))
+    def f(x):
+      y = x.T
+      # Constrain `y` to the original layout of `arr` because without it,
+      # the layout of `y` would be the transpose of `arr`.
+      return jax.lax.with_sharding_constraint(y, Layout(custom_dll, s))
+
+    out = f(arr)
+    self.assertEqual(out.layout, Layout(custom_dll, s))
+    self.assertEqual(out.layout, arr.layout)
+    self.assertArraysEqual(out, inp.T)
+
+  def test_device_put_user_concrete_layout(self):
+    shape = (8, 128)
+    np_inp = np.arange(math.prod(shape)).reshape(shape)
+    dll = DLL(major_to_minor=(1, 0), tiling=((8, 128),))
+    s = SingleDeviceSharding(jax.devices()[0])
+
+    out = jax.device_put(np_inp, Layout(dll, s))
+    self.assertEqual(out.layout, Layout(dll, s))
+    self.assertArraysEqual(out, np_inp)
 
 
 if __name__ == '__main__':

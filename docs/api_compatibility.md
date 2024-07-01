@@ -35,11 +35,13 @@ Only public JAX APIs are covered, which includes the following modules:
 * `jax.profiler`
 * `jax.random` (see [details below](#numerics-and-randomness))
 * `jax.scipy`
+* `jax.tree`
 * `jax.tree_util`
 * `jax.test_util`
 
-Not everything in these modules is public. Over time, we are working to separate
-public and private APIs. Public APIs are documented in the JAX documentation.
+Not everything in these modules is intended to be public, and over time, we
+are working to separate public and private APIs. Public APIs are documented
+in the JAX documentation.
 Additionally, our goal is that all non-public APIs should have names
 prefixed with underscores, although we do not entirely comply with this yet.
 
@@ -48,9 +50,7 @@ prefixed with underscores, although we do not entirely comply with this yet.
 *  anything prefixed with an underscore.
 * `jax._src`
 * `jax.core`
-* `jax.linear_util`
 * `jax.lib`
-* `jax.prng`
 * `jax.interpreters`
 * `jax.experimental`
 * `jax.example_libraries`

@@ -33,27 +33,19 @@ KeylessSampleFnType = Callable[..., jax.Array]
 set_seed = prng_seed
 
 FOLD_IN_ROUNDS = 128
-SUPPORTED_CONVERSION_KEYS = ["rbg", "unsafe_rbg", "pallas_tpu"]
 
 
 def to_pallas_key(key: jax_prng.PRNGKeyArray) -> jax_prng.PRNGKeyArray:
   """Helper function for converting non-Pallas PRNG keys into Pallas keys."""
-
-  # Only allow conversion from RBG -> Pallas keys.
-  # There is no technical reason why we cannot support Threefry here, but
-  # this reduces the chance of unintended behavior where the pallas PRNG
-  # produces different random bits than Threefry. RBG has fewer guarantees
-  # so users of RBG should be more aware of the consequences.
-  if key._impl.name not in SUPPORTED_CONVERSION_KEYS:
-    raise ValueError(f"Unsupported key type: {key._impl.name}"
-                     f"Supported keys are: {SUPPORTED_CONVERSION_KEYS}")
-
+  batch_dims = key.shape
   key_data = jax_api_random.key_data(key)
   pallas_key_size = np.prod(tpu_key_impl.key_shape)
-  if key_data.size < pallas_key_size:
+  if np.prod(key_data.shape[len(batch_dims):]) < pallas_key_size:
     raise ValueError(f"Key data must be at least {pallas_key_size} bytes.")
-  pallas_key_data = jnp.ravel(key_data)[:pallas_key_size]
-  pallas_key_data = jnp.reshape(pallas_key_data, tpu_key_impl.key_shape)
+  pallas_key_data = jnp.reshape(
+      key_data, batch_dims + (-1,))[..., :pallas_key_size]
+  pallas_key_data = jnp.reshape(pallas_key_data,
+                                batch_dims + tpu_key_impl.key_shape)
   return jax_api_random.wrap_key_data(pallas_key_data, impl="pallas_tpu")
 
 def _seed_func(seed: jnp.int32):

@@ -57,14 +57,6 @@ def broadcast_one_to_all(in_tree: Any, is_source: bool | None = None) -> Any:
     A pytree matching in_tree where the leaves now all contain the data from the
     first host.
   """
-  if jax.process_count() == 1:
-    # Note: This may return results that are different from the multi-host case
-    # below since it does not force-convert inputs to numpy arrays. We don't do
-    # such conversion here (and the API contract does not promise such a
-    # requirement) because doing so could be expensive for single-controller
-    # runtimes with lots of addressable devices.
-    return in_tree
-
   if is_source is None:
     is_source = jax.process_index() == 0
 

@@ -65,7 +65,8 @@ Noteworthy properties and restrictions
 ``BlockSpec``\s and grid iteration
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-``BlockSpec``\s generally behave as expected in Pallas --- every invocation of
+``BlockSpec``\s (see :ref:`pallas_blockspec`) generally behave as expected
+in Pallas --- every invocation of
 the kernel body gets access to slices of the inputs and is meant to initialize a slice
 of the output.
 

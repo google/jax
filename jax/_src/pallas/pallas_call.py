@@ -228,7 +228,7 @@ def _pallas_call_impl(*args, jaxpr, name, out_shapes,
 
     # Pad values to evenly divide into block dimensions.
     # This allows interpret mode to catch errors on OOB memory accesses
-    # by poisoning values with NaN. It also fixes an inconstency with
+    # by poisoning values with NaN. It also fixes an inconsistency with
     # lax.dynamic_slice where if the slice goes out of bounds, it will instead
     # move the start_index backwards so the slice will fit in memory.
     carry = map(_pad_values_to_block_dimension, carry, block_shapes)
@@ -1009,6 +1009,45 @@ def pallas_call(
     name: str | None = None,
     compiler_params: dict[str, Any] | None = None,
 ) -> Callable[..., Any]:
+  """Invokes a Pallas kernel on some inputs.
+
+  See `Pallas Quickstart <https://jax.readthedocs.io/en/latest/pallas/quickstart.html>`_.
+
+  Args:
+    f: the kernel function, that receives a Ref for each input and output.
+      The shape of the Refs are given by the ``block_shape`` in the
+      corresponding ``in_specs`` and ``out_specs``.
+    out_shape: a PyTree of :class:`jax.ShapeDtypeStruct` describing the shape
+      and dtypes of the outputs.
+    grid_spec: TO BE DOCUMENTED.
+    debug: if True, Pallas prints various intermediate forms of the kernel
+      as it is being processed.
+    grid: the iteration space, as a tuple of integers. The kernel is executed
+      as many times as ``prod(grid)``. The default value ``None`` is equivalent
+      to ``()``.
+      See details at :ref:`pallas_grid`.
+    in_specs: a PyTree of :class:`jax.experimental.pallas.BlockSpec` with
+      a structure matching that of the positional arguments.
+      See details at :ref:`pallas_blockspec`.
+    out_specs: a PyTree of :class:`jax.experimental.pallas.BlockSpec` with
+      a structure matching that of the outputs.
+      See details at :ref:`pallas_blockspec`.
+      The default value for `out_specs` specifies the whole array,
+      e.g., as `pl.BlockSpec(lambda *indices: indices, x.shape)`.
+    input_output_aliases: a dictionary mapping the index of some inputs to
+      the index of the output that aliases them.
+    interpret: runs the ``pallas_call`` as a ``jax.jit`` of a scan over the
+      grid whose body is the kernel lowered as a JAX function. This does not
+      require a TPU or a GPU, and is the only way to run Pallas kernels on CPU.
+      This is useful for debugging.
+    name: TO BE DOCUMENTED.
+    compiler_params: TO BE DOCUMENTED.
+
+  Returns:
+    A function that can be called on a number of positional array arguments to
+    invoke the Pallas kernel.
+
+  """
   name = _extract_function_name(f, name)
   if compiler_params is None:
     compiler_params = {}

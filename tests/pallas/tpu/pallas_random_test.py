@@ -35,6 +35,15 @@ class PRNGTest(jtu.JaxTestCase):
       self.skipTest("Need TPU devices")
     super().setUp()
 
+  def test_to_pallas_key_under_vmap(self):
+    key = jax.random.key(42, impl="rbg")
+    key = jax.random.split(key, 10)
+    batched_key = plrandom.to_pallas_key(key)
+    batched_key_data = jax.random.key_data(batched_key)
+    vmapped_key = jax.vmap(plrandom.to_pallas_key)(key)
+    vmapped_key_data = jax.random.key_data(vmapped_key)
+    np.testing.assert_array_equal(batched_key_data, vmapped_key_data)
+
   def test_pallas_key_raise_not_implemented_outside_of_kernel(self):
     key = jax_random.key(0, impl="rbg")
     pallas_key = plrandom.to_pallas_key(key)
