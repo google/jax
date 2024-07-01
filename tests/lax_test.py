@@ -1940,7 +1940,7 @@ class LaxTest(jtu.JaxTestCase):
   )
   @jtu.skip_on_devices('gpu') # jax.lax.mul has an XLA bug on GPU b/339071103
   @jtu.skip_on_devices('tpu') # b/39342488
-  def testReduceWindowGeneralJVP(
+  def testReduceWindowGeneralGrads(
       self,
       op,
       init_val,
@@ -1952,6 +1952,7 @@ class LaxTest(jtu.JaxTestCase):
       base_dilation,
       window_dilation,
   ):
+    
     rng = jtu.rand_small(self.rng())
     init_val = np.asarray(init_val, dtype=dtype)
 
@@ -1991,7 +1992,9 @@ class LaxTest(jtu.JaxTestCase):
 
     operand = args_maker()[0]
     jtu.check_jvp(fun2, partial(jax.jvp, fun2), (operand,))
-    check_grads(fun2, (operand,), 3, ["fwd"], eps=1.)
+    check_grads(fun2, (operand,), 3, ["fwd", "rev"], eps=1.)
+
+    
 
   @jtu.sample_product(
       [

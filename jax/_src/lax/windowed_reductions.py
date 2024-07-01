@@ -33,6 +33,7 @@ from jax._src.lax import slicing
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
 from jax._src.numpy.ufuncs import logaddexp
+from jax._src.numpy import zeros_like
 from jax._src.typing import Array
 import numpy as np
 from jax._src.core import ClosedJaxpr
@@ -110,7 +111,6 @@ def _reduce_window(
         window_dilation=tuple(window_dilation),
     )
     return tree_util.tree_unflatten(out_tree, out_flat)
-
 
 
 def reduce_window(
@@ -395,6 +395,7 @@ def reduce_window_jvp(
     raise TypeError("reduce_window jvp does not support non-zero init_value_tangent.")
 
   init_value_tangent = map(ad_util.instantiate, init_value_tangent)
+  operand_tangent = map(ad_util.instantiate, operand_tangent)
   c_reduction_jaxpr = ClosedJaxpr(reduction_jaxpr, consts)
   jvp_reduction = jvp_jaxpr(c_reduction_jaxpr, (True,) * len(tangents), [False] * len(init_value_tangent))[0]
 
@@ -413,13 +414,98 @@ def reduce_window_jvp(
       base_dilation=base_dilation,
       window_dilation=window_dilation,
   )
-  primals, tangents = util.split_list(jvp_primals_tangents, [len(jvp_primals_tangents) // 2])
+  _, tangents = util.split_list(jvp_primals_tangents, [len(jvp_primals_tangents) // 2])
+
+  def primals_wrapper(*args):
+    l, r = args
+    return jaxpr_as_fun(c_reduction_jaxpr)(*l, *r)
+    
+  primals = _reduce_window(
+      operand=operand,
+      init_value=init_value,
+      computation=primals_wrapper,
+      window_dimensions=window_dimensions,
+      window_strides=window_strides,
+      padding=padding,
+      base_dilation=base_dilation,
+      window_dilation=window_dilation,
+  )
   return [*primals], [*tangents]
+
+def _reduce_window_transpose_rule(
+    cotangents,
+    *invals,
+    jaxpr,
+    consts,
+    window_dimensions,
+    window_strides,
+    padding,
+    base_dilation,
+    window_dilation,
+):
+  step = len(cotangents)
+  primals, init_values = util.split_list(invals, [step])
+  substep = step // 2
+  init_value_primal, init_value_tangent = util.split_list(init_values, [substep])
+  
+  nonzeros = [type(r) is not ad.Zero for r in cotangents]
+  if not any(nonzeros):
+    return *primals, init_value_primal, init_value_tangent
+
+  nonzero_cotangents = [t for t, nonzero in zip(cotangents, nonzeros) if nonzero]
+
+  cotangent_shape = nonzero_cotangents[0].shape
+  primals_shape = primals[0].shape
+
+  tangent_pads = convolution._conv_general_vjp_lhs_padding(
+      primals_shape,
+      window_dimensions,
+      window_strides,
+      cotangent_shape,
+      padding,
+      base_dilation,
+      window_dilation,
+  )
+
+  cotangents = map(ad_util.instantiate, cotangents)
+  tangent_padding_config = [(lo, hi, stride - 1)
+                    for (lo, hi), stride in zip(tangent_pads, window_strides)]
+  pad_cotangent = [lax.pad(c, lax._zero(c), tangent_padding_config) for c in cotangents]
+
+  c_reduction_jaxpr = ClosedJaxpr(jaxpr, consts)
+  reduction_jvp = jaxpr_as_fun(c_reduction_jaxpr)
+
+  def lhs_only_wrapper(fn, *args):
+    unpacked_args, _ = tree_util.tree_flatten(args)
+    x, y = util.split_list(unpacked_args, [len(unpacked_args) // 2])
+    out = fn(*x, *y)
+    return out
+
+  ones = [1] * len(primals_shape)
+  
+  outs = _reduce_window(
+      [*pad_cotangent],
+      [*init_value_tangent, *init_value_tangent],
+      partial(lhs_only_wrapper, reduction_jvp),
+      window_dimensions=window_dimensions,
+      window_strides=base_dilation,
+      padding=[(0, 0)] * len(primals_shape),
+      base_dilation=ones,
+      window_dilation=window_dilation,
+  )
+  result = []
+  for out in outs:
+    zeros = zeros_like(primals[0])
+    # broadcast
+    zeros += out
+    result.append(out)
+  return *result, *init_value_primal, *init_value_tangent
 
 ad.primitive_jvps[reduce_window_p] = reduce_window_jvp
 reduce_window_p.multiple_results = True
 reduce_window_p.def_impl(partial(dispatch.apply_primitive, reduce_window_p))
 reduce_window_p.def_abstract_eval(_reduce_window_abstract_eval_rule)
+ad.primitive_transposes[reduce_window_p] = _reduce_window_transpose_rule
 batching.primitive_batchers[reduce_window_p] = _generic_reduce_window_batch_rule
 
 
@@ -633,7 +719,6 @@ mlir.register_lowering(reduce_window_min_p, partial(
     _reduce_window_lower, mlir.min_hlo, lax._get_min_identity))
 mlir.register_lowering(reduce_window_max_p, partial(
     _reduce_window_lower, mlir.max_hlo, lax._get_max_identity))
-
 
 
 def _select_and_scatter_shape_rule(
