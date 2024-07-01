@@ -174,12 +174,14 @@ https://jax.readthedocs.io/en/latest/notebooks/Distributed_arrays_and_automatic_
 # Note: import <name> as <name> is required for names to be exported.
 # See PEP 484 & https://github.com/google/jax/issues/7570
 
+
+# Test
 from jax._src.random import (
   PRNGKey as PRNGKey,
   ball as ball,
   bernoulli as bernoulli,
-  binomial as binomial,
   beta as beta,
+  binomial as binomial,
   bits as bits,
   categorical as categorical,
   cauchy as cauchy,
@@ -195,12 +197,12 @@ from jax._src.random import (
   generalized_normal as generalized_normal,
   geometric as geometric,
   gumbel as gumbel,
-  key as key,
   key_data as key_data,
   key_impl as key_impl,
+  key as key,
   laplace as laplace,
-  logistic as logistic,
   loggamma as loggamma,
+  logistic as logistic,
   lognormal as lognormal,
   maxwell as maxwell,
   multivariate_normal as multivariate_normal,
