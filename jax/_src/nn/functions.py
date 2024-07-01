@@ -787,9 +787,10 @@ def _dot_product_attention_xla(
     bias: ArrayLike | None,
     mask: ArrayLike | None,
     is_causal: bool,
-    scale: float,
-    softmax_in_fp32: bool):
-  logits_dtype = jnp.float32 if softmax_in_fp32 else None
+    scale: float):
+  logits_dtype = None
+  if query.dtype in (jnp.float16, jnp.bfloat16):
+    logits_dtype = jnp.float32
   # Compute the attention logits
   logits = jnp.einsum('BTNH,BSNH->BNTS', query, key,
                       preferred_element_type=logits_dtype)
@@ -822,7 +823,7 @@ def _dot_product_attention_xla(
 
   # Compute the attention context.
   encoded = jnp.einsum('BNTS,BSNH->BTNH', probs, value)
-  return encoded, probs
+  return encoded
 
 def dot_product_attention(
     query: ArrayLike,
@@ -833,9 +834,7 @@ def dot_product_attention(
     *,
     scale: float | None = None,
     is_causal: bool = False,
-    implementation: str | None = 'xla',
-    softmax_in_fp32: bool = True,
-    return_probs: bool = False) -> Array | tuple[Array, Array]:
+    implementation: str | None = None) -> Array | tuple[Array, Array]:
   r"""Scaled dot product attention function.
 
   Computes the attention function on Query, Key, and Value tensors:
@@ -875,15 +874,9 @@ def dot_product_attention(
                     Supported strings are `xla`, `cudnn` (cuDNN flash
                     attention). It defaults to `None`, which will automatically
                     select the best available backend.
-    softmax_in_fp32: if True, the output of :math:`QK^T` will be in fp32 and the
-                     following ops like softmax will be also in fp32.
-    return_probs: If True, then return a `(out, probs)` tuple, where `out` is
-                  the attention output and `probs` is the softmax result.
 
   Returns:
-    An array of the attention output with the same shape of :code:`query`; Or a
-    tuple of the attention output and the intermediate softmax result if
-    `return_probs` is True.
+    An array of the attention output with the same shape of :code:`query`.
 
   Raises:
     ValueError: if the `implementation` is not a supported option from
@@ -908,17 +901,11 @@ def dot_product_attention(
   assert query.dtype == key.dtype == value.dtype
   if mask is not None:
     assert mask.dtype == query.dtype and mask.dtype == jnp.bool_
-  if implementation == 'cudnn':
-    assert (
-        not return_probs and softmax_in_fp32
-    ), ("Implementation `cudnn` doesn't support return_probs=True and"
-        "softmax_in_fp32=False.")
 
   match implementation:
     case 'xla':
-      encoded, probs = _dot_product_attention_xla(
+      return _dot_product_attention_xla(
           query, key, value, bias, mask, is_causal=is_causal, scale=scale_val,
-          softmax_in_fp32=softmax_in_fp32,
       )
     case 'cudnn':
       mask_type = MaskType.CAUSAL if is_causal else MaskType.NO_MASK
@@ -942,20 +929,16 @@ def dot_product_attention(
         if mask is not None:
           bias = bias + mask
 
-      encoded = cudnn_dot_product_attention(
-          query, key, value, bias, mask=None, scale=scale_val, mask_type=mask_type
+      return cudnn_dot_product_attention(
+          query, key, value, bias, mask=None, scale=scale_val,
+          mask_type=mask_type,
       )
     case None:
       # TODO(kaixih@nvidia) Defaults to XLA for now. Will automatically select
       # best backend.
-      encoded, probs = _dot_product_attention_xla(
+      return _dot_product_attention_xla(
           query, key, value, bias, mask, is_causal=is_causal, scale=scale_val,
-          softmax_in_fp32=softmax_in_fp32,
       )
     case _:
       raise ValueError(f"Unsupported implementation option: {implementation}")
 
-  if return_probs:
-    return encoded, probs
-
-  return encoded
