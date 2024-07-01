@@ -6116,7 +6116,7 @@ class NumpyDocTests(jtu.JaxTestCase):
 
     unimplemented = ['fromfile', 'fromiter']
     aliases = ['abs', 'acos', 'acosh', 'asin', 'asinh', 'atan', 'atanh', 'atan2',
-               'amax', 'amin']
+               'amax', 'amin', 'divide']
 
     for name in dir(jnp):
       if name.startswith('_') or name in unimplemented:
