@@ -19,7 +19,7 @@ from __future__ import annotations
 from functools import partial
 import operator
 import numpy as np
-from typing import Any
+from typing import Any, Literal
 import warnings
 
 import jax
@@ -788,9 +788,7 @@ def _dot_product_attention_xla(
     mask: ArrayLike | None,
     is_causal: bool,
     scale: float):
-  logits_dtype = None
-  if query.dtype in (jnp.float16, jnp.bfloat16):
-    logits_dtype = jnp.float32
+  logits_dtype = jnp.promote_types(query.dtype, jnp.float32)
   # Compute the attention logits
   logits = jnp.einsum('BTNH,BSNH->BNTS', query, key,
                       preferred_element_type=logits_dtype)
@@ -834,7 +832,7 @@ def dot_product_attention(
     *,
     scale: float | None = None,
     is_causal: bool = False,
-    implementation: str | None = None) -> Array | tuple[Array, Array]:
+    implementation: Literal['xla', 'cudnn'] | None = None) -> Array:
   r"""Scaled dot product attention function.
 
   Computes the attention function on Query, Key, and Value tensors:
@@ -876,31 +874,27 @@ def dot_product_attention(
                     select the best available backend.
 
   Returns:
-    An array of the attention output with the same shape of :code:`query`.
-
-  Raises:
-    ValueError: if the `implementation` is not a supported option from
-                ['xla', 'cudnn', None].
-
+    An array of the attention output with the same shape as :code:`query`.
   """
-  def _assert_has_shape(t: ArrayLike, shape: Sequence[int]) -> None:
-    assert t.ndim == len(shape)
+  def _check_has_shape(t: ArrayLike, shape: Sequence[int], name: str) -> None:
+    if t.ndim != len(shape):
+      raise ValueError(f"{name} ndim should be {len(shape)}, but got {t.ndim}")
     value_str1 = f't.shape={t.shape}'
     value_str2 = f'shape={shape}'
     for i in range(t.ndim):
-      if shape[i] != -1:
-        assert (
-            t.shape[i] == shape[i]
-        ), f'Shapes are not equal {value_str1} vs {value_str2}'
+      if shape[i] != -1 and t.shape[i] != shape[i]:
+        raise ValueError(f"{name} shape should be {shape}: but got {t.shape}")
     
   B, S, N, H = key.shape
-  _assert_has_shape(value, [B, S, N, H])
-  _assert_has_shape(query, [B, -1, N, H])
+  _check_has_shape(value, [B, S, N, H], 'value')
+  _check_has_shape(query, [B, -1, N, H], 'query')
   T = query.shape[1]
   scale_val = (1.0 / np.sqrt(H)) if scale is None else scale
-  assert query.dtype == key.dtype == value.dtype
-  if mask is not None:
-    assert mask.dtype == query.dtype and mask.dtype == jnp.bool_
+  if not (query.dtype == key.dtype == value.dtype):
+    raise ValueError(f"query/key/value should have the same shape, but got "
+                     f"{query.shape} vs {key.shape} vs {value.shape}.")
+  if mask is not None and mask.dtype != jnp.bool_:
+    raise ValueError(f"Mask must be boolean dtype, but got {mask.dtype}.")
 
   match implementation:
     case 'xla':
@@ -911,7 +905,6 @@ def dot_product_attention(
       mask_type = MaskType.CAUSAL if is_causal else MaskType.NO_MASK
       # Convert bool mask to float mask for addition
       if mask is not None:
-        assert mask.dtype == jnp.bool_
         large_negative_number = _get_large_negative(query.dtype)
         mask = jnp.where(mask, jnp.zeros((), query.dtype),
                          large_negative_number)
