@@ -104,10 +104,10 @@ std::tuple<int64_t, int64_t, int64_t> SplitBatch2D(ffi::Span<T> dims) {
 
 template <ffi::DataType dtype>
 void CopyIfDiffBuffer(ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out) {
-  auto [batch_count, x_rows, x_cols] = SplitBatch2D(x.dimensions);
-  if (x.data != x_out->data) {
+  auto [batch_count, x_rows, x_cols] = SplitBatch2D(x.dimensions());
+  if (x.typed_data() != x_out->typed_data()) {
     const auto x_size = batch_count * x_rows * x_cols;
-    std::copy_n(x.data, x_size, x_out->data);
+    std::copy_n(x.typed_data(), x_size, x_out->typed_data());
   }
 }
 
@@ -236,11 +236,11 @@ ffi::Error LuDecomposition<dtype>::Kernel(
     ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out,
     ffi::ResultBuffer<LapackIntDtype> ipiv,
     ffi::ResultBuffer<LapackIntDtype> info) {
-  RETURN_IF_FFI_ERROR(CheckMatrixDimensions(x.dimensions));
-  auto [batch_count, x_rows, x_cols] = SplitBatch2D(x.dimensions);
-  auto* x_out_data = x_out->data;
-  auto* ipiv_data = ipiv->data;
-  auto* info_data = info->data;
+  RETURN_IF_FFI_ERROR(CheckMatrixDimensions(x.dimensions()));
+  auto [batch_count, x_rows, x_cols] = SplitBatch2D(x.dimensions());
+  auto* x_out_data = x_out->typed_data();
+  auto* ipiv_data = ipiv->typed_data();
+  auto* info_data = info->typed_data();
 
   CopyIfDiffBuffer(x, x_out);
 
@@ -409,16 +409,16 @@ template <ffi::DataType dtype>
 ffi::Error CholeskyFactorization<dtype>::Kernel(
     ffi::Buffer<dtype> x, MatrixParams::UpLo uplo,
     ffi::ResultBuffer<dtype> x_out, ffi::ResultBuffer<LapackIntDtype> info) {
-  RETURN_IF_FFI_ERROR(CheckMatrixDimensions(x.dimensions));
-  auto [batch_count, x_rows, x_cols] = SplitBatch2D(x.dimensions);
-  auto* x_out_data = x_out->data;
-  auto* info_data = info->data;
+  RETURN_IF_FFI_ERROR(CheckMatrixDimensions(x.dimensions()));
+  auto [batch_count, x_rows, x_cols] = SplitBatch2D(x.dimensions());
+  auto* x_out_data = x_out->typed_data();
+  auto* info_data = info->typed_data();
 
   CopyIfDiffBuffer(x, x_out);
 
   auto uplo_v = static_cast<char>(uplo);
   ASSIGN_OR_RETURN_FFI_ERROR(
-      auto x_order_v, MaybeCastNoOverflow<lapack_int>(x.dimensions.back()));
+      auto x_order_v, MaybeCastNoOverflow<lapack_int>(x.dimensions().back()));
   auto x_leading_dim_v = x_order_v;
 
   const int64_t x_out_step{x_rows * x_cols};
