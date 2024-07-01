@@ -191,6 +191,7 @@ async def async_serialize(
     context=TS_CONTEXT,
     primary_host: int | None = 0,
     replica_id: int = 0,
+    transaction: Optional[ts.Transaction] = None,
 ):
   """Serialize an array using TensorStore.
 
@@ -204,8 +205,10 @@ async def async_serialize(
     primary_host: Primary host, which indicates the host that will be treated as
       the "leader". If None, all hosts are treated as the primary. DO NOT USE
       unless you are sure you know what you are doing.
-    replica_id: Allows overriding the shard replica id that will be saved.
-      DO NOT USE unless you are sure you know what you are doing.
+    replica_id: Allows overriding the shard replica id that will be saved. DO
+      NOT USE unless you are sure you know what you are doing.
+    transaction: TensorStore transaction to use for opening and writing the
+      array.  If not specified, a non-transactional write will be used.
   """
   if (isinstance(arr_inp, array.ArrayImpl) and jax.process_count() > 1 and
       arr_inp.is_fully_addressable):
@@ -232,6 +235,7 @@ async def async_serialize(
         create=True,
         open=True,
         context=context,
+        transaction=transaction,
     )
     # Asynchronous case.
     if commit_future is not None:
@@ -251,11 +255,22 @@ async def async_serialize(
       open=True,
       assume_metadata=True,
       context=context,
+      transaction=transaction,
   )
 
   async def _write_array(shard):
     if shard.replica_id == replica_id:
-      write_future = t[shard.index].write(shard.data)
+      write_future = t[shard.index].write(
+          shard.data,
+          # Avoid additional copy of input array into the TensorStore chunk
+          # cache.  If `arr_inp` is a jax.Array, the result of converting
+          # it to a NumPy array, as is done internally by TensorStore, is
+          # guaranteed to be immutable and therefore it is safe to retain a
+          # reference indefinitely.
+          can_reference_source_data_indefinitely=isinstance(
+              arr_inp, array.ArrayImpl
+          ),
+      )
       if commit_future is not None:
         assert isinstance(commit_future, list)
         commit_future.append(write_future.commit)
@@ -567,7 +582,14 @@ class AsyncManager:
 class GlobalAsyncCheckpointManager(AsyncManager, GlobalAsyncCheckpointManagerBase):
   """Responsible for serializing GDAs via TensorStore."""
 
-  def serialize(self, arrays, tensorstore_specs, *, on_commit_callback):
+  def serialize(
+      self,
+      arrays,
+      tensorstore_specs,
+      *,
+      on_commit_callback,
+      transaction: Optional[ts.Transaction] = None,
+  ):
     """Serializes Arrays or Arrays via TensorStore asynchronously.
 
     TensorStore writes to a storage layer in 2 steps:
@@ -587,32 +609,52 @@ class GlobalAsyncCheckpointManager(AsyncManager, GlobalAsyncCheckpointManagerBas
         have finished writing their checkpoints to disk. Filesystems where
         atomic rename operations are supported, you can rename from the
         temporary directory to the final directory. On GCS, you write to the
-        final directory directly and in `on_commit_callback` you write a
-        success file indicating that the serialization was successful because
-        GCS does not support atomic rename operations.
+        final directory directly and in `on_commit_callback` you write a success
+        file indicating that the serialization was successful because GCS does
+        not support atomic rename operations.
+      transaction: Optional TensorStore transaction to use.
     """
     logger.info('Waiting for previous serialization to finish.')
     self.wait_until_finished()
 
-    commit_futures = [[] for _ in range(len(tensorstore_specs))]
+    commit_futures: list[ts.Future] = []
 
     async def _run_serializer():
       future_writer = jax.tree_util.tree_map(
-          async_serialize, arrays, tensorstore_specs, commit_futures)
+          lambda arr_inp, tensorstore_spec: async_serialize(
+              arr_inp,
+              tensorstore_spec,
+              commit_future=commit_futures,
+              transaction=transaction,
+          ),
+          arrays,
+          tensorstore_specs,
+      )
       return await asyncio.gather(*future_writer)
 
     asyncio.run(_run_serializer())
 
-    self._add_futures(jax.tree_util.tree_flatten(commit_futures)[0])
+    self._add_futures(commit_futures)
 
     # Used in wait_until_finished to check on process != 0, if the checkpoint
     # has finished writing.
     self._start_async_commit(on_commit_callback)
 
-  def serialize_with_paths(self, arrays: Sequence[jax.Array],
-                           paths: Sequence[str], *, on_commit_callback):
+  def serialize_with_paths(
+      self,
+      arrays: Sequence[jax.Array],
+      paths: Sequence[str],
+      *,
+      on_commit_callback,
+      transaction: Optional[ts.Transaction] = None,
+  ):
     tspecs = jax.tree.map(get_tensorstore_spec, paths)
-    self.serialize(arrays, tspecs, on_commit_callback=on_commit_callback)
+    self.serialize(
+        arrays,
+        tspecs,
+        on_commit_callback=on_commit_callback,
+        transaction=transaction,
+    )
 
   def deserialize(self, shardings: Sequence[sharding.Sharding | Layout],
                   tensorstore_specs: Sequence[dict[str, Any]],

@@ -96,6 +96,41 @@ class CheckpointTest(jtu.JaxTestCase):
     self.assertGreater(peak, 30_000_000)
     tm.stop()
 
+  def test_memory_consumption_for_save(self):
+    global_mesh = jtu.create_global_mesh((1, 1), ('x', 'y'))
+    inp_shape = (16 * 1024, 16 * 1024)
+    pspec = P('x', 'y')
+    num = math.prod(inp_shape)
+    sharding = NamedSharding(global_mesh, pspec)
+    src = jnp.arange(num, dtype=np.int32).reshape(inp_shape)
+    inp = array.make_array_from_callback(
+        inp_shape, sharding, lambda idx: src[idx]
+    )
+    ckpt_dir = pathlib.Path(self.create_tempdir('memprofsave').full_path)
+    tspec = serialization.get_tensorstore_spec(str(ckpt_dir))
+    tspec['metadata'] = {
+        'shape': inp.shape,
+        'compressor': None,
+        'chunks': inp.shape,
+    }
+
+    is_cpu = jtu.test_device_matches(['cpu'])
+    tm.start()
+    try:
+      manager = serialization.GlobalAsyncCheckpointManager()
+      manager.serialize(
+          [inp],
+          [tspec],
+          on_commit_callback=partial(
+              self._on_commit_callback, ckpt_dir, ckpt_dir
+          ),
+      )
+      manager.wait_until_finished()
+      unused_current, peak = tm.get_traced_memory()
+      self.assertLess(peak, src.nbytes * (1 * (not is_cpu) + 0.5))
+    finally:
+      tm.stop()
+
   def test_checkpointing_with_path_variant(self):
     global_mesh = jtu.create_global_mesh((4, 2), ('x', 'y'))
     inp_shape = (8, 2)
@@ -186,6 +221,100 @@ class CheckpointTest(jtu.JaxTestCase):
                            np.array([[16, 17], [18, 19]], dtype=np.int32))
     self.assertArraysEqual(np.asarray(m2.addressable_shards[1].data),
                            np.array([[16, 17], [18, 19]], dtype=np.int32))
+    self.assertEqual(m2.addressable_shards[0].data.shape, (2, 2))
+    self.assertEqual(m2.dtype, np.int32)
+
+    self.assertIsInstance(m3, array.ArrayImpl)
+    for i, s in enumerate(m3.addressable_shards):
+      self.assertEqual(s.index, (slice(None),))
+      self.assertEqual(s.replica_id, i)
+      self.assertArraysEqual(np.asarray(s.data), np.array([], dtype=np.float32))
+    self.assertEqual(m3.dtype, np.float32)
+
+  def test_checkpointing_ocdbt_transaction(self):
+    global_mesh = jtu.create_global_mesh((4, 2), ('x', 'y'))
+    inp_shape = (8, 2)
+    pspec = P('x', 'y')
+    num = math.prod(inp_shape)
+
+    # First Array
+    global_input_data1 = np.arange(num, dtype=np.int32).reshape(inp_shape)
+    a1 = array.make_array_from_callback(
+        inp_shape,
+        NamedSharding(global_mesh, pspec),
+        lambda idx: global_input_data1[idx],
+    )
+    ckpt_dir = pathlib.Path(self.create_tempdir('ckpt').full_path)
+    ckpt_path1 = ckpt_dir / 'first'
+
+    # Second Array
+    global_input_data2 = np.arange(num, num + num, dtype=np.int32).reshape(
+        inp_shape
+    )
+    a2 = array.make_array_from_callback(
+        inp_shape,
+        NamedSharding(global_mesh, pspec),
+        lambda idx: global_input_data2[idx],
+    )
+    ckpt_path2 = ckpt_dir / 'second'
+
+    # Third Array
+    def cb3(_):
+      return np.array([], dtype=np.float32)
+
+    global_mesh1d = jtu.create_global_mesh((8,), ('x',))
+    a3 = array.make_array_from_callback(
+        (0,), NamedSharding(global_mesh1d, P(None)), cb3
+    )
+    ckpt_path3 = ckpt_dir / 'third'
+
+    ckpt_paths = [str(ckpt_path1), str(ckpt_path2), str(ckpt_path3)]
+    tspecs = jax.tree_util.tree_map(
+        lambda p: serialization.get_tensorstore_spec(p, ocdbt=True), ckpt_paths
+    )
+
+    manager = serialization.GlobalAsyncCheckpointManager()
+    with ts.Transaction(atomic=True) as transaction:
+      manager.serialize(
+          [a1, a2, a3],
+          tspecs,
+          on_commit_callback=partial(
+              self._on_commit_callback, ckpt_dir, ckpt_dir
+          ),
+          transaction=transaction,
+      )
+    manager.wait_until_finished()
+
+    m1, m2, m3 = serialization.run_deserialization(
+        [
+            NamedSharding(global_mesh, pspec),
+            NamedSharding(global_mesh, P('x')),
+            NamedSharding(global_mesh1d, P(None)),
+        ],
+        tspecs,
+    )
+
+    self.assertIsInstance(m1, array.ArrayImpl)
+    self.assertArraysEqual(
+        np.asarray(m1.addressable_shards[0].data),
+        np.array([[0], [2]], dtype=np.int32),
+    )
+    self.assertArraysEqual(
+        np.asarray(m1.addressable_shards[1].data),
+        np.array([[1], [3]], dtype=np.int32),
+    )
+    self.assertEqual(m1.addressable_shards[0].data.shape, (2, 1))
+    self.assertEqual(m1.dtype, np.int32)
+
+    self.assertIsInstance(m2, array.ArrayImpl)
+    self.assertArraysEqual(
+        np.asarray(m2.addressable_shards[0].data),
+        np.array([[16, 17], [18, 19]], dtype=np.int32),
+    )
+    self.assertArraysEqual(
+        np.asarray(m2.addressable_shards[1].data),
+        np.array([[16, 17], [18, 19]], dtype=np.int32),
+    )
     self.assertEqual(m2.addressable_shards[0].data.shape, (2, 2))
     self.assertEqual(m2.dtype, np.int32)
 
