@@ -46,6 +46,7 @@ from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
 from jax._src.sharding import Sharding
 from jax._src.sharding_impls import NamedSharding, parse_flatten_op_sharding
+from jax._src.typing import ArrayLike
 
 logger = logging.getLogger(__name__)
 
@@ -612,3 +613,43 @@ def visualize_array_sharding(arr, **kwargs):
   def _visualize(sharding):
     return visualize_sharding(arr.shape, sharding, **kwargs)
   inspect_array_sharding(arr, callback=_visualize)
+
+
+def assert_(condition: ArrayLike, message: str, *, skip_under_jit: bool = False) -> None:
+  """Runtime assertion for JAX debugging.
+
+  Args:
+    condition: scalar condition. If False, an assertion error will be raised.
+    message: message to display if assertion is false
+    skip_under_jit: if True, then skip the assertion within JIT-compiled code.
+      If False (default), then execute the assertion at runtime via jax.debug.callback.
+  """
+  return debug_assert_p.bind(condition, message=message, skip_under_jit=skip_under_jit)
+
+debug_assert_p = core.Primitive('debug_assert')
+
+@debug_assert_p.def_abstract_eval
+def debug_assert_abstract_eval(x, *, message, skip_under_jit):
+  _ = bool(skip_under_jit)
+  if not isinstance(message, str):
+    raise TypeError(f"debug.assert_ message must be a string; got {type(message)=}")
+  if x.ndim > 0:
+    raise ValueError(f"debug.assert_ argument must be a scalar; got {x.shape=}")
+  return x
+
+@debug_assert_p.def_impl
+def debug_assert_impl(x, *, message, skip_under_jit):
+  _ = debug_assert_abstract_eval(jnp.asarray(x), message=message, skip_under_jit=skip_under_jit)
+  def assertion_callback(x, message=message):
+    assert x, message
+  jax.debug.callback(assertion_callback, x)
+  return x
+
+def debug_assert_lowering(x, *, message, skip_under_jit):
+  if skip_under_jit:
+    return x
+  return debug_assert_impl(x, message=message, skip_under_jit=skip_under_jit)
+
+mlir.register_lowering(debug_assert_p, mlir.lower_fun(debug_assert_lowering, multiple_results=False))
+batching.defvectorized(debug_assert_p)
+ad.deflinear2(debug_assert_p, lambda t, _: [t])

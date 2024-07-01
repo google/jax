@@ -25,6 +25,7 @@ from jax.interpreters import pxla
 from jax._src import ad_checkpoint
 from jax._src import debugging
 from jax._src import dispatch
+from jax._src.lib import xla_extension
 from jax._src import test_util as jtu
 from jax._src.maps import xmap
 import jax.numpy as jnp
@@ -1155,6 +1156,26 @@ class InspectShardingTest(jtu.JaxTestCase):
 
     with mesh:
       f(arr)
+
+class DebugAssertTest(jtu.JaxTestCase):
+  def test_basic_assertion(self):
+    msg = "This is the test message"
+    with self.assertRaisesRegex(AssertionError, msg):
+      jax.debug.assert_(False, msg)
+    with self.assertRaisesRegex(AssertionError, msg):
+      jax.debug.assert_(False, msg, skip_under_jit=True)
+
+  def test_jit_assertion(self):
+    msg = "This is the test message"
+    assert_ = jax.jit(functools.partial(jax.debug.assert_, message=msg))
+    assert_(True)  # no error
+    with self.assertRaisesRegex(xla_extension.XlaRuntimeError, msg):
+      assert_(False)
+
+    assert_skipped = jax.jit(functools.partial(
+      jax.debug.assert_, message=msg, skip_under_jit=True))
+    assert_skipped(True)  # no error
+    assert_skipped(False)  # no error; skipped
 
 
 if not rich:

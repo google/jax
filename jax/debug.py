@@ -13,6 +13,7 @@
 # limitations under the License.
 __all__ = ["callback", "print", "DebugEffect", "visualize_array_sharding",
            "inspect_array_sharding", "visualize_sharding", "breakpoint"]
+from jax._src.debugging import assert_ as assert_
 from jax._src.debugging import debug_callback as callback
 from jax._src.debugging import debug_print as print
 from jax._src.debugging import DebugEffect
