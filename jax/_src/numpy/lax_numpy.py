@@ -2468,15 +2468,14 @@ def nonzero(a: ArrayLike, *, size: int | None = None,
     raise ValueError("Calling nonzero on 0d arrays is not allowed. "
                      "Use jnp.atleast_1d(scalar).nonzero() instead.")
   mask = arr if arr.dtype == bool else (arr != 0)
-  calculated_size = mask.sum() if size is None else size
-  calculated_size = core.concrete_dim_or_error(calculated_size,
+  calculated_size_ = mask.sum() if size is None else size
+  calculated_size: int = core.concrete_dim_or_error(calculated_size_,
     "The size argument of jnp.nonzero must be statically specified "
     "to use jnp.nonzero within JAX transformations.")
   if arr.size == 0 or calculated_size == 0:
     return tuple(zeros(calculated_size, int) for dim in arr.shape)
   flat_indices = reductions.cumsum(
-      bincount(reductions.cumsum(mask),
-               length=calculated_size))  # type: ignore[arg-type]
+      bincount(reductions.cumsum(mask), length=calculated_size))
   strides: np.ndarray = (np.cumprod(arr.shape[::-1])[::-1] // arr.shape).astype(int_)
   out = tuple((flat_indices // stride) % size for stride, size in zip(strides, arr.shape))
   if fill_value is not None:
@@ -3976,8 +3975,8 @@ def identity(n: DimSize, dtype: DTypeLike | None = None) -> Array:
   return eye(n, dtype=dtype)
 
 
-def arange(start: DimSize, stop: DimSize | None = None,
-           step: DimSize | None = None, dtype: DTypeLike | None = None,
+def arange(start: ArrayLike | DimSize, stop: ArrayLike | DimSize | None = None,
+           step: ArrayLike | None = None, dtype: DTypeLike | None = None,
            *, device: xc.Device | Sharding | None = None) -> Array:
   """Create an array of evenly-spaced values.
 
@@ -4055,8 +4054,8 @@ def arange(start: DimSize, stop: DimSize | None = None,
   return output
 
 
-def _arange(start: DimSize, stop: DimSize | None = None,
-           step: DimSize | None = None, dtype: DTypeLike | None = None) -> Array:
+def _arange(start: ArrayLike | DimSize, stop: ArrayLike | DimSize | None = None,
+            step: ArrayLike | None = None, dtype: DTypeLike | None = None) -> Array:
   dtypes.check_user_dtype_supported(dtype, "arange")
   if not config.dynamic_shapes.value:
     util.check_arraylike("arange", start)
@@ -4088,11 +4087,11 @@ def _arange(start: DimSize, stop: DimSize | None = None,
     if (not dtypes.issubdtype(start_dtype, np.integer) and
         not dtypes.issubdtype(start_dtype, dtypes.extended)):
       ceil_ = ufuncs.ceil if isinstance(start, core.Tracer) else np.ceil
-      start = ceil_(start).astype(int)  # type: ignore
-    return lax.iota(dtype, start)
+      start = ceil_(start).astype(int)  # type: ignore[operator]
+    return lax.iota(dtype, start)  # type: ignore[arg-type]
   else:
     if step is None and start == 0 and stop is not None:
-      return lax.iota(dtype, np.ceil(stop).astype(int))
+      return lax.iota(dtype, np.ceil(stop).astype(int))  # type: ignore[arg-type]
     return array(np.arange(start, stop=stop, step=step, dtype=dtype))
 
 
