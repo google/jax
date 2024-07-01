@@ -3296,13 +3296,6 @@ FailureOr<xla::Array<Value>> vector_extract_slice_impl(
   // We currently only support no-op cases - that is, those where we effectively
   // just extract a slice of vregs without doing any operations (e.g. shifts) on
   // them.
-  // TODO(tlongeri): VectorLayout enforces that the offsets must fall in the
-  // first tile of each vreg. That means a no-op would not result in a valid
-  // layout if the index offset falls within a different tile in the vreg. Do we
-  // want to loosen this restriction or add shifts? This is the only non-no-op
-  // that might make sense to support - otherwise we should expect
-  // infer-vector-layout to assign no-op layouts and have the burden of any
-  // shifts that might be needed later fall on relayout.
   for (auto [index_offset, in_offset, vreg_slice, out_offset] : llvm::zip_equal(
            ArrayRef<int64_t>(full_offsets).take_back(2), layout_in.offsets(),
            layout_in.vregSlice(ctx.target_shape), layout_out.offsets())) {
@@ -5005,15 +4998,33 @@ FailureOr<TypedValue<VectorType>> relayout(
     src = dst;
   }
 
+  auto rotate_vregs = [&](xla::Array<Value> &vregs, int64_t rotate_amount,
+                          const int dimension) {
+    if (rotate_amount != 0) {
+      vregs.Each([&](absl::Span<const int64_t> idx, Value *vreg) {
+        CHECK(vreg);
+        *vreg = builder
+                    .create<tpu::RotateOp>(vreg->getLoc(), *vreg,
+                                           /*amount=*/rotate_amount,
+                                           /*dimension=*/dimension,
+                                           /*stride=*/nullptr,
+                                           /*stride_dimension=*/nullptr)
+                    .getResult();
+      });
+    }
+  };
+  auto rotate_sublanes = [&](xla::Array<Value> &vregs, int64_t rotate_amount) {
+    rotate_vregs(vregs, rotate_amount, 0);
+  };
+  auto rotate_lanes = [&](xla::Array<Value> &vregs, int64_t rotate_amount) {
+    rotate_vregs(vregs, rotate_amount, 1);
+  };
+
   // Fix up the offsets, assuming everything else matches between src and dst.
   if (src.tiling() == dst.tiling() &&
       src.implicit_dim() == dst.implicit_dim()) {
     const auto &tiling = src.tiling();
-    // TODO(apaszke): Changing an offset might add or remove one vreg.
-    if (dst_tiles_shape != src_tiles.dimensions()) {
-      return emitError(
-          v.getLoc(), "Not implemented: Offsets changing the vreg array shape");
-    }
+    const std::array<int64_t, 2> vreg_slice = src.vregSlice(target_shape);
     xla::Array<Value> dst_tiles = src_tiles;
 
     // Shifting rows
@@ -5028,6 +5039,11 @@ FailureOr<TypedValue<VectorType>> relayout(
 
     if (row_diff != 0) {  // This is an easy case, because we never need to
                           // combine multiple vregs.
+      if (dst_tiles_shape != src_tiles.dimensions()) {
+        return emitError(
+            v.getLoc(),
+            "Not implemented: Offsets changing the vreg array shape");
+      }
       const SmallVector<int64_t> implicit_shape =
           src.implicitShape(vty.getShape());
       if (implicit_shape[implicit_shape.size() - 2] != 1) {
@@ -5040,15 +5056,7 @@ FailureOr<TypedValue<VectorType>> relayout(
         if (sublane_diff < 0) {
           sublane_diff += target_shape[0];
         }
-        src_tiles.Each([&](absl::Span<const int64_t> idx, Value tile) {
-          dst_tiles(idx) =
-              builder
-                  .create<tpu::RotateOp>(v.getLoc(), tile,
-                                         /*amount=*/sublane_diff,
-                                         /*dimension=*/0, /*stride=*/nullptr,
-                                         /*stride_dimension=*/nullptr)
-                  .getResult();
-        });
+        rotate_sublanes(dst_tiles, sublane_diff);
       }
       const int src_subelem = *src.offsets()[0] % packing;
       const int dst_subelem = *dst.offsets()[0] % packing;
@@ -5093,62 +5101,232 @@ FailureOr<TypedValue<VectorType>> relayout(
         return emitError(v.getLoc(),
                          "Not implemented: Both columns and rows are shifted");
       }
-      if (bitwidth != 32 || tiling != target_shape) {
+      if (packing != 1 && tiling[0] == 1) {
         return emitError(v.getLoc(),
-                         "Not implemented: Only 32-bit column shifts for "
-                         "native layouts supported");
+                         "Not implemented: Packed type with 1D tiling");
       }
-      TPU_ASSERT_GE_LOC(v.getLoc(), src_tiles.num_dimensions(), 1);
-      std::optional<tpu::CreateMaskOp> maybe_create_mask;
-      if (*(src_tiles.dimensions().end() - 1) > 1) {
-        int64_t lane_start, lane_end;
-        if (col_diff > 0) {
-          lane_start = 0;
-          lane_end = col_diff;
-        } else {  // col_diff < 0
-          lane_start = target_shape[1] + col_diff;
-          lane_end = target_shape[1];
-        }
-        auto boundIdxConst =
-            std::bind(IdxConst, std::placeholders::_1, builder, v.getLoc());
-        maybe_create_mask = builder.create<tpu::CreateMaskOp>(
-            v.getLoc(), VectorType::get(target_shape, builder.getI1Type()),
-            ValueRange{boundIdxConst(0), boundIdxConst(lane_start)},
-            ValueRange{boundIdxConst(target_shape[0]),
-                       boundIdxConst(lane_end)});
+      src_tiles.Reshape(
+          src.tileArrayImplicitShape(vty.getShape(), target_shape));
+      TPU_ASSERT_EQ_LOC(v.getLoc(), tiling[1], target_shape[1]);
+      // Example of what before/after looks like:
+      // Consider 32-bit tiling of (4, 128), and a shift from (x, 0) to (x, N),
+      // where N < 128. The vreg array may look as follows:
+      //
+      //  +-------+----+  +-------+----+  +-------+----+
+      //  | A0    | B0 |  | A2    | B3 |  | A4    | B4 |
+      //  +-------+----+  +-------+----+  +-------+----+
+      //  | A1    | B1 |  | A3    | B3 |  | A5    | X  |
+      //  +-------+----+  +-------+----+  +-------+----+
+      //
+      // Here, Ai and Bi are the left and right parts of the i-th tile,
+      // such that Bi has N columns (the rotate amount). X is padding (which
+      // does not have to be aligned with our partitioning, but it is for this
+      // example).
+      //
+      // The vreg array, after correcting offsets, will look as follows:
+      //
+      //  +----+-------+  +----+-------+  +----+-------+
+      //  | X  | A0    |  | B1 | A2    |  | B3 | A4    |
+      //  +----+-------+  +----+-------+  +----+-------+
+      //  | B0 | A1    |  | B2 | A3    |  | B4 | A5    |
+      //  +----+-------+  +----+-------+  +----+-------+
+      //
+      // Note how, for example, the new 2nd vreg is assembled from the original:
+      //
+      // - A2, A3 come from the 2nd vreg, just lane-shifted.
+      // - B1 comes from the 1st vreg, lane- and sublane-shifted.
+      // - B2 comes from the 2nd vreg, lane- and sublane-shifted.
+      //
+      // ----------------
+      //
+      // The final vreg can be split into four (possibly-empty) parts from
+      // different sources:
+      //
+      // +------+----+
+      // | UL   | UR |
+      // |      |    |
+      // |      |    |
+      // |      +----+
+      // |      |    |
+      // +------+    |
+      // | LL   | LR |
+      // +------+----+
+      //
+      // In the before/after example above, the UR part is empty (LR occupies
+      // the entire right half). All non-empty parts is only possible with more
+      // than two tiles per vreg.
+      //
+      // When shifting left, the upper part of dst_vregs[..., i] comes from
+      // src_vregs[..., i], and the lower part comes from
+      // src_vregs[..., i+1].
+      // When shifting right, the upper part of dst_vregs[..., i] comes from
+      // src_vregs[..., i-1], and the lower part comes from
+      // src_vregs[..., i].
+      //
+      // A note on some special cases:
+      // - Tile-aligned shifts result in empty left parts.
+      // - Native tiling (a single tile per vreg) results in empty upper
+      //   right and lower left parts.
+
+      const int64_t sublanes_per_tile = src.sublanesPerTile(target_shape);
+      const std::array<int64_t, 2> tiled_ishape =
+          src.getImplicitTiledDims(vty.getShape(), 1);
+      const int64_t tiles_per_vreg = src.tilesPerVreg(target_shape);
+
+      int64_t split_offset = col_diff;
+      int64_t upper_idx_delta = -1;
+      int64_t lower_idx_delta = 0;
+      if (col_diff < 0) {
+        split_offset += vreg_slice[1];
+        ++upper_idx_delta;
+        ++lower_idx_delta;
       }
-      src_tiles.Each([&](absl::Span<const int64_t> idx, Value *tile) {
-        *tile = builder
-                    .create<tpu::RotateOp>(v.getLoc(), *tile,
-                                           /*amount=*/col_diff < 0
-                                               ? target_shape[1] + col_diff
-                                               : col_diff,
-                                           /*dimension=*/1, /*stride=*/nullptr,
-                                           /*stride_dimension=*/nullptr)
-                    .getResult();
-      });
-      src_tiles.Each([&](absl::Span<const int64_t> idx, Value rot_tile) {
-        Value prev_rot_tile;
-        if (col_diff > 0) {
-          if (*(idx.end() - 1) != 0) {
-            SmallVector<int64_t> prev_idx(idx.begin(), idx.end());
-            --*(prev_idx.end() - 1);
-            prev_rot_tile = src_tiles(prev_idx);
+      const int64_t left_tile_split = llvm::divideCeil(split_offset, tiling[1]);
+      const int64_t right_tile_split = split_offset / tiling[1];
+      const int64_t left_right_split = split_offset % tiling[1];
+
+      rotate_lanes(src_tiles, left_right_split);
+      // TODO(tlongeri): Clean up. Some of these rotations may end up unused:
+      // - The left part of the first vreg and the right part of the last vreg
+      //   may be entirely padding.
+      // - The entire left part may be unused if the shift is tile-aligned.
+      // They will be removed as dead code anyway, but it would be nicer to not
+      // generate them in the first place.
+      // Also, sometimes the rotation amount is 0, so we don't need to allocate
+      // another array (and we should steal the allocation for src_tiles, too).
+      xla::Array<Value> left_part = src_tiles;
+      xla::Array<Value> right_part = src_tiles;
+      rotate_sublanes(left_part, left_tile_split * sublanes_per_tile);
+      rotate_sublanes(right_part, right_tile_split * sublanes_per_tile);
+      // We assemble left and right, and then put them together.
+      // TODO(tlongeri): Lower and upper first is probably better, it can be
+      // reused for consecutive vregs. We can assemble lower_left+lower_right
+      // for this vreg and upper_left+upper_right for the next one in the same
+      // vselect. But the mask for assembling upper+lower is not as simple, so
+      // it might be a bit more expensive to generate. Worth it for large vreg
+      // arrays, I'm not sure about small ones (especially in older TPU gens).
+      const auto mask_vreg_ty = VectorType::get(
+          packing == 1
+              ? target_shape
+              : ArrayRef<int64_t>{target_shape[0], target_shape[1], packing},
+          builder.getI1Type());
+      Value left_mask = nullptr;
+      Value right_mask = nullptr;
+      Value left_right_mask = nullptr;
+      auto get_left_mask = [&]() {
+        if (left_mask == nullptr) {
+          left_mask = builder.create<tpu::CreateMaskOp>(
+              v.getLoc(), mask_vreg_ty,
+              ArrayRef<Value>{IdxConst(0, builder, v.getLoc()),
+                              IdxConst(0, builder, v.getLoc())},
+              ArrayRef<Value>{IdxConst(left_tile_split * sublanes_per_tile,
+                                       builder, v.getLoc()),
+                              IdxConst(target_shape[1], builder, v.getLoc())});
+        }
+        return left_mask;
+      };
+      auto get_right_mask = [&]() {
+        if (right_mask == nullptr) {
+          right_mask = builder.create<tpu::CreateMaskOp>(
+              v.getLoc(), mask_vreg_ty,
+              ArrayRef<Value>{IdxConst(0, builder, v.getLoc()),
+                              IdxConst(0, builder, v.getLoc())},
+              ArrayRef<Value>{IdxConst(right_tile_split * sublanes_per_tile,
+                                       builder, v.getLoc()),
+                              IdxConst(target_shape[1], builder, v.getLoc())});
+        }
+        return right_mask;
+      };
+      auto get_left_right_mask = [&]() {
+        if (left_right_mask == nullptr) {
+          left_right_mask = builder.create<tpu::CreateMaskOp>(
+              v.getLoc(), mask_vreg_ty,
+              ArrayRef<Value>{IdxConst(0, builder, v.getLoc()),
+                              IdxConst(0, builder, v.getLoc())},
+              ArrayRef<Value>{IdxConst(target_shape[0], builder, v.getLoc()),
+                              IdxConst(left_right_split, builder, v.getLoc())});
+        }
+        return left_right_mask;
+      };
+      xla::Array<Value> dst_vregs(
+          dst.tileArrayImplicitShape(vty.getShape(), target_shape));
+      dst_vregs.Each([&](absl::Span<const int64_t> dst_idx, Value *dst_vreg) {
+        SmallVector<int64_t> dst_idx_local(toArrayRef(dst_idx));
+        Value lower_left = nullptr;
+        Value lower_right = nullptr;
+        Value upper_left = nullptr;
+        Value upper_right = nullptr;
+        // Set parts if their size is non-empty and the source vreg exists.
+        *(dst_idx_local.end() - 1) += lower_idx_delta;
+        if (*(dst_idx_local.end() - 1) < *(src_tiles.dimensions().end() - 1)) {
+          if (left_tile_split < tiles_per_vreg && 0 < left_right_split) {
+            lower_left = left_part(dst_idx_local);
           }
-        } else {  // col_diff < 0
-          if (*(idx.end() - 1) != *(src_tiles.dimensions().end() - 1) - 1) {
-            SmallVector<int64_t> prev_idx(idx.begin(), idx.end());
-            ++*(prev_idx.end() - 1);
-            prev_rot_tile = src_tiles(prev_idx);
+          if (right_tile_split < tiles_per_vreg) {
+            lower_right = right_part(dst_idx_local);
           }
         }
-        if (prev_rot_tile != nullptr) {
-          rot_tile = builder.create<arith::SelectOp>(
-              v.getLoc(), maybe_create_mask->getResult(), prev_rot_tile,
-              rot_tile);
+        *(dst_idx_local.end() - 1) -= lower_idx_delta;
+        *(dst_idx_local.end() - 1) += upper_idx_delta;
+        if (*(dst_idx_local.end() - 1) >= 0) {
+          if (0 < left_tile_split && 0 < left_right_split) {
+            upper_left = left_part(dst_idx_local);
+          }
+          if (0 < right_tile_split) {
+            upper_right = right_part(dst_idx_local);
+          }
         }
-        dst_tiles(idx) = rot_tile;
+        *(dst_idx_local.end() - 1) -= upper_idx_delta;
+
+        // For the first and last vregs, some parts may be all padding, so
+        // unset them if this is the case. Note that the first and last vreg
+        // are the same when there is only one.
+        if (*(dst_idx_local.end() - 1) == 0) {
+          if (right_tile_split * tiling[1] <= *dst.offsets()[1]) {
+            upper_right = nullptr;
+          }
+          if (split_offset <= *dst.offsets()[1]) {
+            upper_left = nullptr;
+          }
+          if (vreg_slice[1] - tiling[1] + left_right_split <=
+              *dst.offsets()[1]) {
+            lower_left = nullptr;
+          }
+        }
+        if (*(dst_idx_local.end() - 1) ==
+            *(dst_vregs.dimensions().end() - 1) - 1) {
+          const uint64_t end_offset =
+              (*dst.offsets()[1] + tiled_ishape[1] - 1) % vreg_slice[1] + 1;
+          if (end_offset <= left_tile_split * tiling[1]) {
+            lower_left = nullptr;
+          }
+          if (end_offset <= split_offset) {
+            lower_right = nullptr;
+          }
+          if (end_offset <= left_right_split) {
+            upper_right = nullptr;
+          }
+        }
+        // Combine parts into the final vreg (see comment in mask definitions).
+        auto combine_parts = [&builder](Value part1, Value part2,
+                                        auto get_mask_fn) -> Value {
+          if (part1 && part2) {
+            return builder.create<arith::SelectOp>(part1.getLoc(),
+                                                   get_mask_fn(), part1, part2);
+          } else if (part1) {
+            return part1;
+          } else {
+            return part2;
+          }
+        };
+        Value left = combine_parts(upper_left, lower_left, get_left_mask);
+        Value right = combine_parts(upper_right, lower_right, get_right_mask);
+        *dst_vreg = combine_parts(left, right, get_left_right_mask);
+        CHECK(*dst_vreg);
       });
+      return assemble(builder, vty, dst, std::move(dst_vregs), target_shape,
+                      /*use_implicit_shape=*/true)
+          .getResult();
     }
     return assemble(builder, vty, dst, std::move(dst_tiles), target_shape)
         .getResult();
@@ -5209,6 +5387,18 @@ LogicalResult applyLayoutOp(RewriteContext &ctx, Operation &op) {
     }
   }
 
+  // TODO: b/342235360 - This check is temporary while we increase and test
+  // support for offsets outside of the first tile. When support is more broad,
+  // any op without support should check it within their own rule.
+  if (!isa<vector::ExtractStridedSliceOp>(op)) {
+    for (const Layout &layout : layouts_in) {
+      if (layout && layout->offsets()[1].has_value() &&
+          layout->offsets()[1].value() >= layout->tiling()[1]) {
+        return op.emitError(
+            "Not implemented: Input offsets outside of the first tile");
+      }
+    }
+  }
   const bool no_vector_args =
       llvm::none_of(layouts_out,
                     [](Layout layout) { return layout.has_value(); }) &&

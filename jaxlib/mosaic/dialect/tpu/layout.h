@@ -233,11 +233,6 @@ class VectorLayout {
         implicit_dim_(implicit_dim) {
     // TODO(b/275751535): Allow more bitwidths.
     CHECK(llvm::has_single_bit<unsigned>(bitwidth_) && bitwidth_ <= 32);
-    // Offsets should not exceed the tile size. The data always starts within
-    // the first tile of a vreg.
-    for (auto [o, t] : llvm::zip(offsets_, tiling_)) {
-      CHECK(!o || 0 <= *o && *o < t);
-    }
   }
 
   int8_t bitwidth() const { return bitwidth_; }
@@ -451,6 +446,14 @@ class VectorLayout {
   // Check conditions that depend on the target shape. Invariants that are
   // independent of it are checked in the constructor.
   bool isValid(const std::array<int64_t, 2> target_shape) const {
+    // Offsets should fall within the vreg slice, or else we have vregs that
+    // only contain padding.
+    for (auto [o, vs] : llvm::zip(offsets_, vregSlice(target_shape))) {
+      if (o.has_value() && (*o < 0 || vs <= *o)) {
+        return false;
+      }
+    }
+
     // Tiling should neatly divide the target shape, so that every vector
     // register ends up having the same structure.
     // Also, every tile should occupy a fixed number of sublanes.
