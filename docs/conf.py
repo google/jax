@@ -301,7 +301,11 @@ epub_exclude_files = ['search.html']
 # -- Extension configuration -------------------------------------------------
 
 # Tell sphinx autodoc how to render type aliases.
-autodoc_typehints = "description"
+
+# type aliases are not respected in overloaded function signatures, which leads to
+# hard to read docs. Until this is improved, we'll disable typehints
+# (https://github.com/google/jax/pull/21797).
+autodoc_typehints = "none"
 autodoc_typehints_description_target = "all"
 autodoc_type_aliases = {
     'ArrayLike': 'jax.typing.ArrayLike',
