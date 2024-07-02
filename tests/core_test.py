@@ -749,6 +749,7 @@ class DynamicShapesTest(jtu.JaxTestCase):
     with self.assertRaisesRegex(TypeError, "inconsistently typed as"):
       core.check_jaxpr(jaxpr)
 
+  @unittest.skip("can't eval_jaxpr in pjit staging rule if we pop trace")
   def test_check_jaxpr_key_reuse(self):
     with config.debug_key_reuse(True):
       def f(seed):

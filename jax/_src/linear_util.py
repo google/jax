@@ -286,7 +286,7 @@ def _check_input_type(in_type: core.InputType) -> None:
     return (isinstance(d, (int, core.DBIdx, core.DArray)) and
             (not isinstance(d, core.DArray) or type(d) is core.bint and not d.shape))
   assert all(valid_size(d) for a, _ in in_type if type(a) is core.DShapedArray
-             for d in a.shape)
+             for d in a.shape), in_type
 
   # Check that all DBIdx point to positions to the left of the input on which
   # they appear.
@@ -368,7 +368,7 @@ def cache(call: Callable, *, explain: Callable | None = None):
 @partial(partial, tree_map)
 def _copy_main_traces(x):
   if isinstance(x, core.MainTrace):
-    return core.MainTrace(x.level, x.trace_type, **x.payload)
+    return core.MainTrace(x.trace_type, **x.payload)
   else:
     return x
 

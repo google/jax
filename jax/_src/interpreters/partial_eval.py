@@ -2808,22 +2808,38 @@ def inline_jaxpr_into_trace(
   env: dict[Var, Var] = dict(zip([*jaxpr.constvars, *jaxpr.invars],
                                  [*constvars, *argvars]))
 
+  def subst(aval):
+    if isinstance(aval, DShapedArray):
+      shape = [env[d] if type(d) is Var else d for d in aval.shape]
+      return aval.update(shape=tuple(shape))
+    return aval
+
   src = source_info_util.current()
   for eqn in jaxpr.eqns:
     invars = [x if isinstance(x, Literal) else env[x] for x in eqn.invars]
-    outvars = [Var('', v.aval) for v in eqn.outvars]
+    outvars = [Var('', subst(v.aval)) for v in eqn.outvars]
     src_ = (src if not eqn.source_info.name_stack else
             src.replace(name_stack=src.name_stack + eqn.source_info.name_stack))
-    trace.frame.add_eqn(core.new_jaxpr_eqn(invars, outvars, eqn.primitive,
-                                           eqn.params, eqn.effects, src_))
+    new_eqn = core.new_jaxpr_eqn(invars, outvars, eqn.primitive,
+                                 eqn.params, eqn.effects, src_)
+    trace.frame.add_eqn(new_eqn)
     map(env.setdefault, eqn.outvars, outvars)
 
   tracer_env: dict[Var, Any] = dict(zip([*jaxpr.constvars, *jaxpr.invars],
                                         [*consts, *arg_tracers]))
-  def new_tracer(atom):
-    tracer = DynamicJaxprTracer(trace, atom.aval, src)
+  def get_tracer(v):
+    t = tracer_env.get(v)
+    if t is None:
+      t = tracer_env[v] = new_tracer(v)
+    return t
+  def new_tracer(v):
+    def subst(aval):
+      if isinstance(aval, DShapedArray):
+        shape = [tracer_env[d] if type(d) is Var else d for d in aval.shape]
+        return aval.update(shape=tuple(shape))
+      return aval
+    tracer = DynamicJaxprTracer(trace, subst(v.aval), src)
     trace.frame.tracers.append(tracer)
-    trace.frame.tracer_to_var[id(tracer)] = env[atom]
+    trace.frame.tracer_to_var[id(tracer)] = env[v]
     return tracer
-  return [x.val if isinstance(x, Literal) else tracer_env[x] if x in tracer_env
-          else new_tracer(x) for x in jaxpr.outvars]
+  return [x.val if isinstance(x, Literal) else get_tracer(x) for x in jaxpr.outvars]
