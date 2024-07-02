@@ -192,21 +192,36 @@ def unaccelerate_getattr_deprecation(module, name):
     module._deprecations[name] = (message, prev_attr)
 
 @contextmanager
-def capture_stdout() -> Generator[Callable[[], str | None], None, None]:
-  """Context manager to capture all stdout output."""
+def capture_stdout() -> Generator[Callable[[], str], None, None]:
+  """Context manager to capture all output written to stdout.
 
-  # The encoding should also work on windows, the default doesn't necessarily.
-  with tempfile.NamedTemporaryFile(mode="w+", delete=True, encoding='utf-8') as f:
+  Unlike ``contextlib.redirect_stdout``, this context manager works for
+  both pure Python and native code.
+
+  Yields:
+    A function returning the captured output. The function must be called
+    *after* the context is no longer active.
+
+  Example:
+    >>> with capture_stdout() as get_captured:
+    ...   print(42)
+    ...
+    >>> print("Captured": get_captured())
+    Captured: 42
+  """
+  # ``None`` means the stdout has not been captured yet.
+  captured = None
+
+  def get_captured() -> str:
+    if captured is None:
+      raise ValueError("get_captured() called while the context is active.")
+    return captured
+
+  with tempfile.NamedTemporaryFile(mode="w+", encoding='utf-8') as f:
     original_stdout = os.dup(sys.stdout.fileno())
     os.dup2(f.fileno(), sys.stdout.fileno())
-
-    # if get_stdout returns not it means we are not done capturing
-    # stdout. it should only be used after the context has exited.
-    captured = None
-    get_stdout: Callable[[], str | None] = lambda: captured
-
     try:
-      yield get_stdout
+      yield get_captured
     finally:
       # Python also has its own buffers, make sure everything is flushed.
       sys.stdout.flush()
