@@ -75,17 +75,23 @@ There are two ways to build `jaxlib` with CUDA support: (1) use
 `python build/build.py --enable_cuda` to generate a jaxlib wheel with cuda
 support, or (2) use
 `python build/build.py --enable_cuda --build_gpu_plugin --gpu_plugin_cuda_version=12`
-to generate three wheels (jaxlib without cuda, jax-cuda-plugin,
-and jax-cuda-pjrt). You can set `gpu_plugin_cuda_version` to 11 or 12.
+to generate three wheels (jaxlib without cuda, jax-cuda-plugin, and
+jax-cuda-pjrt).
 
-See `python build/build.py --help` for configuration options, including ways to
-specify the paths to CUDA and CUDNN, which you must have installed. Here
+See `python build/build.py --help` for configuration options. Here
 `python` should be the name of your Python 3 interpreter; on some systems, you
 may need to use `python3` instead. Despite calling the script with `python`,
 Bazel will always use its own hermetic Python interpreter and dependencies, only
 the `build/build.py` script itself will be processed by your system Python
 interpreter. By default, the wheel is written to the `dist/` subdirectory of the
 current directory.
+
+*  Versions prior v.0.4.31: you must have CUDA and CUDNN installed and provide
+   paths to them using configuration options.
+
+*  Versions starting from v.0.4.31: you can provide custom CUDA and CUDNN 
+   versions in the configuration options. Bazel will download them and use as
+   target dependencies.
 
 ### Building jaxlib from source with a modified XLA repository.
 
@@ -111,6 +117,8 @@ The version of XLA pinned by JAX is regularly updated, but is updated in
 particular before each `jaxlib` release.
 
 ### Additional Notes for Building `jaxlib` from source on Windows
+**NB: Starting from v.0.4.31, JAX doesn't support Windows build with CUDA**
+**enabled.**
 
 On Windows, follow [Install Visual Studio](https://docs.microsoft.com/en-us/visualstudio/install/install-visual-studio?view=vs-2019)
 to set up a C++ toolchain. Visual Studio 2019 version 16.5 or newer is required.
@@ -139,16 +147,14 @@ Once coreutils is installed, the realpath command should be present in your shel
 
 Once everything is installed. Open PowerShell, and make sure MSYS2 is in the
 path of the current session. Ensure `bazel`, `patch` and `realpath` are
-accessible. Activate the conda environment. The following command builds with
-CUDA enabled, adjust it to whatever suitable for you:
+accessible. Activate the conda environment. The following command builds JAX, 
+adjust it to whatever suitable for you:
 
 ```
 python .\build\build.py `
   --enable_cuda `
-  --cuda_path='C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v10.1' `
-  --cudnn_path='C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v10.1' `
-  --cuda_version='10.1' `
-  --cudnn_version='7.6.5'
+  --cuda_version='12.3.2' `
+  --cudnn_version='8.9.7.29'
 ```
 
 To build with debug information, add the flag `--bazel_options='--copt=/Z7'`.

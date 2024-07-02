@@ -1,0 +1,81 @@
+name: Presubmit - Windows CPU
+on:
+  # TODO(DO_NOT_SUBMIT): temporary check
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read  # to fetch code
+  actions: write  # to cancel previous workflows
+
+env:
+  DISTUTILS_USE_SDK: 1
+  MSSdk: 1
+
+jobs:
+  presubmit-win-wheels:
+    if: ${{ (github.event.action != 'labeled') || (github.event.label.name == 'windows:force-run')}}
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [windows-2019-32core]
+        arch: [AMD64]
+        pyver: ['3.10']
+    name: ${{ matrix.os }} Windows build
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Cancel Previous Runs
+        uses: styfle/cancel-workflow-action@85880fa0301c86cca9da44039ee3bb12d3bedbfa # ratchet: styfle/cancel-workflow-action@0.12.1
+        with:
+          access_token: ${{ github.token }}
+
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # ratchet:actions/checkout@v4
+        with:
+          path: jax
+          ref: test_616865795
+
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # ratchet:actions/checkout@v4
+        with:
+          repository: openxla/xla
+          path: xla
+          ref: test_616865795
+
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # ratchet:actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.pyver }}
+          cache: 'pip'
+
+      - name: Build wheels
+        env:
+          BAZEL_VC: "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Enterprise\\VC"
+          JAXLIB_NIGHTLY: true  # Tag the wheels as dev versions
+        run: |
+          cd jax
+          python -m pip install -r build/test-requirements.txt
+          python -m pip uninstall -y matplotlib
+          python -m pip install --pre --upgrade numpy==2.0.0rc1 scipy==1.13.0
+          "C:\\msys64\\;C:\\msys64\\usr\\bin\\;" >> $env:GITHUB_PATH
+          python.exe build\build.py ('--bazel_options=--override_repository=xla=${{ github.workspace }}\xla' -replace '\\','\\') --bazel_options=--color=yes --bazel_options=--config=win_clang
+
+      - uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # ratchet: actions/upload-artifact@v4
+        with:
+          name: wheels
+          path: ${{ github.workspace }}\jax\dist\*.whl
+          retention-days: 5
+
+      - name: Run tests
+        env:
+          JAX_ENABLE_CHECKS: true
+          JAX_SKIP_SLOW_TESTS: true
+          PY_COLORS: 1
+        run: |
+          cd jax
+          python -m pip install -e ${{ github.workspace }}\jax
+          python -m pip install --no-index --find-links ${{ github.workspace }}\jax\dist jaxlib
+          echo "JAX_ENABLE_CHECKS=$JAX_ENABLE_CHECKS"
+          pytest -n auto --tb=short tests examples

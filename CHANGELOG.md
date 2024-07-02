@@ -25,6 +25,13 @@ Remember to align the itemized text with the first line of an item within a list
   * Removed a number of previously-deprecated internal APIs related to
     polymorphic shapes. From {mod}`jax.core`: removed `canonicalize_shape`,
     `dimension_as_value`, `definitely_equal`, and `symbolic_equal_dim`.
+  * Hermetic CUDA support is added.
+
+    Hermetic CUDA uses a specific downloadable version of CUDA instead of the
+    user’s locally installed CUDA. Bazel will download CUDA, CUDNN and NCCL
+    distributions, and then use CUDA libraries and tools as dependencies in
+    various Bazel targets. This enables more reproducible builds for JAX and its
+    supported CUDA versions.
 
 ## jaxlib 0.4.31
 
