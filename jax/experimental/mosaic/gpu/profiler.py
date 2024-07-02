@@ -76,29 +76,32 @@ def _record_event(args, event):
       treedef, record_event_p.bind(*flat_args, event=event)
   )
 
-def measure(f, *args, **kwargs):
-  # TODO(apaszke): Raise if this is called under jit.
-  start_event = mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_create()
-  end_event = mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_create()
-  try:
+class Measured:
+  def __init__(self, f):
+    self.start_event = mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_create()
+    self.end_event = mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_create()
 
     @jax.jit
     def run(*args, **kwargs):
       flat_args, treedef = jax.tree.flatten((args, kwargs))
-      flat_args = _record_event(flat_args, start_event)
+      flat_args = _record_event(flat_args, self.start_event)
       args, kwargs = jax.tree.unflatten(treedef, flat_args)
-      return _record_event(f(*args, **kwargs), end_event)
+      return _record_event(f(*args, **kwargs), self.end_event)
 
-    jax.block_until_ready(run(*args, **kwargs))  # Warmup.
-    results = jax.block_until_ready(run(*args, **kwargs))
-    elapsed = mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_elapsed(
-        start_event, end_event
-    )
-  finally:
-    mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_destroy(start_event)
-    mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_destroy(end_event)
-  return results, elapsed
+    self.run = run
 
+  def __call__(self, *args, **kwargs):
+    res = jax.block_until_ready(self.run(*args, **kwargs))
+    elapsed = mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_elapsed(self.start_event, self.end_event)
+    return res, elapsed
+
+  def __del__(self):
+    mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_destroy(self.start_event)
+    mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_destroy(self.end_event)
+
+
+def measure(f, *args, **kw):
+  return Measured(f)(*args, **kw)
 
 class ProfilerSpec:
   ENTER = 0
