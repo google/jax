@@ -32,8 +32,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-_CACHE_SUFFIX = "-cache.bin"
-_ATIME_SUFFIX = "-atime.bin"
+_CACHE_SUFFIX = "-cache"
+_ATIME_SUFFIX = "-atime"
 
 
 class LRUCache(CacheInterface):
