@@ -29,6 +29,79 @@ package(
 jax_generate_backend_suites()
 
 jax_test(
+    name = "all_gather_test",
+    srcs = [
+        "all_gather_test.py",
+    ],
+    disable_backends = [
+        "cpu",
+        "gpu",
+    ],
+    deps = [
+        "//jax:pallas_tpu_ops",
+    ] + py_deps("absl/testing") + py_deps("numpy") + py_deps("hypothesis"),
+)
+
+jax_test(
+    name = "gmm_test",
+    srcs = [
+        "gmm_test.py",
+    ],
+    disable_backends = [
+        "cpu",
+        "gpu",
+    ],
+    shard_count = 50,
+    tags = [
+        "noasan",  # Times out.
+        "nomsan",  # Times out.
+        "notsan",  # Times out.
+    ],
+    deps = [
+        "//jax:pallas_tpu_ops",
+    ] + py_deps([
+        "absl/testing",
+        "absl/flags",
+        "numpy",
+        "hypothesis",
+    ]),
+)
+
+jax_test(
+    name = "pallas_call_test",
+    srcs = ["pallas_call_test.py"],
+    disable_backends = [
+        "cpu",
+        "gpu",
+    ],
+    deps = [
+        "//jax:extend",
+        "//jax:pallas_tpu",
+        "//jax:pallas_tpu_ops",
+    ],
+)
+
+jax_test(
+    name = "pallas_pipeline_test",
+    srcs = ["pallas_pipeline_test.py"],
+    disable_backends = [
+        "cpu",
+        "gpu",
+    ],
+    shard_count = 2,
+    tags = [
+        "noasan",  # Times out.
+        "nomsan",  # Times out.
+        "notsan",  # Times out.
+    ],
+    deps = [
+        "//jax:extend",
+        "//jax:pallas_tpu",
+        "//jax:pallas_tpu_ops",
+    ] + py_deps("hypothesis"),
+)
+
+jax_test(
     name = "pallas_random_test",
     srcs = [
         "pallas_random_test.py",
@@ -44,4 +117,56 @@ jax_test(
         "//third_party/py/absl/testing:absltest",
         "//third_party/py/absl/testing:parameterized",
     ] + py_deps("numpy"),
+)
+
+jax_test(
+    name = "paged_attention_kernel_test",
+    srcs = ["paged_attention_kernel_test.py"],
+    disable_backends = [
+        "cpu",
+        "gpu",
+    ],
+    shard_count = 5,
+    tags = [
+        "noasan",  # Times out.
+        "nomsan",  # Times out.
+        "notsan",  # Times out.
+    ],
+    deps = [
+        "//jax:pallas_tpu_ops",
+    ] + py_deps("absl/testing") + py_deps("numpy"),
+)
+
+jax_test(
+    name = "splash_attention_kernel_test",
+    srcs = [
+        "splash_attention_kernel_test.py",
+    ],
+    disable_backends = [
+        "cpu",
+        "gpu",
+    ],
+    shard_count = 18,
+    tags = [
+        "noasan",  # Times out.
+        "nomsan",  # Times out.
+        "notsan",  # Times out.
+    ],
+    deps = [
+        "//jax:pallas_tpu_ops",
+    ] + py_deps("absl/testing") + py_deps("numpy") + py_deps("hypothesis"),
+)
+
+jax_test(
+    name = "splash_attention_mask_test",
+    srcs = [
+        "splash_attention_mask_test.py",
+    ],
+    disable_backends = [
+        "cpu",
+        "gpu",
+    ],
+    deps = [
+        "//jax:pallas_tpu_ops",
+    ] + py_deps("absl/testing") + py_deps("numpy") + py_deps("hypothesis"),
 )
