@@ -74,6 +74,9 @@ def has_megascale_address():
   return get_tpu_env_value('MEGASCALE_COORDINATOR_ADDRESS') is not None
 
 class BaseTpuCluster(clusters.ClusterEnv):
+
+  name: str = "tpu"
+
   """Abstract cluster supports both single and multislice TPU environments.
 
   If MEGASCALE_COORDINATOR_ADDRESS is not set, we assume single slice topology.
@@ -169,6 +172,9 @@ class BaseTpuCluster(clusters.ClusterEnv):
     raise NotImplementedError()
 
 class GceTpuCluster(BaseTpuCluster):
+
+  name: str = "gcetpu"
+
   @classmethod
   def is_env_present(cls) -> bool:
     if not running_in_cloud_tpu_vm:
@@ -194,6 +200,9 @@ class GceTpuCluster(BaseTpuCluster):
     return [worker.split(':')[2] for worker in workers]
 
 class GkeTpuCluster(BaseTpuCluster):
+
+  name: str = "gketpu"
+
   @classmethod
   def is_env_present(cls) -> bool:
     if running_in_cloud_tpu_vm and os.environ.get("TPU_WORKER_HOSTNAMES") is not None:
