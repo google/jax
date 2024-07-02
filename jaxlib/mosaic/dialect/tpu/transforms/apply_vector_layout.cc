@@ -1627,18 +1627,26 @@ LogicalResult tpu_strided_store_rule(RewriteContext &ctx, Operation &op,
                               store_op.getStrides());
 }
 
-LogicalResult matmul_rule_impl(RewriteContext &ctx, Operation &op,
-                               const bool transpose_lhs,
-                               const bool transpose_rhs,
-                               const VectorLayout &layout_lhs,
-                               const VectorLayout &layout_rhs,
-                               const VectorLayout &layout_acc,
-                               const VectorLayout &layout_out) {
+LogicalResult tpu_matmul_rule(RewriteContext &ctx, Operation &op,
+                              const ArrayRef<Layout> layouts_in,
+                              const ArrayRef<Layout> layouts_out) {
+  TPU_ASSERT_EQ_OP(layouts_in.size(), 3);
+  TPU_ASSERT_EQ_OP(layouts_out.size(), 1);
+  TPU_ASSERT_OP(
+      llvm::all_of(layouts_in, [&](const Layout &l) { return l.has_value(); }));
+  TPU_ASSERT_OP(layouts_out.front().has_value());
+  auto matmul_op = cast<tpu::MatmulOp>(op);
+  auto transpose_lhs = matmul_op.getTransposeLhs();
+  auto transpose_rhs = matmul_op.getTransposeRhs();
+  auto &layout_lhs = *layouts_in[0];
+  auto &layout_rhs = *layouts_in[1];
+  auto &layout_acc = *layouts_in[2];
+  auto layout_out = *layouts_out[0];
   if (transpose_lhs) {
     return op.emitOpError("Not implemented: Transposed LHS");
   }
-  const std::array<std::reference_wrapper<const VectorLayout>, 3> layouts_in = {
-      layout_lhs, layout_rhs, layout_acc};
+  const std::array<std::reference_wrapper<const VectorLayout>, 3> layouts_in_ =
+      {layout_lhs, layout_rhs, layout_acc};
   const std::array<std::reference_wrapper<const VectorLayout>, 4> all_layouts =
       {layout_lhs, layout_rhs, layout_acc, layout_out};
   for (const VectorLayout &layout : all_layouts) {
@@ -1655,16 +1663,11 @@ LogicalResult matmul_rule_impl(RewriteContext &ctx, Operation &op,
     rhs = tpu_matmul_op.getRhs();
     acc = tpu_matmul_op.getAcc();
     res = tpu_matmul_op.getResult();
-  } else if (auto vector_contraction_op = dyn_cast<vector::ContractionOp>(op)) {
-    lhs = vector_contraction_op.getLhs();
-    rhs = vector_contraction_op.getRhs();
-    acc = cast<TypedValue<VectorType>>(vector_contraction_op.getAcc());
-    res = cast<TypedValue<VectorType>>(vector_contraction_op.getResult());
   } else {
     LOG(FATAL) << "Unexpected op type";
   }
 
-  for (const VectorLayout &layout : layouts_in) {
+  for (const VectorLayout &layout : layouts_in_) {
     if (layout.implicit_dim() != VectorLayout::ImplicitDim::kNone) {
       return op.emitOpError(
           "Not implemented: Unsupported matmul operand layout");
@@ -1913,20 +1916,6 @@ LogicalResult matmul_rule_impl(RewriteContext &ctx, Operation &op,
           .getOperation());
   op.erase();
   return success();
-}
-
-LogicalResult tpu_matmul_rule(RewriteContext &ctx, Operation &op,
-                              const ArrayRef<Layout> layouts_in,
-                              const ArrayRef<Layout> layouts_out) {
-  TPU_ASSERT_EQ_OP(layouts_in.size(), 3);
-  TPU_ASSERT_EQ_OP(layouts_out.size(), 1);
-  TPU_ASSERT_OP(
-      llvm::all_of(layouts_in, [&](const Layout &l) { return l.has_value(); }));
-  TPU_ASSERT_OP(layouts_out.front().has_value());
-  auto matmul_op = cast<tpu::MatmulOp>(op);
-  return matmul_rule_impl(ctx, *matmul_op, matmul_op.getTransposeLhs(),
-                          matmul_op.getTransposeRhs(), *layouts_in[0],
-                          *layouts_in[1], *layouts_in[2], *layouts_out[0]);
 }
 
 LogicalResult tpu_store_rule(RewriteContext &ctx, Operation &op,
@@ -3416,54 +3405,6 @@ LogicalResult vector_extract_rule(RewriteContext &ctx, Operation &op,
   return success();
 }
 
-LogicalResult vector_contract_rule(RewriteContext &ctx, Operation &op,
-                                   const ArrayRef<Layout> layouts_in,
-                                   const ArrayRef<Layout> layouts_out) {
-  TPU_ASSERT_EQ_OP(layouts_in.size(), 3);
-  TPU_ASSERT_EQ_OP(layouts_out.size(), 1);
-  TPU_ASSERT_OP(
-      llvm::all_of(layouts_in, [&](const Layout &l) { return l.has_value(); }));
-  TPU_ASSERT_OP(layouts_out.front().has_value());
-  MLIRContext *const mlir_ctx = ctx.getMLIRContext();
-  Builder builder(mlir_ctx);
-  auto vector_contract_op = cast<vector::ContractionOp>(op);
-  // TODO(tlongeri): There is some unnecessary uniquing happening but not sure
-  // if it can be avoided without sacrificing readability rather severely.
-  auto getMapAttr = [&](const unsigned first, const unsigned second) {
-    return AffineMapAttr::get(AffineMap::get(
-        3, 0,
-        {getAffineDimExpr(first, mlir_ctx), getAffineDimExpr(second, mlir_ctx)},
-        mlir_ctx));
-  };
-  const ArrayAttr matmul_indexing_maps = builder.getArrayAttr(
-      {getMapAttr(0, 2), getMapAttr(2, 1), getMapAttr(0, 1)});
-  const ArrayAttr matmul_indexing_maps_transposed = builder.getArrayAttr(
-      {getMapAttr(0, 2), getMapAttr(1, 2), getMapAttr(0, 1)});
-  const auto indexing_maps = vector_contract_op->getAttr("indexing_maps");
-  if (indexing_maps != matmul_indexing_maps &&
-      indexing_maps != matmul_indexing_maps_transposed) {
-    return vector_contract_op->emitOpError(
-        "Not implemented: Non-matmul or unsupported indexing_maps");
-  }
-  const bool transpose_rhs = indexing_maps == matmul_indexing_maps_transposed;
-  const ArrayAttr matmul_iterator_types =
-      builder.getArrayAttr({builder.getAttr<vector::IteratorTypeAttr>(
-                                vector::IteratorType::parallel),
-                            builder.getAttr<vector::IteratorTypeAttr>(
-                                vector::IteratorType::parallel),
-                            builder.getAttr<vector::IteratorTypeAttr>(
-                                vector::IteratorType::reduction)});
-  if (vector_contract_op->getAttr("iterator_types") != matmul_iterator_types) {
-    return vector_contract_op->emitOpError(
-        "Not implemented: Non-matmul iterator_types");
-  }
-  const bool transpose_lhs =
-      false;  // TODO(apaszke): Support that in the affine maps
-  return matmul_rule_impl(ctx, *vector_contract_op, transpose_lhs,
-                          transpose_rhs, *layouts_in[0], *layouts_in[1],
-                          *layouts_in[2], *layouts_out[0]);
-}
-
 LogicalResult vector_extract_strided_slice_rule(
     RewriteContext &ctx, Operation &op, const ArrayRef<Layout> layouts_in,
     const ArrayRef<Layout> layouts_out) {
@@ -4297,7 +4238,6 @@ const llvm::StringMap<rule_type> &rules() {
       {tpu::AssumeLayoutOp::getOperationName(), tpu_assume_layout_rule},
       {tpu::PRNGRandomBitsOp::getOperationName(), prng_random_bits_rule},
       {vector::BroadcastOp::getOperationName(), vector_broadcast_rule},
-      {vector::ContractionOp::getOperationName(), vector_contract_rule},
       {vector::ExtractOp::getOperationName(), vector_extract_rule},
       {vector::LoadOp::getOperationName(), vector_load_rule},
       {vector::MultiDimReductionOp::getOperationName(),
@@ -4369,16 +4309,6 @@ FailureOr<xla::Array<Value>> disassemble(
   if (auto roll_vectors_op = dyn_cast<RollVectorsOp>(op)) {
     return XlaArrayFromShapeAndValues<Value>(layout_shape,
                                              roll_vectors_op->getOperands());
-  }
-  if (auto contraction_op = dyn_cast<vector::ContractionOp>(op)) {
-    const int64_t num_vectors = ShapedType::getNumElements(layout_shape);
-    FAILUREOR_ASSIGN_OR_RETURN(
-        VectorType vreg_ty,
-        getNativeVregType(vty.getElementType(), target_shape));
-    // TODO(tlongeri): nicer way of doing ValueTypeRange?
-    Operation *const u = builder.create<UnrollVectorsOp>(
-        val.getLoc(), SmallVector<Type>(num_vectors, vreg_ty), val);
-    return XlaArrayFromShapeAndValues<Value>(layout_shape, u->getResults());
   }
   return op->emitOpError("Not implemented: ") << val;
 }

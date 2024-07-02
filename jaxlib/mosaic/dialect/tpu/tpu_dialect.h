@@ -53,6 +53,8 @@ std::pair<bool, bool> mightCommunicateBetweenChips(Operation* op);
 std::unique_ptr<OperationPass<func::FuncOp>> createInferMemRefLayoutPass(
     int hardware_generation = -1);
 
+std::unique_ptr<OperationPass<func::FuncOp>> createCanonicalizeMosaicPass();
+
 std::unique_ptr<OperationPass<func::FuncOp>> createInferVectorLayoutPass(
     int lane_count = 128, int sublane_count = 8);
 
