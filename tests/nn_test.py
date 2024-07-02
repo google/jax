@@ -28,6 +28,8 @@ from jax._src import config
 from jax._src import core
 from jax._src import test_util as jtu
 from jax._src import ad_checkpoint
+from jax._src.lib import cuda_versions
+from jax._src.nn.functions import _get_causal_mask
 from jax.test_util import check_grads
 from jax import nn
 from jax import random
@@ -36,8 +38,99 @@ import jax.numpy as jnp
 
 config.parse_flags_with_absl()
 
+def _is_required_cudnn_version_satisfied():
+  if not jtu.test_device_matches(["cuda"]):
+    return False
+  if cuda_versions is None:
+    return False
+  if not jtu.is_cuda_compute_capability_at_least("8.0"):
+    return False
+  if cuda_versions.cudnn_get_version() < 8904:
+    return False
 
+  return True
+
+def _get_causal_mask(T, S):
+  assert T == S
+  mask_shape = (T, S)
+  row_idx = jax.lax.broadcasted_iota(jnp.int32, mask_shape, 0)
+  col_idx = jax.lax.broadcasted_iota(jnp.int32, mask_shape, 1)
+  return (row_idx >= col_idx)[jnp.newaxis, jnp.newaxis, :, :]
+
+@jtu.with_config(jax_legacy_prng_key="allow",
+                 jax_numpy_dtype_promotion="standard")
 class NNFunctionsTest(jtu.JaxTestCase):
+  @parameterized.product(
+      dtype=[jnp.bfloat16, jnp.float16],
+      use_bias=(False, True),
+      causal_mode=(None, 'is_causal', 'is_mask'),
+      impl=('xla', 'cudnn'),
+  )
+  @jtu.skip_on_flag("jax_skip_slow_tests", True)
+  def testDotProductAttentionInfer(self, dtype, use_bias, causal_mode, impl):
+    if impl == 'cudnn' and not _is_required_cudnn_version_satisfied():
+      raise unittest.SkipTest("CUDA or cuDNN versions are not compatible.")
+
+    sdpa = nn.dot_product_attention
+    sdpa_ref = partial(sdpa, implementation=None)
+    sdpa_ans = partial(sdpa, implementation=impl)
+
+    B, S, T, N, H = 4, 1024, 1024, 4, 64
+    keys = random.split(random.PRNGKey(0), 4)
+    Q = random.normal(keys[0], (B, T, N, H), dtype)
+    K = random.normal(keys[1], (B, S, N, H), dtype)
+    V = random.normal(keys[2], (B, S, N, H), dtype)
+    if use_bias:
+      bias = random.normal(keys[3], (1, N, T, S), dtype)
+    else:
+      bias = None
+
+    is_causal = causal_mode == 'is_causal'
+    causal_mask = _get_causal_mask(T, S) if causal_mode == 'is_mask' else None
+
+    out_ref = sdpa_ref(Q, K, V, bias, causal_mask, is_causal=is_causal)
+    out_ans = sdpa_ans(Q, K, V, bias, causal_mask, is_causal=is_causal)
+    self.assertAllClose(out_ref, out_ans, atol=.01, rtol=.01)
+
+  @parameterized.product(
+      dtype=[jnp.bfloat16, jnp.float16],
+      use_bias=(False, True),
+      causal_mode=(None, 'is_causal', 'is_mask'),
+      impl=('xla', 'cudnn'),
+  )
+  @jtu.skip_on_flag("jax_skip_slow_tests", True)
+  def testDotProductAttentionTrain(self, dtype, use_bias, causal_mode, impl):
+    if impl == 'cudnn' and not _is_required_cudnn_version_satisfied():
+      raise unittest.SkipTest("CUDA or cuDNN versions are not compatible.")
+
+    sdpa = nn.dot_product_attention
+    B, S, T, N, H = 4, 1024, 1024, 4, 64
+    keys = random.split(random.PRNGKey(0), 5)
+    Q = random.normal(keys[0], (B, T, N, H), dtype)
+    K = random.normal(keys[1], (B, S, N, H), dtype)
+    V = random.normal(keys[2], (B, S, N, H), dtype)
+    grad = random.normal(keys[3], (B, T, N, H), dtype)
+    if use_bias:
+      bias = random.normal(keys[4], (1, N, T, S), dtype)
+    else:
+      bias = None
+
+    is_causal = causal_mode == 'is_causal'
+    causal_mask = _get_causal_mask(T, S) if causal_mode == 'is_mask' else None
+
+    sdpa_ref = partial(sdpa, implementation=None, is_causal=is_causal)
+    _, sdpa_vjp_ref = jax.vjp(sdpa_ref, Q, K, V, bias, causal_mask)
+    dQ_ref, dK_ref, dV_ref, dbias_ref, _ = sdpa_vjp_ref(grad)
+
+    sdpa_ans = partial(sdpa, implementation=impl, is_causal=is_causal)
+    _, sdpa_vjp_ans = jax.vjp(sdpa_ans, Q, K, V, bias, causal_mask)
+    dQ_ans, dK_ans, dV_ans, dbias_ans, _ = sdpa_vjp_ans(grad)
+    rtol, atol = (.01, .01)
+    self.assertAllClose(dQ_ref, dQ_ans, rtol=rtol, atol=atol)
+    self.assertAllClose(dK_ref, dK_ans, rtol=rtol, atol=atol)
+    self.assertAllClose(dV_ref, dV_ans, rtol=rtol, atol=atol)
+    self.assertAllClose(dbias_ref, dbias_ans, rtol=.03, atol=atol)
+
   @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def testSoftplusGrad(self):
     check_grads(nn.softplus, (1e-8,), order=4,

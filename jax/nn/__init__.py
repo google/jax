@@ -36,6 +36,7 @@ from jax._src.nn.functions import (
   one_hot as one_hot,
   relu as relu,
   relu6 as relu6,
+  dot_product_attention as dot_product_attention,
   selu as selu,
   sigmoid as sigmoid,
   soft_sign as soft_sign,
