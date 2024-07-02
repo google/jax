@@ -226,8 +226,12 @@ _deprecations = {
     "jax.clear_backends is deprecated.",
     _deprecated_clear_backends
   ),
+  # Added Jun 16, 2024
   "xla_computation": (
-      "jax.xla_computation is deprecated. Please use the AOT APIs.",
+      "jax.xla_computation is deprecated. Please use the AOT APIs; see "
+      "https://jax.readthedocs.io/en/latest/aot.html. For example, replace "
+      "xla_computation(f)(*xs) with jit(f).lower(*xs).compiler_ir('hlo'). See "
+      "CHANGELOG.md for 0.4.30 for more examples.",
       _deprecated_xla_computation
   ),
 }

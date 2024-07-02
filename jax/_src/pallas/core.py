@@ -16,12 +16,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
-import copy
 import contextlib
+import copy
 import dataclasses
 import functools
 import threading
 from typing import Any, Union
+import warnings
 
 import jax
 from jax._src import api_util
@@ -175,10 +176,35 @@ class BlockSpec:
 
   See :ref:`pallas_blockspec` for more details.
   """
-  index_map: Callable[..., Any] | None = None
   block_shape: tuple[int | None, ...] | None = None
-  memory_space: Any | None = None
-  indexing_mode: IndexingMode = blocked
+  index_map: Callable[..., Any] | None = None
+  memory_space: Any | None = dataclasses.field(kw_only=True, default=None)
+  indexing_mode: IndexingMode = dataclasses.field(kw_only=True, default=blocked)
+
+  def __init__(
+      self,
+      block_shape: Any | None = None,
+      index_map: Any | None = None,
+      *,
+      memory_space: Any | None = None,
+      indexing_mode: IndexingMode = blocked,
+  ) -> None:
+    if callable(block_shape):
+      # TODO(slebedev): Remove this code path and update the signature of
+      # __init__ after October 1, 2024.
+      warnings.warn(
+          "BlockSpec now expects ``block_shape`` to be passed before"
+          " ``index_map``. Update your code by swapping the order of these"
+          " arguments. For example, ``pl.BlockSpace(lambda i: i, (42,))``"
+          " should be written as ``pl.BlockSpec((42,), lambda i: i)``.",
+          DeprecationWarning,
+      )
+      index_map, block_shape = block_shape, index_map
+
+    self.block_shape = block_shape
+    self.index_map = index_map
+    self.memory_space = memory_space
+    self.indexing_mode = indexing_mode
 
   def compute_index(self, *args):
     assert self.index_map is not None

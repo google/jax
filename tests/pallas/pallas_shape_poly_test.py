@@ -72,10 +72,10 @@ def matmul(
       functools.partial(matmul_kernel),
       out_shape=jax.ShapeDtypeStruct((m, n), jnp.float32),
       in_specs=[
-          pl.BlockSpec(lambda i, j, k: (i, k), (block_m, block_l)),
-          pl.BlockSpec(lambda i, j, k: (k, j), (block_l, block_n)),
+          pl.BlockSpec((block_m, block_l), lambda i, j, k: (i, k)),
+          pl.BlockSpec((block_l, block_n), lambda i, j, k: (k, j)),
       ],
-      out_specs=pl.BlockSpec(lambda i, j, k: (i, j), (block_m, block_n)),
+      out_specs=pl.BlockSpec((block_m, block_n), lambda i, j, k: (i, j)),
       grid=grid,
       interpret=jtu.test_device_matches(["cpu"]),
   )
@@ -109,8 +109,8 @@ class ShapePolyTest(jtu.JaxTestCase,
       return pl.pallas_call(
           copy_kernel,
           out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype),
-          in_specs=[pl.BlockSpec(lambda i, j: (i, j), block_shape)],
-          out_specs=pl.BlockSpec(lambda i, j: (i, j), block_shape),
+          in_specs=[pl.BlockSpec(block_shape, lambda i, j: (i, j))],
+          out_specs=pl.BlockSpec(block_shape, lambda i, j: (i, j)),
           grid=grid,
           interpret=eager and jtu.test_device_matches(["cpu"]))(x)
 
@@ -171,8 +171,8 @@ class ShapePolyTest(jtu.JaxTestCase,
       return pl.pallas_call(
           copy_one,
           out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype),
-          in_specs=[pl.BlockSpec(lambda i, j: (i, j), block_shape)],
-          out_specs=pl.BlockSpec(lambda i, j: (i, j), block_shape),
+          in_specs=[pl.BlockSpec(block_shape, lambda i, j: (i, j))],
+          out_specs=pl.BlockSpec(block_shape, lambda i, j: (i, j)),
           grid=grid,
           interpret=eager and jtu.test_device_matches(["cpu"]))(x)
     shape1 = (128, 256)

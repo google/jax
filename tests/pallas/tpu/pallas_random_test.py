@@ -184,10 +184,10 @@ class BlockInvarianceTest(parameterized.TestCase):
 
     global_key = jax_random.key(0, impl="pallas_tpu")
     o_shape = jnp.ones((64, 512), dtype=jnp.float32)
-    key_spec = pl.BlockSpec(lambda i, j: (0, 0),
-                            block_shape=(1, 1),
-                            memory_space=pltpu.TPUMemorySpace.SMEM)
-    out_spec = pl.BlockSpec(lambda i, j: (i, j), block_shape=(16, 128))
+    key_spec = pl.BlockSpec(
+        (1, 1), lambda i, j: (0, 0), memory_space=pltpu.TPUMemorySpace.SMEM
+    )
+    out_spec = pl.BlockSpec((16, 128), lambda i, j: (i, j))
     result_16x128 = pl.pallas_call(
         make_kernel_body(index_map=lambda i, j: (i, j)),
         out_shape=o_shape,
@@ -196,7 +196,7 @@ class BlockInvarianceTest(parameterized.TestCase):
         grid=(4, 4),
     )(global_key)
 
-    out_spec = pl.BlockSpec(lambda i, j: (j, i), block_shape=(32, 256))
+    out_spec = pl.BlockSpec((32, 256), lambda i, j: (j, i))
     result_32x256 = pl.pallas_call(
         make_kernel_body(index_map=lambda i, j: (j, i)),
         in_specs=[key_spec],
@@ -205,7 +205,6 @@ class BlockInvarianceTest(parameterized.TestCase):
         grid=(2, 2),
     )(global_key)
     np.testing.assert_array_equal(result_16x128, result_32x256)
-
 
 
 if __name__ == "__main__":

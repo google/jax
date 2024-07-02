@@ -474,35 +474,35 @@ def paged_attention(
     q = q.reshape(batch_size, num_heads, 1, head_dim)
     if megacore_mode == "kv_head":
       q_block_spec = pl.BlockSpec(
-          lambda core_index, b, h, *_: (b, h * num_cores + core_index, 0, 0),
           (None, num_heads // num_kv_heads, None, head_dim),
+          lambda core_index, b, h, *_: (b, h * num_cores + core_index, 0, 0),
       )
     elif megacore_mode == "batch":
       q_block_spec = pl.BlockSpec(
-          lambda core_index, b, h, *_: (b * num_cores + core_index, h, 0, 0),
           (None, num_heads // num_kv_heads, None, head_dim),
+          lambda core_index, b, h, *_: (b * num_cores + core_index, h, 0, 0),
       )
     else:
       q_block_spec = pl.BlockSpec(
-          lambda core_index, b, h, *_: (b, h, 0, 0),
           (None, num_heads // num_kv_heads, None, head_dim),
+          lambda core_index, b, h, *_: (b, h, 0, 0),
       )
     q_dtype_for_kernel_launch = jnp.float32
   else:
     if megacore_mode == "kv_head":
       q_block_spec = pl.BlockSpec(
-          lambda core_index, b, h, *_: (b, h * num_cores + core_index, 0),
           (None, num_heads // num_kv_heads, head_dim),
+          lambda core_index, b, h, *_: (b, h * num_cores + core_index, 0),
       )
     elif megacore_mode == "batch":
       q_block_spec = pl.BlockSpec(
-          lambda core_index, b, h, *_: (b * num_cores + core_index, h, 0),
           (None, num_heads // num_kv_heads, head_dim),
+          lambda core_index, b, h, *_: (b * num_cores + core_index, h, 0),
       )
     else:
       q_block_spec = pl.BlockSpec(
-          lambda core_index, b, h, *_: (b, h, 0),
           (None, num_heads // num_kv_heads, head_dim),
+          lambda core_index, b, h, *_: (b, h, 0),
       )
     q_dtype_for_kernel_launch = q.dtype
 

@@ -16,6 +16,7 @@
 # See PEP 484 & https://github.com/google/jax/issues/7570
 
 from jax._src.extend.ffi import (
+    ffi_call as ffi_call,
     ffi_lowering as ffi_lowering,
     include_dir as include_dir,
     pycapsule as pycapsule,

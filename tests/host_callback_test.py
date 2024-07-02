@@ -2721,8 +2721,7 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
                                  { lambda  ; f_ a b c g h.
                                    let d = broadcast_in_dim[ broadcast_dimensions=(  )
                                                              shape=(5,) ] 0.00
-                                   in (a, d, g, h) } )
-                      linear=(False, False, False, False, False, False) ] e a 1 2 c h i
+                                   in (a, d, g, h) } ) ] e a 1 2 c h i
           in (f, g, j, k) }""", func, [y, 5])
 
   def test_while(self):

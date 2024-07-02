@@ -49,8 +49,8 @@ class CompatTest(bctu.CompatTestBase):
         o_ref[0] = x_ref[0] + 1
       return pl.pallas_call(add_one,
                             out_shape=jax.ShapeDtypeStruct((8,), jnp.float32),
-                            in_specs=[pl.BlockSpec(lambda i: i, (1,))],
-                            out_specs=pl.BlockSpec(lambda i: i, (1,)),
+                            in_specs=[pl.BlockSpec((1,), lambda i: i)],
+                            out_specs=pl.BlockSpec((1,), lambda i: i),
                             grid=8)(x)
     data = self.load_testdata(cuda_add_one.data_2024_05_02)
 

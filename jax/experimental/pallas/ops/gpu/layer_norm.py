@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import functools
 
-from typing import Optional
-
 import jax
 from jax import lax
 import jax.numpy as jnp

@@ -2,6 +2,8 @@
 
 # Grids and BlockSpecs
 
+<!--* freshness: { reviewed: '2024-06-01' } *-->
+
 (pallas_grid)=
 ### `grid`, a.k.a. kernels in a loop
 
@@ -115,7 +117,7 @@ below:
 ```python
 >>> def slices_for_invocation(x_shape: tuple[int, ...],
 ...                           x_spec: pl.BlockSpec,
-...                           grid: tuple[int, ...],                            
+...                           grid: tuple[int, ...],
 ...                           invocation_indices: tuple[int, ...]) -> tuple[slice, ...]:
 ...   assert len(invocation_indices) == len(grid)
 ...   assert all(0 <= i < grid_size for i, grid_size in zip(invocation_indices, grid))
@@ -135,15 +137,15 @@ below:
 For example:
 ```python
 >>> slices_for_invocation(x_shape=(100, 100),
-...                       x_spec = pl.BlockSpec(lambda i, j: (i, j), (10, 20)),
-...                       grid = (10, 5),    
+...                       x_spec = pl.BlockSpec((10, 20), lambda i, j: (i, j)),
+...                       grid = (10, 5),
 ...                       invocation_indices = (2, 3))
 [slice(20, 30, None), slice(60, 80, None)]
 
 >>> # Same shape of the array and blocks, but we iterate over each block 4 times
 >>> slices_for_invocation(x_shape=(100, 100),
-...                       x_spec = pl.BlockSpec(lambda i, j, k: (i, j), (10, 20)),
-...                       grid = (10, 5, 4),    
+...                       x_spec = pl.BlockSpec((10, 20), lambda i, j, k: (i, j)),
+...                       grid = (10, 5, 4),
 ...                       invocation_indices = (2, 3, 0))
 [slice(20, 30, None), slice(60, 80, None)]
 
@@ -166,7 +168,7 @@ over the second axis:
 ...                        out_shape=jax.ShapeDtypeStruct(x_shape, dtype=np.int32),
 ...                        grid=grid,
 ...                        in_specs=[],
-...                        out_specs=pl.BlockSpec(out_index_map, block_shape),
+...                        out_specs=pl.BlockSpec(block_shape, out_index_map),
 ...                        interpret=True)()
 ...   print(res)
 
@@ -195,7 +197,7 @@ Hence, we iterate over the same output block 10 times.
 The output shown below was generated on CPU using `interpret=True`
 mode, which at the moment executes the invocation sequentially.
 On TPUs, programs are executed in a combination of parallel and sequential,
-and this function generates the output shown. 
+and this function generates the output shown.
 See [the Pallas TPU documentation](https://jax.readthedocs.io/en/latest/pallas/tpu/details.html#noteworthy-properties-and-restrictions).
 
 ```python

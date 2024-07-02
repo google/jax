@@ -14,18 +14,26 @@
 
 from __future__ import annotations
 
-import os
-import ctypes
 from collections.abc import Iterable, Mapping, Sequence
+import ctypes
+import functools
+import os
 from typing import Any
 
-import numpy as np
-
+from jax._src import core
+from jax._src import dispatch
 from jax._src import dtypes
+from jax._src import util
+from jax._src.callback import _check_shape_dtype, callback_batching_rule
+from jax._src.interpreters import ad
+from jax._src.interpreters import batching
 from jax._src.interpreters import mlir
 from jax._src.lib import jaxlib
 from jax._src.lib.mlir import ir
-from jax._src.typing import DimSize
+from jax._src.typing import Array, ArrayLike, DimSize, DuckTypedArray
+import numpy as np
+
+map, unsafe_map = util.safe_map, map
 
 
 def pycapsule(funcptr):
@@ -140,3 +148,110 @@ def _ir_attribute(obj: Any) -> ir.Attribute:
     elif isinstance(mlir_type, ir.FloatType):
       return ir.FloatAttr.get(mlir_type, obj)
   raise TypeError(f"Unsupported attribute type: {type(obj)}")
+
+
+def ffi_call(
+    target_name: str,
+    result_shape_dtypes: DuckTypedArray | Sequence[DuckTypedArray],
+    *args: ArrayLike,
+    vectorized: bool = False,
+    **kwargs: Any,
+) -> Array | list[Array]:
+  """Call a foreign function interface (FFI) target.
+
+  Like :func:`~jax.pure_callback`, the behavior of ``ffi_call`` under
+  :func:`~jax.vmap` depends on the value of ``vectorized``. When ``vectorized``
+  is ``True``, the FFI target is assumed to satisfy: ``ffi_call(xs) ==
+  jnp.stack([ffi_call(x) for x in xs])``. In other words, calling the FFI target
+  with an extra leading dimension should return the same result as calling it
+  within a loop and stacking along the zeroth axis. Therefore, the FFI target
+  will be called directly on batched inputs (where the batch axes are the
+  leading dimensions). Additionally, the callbacks should return outputs that
+  have corresponding leading batch axes. If ``vectorized`` is ``False`` (the
+  default behavior), transforming this ``ffi_call`` under :func:`~jax.vmap` will
+  result in a :func:`~jax.lax.scan` with the ``ffi_call`` in the body.
+
+  Args:
+    target_name: the name of the XLA FFI custom call target that was registered
+      using :func:`~jaxlib.xla_client.register_custom_call_target`.
+    result_shape_dtypes: an object, or sequence of objects, with ``shape`` and
+      ``dtype`` attributes which are expected to match the shape and dtype of
+      the custom call output or outputs. :class:`~jax.ShapeDtypeStruct` is often
+      used to define the elements of ``result_shape_dtypes``.
+    *args: the arguments passed to the custom call.
+    vectorized: boolean specifying whether the callback function can operate in
+      a vectorized manner, as described above.
+    **kwargs: keyword arguments that are passed as named attributes to the
+      custom call using XLA's FFI interface.
+
+  Returns:
+    One or more :class:`~jax.Array` objects whose shapes and dtypes match
+    ``result_shape_dtypes``.
+  """
+  if isinstance(result_shape_dtypes, Sequence):
+    multiple_results = True
+    result_types = result_shape_dtypes
+  else:
+    multiple_results = False
+    result_types = (result_shape_dtypes,)
+  map(_check_shape_dtype, result_types)
+  result_avals = tuple(core.ShapedArray(x.shape, x.dtype) for x in result_types)
+  results = ffi_call_p.bind(
+      *args,
+      result_avals=result_avals,
+      vectorized=vectorized,
+      target_name=target_name,
+      **kwargs,
+  )
+  if multiple_results:
+    return results
+  else:
+    return results[0]
+
+
+def ffi_call_abstract_eval(
+    *avals_in,
+    result_avals: tuple[core.ShapedArray, ...],
+    target_name: str,
+    vectorized: bool,
+    **kwargs: Any,
+):
+  del avals_in, target_name, vectorized, kwargs
+  return result_avals
+
+
+def ffi_call_jvp(*args, target_name, **kwargs):
+  del args, kwargs
+  raise ValueError(
+      f"The FFI call to `{target_name}` cannot be differentiated. "
+      "You can use `jax.custom_jvp` or `jax.custom_jvp` to add support.")
+
+
+def ffi_call_transpose(*args, target_name, **kwargs):
+  del args, kwargs
+  raise ValueError(
+      f"The FFI call to `{target_name}` cannot be differentiated. "
+      "You can use `jax.custom_jvp` or `jax.custom_jvp` to add support.")
+
+
+def ffi_call_lowering(
+    ctx: mlir.LoweringRuleContext,
+    *operands: ir.Value,
+    result_avals: tuple[core.ShapedArray, ...],
+    target_name: str,
+    vectorized: bool,
+    **kwargs: Any,
+) -> Sequence[ir.Value]:
+  del result_avals, vectorized
+  return ffi_lowering(target_name)(ctx, *operands, **kwargs)
+
+
+ffi_call_p = core.Primitive("ffi_call")
+ffi_call_p.multiple_results = True
+ffi_call_p.def_impl(functools.partial(dispatch.apply_primitive, ffi_call_p))
+ffi_call_p.def_abstract_eval(ffi_call_abstract_eval)
+ad.primitive_jvps[ffi_call_p] = ffi_call_jvp
+ad.primitive_transposes[ffi_call_p] = ffi_call_transpose
+batching.primitive_batchers[ffi_call_p] = functools.partial(
+    callback_batching_rule, ffi_call_p)
+mlir.register_lowering(ffi_call_p, ffi_call_lowering)

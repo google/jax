@@ -840,10 +840,82 @@ def _average(a: ArrayLike, axis: Axis = None, weights: ArrayLike | None = None,
   return avg
 
 
-@implements(np.var, skip_params=['out'])
 def var(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
         out: None = None, ddof: int = 0, keepdims: bool = False, *,
         where: ArrayLike | None = None, correction: int | float | None = None) -> Array:
+  r"""Compute the variance along a given axis.
+
+  JAX implementation of :func:`numpy.var`.
+
+  Args:
+    a: input array.
+    axis: optional, int or sequence of ints, default=None. Axis along which the
+      variance is computed. If None, variance is computed along all the axes.
+    dtype: The type of the output array. Default=None.
+    ddof: int, default=0. Degrees of freedom. The divisor in the variance computation
+      is ``N-ddof``, ``N`` is number of elements along given axis.
+    keepdims: bool, default=False. If true, reduced axes are left in the result
+      with size 1.
+    where: optional, boolean array, default=None. The elements to be used in the
+      variance. Array should be broadcast compatible to the input.
+    correction: int or float, default=None. Alternative name for ``ddof``.
+      Both ddof and correction can't be provided simultaneously.
+    out: Unused by JAX.
+
+  Returns:
+    An array of the variance along the given axis.
+
+  See also:
+    - :func:`jax.numpy.mean`: Compute the mean of array elements over a given axis.
+    - :func:`jax.numpy.std`: Compute the standard deviation of array elements over
+      given axis.
+    - :func:`jax.numpy.nanvar`: Compute the variance along a given axis, ignoring
+      NaNs values.
+    - :func:`jax.numpy.nanstd`: Computed the standard deviation of a given axis,
+      ignoring NaN values.
+
+  Examples:
+    By default, ``jnp.var`` computes the variance along all axes.
+
+    >>> x = jnp.array([[1, 3, 4, 2],
+    ...                [5, 2, 6, 3],
+    ...                [8, 4, 2, 9]])
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   jnp.var(x)
+    Array(5.74, dtype=float32)
+
+    If ``axis=1``, variance is computed along axis 1.
+
+    >>> jnp.var(x, axis=1)
+    Array([1.25  , 2.5   , 8.1875], dtype=float32)
+
+    To preserve the dimensions of input, you can set ``keepdims=True``.
+
+    >>> jnp.var(x, axis=1, keepdims=True)
+    Array([[1.25  ],
+           [2.5   ],
+           [8.1875]], dtype=float32)
+
+    If ``ddof=1``:
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.var(x, axis=1, keepdims=True, ddof=1))
+    [[ 1.67]
+     [ 3.33]
+     [10.92]]
+
+    To include specific elements of the array to compute variance, you can use
+    ``where``.
+
+    >>> where = jnp.array([[1, 0, 1, 0],
+    ...                    [0, 1, 1, 0],
+    ...                    [1, 1, 1, 0]], dtype=bool)
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.var(x, axis=1, keepdims=True, where=where))
+    [[2.25]
+     [4.  ]
+     [6.22]]
+  """
   if correction is None:
     correction = ddof
   elif not isinstance(ddof, int) or ddof != 0:
@@ -905,10 +977,78 @@ def _var_promote_types(a_dtype: DTypeLike, dtype: DTypeLike | None) -> tuple[DTy
   return _upcast_f16(computation_dtype), np.dtype(dtype)
 
 
-@implements(np.std, skip_params=['out'])
 def std(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
         out: None = None, ddof: int = 0, keepdims: bool = False, *,
         where: ArrayLike | None = None, correction: int | float | None = None) -> Array:
+  r"""Compute the standard deviation along a given axis.
+
+  JAX implementation of :func:`numpy.std`.
+
+  Args:
+    a: input array.
+    axis: optional, int or sequence of ints, default=None. Axis along which the
+      standard deviation is computed. If None, standard deviaiton is computed
+      along all the axes.
+    dtype: The type of the output array. Default=None.
+    ddof: int, default=0. Degrees of freedom. The divisor in the standard deviation
+      computation is ``N-ddof``, ``N`` is number of elements along given axis.
+    keepdims: bool, default=False. If true, reduced axes are left in the result
+      with size 1.
+    where: optional, boolean array, default=None. The elements to be used in the
+      standard deviation. Array should be broadcast compatible to the input.
+    correction: int or float, default=None. Alternative name for ``ddof``.
+      Both ddof and correction can't be provided simultaneously.
+    out: Unused by JAX.
+
+  Returns:
+    An array of the standard deviation along the given axis.
+
+  See also:
+    - :func:`jax.numpy.var`: Compute the variance of array elements over given
+      axis.
+    - :func:`jax.numpy.mean`: Compute the mean of array elements over a given axis.
+    - :func:`jax.numpy.nanvar`: Compute the variance along a given axis, ignoring
+      NaNs values.
+    - :func:`jax.numpy.nanstd`: Computed the standard deviation of a given axis,
+      ignoring NaN values.
+
+  Examples:
+    By default, ``jnp.std`` computes the standard deviation along all axes.
+
+    >>> x = jnp.array([[1, 3, 4, 2],
+    ...                [4, 2, 5, 3],
+    ...                [5, 4, 2, 3]])
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   jnp.std(x)
+    Array(1.21, dtype=float32)
+
+    If ``axis=0``, computes along axis 0.
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.std(x, axis=0))
+    [1.7  0.82 1.25 0.47]
+
+    To preserve the dimensions of input, you can set ``keepdims=True``.
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.std(x, axis=0, keepdims=True))
+    [[1.7  0.82 1.25 0.47]]
+
+    If ``ddof=1``:
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.std(x, axis=0, keepdims=True, ddof=1))
+    [[2.08 1.   1.53 0.58]]
+
+    To include specific elements of the array to compute standard deviation, you
+    can use ``where``.
+
+    >>> where = jnp.array([[1, 0, 1, 0],
+    ...                    [0, 1, 0, 1],
+    ...                    [1, 1, 1, 0]], dtype=bool)
+    >>> jnp.std(x, axis=0, keepdims=True, where=where)
+    Array([[2., 1., 1., 0.]], dtype=float32)
+  """
   if correction is None:
     correction = ddof
   elif not isinstance(ddof, int) or ddof != 0:

@@ -144,26 +144,14 @@ def attn_unbatched(
       kernel,
       grid=grid_,
       in_specs=[
-          pl.BlockSpec(lambda i, j: (i, 0), (block_h, head_dim)),
-          pl.BlockSpec(lambda i, j: (j, 0, 0), (None, k_seq_len, head_dim)),
-          pl.BlockSpec(lambda i, j: (j, 0, 0), (None, k_seq_len, head_dim)),
+          pl.BlockSpec((block_h, head_dim), lambda i, j: (i, 0)),
+          pl.BlockSpec((None, k_seq_len, head_dim), lambda i, j: (j, 0, 0)),
+          pl.BlockSpec((None, k_seq_len, head_dim), lambda i, j: (j, 0, 0)),
       ],
       out_specs=[
-          pl.BlockSpec(lambda i, j: (j, i, 0), (None, block_h, head_dim)),  # o
-          pl.BlockSpec(
-              lambda i, j: (j, i),
-              (
-                  None,
-                  block_h,
-              ),
-          ),  # l
-          pl.BlockSpec(
-              lambda i, j: (j, i),
-              (
-                  None,
-                  block_h,
-              ),
-          ),  # m
+          pl.BlockSpec((None, block_h, head_dim), lambda i, j: (j, i, 0)),  # o
+          pl.BlockSpec((None, block_h), lambda i, j: (j, i)),  # l
+          pl.BlockSpec((None, block_h), lambda i, j: (j, i)),  # m
       ],
       compiler_params=dict(
           triton=dict(num_warps=num_warps_, num_stages=num_stages)

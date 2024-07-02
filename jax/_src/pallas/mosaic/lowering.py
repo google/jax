@@ -2080,7 +2080,7 @@ def _while_lowering_rule(
 
 lowering_rules[lax.while_p] = _while_lowering_rule
 
-def _cond_lowering_rule(ctx: LoweringRuleContext, *args, branches, linear):
+def _cond_lowering_rule(ctx: LoweringRuleContext, *args, branches):
   index, *args = args
   out_types = map(aval_to_ir_type, ctx.avals_out)
   pred = arith.CmpIOp(
@@ -2099,7 +2099,6 @@ def _cond_lowering_rule(ctx: LoweringRuleContext, *args, branches, linear):
           arith.SubIOp(index, ir_constant(1, index.type)).result,
           *args,
           branches=branches[1:],
-          linear=linear,
       )
     else:
       out = jaxpr_subcomp(lowering_context, branches[1].jaxpr, *args)

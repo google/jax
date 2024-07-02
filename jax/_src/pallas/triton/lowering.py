@@ -2542,7 +2542,6 @@ def _cond_lowering_rule(
     index,
     *args,  # *consts, *ops
     branches,  # tuple(jaxprs)
-    linear,
 ):
   block_infos = ctx.block_infos
 
@@ -2572,7 +2571,6 @@ def _cond_lowering_rule(
           _sub(index, _ir_constant(1, index.type)),
           *args,
           branches=branches[1:],
-          linear=linear,
       )
     else:
       outs1 = lower_jaxpr_to_triton_ir(

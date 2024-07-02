@@ -282,7 +282,7 @@ class JaxprEqnContext:
             f"threefry_partitionable={self.threefry_partitionable})")
 
 
-class JaxprEqn(NamedTuple):
+class JaxprEqn:
   invars: list[Atom]
   outvars: list[Var]
   primitive: Primitive
@@ -290,6 +290,20 @@ class JaxprEqn(NamedTuple):
   effects: Effects
   source_info: source_info_util.SourceInfo
   ctx: JaxprEqnContext
+
+  # It's slightly faster to use a class with __slots__ than a NamedTuple.
+  __slots__ = ['invars', 'outvars', 'primitive', 'params', 'effects',
+               'source_info', 'ctx']
+
+  def __init__(self, invars, outvars, primitive, params, effects, source_info,
+               ctx):
+    self.invars = invars
+    self.outvars = outvars
+    self.primitive = primitive
+    self.params = params
+    self.effects = effects
+    self.source_info = source_info
+    self.ctx = ctx
 
   def __repr__(self):
     return str(pp_eqn(self, JaxprPpContext(), JaxprPpSettings())).rstrip()
@@ -304,7 +318,6 @@ class JaxprEqn(NamedTuple):
       source_info: source_info_util.SourceInfo | None = None,
       ctx: JaxprEqnContext | None = None
   ):
-    # It is slightly faster to rebuild the tuple directly than to call _replace.
     return JaxprEqn(
       self.invars if invars is None else invars,
       self.outvars if outvars is None else outvars,

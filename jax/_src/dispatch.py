@@ -330,7 +330,7 @@ def _override_get_device_assignment(sharding, *args, **kwargs):
 def _identity_fn(x):
   return x
 
-def _mcjax_reshard(x, target_sharding):
+def _different_device_order_reshard(x, target_sharding):
   from jax._src import api, array
 
   inp_sharding = x.sharding
@@ -410,7 +410,14 @@ def _device_put_sharding_impl(x, aval, device):
     if (not s.is_fully_addressable and
         isinstance(x, array.ArrayImpl) and not x.is_fully_addressable):
       assert isinstance(s, Sharding)
-      return _mcjax_reshard(x, s)
+      return _different_device_order_reshard(x, s)
+
+    if (s.is_fully_addressable and isinstance(x, array.ArrayImpl) and
+        x.is_fully_addressable and len(s.device_set) > 1 and
+        s._internal_device_list != x.sharding._internal_device_list and  # pytype: disable=attribute-error
+        s.device_set == x.sharding.device_set):
+      assert isinstance(s, Sharding)
+      return _different_device_order_reshard(x, s)
 
     if not s.is_fully_addressable:
       if ((isinstance(x, array.ArrayImpl) and not x._committed) or

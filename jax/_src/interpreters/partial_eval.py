@@ -1268,7 +1268,7 @@ def _partial_eval_jaxpr_custom_cached(
         map(partial(write, False, True), resvars)
         residuals.update(resvars)
         reload_eqn = core.JaxprEqn(
-            resvars, eqn.outvars, device_put_p,  # type: ignore
+            resvars, eqn.outvars, device_put_p,
             dict(devices=[TransferToMemoryKind(policy.src)], srcs=[None]),
             set(), source_info_util.new_source_info(),
             JaxprEqnContext(None, False))

@@ -2562,22 +2562,6 @@ class LaxControlFlowTest(jtu.JaxTestCase):
                   'tuple of ClosedJaxpr required: (4, 2)'),
         lambda: core.check_jaxpr(jaxpr))
 
-    jaxpr, eqn = new_jaxpr()
-    eqn.params['linear'] = (4, 2)
-    self.assertRaisesRegex(
-        core.JaxprTypeError,
-        re.escape('invalid cond param linear of type tuple, '
-                  'tuple of bool required: (4, 2)'),
-        lambda: core.check_jaxpr(jaxpr))
-
-    jaxpr, eqn = new_jaxpr()
-    eqn.params['linear'] = 'multi\nline'
-    self.assertRaisesRegex(
-        core.JaxprTypeError,
-        r'invalid cond param linear of type str, '
-        r'tuple of bool required:\r?\nmulti\r?\nline',
-        lambda: core.check_jaxpr(jaxpr))
-
   def test_cond_transformation_rule_with_consts(self):
     # https://github.com/google/jax/pull/9731
 

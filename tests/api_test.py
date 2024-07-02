@@ -6448,7 +6448,6 @@ class JaxprTest(jtu.JaxTestCase):
             p:f32[] = add n l
           in (p,) }
       )
-      linear=(False, False, False, False)
     ] e a a c d
   in (f,) }"""
     jaxpr = api.make_jaxpr(f)(jnp.float32(3.))
@@ -10028,8 +10027,7 @@ class CustomTransposeTest(jtu.JaxTestCase):
       return x + fn(y, x)
 
     def cond_wrap(f):
-      return lambda i, x: lax.cond(i > 0, f, lambda x: x, x,
-                                   linear=(True,))
+      return lambda i, x: lax.cond(i > 0, f, lambda x: x, x)
 
     i = 7.
     x = jnp.ones(2) * 6.
@@ -10053,8 +10051,7 @@ class CustomTransposeTest(jtu.JaxTestCase):
       return x + fn(y, x)
 
     def cond_wrap(f):
-      return lambda i, x: lax.cond(i > 0, f, lambda x: x, x,
-                                   linear=(True,))
+      return lambda i, x: lax.cond(i > 0, f, lambda x: x, x)
 
     i = 7.
     x = jnp.ones(2) * 6.

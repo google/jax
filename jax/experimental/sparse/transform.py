@@ -848,15 +848,14 @@ def _scan_sparse(spenv, *spvalues, jaxpr, num_consts, num_carry, **params):
 
 sparse_rules_bcoo[lax.scan_p] = _scan_sparse
 
-def _cond_sparse(spenv, pred, *operands, branches, linear, **params):
+def _cond_sparse(spenv, pred, *operands, branches, **params):
   sp_branches, treedefs = zip(*(_sparsify_jaxpr(spenv, jaxpr, *operands)
                                 for jaxpr in branches))
   _check_tree_and_avals("sparsified true_fun and false_fun output",
                         treedefs[0], sp_branches[0].out_avals,
                         treedefs[1], sp_branches[1].out_avals)
-  sp_linear = tuple(_duplicate_for_sparse_spvalues(operands, linear))
   args, _ = tree_flatten(spvalues_to_arrays(spenv, (pred, *operands)))
-  out_flat = lax.cond_p.bind(*args, branches=sp_branches, linear=sp_linear, **params)
+  out_flat = lax.cond_p.bind(*args, branches=sp_branches, **params)
   out = tree_unflatten(treedefs[0], out_flat)
   return arrays_to_spvalues(spenv, out)
 

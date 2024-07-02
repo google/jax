@@ -300,7 +300,7 @@ def _ndarray_constant_handler(val: np.ndarray | np.generic) -> Sequence[ir.Value
   """
   if val.dtype == dtypes.float0:
     return _numpy_array_constant(np.zeros(val.shape, dtype=np.bool_))
-  elif np.any(np.equal(0, val.strides)) and val.size > 0:
+  elif 0 in val.strides and val.size > 0:
     zero_stride_axes, = np.where(np.equal(0, val.strides))
     other_axes, = np.where(np.not_equal(0, val.strides))
     collapsed_val = val[tuple(0 if ax in zero_stride_axes else slice(None)  # type: ignore

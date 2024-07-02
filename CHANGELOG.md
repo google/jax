@@ -18,6 +18,9 @@ Remember to align the itemized text with the first line of an item within a list
   * `libdevice.10.bc` is no longer bundled with CUDA wheels. It must be
     installed either as a part of local CUDA installation, or via NVIDIA's CUDA
     pip wheels.
+  * {class}`jax.experimental.pallas.BlockSpec` now expects `block_shape` to
+    be passed *before* `index_map`. The old argument order is deprecated and
+    will be removed in a future release.
 * Deprecations
   * Removed a number of previously-deprecated internal APIs related to
     polymorphic shapes. From {mod}`jax.core`: removed `canonicalize_shape`,

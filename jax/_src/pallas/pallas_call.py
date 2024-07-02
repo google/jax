@@ -1033,7 +1033,7 @@ def pallas_call(
       a structure matching that of the outputs.
       See details at :ref:`pallas_blockspec`.
       The default value for `out_specs` specifies the whole array,
-      e.g., as `pl.BlockSpec(lambda *indices: indices, x.shape)`.
+      e.g., as ``pl.BlockSpec(x.shape, lambda *indices: indices)``.
     input_output_aliases: a dictionary mapping the index of some inputs to
       the index of the output that aliases them.
     interpret: runs the ``pallas_call`` as a ``jax.jit`` of a scan over the

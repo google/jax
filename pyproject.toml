@@ -61,6 +61,8 @@ filterwarnings = [
     "default:Special cases found for .* but none were parsed.*:UserWarning",
     "default:.*is not JSON-serializable. Using the repr instead.",
     # end array_api_tests-related warnings
+    # TODO(slebedev): Remove once we migrate all pl.BlockSpec usages in JAX.
+    "default:BlockSpec now expects .*:DeprecationWarning",
 ]
 doctest_optionflags = [
     "NUMBER",

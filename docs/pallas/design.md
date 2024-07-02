@@ -23,7 +23,7 @@ job of compiling user programs but inevitably some users hit XLA's
 limitations.
 In these cases, we need to provide an “escape hatch” to allow
 experts to write hand-tuned kernels that outperform XLA at that
-point in time. 
+point in time.
 Furthermore, advances in ML systems research take some time to be
 incorporated into XLA and users often want to run ahead with them.
 Over time, the compiler can incorporate the optimizations that were proven
@@ -431,10 +431,10 @@ add = pl.pallas_call(
     add_kernel,
     out_shape=jax.ShapeDtypeStruct((8,), jnp.int32),
     in_specs=[
-      pl.BlockSpec(lambda i: i, (2,)),
-      pl.BlockSpec(lambda i: i, (2,))
+        pl.BlockSpec((2,), lambda i: i),
+        pl.BlockSpec((2,), lambda i: i)
     ],
-    out_specs=pl.BlockSpec(lambda i: i, (2,)),
+    out_specs=pl.BlockSpec((2,), lambda i: i),
     grid=(4,))
 add(x, y)
 ```
@@ -465,10 +465,10 @@ def matmul(x, y, *, block_shape, activation):
       partial(matmul_kernel, block_k=block_k, activation=activation),
       out_shape=jax.ShapeDtypeStruct((x.shape[0], y.shape[1],), jnp.float32),
       in_specs=[
-        pl.BlockSpec(lambda i, j: (i, 0), (block_m, x.shape[1])),
-        pl.BlockSpec(lambda i, j: (0, j), (y.shape[0], block_n))
+          pl.BlockSpec((block_m, x.shape[1]), lambda i, j: (i, 0)),
+          pl.BlockSpec((y.shape[0], block_n), lambda i, j: (0, j))
       ],
-      out_specs=pl.BlockSpec(lambda i, j: (i, j), (block_m, block_n)),
+      out_specs=pl.BlockSpec((block_m, block_n), lambda i, j: (i, j)),
       grid=(4, 4),
   )
   return fused_matmul(x, y)

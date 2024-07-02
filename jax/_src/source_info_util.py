@@ -142,9 +142,16 @@ def new_name_stack(name: str = '') -> NameStack:
   return name_stack
 
 
-class SourceInfo(NamedTuple):
+class SourceInfo:
   traceback: Traceback | None
   name_stack: NameStack
+
+  # It's slightly faster to use a class with __slots__ than a NamedTuple.
+  __slots__ = ['traceback', 'name_stack']
+
+  def __init__(self, traceback: Traceback | None, name_stack: NameStack):
+    self.traceback = traceback
+    self.name_stack = name_stack
 
   def replace(self, *, traceback: Traceback | None = None,
       name_stack: NameStack | None = None) -> SourceInfo:

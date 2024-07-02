@@ -81,9 +81,10 @@ We use the `pallas_call` higher-order function.
 ```{code-cell} ipython3
 @jax.jit
 def add_vectors(x: jax.Array, y: jax.Array) -> jax.Array:
-  return pl.pallas_call(add_vectors_kernel,
-                        out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype)
-                        )(x, y)
+  return pl.pallas_call(
+      add_vectors_kernel,
+      out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype)
+  )(x, y)
 add_vectors(jnp.arange(8), jnp.arange(8))
 ```
 
@@ -272,12 +273,12 @@ the computation 4 ways. We split up `z` into 4 `(512, 512)` blocks where
 each block is computed with a `(512, 1024) x (1024, 512)` matrix multiplication.
 To express this, we'd first use a `(2, 2)` grid (one block for each program).
 
-For `x`, we use `BlockSpec(lambda i, j: (i, 0), (512, 1024))`  -- this
+For `x`, we use `BlockSpec((512, 1024), lambda i, j: (i, 0))`  -- this
 carves `x` up into "row" blocks.
 To see this see how both program instances
 `(1, 0)` and `(1, 1)` pick the `(1, 0)` block in `x`.
-For `y`, we use a transposed version `BlockSpec(lambda i, j: (0, j), (1024, 512))`.
-Finally, for `z` we use `BlockSpec(lambda i, j: (i, j), (512, 512))`.
+For `y`, we use a transposed version `BlockSpec((1024, 512), lambda i, j: (0, j))`.
+Finally, for `z` we use `BlockSpec((512, 512), lambda i, j: (i, j))`.
 
 These `BlockSpec`s are passed into `pallas_call` via `in_specs` and `out_specs`.
 
@@ -296,11 +297,11 @@ def matmul(x: jax.Array, y: jax.Array):
     out_shape=jax.ShapeDtypeStruct((x.shape[0], y.shape[1]), x.dtype),
     grid=(2, 2),
     in_specs=[
-      pl.BlockSpec(lambda i, j: (i, 0), (x.shape[0] // 2, x.shape[1])),
-      pl.BlockSpec(lambda i, j: (0, j), (y.shape[0], y.shape[1] // 2))
+        pl.BlockSpec((x.shape[0] // 2, x.shape[1]), lambda i, j: (i, 0)),
+        pl.BlockSpec((y.shape[0], y.shape[1] // 2), lambda i, j: (0, j))
     ],
     out_specs=pl.BlockSpec(
-      lambda i, j: (i, j), (x.shape[0] // 2, y.shape[1] // 2)
+        (x.shape[0] // 2, y.shape[1] // 2), lambda i, j: (i, j),
     )
   )(x, y)
 k1, k2 = jax.random.split(jax.random.key(0))
@@ -325,11 +326,11 @@ def matmul(x: jax.Array, y: jax.Array, *, activation):
     out_shape=jax.ShapeDtypeStruct((x.shape[0], y.shape[1]), x.dtype),
     grid=(2, 2),
     in_specs=[
-      pl.BlockSpec(lambda i, j: (i, 0), (x.shape[0] // 2, x.shape[1])),
-      pl.BlockSpec(lambda i, j: (0, j), (y.shape[0], y.shape[1] // 2))
+        pl.BlockSpec((x.shape[0] // 2, x.shape[1]), lambda i, j: (i, 0)),
+        pl.BlockSpec((y.shape[0], y.shape[1] // 2), lambda i, j: (0, j))
     ],
     out_specs=pl.BlockSpec(
-      lambda i, j: (i, j), (x.shape[0] // 2, y.shape[1] // 2)
+        (x.shape[0] // 2, y.shape[1] // 2), lambda i, j: (i, j)
     ),
   )(x, y)
 k1, k2 = jax.random.split(jax.random.key(0))
