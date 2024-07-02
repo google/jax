@@ -2620,7 +2620,7 @@ def clone(key):
   Outside the context of key reuse checking (see :mod:`jax.experimental.key_reuse`)
   this function operates as an identity.
 
-  Example:
+  Examples:
 
     >>> import jax
     >>> key = jax.random.key(0)

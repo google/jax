@@ -31,10 +31,10 @@ jax::Trsm<double>::FnType dtrsm_;
 jax::Trsm<std::complex<float>>::FnType ctrsm_;
 jax::Trsm<std::complex<double>>::FnType ztrsm_;
 
-jax::Getrf<float>::FnType sgetrf_;
-jax::Getrf<double>::FnType dgetrf_;
-jax::Getrf<std::complex<float>>::FnType cgetrf_;
-jax::Getrf<std::complex<double>>::FnType zgetrf_;
+jax::LuDecomposition<ffi::DataType::F32>::FnType sgetrf_;
+jax::LuDecomposition<ffi::DataType::F64>::FnType dgetrf_;
+jax::LuDecomposition<ffi::DataType::C64>::FnType cgetrf_;
+jax::LuDecomposition<ffi::DataType::C128>::FnType zgetrf_;
 
 jax::Geqrf<float>::FnType sgeqrf_;
 jax::Geqrf<double>::FnType dgeqrf_;
@@ -87,6 +87,18 @@ namespace jax {
 
 #define JAX_KERNEL_FNTYPE_MISMATCH_MSG "FFI Kernel FnType mismatch"
 
+static_assert(std::is_same_v<jax::LuDecomposition<ffi::DataType::F32>::FnType,
+                             jax::Getrf<float>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::LuDecomposition<ffi::DataType::F64>::FnType,
+                             jax::Getrf<double>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::LuDecomposition<ffi::DataType::C64>::FnType,
+                             jax::Getrf<std::complex<float>>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(std::is_same_v<jax::LuDecomposition<ffi::DataType::C128>::FnType,
+                             jax::Getrf<std::complex<double>>::FnType>,
+              JAX_KERNEL_FNTYPE_MISMATCH_MSG);
 static_assert(
     std::is_same_v<jax::CholeskyFactorization<ffi::DataType::F32>::FnType,
                    jax::Potrf<float>::FnType>,
@@ -163,6 +175,11 @@ static auto init = []() -> int {
   AssignKernelFn<Sytrd<std::complex<double>>>(zhetrd_);
 
   // FFI Kernels
+
+  AssignKernelFn<LuDecomposition<ffi::DataType::F32>>(sgetrf_);
+  AssignKernelFn<LuDecomposition<ffi::DataType::F64>>(dgetrf_);
+  AssignKernelFn<LuDecomposition<ffi::DataType::C64>>(cgetrf_);
+  AssignKernelFn<LuDecomposition<ffi::DataType::C128>>(zgetrf_);
 
   AssignKernelFn<CholeskyFactorization<ffi::DataType::F32>>(spotrf_);
   AssignKernelFn<CholeskyFactorization<ffi::DataType::F64>>(dpotrf_);

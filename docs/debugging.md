@@ -15,6 +15,8 @@ kernelspec:
 (debugging)=
 # Introduction to debugging
 
+<!--* freshness: { reviewed: '2024-05-10' } *-->
+
 This section introduces you to a set of built-in JAX debugging methods — {func}`jax.debug.print`, {func}`jax.debug.breakpoint`, and {func}`jax.debug.callback` — that you can use with various JAX transformations.
 
 Let's begin with {func}`jax.debug.print`.

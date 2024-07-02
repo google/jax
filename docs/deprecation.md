@@ -1,6 +1,8 @@
 (version-support-policy)=
 # Python and NumPy version support policy
 
+<!--* freshness: { reviewed: '2024-05-02' } *-->
+
 For NumPy and SciPy version support, JAX follows the Python scientific community's
 [SPEC 0](https://scientific-python.org/specs/spec-0000/).
 

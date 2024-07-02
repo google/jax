@@ -1,5 +1,7 @@
 # Profiling JAX programs
 
+<!--* freshness: { reviewed: '2024-03-18' } *-->
+
 ## Viewing program traces with Perfetto
 
 We can use the JAX profiler to generate traces of a JAX program that can be

@@ -15,12 +15,13 @@
 """Module for emitting custom TPU pipelines within a Pallas call."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 import dataclasses
 import enum
 import functools
 import itertools
 import operator
-from typing import Optional, Union, Any, Sequence
+from typing import Union, Any
 
 import jax
 from jax import lax
@@ -201,12 +202,12 @@ class BufferedRef:
   spec: pl.BlockSpec       # static metadata
   dtype: Any               # static metadata
   buffer_type: BufferType  # static metadata
-  vmem_ref: Optional[REF]
-  accum_ref: Optional[REF]
-  current_slot: Optional[ArrayRef]
-  next_slot: Optional[ArrayRef]
-  sem_recv: Optional[SemaphoreType]
-  sem_send: Optional[SemaphoreType]
+  vmem_ref: REF | None
+  accum_ref: REF | None
+  current_slot: ArrayRef | None
+  next_slot: ArrayRef | None
+  sem_recv: SemaphoreType | None
+  sem_send: SemaphoreType | None
 
   def tree_flatten(self):
     return ((self.vmem_ref, self.accum_ref, self.current_slot,
@@ -218,7 +219,7 @@ class BufferedRef:
     return cls(*meta, *data)
 
   @classmethod
-  def create(cls, spec, dtype, buffer_type) -> 'BufferedRef':
+  def create(cls, spec, dtype, buffer_type) -> BufferedRef:
     """Create a BufferedRef.
 
     Args:
@@ -800,28 +801,60 @@ def _partition_grid(
         "Cannot partition over cores without parallel grid dimensions:"
         f" {dimension_semantics=}"
     )
-
+  if all(not isinstance(grid[i], int) for i in parallel_dimensions):
+    raise NotImplementedError(
+        f"Cannot partition cores over only dynamic grid dimensions: {grid=}"
+    )
   # Try to find a divisible dimension to partition the grid on
   divisible_dimensions = {
       i for i in parallel_dimensions
       if isinstance(grid[i], int) and grid[i] % num_cores == 0
   }
-  if not divisible_dimensions:
-    # TODO(sharadmv): enable uneven grid partitioning
-    raise NotImplementedError(
-        f"Uneven partitioning of grid not supported: {grid=}, {num_cores=}"
+  if divisible_dimensions:
+    first_divisible_dimension, *_ = (
+        i for i in range(len(dimension_semantics)) if i in divisible_dimensions
     )
-  first_divisible_dimension, *_ = [
-      i for i in range(len(dimension_semantics)) if i in divisible_dimensions
-  ]
-  partitioned_dim_size = grid[first_divisible_dimension] // num_cores
-  partitioned_dim_offset = pl.program_id(core_axis) * partitioned_dim_size
-  new_grid = jax_util.tuple_update(
-      grid, first_divisible_dimension, partitioned_dim_size
-  )
-  offsets = jax_util.tuple_update(
-      (0,) * len(grid), first_divisible_dimension, partitioned_dim_offset
-  )
+    partitioned_dim_size = grid[first_divisible_dimension] // num_cores
+    partitioned_dim_offset = pl.program_id(core_axis) * partitioned_dim_size
+    new_grid = jax_util.tuple_update(
+        grid, first_divisible_dimension, partitioned_dim_size
+    )
+    offsets = jax_util.tuple_update(
+        (0,) * len(grid), first_divisible_dimension, partitioned_dim_offset
+    )
+  else:
+    # No divisible dimensions, so we can't evenly partition the grid. Let's pick
+    # the largest dimension and try to divide it as evenly as possible.
+    # TODO(sharadmv): take the product of many nondivisible dimensions to
+    # potentially divide it more evenly
+    largest_parallel_dimension = max(grid[i] for i in parallel_dimensions
+                                     if isinstance(grid[i], int))  # type: ignore
+    partition_dimension, *_ = (
+        i
+        for i, d in enumerate(grid)
+        if isinstance(d, int) and d == largest_parallel_dimension
+    )
+    base_num_iters, rem = divmod(grid[partition_dimension], num_cores)
+    assert rem > 0, rem
+    # We have some remainder iterations that we need to assign somewhere. We
+    # know that rem < num_cores, so we can assign one extra iteration to each
+    # core except for the last (num_cores - rem).
+    core_index = pl.program_id(core_axis)
+    num_iters = jnp.where(core_index < rem, base_num_iters + 1,
+                          base_num_iters)
+    new_grid = jax_util.tuple_update(grid, partition_dimension, num_iters)
+    # Ordinarily, we would compute the offset as:
+    #   grid_offset = pl.program_id(core_axis) * num_iters
+    # However, since we have some cores that don't have an extra iteration, we
+    # need to adjust the offset by `rem`.
+    grid_offset = jnp.where(
+        core_index < rem,
+        core_index * num_iters,
+        core_index * base_num_iters + rem,
+    )
+    offsets = jax_util.tuple_update(
+        (0,) * len(grid), partition_dimension, grid_offset
+    )
   return new_grid, offsets
 
 
@@ -857,6 +890,11 @@ def emit_pipeline(
     dimension_semantics: optional tuple of GridDimensionSemantics (e.g. PARALLEL
       or ARBITRARY).
   """
+  if any(not isinstance(d, (int, jax.Array)) for d in grid):
+    grid_types = tuple(type(d) for d in grid)
+    raise ValueError(
+        f"Grid must consist of Python integers and JAX Arrays: {grid_types}"
+    )
   grid, grid_offsets = _partition_grid(grid, core_axis, dimension_semantics)
 
   num_steps = _grid_size(grid)

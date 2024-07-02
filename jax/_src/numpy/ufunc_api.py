@@ -16,10 +16,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 import math
 import operator
-from typing import Any, Callable
+from typing import Any
 
 import jax
 from jax._src.typing import Array, ArrayLike, DTypeLike

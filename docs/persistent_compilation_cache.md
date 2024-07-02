@@ -1,5 +1,7 @@
 # Persistent Compilation Cache
 
+<!--* freshness: { reviewed: '2024-04-09' } *-->
+
 JAX has an optional disk cache for compiled programs. If enabled, JAX will
 store copies of compiled programs on disk, which can save recompilation time
 when running the same or similar tasks repeatedly.

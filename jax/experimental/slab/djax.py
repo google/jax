@@ -14,9 +14,9 @@
 
 from __future__ import annotations
 
-from functools import partial
-from typing import Callable
 import collections
+from collections.abc import Callable
+from functools import partial
 import sys
 
 import numpy as np

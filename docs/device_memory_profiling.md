@@ -1,5 +1,6 @@
 # Device Memory Profiling
 
+<!--* freshness: { reviewed: '2024-03-08' } *-->
 
 ```{note}
 May 2023 update: we recommend using [Tensorboard

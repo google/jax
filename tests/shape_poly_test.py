@@ -16,13 +16,13 @@
 from __future__ import annotations
 
 import enum
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import cProfile
 import itertools
 import math
 import os
 from pstats import Stats
-from typing import Any, Callable
+from typing import Any
 import unittest
 
 from absl import logging

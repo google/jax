@@ -40,7 +40,7 @@ if CAN_USE_HYPOTHESIS:
       database=None,
       derandomize=True,
       deadline=None,
-      max_examples=50,
+      max_examples=200,
       print_blob=True,
   )
   hp.settings.load_profile('deterministic')
@@ -154,10 +154,10 @@ class PallasCallPipelineTest(parameterized.TestCase):
           matmul_pipeline,
           grid=(4, 4, 4),
           in_specs=[
-              pl.BlockSpec(lambda i, j, k: (i, k), (128, 128)),
-              pl.BlockSpec(lambda i, j, k: (k, j), (128, 128)),
+              pl.BlockSpec((128, 128), lambda i, j, k: (i, k)),
+              pl.BlockSpec((128, 128), lambda i, j, k: (k, j)),
           ],
-          out_specs=pl.BlockSpec(lambda i, j, k: (i, j), (128, 128)),
+          out_specs=pl.BlockSpec((128, 128), lambda i, j, k: (i, j)),
       )(x_ref, y_ref, z_ref)
 
     z = pl.pallas_call(
@@ -201,10 +201,10 @@ class PallasCallPipelineTest(parameterized.TestCase):
             matmul_pipeline,
             grid=(4, 4, 4),
             in_specs=[
-                pl.BlockSpec(lambda i, j, k: (i, k), (128, 128)),
-                pl.BlockSpec(lambda i, j, k: (k, j), (128, 128)),
+                pl.BlockSpec((128, 128), lambda i, j, k: (i, k)),
+                pl.BlockSpec((128, 128), lambda i, j, k: (k, j)),
             ],
-            out_specs=pl.BlockSpec(lambda i, j, k: (i, j), (128, 128)),
+            out_specs=pl.BlockSpec((128, 128), lambda i, j, k: (i, j)),
             should_accumulate_out=should_accumulate_out,
         )(x_ref, y_ref, z_ref)
 
@@ -263,11 +263,11 @@ class PallasCallCollectivePipelineTest(parameterized.TestCase):
 
     inner_allocs = [
         pltpu.BufferedRef.input(
-            pl.BlockSpec(lambda n, m, k: (m, k), (tm, tk)), input_dtype),
+            pl.BlockSpec((tm, tk), lambda n, m, k: (m, k)), input_dtype),
         pltpu.BufferedRef.input(
-            pl.BlockSpec(lambda n, m, k: (k, n), (tk, tn)), input_dtype),
+            pl.BlockSpec((tk, tn), lambda n, m, k: (k, n)), input_dtype),
         pltpu.BufferedRef.accumulator(
-            pl.BlockSpec(lambda n, m, k: (m, n), (tm, tn)), out_dtype),
+            pl.BlockSpec((tm, tn), lambda n, m, k: (m, n)), out_dtype),
         ]
 
     def all_gather_lhs_matmul_kernel(
@@ -560,11 +560,11 @@ class PallasCallCollectivePipelineTest(parameterized.TestCase):
 
     inner_allocs = [
         pltpu.BufferedRef.input(
-            pl.BlockSpec(lambda n, m, k: (m, k), (tm, tk)), input_dtype),
+            pl.BlockSpec((tm, tk), lambda n, m, k: (m, k)), input_dtype),
         pltpu.BufferedRef.input(
-            pl.BlockSpec(lambda n, m, k: (k, n), (tk, tn)), input_dtype),
+            pl.BlockSpec((tk, tn), lambda n, m, k: (k, n)), input_dtype),
         pltpu.BufferedRef.accumulator(
-            pl.BlockSpec(lambda n, m, k: (m, n), (tm, tn)), out_dtype),
+            pl.BlockSpec((tm, tn), lambda n, m, k: (m, n)), out_dtype),
         ]
 
     def all_gather_lhs_matmul_kernel(
@@ -807,16 +807,16 @@ class PallasCallCollectivePipelineTest(parameterized.TestCase):
 
     inner_allocs = [
         pltpu.BufferedRef.input(
-            pl.BlockSpec(lambda n, m, k: (m, k), (tm, tk)), input_dtype),
+            pl.BlockSpec((tm, tk), lambda n, m, k: (m, k)), input_dtype),
         pltpu.BufferedRef.input(
-            pl.BlockSpec(lambda n, m, k: (k, n), (tk, tn)), input_dtype),
+            pl.BlockSpec((tk, tn), lambda n, m, k: (k, n)), input_dtype),
         pltpu.BufferedRef.accumulator(
-            pl.BlockSpec(lambda n, m, k: (m, n), (tm, tn)), out_dtype),
+            pl.BlockSpec((tm, tn), lambda n, m, k: (m, n)), out_dtype),
         # only used for final addition of fwd + bwd streams.
         pltpu.BufferedRef.input(
-            pl.BlockSpec(lambda m: (m, 0), (tm, n)), out_dtype),
+            pl.BlockSpec((tm, n), lambda m: (m, 0)), out_dtype),
         pltpu.BufferedRef.accumulator(
-            pl.BlockSpec(lambda m: (m, 0), (tm, n)), out_dtype),
+            pl.BlockSpec((tm, n), lambda m: (m, 0)), out_dtype),
         ]
 
     def reduce_scatter_lhs_matmul_kernel(
@@ -1083,11 +1083,11 @@ class PallasCallCollectivePipelineTest(parameterized.TestCase):
 
     inner_allocs = [
         pltpu.BufferedRef.input(
-            pl.BlockSpec(lambda n, m, k: (m, k), (tm, tk)), input_dtype),
+            pl.BlockSpec((tm, tk), lambda n, m, k: (m, k)), input_dtype),
         pltpu.BufferedRef.input(
-            pl.BlockSpec(lambda n, m, k: (k, n), (tk, tn)), input_dtype),
+            pl.BlockSpec((tk, tn), lambda n, m, k: (k, n)), input_dtype),
         pltpu.BufferedRef.accumulator(
-            pl.BlockSpec(lambda n, m, k: (m, n), (tm, tn)), out_dtype),
+            pl.BlockSpec((tm, tn), lambda n, m, k: (m, n)), out_dtype),
         ]
 
     def reduce_scatter_lhs_matmul_kernel(
@@ -1316,6 +1316,40 @@ class PallasCallMegacoreTest(parameterized.TestCase):
 
     super().setUp()
 
+  def test_can_partition_nondivisible_grid_with_dynamic_dimensions(self):
+
+    def mul_pipeline(x_ref, y_ref):
+      y_ref[...] = x_ref[...] * 2
+
+    def mul_kernel(iters_ref, x_ref, y_ref):
+      pltpu.emit_pipeline(
+          mul_pipeline,
+          grid=(iters_ref[0], 5),
+          in_specs=[
+              pl.BlockSpec((128, 128), lambda i, j: (i, j)),
+          ],
+          out_specs=pl.BlockSpec((128, 128), lambda i, j: (i, j)),
+          core_axis=0,
+          dimension_semantics=(pltpu.PARALLEL, pltpu.PARALLEL),
+      )(x_ref, y_ref)
+
+    num_cores = jax.devices()[0].num_cores
+    func = pl.pallas_call(
+        mul_kernel,
+        out_shape=jax.ShapeDtypeStruct((640, 640), jnp.float32),
+        grid_spec=pltpu.PrefetchScalarGridSpec(
+            num_scalar_prefetch=1,
+            in_specs=[
+                pl.BlockSpec(memory_space=pltpu.ANY),
+            ],
+            out_specs=pl.BlockSpec(memory_space=pltpu.ANY),
+            grid=(num_cores,),
+        ),
+        compiler_params=dict(mosaic=dict(dimension_semantics=('parallel',))),
+    )
+    x = jax.random.uniform(jax.random.key(0), (640, 640))
+    np.testing.assert_allclose(func(jnp.array([5]), x), x * 2)
+
   def test_megacore_mul(self):
     x = jax.random.uniform(jax.random.key(0), (512, 512))
 
@@ -1327,9 +1361,9 @@ class PallasCallMegacoreTest(parameterized.TestCase):
           matmul_pipeline,
           grid=(4, 4),
           in_specs=[
-              pl.BlockSpec(lambda i, j: (i, j), (128, 128)),
+              pl.BlockSpec((128, 128), lambda i, j: (i, j)),
           ],
-          out_specs=pl.BlockSpec(lambda i, j: (i, j), (128, 128)),
+          out_specs=pl.BlockSpec((128, 128), lambda i, j: (i, j)),
           core_axis=0,
           dimension_semantics=(pltpu.ARBITRARY, pltpu.PARALLEL)
       )(x_ref, y_ref)
@@ -1351,6 +1385,7 @@ class PallasCallMegacoreTest(parameterized.TestCase):
       (1024, 1024, 1024, 256, 512, 256),
       (768, 1024, 1024, 256, 512, 256),
       (1024, 1024, 768, 256, 512, 256),
+      (768, 1024, 768, 256, 512, 256),
   )
   def test_megacore_matmul(self, m, k, n, bm, bk, bn):
     k1, k2 = jax.random.split(jax.random.key(42))
@@ -1366,14 +1401,15 @@ class PallasCallMegacoreTest(parameterized.TestCase):
     def matmul_kernel(x_ref, y_ref, z_ref, *, bm, bk, bn):
       m, k = x_ref.shape
       _, n = y_ref.shape
+      assert k % bk == 0
       pltpu.emit_pipeline(
           matmul_pipeline,
-          grid=(m // bm, n // bn, k // bk),
+          grid=(pl.cdiv(m, bm), pl.cdiv(n, bn), pl.cdiv(k, bk)),
           in_specs=[
-              pl.BlockSpec(lambda i, j, k: (i, k), (bm, bk)),
-              pl.BlockSpec(lambda i, j, k: (k, j), (bk, bn)),
+              pl.BlockSpec((bm, bk), lambda i, j, k: (i, k)),
+              pl.BlockSpec((bk, bn), lambda i, j, k: (k, j)),
           ],
-          out_specs=pl.BlockSpec(lambda i, j, k: (i, j), (bm, bn)),
+          out_specs=pl.BlockSpec((bm, bn), lambda i, j, k: (i, j)),
           core_axis=0,
           dimension_semantics=(pltpu.PARALLEL, pltpu.PARALLEL, pltpu.ARBITRARY)
       )(x_ref, y_ref, z_ref)
@@ -1403,30 +1439,23 @@ if CAN_USE_HYPOTHESIS:
 
     def kernel(x_hbm_ref, y_hbm_ref, o_hbm_ref):
 
-      # Partition iteration space according to number of cores
-      core_index = pl.program_id(0)
-      num_cores = pl.num_programs(0)
-      num_m_iters = pl.cdiv(m, bm)
-      # Floor divide to get number of iterations per core
-      iterations_per_core = jax.lax.div(num_m_iters, num_cores)
-      # Last core gets the remainder of iterations
-      num_iters_on_this_core = jnp.where(
-          core_index == num_cores - 1,
-          iterations_per_core + jax.lax.rem(num_m_iters, num_cores),
-          iterations_per_core,
-      )
-      m_offset = core_index * iterations_per_core
-      grid = (num_iters_on_this_core, pl.cdiv(n, bn), pl.cdiv(k, bk))
+      grid = (pl.cdiv(m, bm), pl.cdiv(n, bn), pl.cdiv(k, bk))
 
       def run(acc_scratch_ref):
         pltpu.emit_pipeline(
             partial(basic_matmul_kernel, acc_scratch_ref=acc_scratch_ref, k=k),
             in_specs=[
-                pl.BlockSpec(lambda i, j, k: (m_offset + i, k), (bm, bk)),
-                pl.BlockSpec(lambda i, j, k: (k, j), (bk, bn)),
+                pl.BlockSpec((bm, bk), lambda i, j, k: (i, k)),
+                pl.BlockSpec((bk, bn), lambda i, j, k: (k, j)),
             ],
-            out_specs=pl.BlockSpec(lambda i, j, k: (m_offset + i, j), (bm, bn)),
+            out_specs=pl.BlockSpec((bm, bn), lambda i, j, k: (i, j)),
             grid=grid,
+            core_axis=0,
+            dimension_semantics=(
+                pltpu.PARALLEL,
+                pltpu.PARALLEL,
+                pltpu.ARBITRARY,
+            ),
         )(x_hbm_ref, y_hbm_ref, o_hbm_ref)
 
       accum_dtype = (

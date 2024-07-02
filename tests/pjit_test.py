@@ -39,7 +39,7 @@ from jax.errors import JAXTypeError
 from jax import lax
 from jax.lax import with_sharding_constraint
 from jax._src import prng
-from jax.sharding import PartitionSpec as P
+from jax.sharding import PartitionSpec as P, Mesh
 from jax.experimental import multihost_utils
 from jax.experimental.custom_partitioning import custom_partitioning
 from jax._src import array
@@ -4219,6 +4219,26 @@ class ArrayPjitTest(jtu.JaxTestCase):
     compiled2 = lowered2.compile()
     out2 = compiled2(jnp.arange(8))
     self.assertArraysEqual(out2, np.arange(8) * 2)
+
+  def test_device_put_efficient_reshard_single_host(self):
+    if jax.device_count() < 4:
+      self.skipTest('Requires >= 4 devices')
+
+    dev = jax.devices()
+    mesh1 = Mesh(np.array([dev[0], dev[1], dev[2], dev[3]]).reshape(2, 2),
+                 ('x', 'y'))
+    mesh2 = Mesh(np.array([dev[3], dev[2], dev[1], dev[0]]).reshape(2, 2),
+                 ('x', 'y'))
+    np_inp = np.arange(16).reshape(8, 2)
+    s1 = NamedSharding(mesh1, P('x', 'y'))
+    s2 = NamedSharding(mesh2, P('x'))
+
+    x_s1 = jax.device_put(np_inp, s1)
+
+    with jax.transfer_guard('disallow_explicit'):
+      out = jax.device_put(x_s1, s2)
+    self.assertArraysEqual(out, np_inp)
+    self.assertEqual(out.sharding, s2)
 
 
 def spec_regex(s):

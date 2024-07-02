@@ -2,6 +2,8 @@
 
 # Ahead-of-time lowering and compilation
 
+<!--* freshness: { reviewed: '2024-06-12' } *-->
+
 JAX offers several transformations, such as `jax.jit` and `jax.pmap`, returning
 a function that is compiled and runs on accelerators or the CPU. As the JIT
 acronym indicates, all compilation happens _just-in-time_ for execution.

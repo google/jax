@@ -15,7 +15,6 @@
 from __future__ import annotations
 
 import jax
-from typing import Tuple
 from jax._src.sharding import Sharding
 from jax._src.lib import xla_client as xc
 from jax._src import dtypes as _dtypes, config
@@ -71,7 +70,7 @@ class __array_namespace_info__:
   def dtypes(
       self, *,
       device: xc.Device | Sharding | None = None,
-      kind: str | Tuple[str, ...] | None = None):
+      kind: str | tuple[str, ...] | None = None):
     # Array API supported dtypes are device-independent in JAX
     del device
     data_types = self._build_dtype_dict()

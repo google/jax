@@ -14,10 +14,10 @@
 from __future__ import annotations
 
 import collections
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 import dataclasses
 from functools import partial
-from typing import Any, Callable, Union
+from typing import Any, Union
 
 import numpy as np
 

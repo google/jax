@@ -179,7 +179,7 @@ def initialize(coordinator_address: str | None = None,
     RuntimeError: If :func:`~jax.distributed.initialize` is called more than once
       or if called after the backend is already initialized.
 
-  Example:
+  Examples:
 
   Suppose there are two GPU processes, and process 0 is the designated coordinator
   with address ``10.0.0.1:1234``. To initialize the GPU cluster, run the

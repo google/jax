@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import functools
 import itertools
 import operator
-from typing import Callable
 
 from jax._src import api
 from jax._src import util

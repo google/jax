@@ -18,9 +18,10 @@ An implementation of sourcemaps following `TC39 <https://tc39.es/source-map>`_.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 import json
-from typing import Iterable, Sequence, Union
+from typing import Union
 
 # A Segment encodes how parts in the generated source relate to the original source.
 # Each segment is made up of 1, 4 or 5 variable-length fields. For their semantics see

@@ -40,11 +40,11 @@ limitations under the License.
 #include <string>
 #include <vector>
 
+#include "third_party/absl/status/statusor.h"
 #include "xla/literal.h"
 #include "xla/literal_util.h"
 #include "xla/pjrt/cpu/cpu_client.h"
 #include "xla/pjrt/pjrt_client.h"
-#include "xla/statusor.h"
 #include "xla/tools/hlo_module_loader.h"
 #include "tsl/platform/init_main.h"
 #include "tsl/platform/logging.h"

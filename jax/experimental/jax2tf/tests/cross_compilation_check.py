@@ -26,12 +26,11 @@ currently saved file with the saved one.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import contextlib
 import dataclasses
 import os
 import re
-from typing import Callable, Optional
 import zlib
 
 from absl import app

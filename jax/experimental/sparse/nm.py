@@ -182,7 +182,7 @@ if gpu_sparse.cuda_is_supported:
   mlir.register_lowering(nm_spmm_p, _nm_spmm_gpu_lowering, platform="cuda")
 
 if gpu_sparse.rocm_is_supported:
-  mlir.register_lowering(nm_spmm_p, _nm_spmm_gpu_lowering, platform="ROCM")
+  mlir.register_lowering(nm_spmm_p, _nm_spmm_gpu_lowering, platform="rocm")
 
 # --------------------------------------------------------------------
 # nm_pack

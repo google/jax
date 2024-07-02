@@ -14,10 +14,12 @@
 # ==============================================================================
 """Utilities for code generator."""
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 import contextlib
 import dataclasses
-from typing import Any, Literal, Sequence
+import enum
+import functools
+from typing import Any, Literal
 
 import jax
 from jaxlib.mlir import ir
@@ -101,12 +103,6 @@ def c(val: int | float, ty):
   return arith.constant(ty, attr)
 
 
-def get_tensormap_descriptor(**attrs):
-  return ir.Type.parse(
-      f"!nvgpu.tensormap.descriptor<{', '.join(k + '=' + v for k, v in attrs.items())}>"
-  )
-
-
 def debug_print(fmt, *args, uniform=True):
   type_formats = []
   new_args = []
@@ -116,10 +112,8 @@ def debug_print(fmt, *args, uniform=True):
       ty_format = "%llu"
     if ir.IntegerType.isinstance(arg.type):
       width = ir.IntegerType(arg.type).width
-      if width == 64:
-        ty_format = "%llu"
-      elif width == 1:
-        ty_format = "%llu"
+      ty_format = "%llu"
+      if width < 64:
         arg = arith.extui(ir.IntegerType.get_signless(64), arg)
     if ir.F32Type.isinstance(arg.type):
       ty_format = "%f"
@@ -130,7 +124,11 @@ def debug_print(fmt, *args, uniform=True):
       raise NotImplementedError(arg.type)
     type_formats.append(ty_format)
     new_args.append(arg)
-  ctx = single_thread if uniform else contextlib.nullcontext
+  ctx = (
+      functools.partial(single_thread, per_block=False)
+      if uniform
+      else contextlib.nullcontext
+  )
   with ctx():
     gpu.printf(fmt.format(*type_formats) + "\n", new_args)
 
@@ -214,31 +212,45 @@ def warpgroup_idx(sync=True):
   return _warp_bcast(wg_idx) if sync else wg_idx
 
 
+class ThreadSubset(enum.IntEnum):
+  WARPGROUP = enum.auto()
+  BLOCK = enum.auto()
+
+
 # True withon `once()` contexts.
-_ONCE_REGION_ACTIVE = False
+_ONCE_PER: ThreadSubset | None = None
 
 
 @contextlib.contextmanager
-def single_thread():
-  """Runs the context only from a single thread."""
-  global _ONCE_REGION_ACTIVE
+def single_thread(per_block=True):
+  """Runs the context only from a single thread.
 
-  if _ONCE_REGION_ACTIVE:
+  Args:
+    per_block: If True, only one thread per block will run the context.
+      Otherwise, only one thread per warp group will run the context.
+  """
+  global _ONCE_PER
+  scope = ThreadSubset.BLOCK if per_block else ThreadSubset.WARPGROUP
+  # If we're already in a single-thread context, we don't have to do anything.
+  if _ONCE_PER is not None and _ONCE_PER >= scope:
     yield
     return
 
   warp = warp_idx()
+  if not per_block:
+    warp = arith.remui(warp, c(4, warp.type))
   first_warp = arith.cmpi(arith.CmpIPredicate.eq, warp, c(0, warp.type))
   elected = nvvm.elect_sync(ir.IntegerType.get_signless(1))
   should_run = arith.andi(first_warp, elected)
   if_op = scf.IfOp(should_run)
-  _ONCE_REGION_ACTIVE = True
+  prev_scope = _ONCE_PER
+  _ONCE_PER = scope
   try:
     with ir.InsertionPoint(if_op.then_block):
       yield
       scf.YieldOp([])
   finally:
-    _ONCE_REGION_ACTIVE = False
+    _ONCE_PER = prev_scope
 
 
 def clock():
@@ -499,7 +511,7 @@ class BarrierArray:
     i32 = ir.IntegerType.get_signless(32)
     self.phases = memref.alloca(ir.MemRefType.get((), i32), [], [])
     memref.store(c(0, i32), self.phases, [])
-    with single_thread():
+    with single_thread(per_block=True):
       for i in range(num_barriers):
         nvgpu.mbarrier_init(self.value, c(arrival_count, index), c(i, index))
     gpu.barrier()
@@ -509,8 +521,11 @@ class BarrierArray:
       yield self[offset]
 
   def __getitem__(self, offset: ir.Value | int):
+    index = ir.IndexType.get()
     if isinstance(offset, int):
-      offset = c(offset, ir.IndexType.get())
+      offset = c(offset, index)
+    if ir.IntegerType.isinstance(offset.type):
+      offset = arith.index_castui(index, offset)
     return Barrier(self, offset)
 
 
@@ -519,13 +534,32 @@ class Barrier:
   barrier_array: BarrierArray
   offset: ir.Value
 
-  def wait_parity(self, parity):
+  def wait_parity(self, parity, expect_wait=False):
+    i1 = ir.IntegerType.get_signless(1)
     index = ir.IndexType.get()
-    nvgpu.mbarrier_try_wait_parity(
-        self.barrier_array.value, parity, c(10000000, index), self.offset,
+    if expect_wait:
+      nvgpu.mbarrier_try_wait_parity(
+          self.barrier_array.value, parity, c(10000000, index), self.offset,
+      )
+      return
+    barrier_ptr = self.get_ptr()
+    barrier_ready = llvm.inline_asm(
+        i1,
+        [barrier_ptr, parity],
+        "mbarrier.test_wait.parity.shared.b64 $0, [$1], $2;",
+        "=b,l,r",
+        asm_dialect=0,
+        has_side_effects=True,
     )
+    should_wait = arith.xori(barrier_ready, c(1, i1))
+    should_wait = llvm.intr_expect(should_wait, c(0, i1))
+    with ir.InsertionPoint(scf.IfOp(should_wait).then_block):
+      nvgpu.mbarrier_try_wait_parity(
+          self.barrier_array.value, parity, c(10000000, index), self.offset,
+      )
+      scf.yield_([])
 
-  def wait(self):
+  def wait(self, expect_wait=False):
     i32 = ir.IntegerType.get_signless(32)
     parities = memref.load(self.barrier_array.phases, [])
     offset_i32 = arith.index_castui(i32, self.offset)
@@ -535,11 +569,30 @@ class Barrier:
     )
     new_parities = arith.xori(parities, bitmask)
     memref.store(new_parities, self.barrier_array.phases, [])
-    self.wait_parity(parity)
+    self.wait_parity(parity, expect_wait=expect_wait)
 
   def arrive(self):
     token_ty = ir.Type.parse("!nvgpu.mbarrier.token")
     nvgpu.mbarrier_arrive(token_ty, self.barrier_array.value, self.offset)
+
+  def get_ptr(self):
+    i32 = ir.IntegerType.get_signless(32)
+    i64 = ir.IntegerType.get_signless(64)
+    ptr_ty = ir.Type.parse("!llvm.ptr<3>")
+    smem = ir.IntegerAttr.get(i64, 3)
+    num_barriers = self.barrier_array.num_barriers
+    mbarrier_ref_ty = ir.MemRefType.get((num_barriers,), i64, memory_space=smem)
+    mbarrier_ref = builtin.unrealized_conversion_cast(
+        [mbarrier_ref_ty], [self.barrier_array.value],
+    )
+    mbarrier_ref_ptr = memref.extract_aligned_pointer_as_index(mbarrier_ref)
+    barrier_arr_ptr = llvm.inttoptr(
+        ptr_ty, arith.index_cast(i64, mbarrier_ref_ptr),
+    )
+    offset_i32 = arith.index_cast(i32, self.offset)
+    return llvm.getelementptr(
+        ptr_ty, barrier_arr_ptr, [offset_i32], [-2147483648], i64,
+    )
 
 
 class Partition:
@@ -697,3 +750,35 @@ def warp_tree_reduce(value, op, group_size):
     result = op(result, other_result)
 
   return result
+
+
+def memref_ptr(memref_arg, memory_space=None):
+  i64 = ir.IntegerType.get_signless(64)
+  memref_ty = ir.MemRefType(memref_arg.type)
+  if len(memref_ty.shape) == 0:
+    raise NotImplementedError
+  elem_bytewidth = bytewidth(memref_ty.element_type)
+  rank = len(memref_ty.shape)
+  # TODO: Read out memory space from memref
+  space = "" if memory_space is None else "<" + str(memory_space) + ">"
+  ptr_ty = ir.Type.parse("!llvm.ptr" + space)
+  desc_ty = ir.Type.parse(
+      f"!llvm.struct<({ptr_ty}, {ptr_ty}, i64, array<{rank} x i64>,"
+      f" array<{rank} x i64>)>"
+  )
+  desc = builtin.UnrealizedConversionCastOp([desc_ty], [memref_arg])
+  aligned_ptr = llvm.extractvalue(ptr_ty, desc, [1])
+  offset_elems = llvm.extractvalue(i64, desc, [2])
+  offset_bytes = llvm.mul(
+      offset_elems,
+      c(elem_bytewidth, i64),
+      overflow_flags=llvm.IntegerOverflowFlags.none,
+  )
+  return llvm.inttoptr(
+      ptr_ty,
+      llvm.add(
+          llvm.ptrtoint(i64, aligned_ptr),
+          offset_bytes,
+          overflow_flags=llvm.IntegerOverflowFlags.none,
+      ),
+  )

@@ -8,7 +8,29 @@ Remember to align the itemized text with the first line of an item within a list
 
 ## jax 0.4.31
 
+* Changes
+  * The minimum Python version is now 3.10. 3.10 will remain the minimum
+    supported version until July 2025.
+  * The minimum NumPy version is now 1.24. NumPy 1.24 will remain the minimum
+    supported version until December 2024.
+  * {func}`jax.numpy.ceil`, {func}`jax.numpy.floor` and {func}`jax.numpy.trunc` now return the output
+    of the same dtype as the input, i.e. no longer upcast integer or boolean inputs to floating point.
+  * `libdevice.10.bc` is no longer bundled with CUDA wheels. It must be
+    installed either as a part of local CUDA installation, or via NVIDIA's CUDA
+    pip wheels.
+  * {class}`jax.experimental.pallas.BlockSpec` now expects `block_shape` to
+    be passed *before* `index_map`. The old argument order is deprecated and
+    will be removed in a future release.
+* Deprecations
+  * Removed a number of previously-deprecated internal APIs related to
+    polymorphic shapes. From {mod}`jax.core`: removed `canonicalize_shape`,
+    `dimension_as_value`, `definitely_equal`, and `symbolic_equal_dim`.
+
 ## jaxlib 0.4.31
+
+* Bug fixes
+  * Fixed a bug that meant that negative static_argnums to a jit were mishandled
+    by the jit dispatch fast path.
 
 ## jax 0.4.30 (June 18, 2024)
 

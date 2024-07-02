@@ -1,6 +1,8 @@
 (investigating-a-regression)=
 # Investigating a regression
 
+<!--* freshness: { reviewed: '2023-11-15' } *-->
+
 So you updated JAX and you hit a speed regression?
 You have a little bit of time and are ready to investigate this?
 Let's first make a JAX issue.

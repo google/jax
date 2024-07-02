@@ -507,14 +507,12 @@ class JaxNumpyReducerTests(jtu.JaxTestCase):
       for weights_shape in ([None, shape] if axis is None or len(shape) == 1 or isinstance(axis, tuple)
                             else [None, (shape[axis],), shape])
     ],
-    keepdims=([False, True] if numpy_version >= (1, 23) else [None]),
+    keepdims=[False, True],
     returned=[False, True],
   )
   def testAverage(self, shape, dtype, axis, weights_shape, returned, keepdims):
     rng = jtu.rand_default(self.rng())
-    kwds = dict(returned=returned)
-    if keepdims is not None:
-      kwds['keepdims'] = keepdims
+    kwds = dict(returned=returned, keepdims=keepdims)
     if weights_shape is None:
       np_fun = lambda x: np.average(x, axis, **kwds)
       jnp_fun = lambda x: jnp.average(x, axis, **kwds)
@@ -527,15 +525,11 @@ class JaxNumpyReducerTests(jtu.JaxTestCase):
     tol = {dtypes.bfloat16: 2e-1, np.float16: 1e-2, np.float32: 1e-5,
            np.float64: 1e-12, np.complex64: 1e-5}
     check_dtypes = shape is not jtu.PYTHON_SCALAR_SHAPE
-    if numpy_version == (1, 23, 0) and keepdims and weights_shape is not None and axis is not None:
-      # Known failure: https://github.com/numpy/numpy/issues/21850
-      pass
-    else:
-      try:
-        self._CheckAgainstNumpy(np_fun, jnp_fun, args_maker,
-                                check_dtypes=check_dtypes, tol=tol)
-      except ZeroDivisionError:
-        self.skipTest("don't support checking for ZeroDivisionError")
+    try:
+      self._CheckAgainstNumpy(np_fun, jnp_fun, args_maker,
+                              check_dtypes=check_dtypes, tol=tol)
+    except ZeroDivisionError:
+      self.skipTest("don't support checking for ZeroDivisionError")
     self._CompileAndCheck(jnp_fun, args_maker, check_dtypes=check_dtypes,
                           rtol=tol, atol=tol)
 

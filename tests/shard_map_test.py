@@ -14,14 +14,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence, Iterable, Iterator, Generator
+from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 import contextlib
 from functools import partial
 import itertools as it
 import math
 import operator as op
 from types import SimpleNamespace
-from typing import Any, NamedTuple, Callable, TypeVar
+from typing import Any, NamedTuple, TypeVar
 import unittest
 
 from absl.testing import absltest
@@ -1814,6 +1814,101 @@ class ShardMapTest(jtu.JaxTestCase):
     xs = jnp.arange(4 * 16.).reshape(4, 16)
     with self.assertRaisesRegex(ValueError, "spmd_axis_name cannot appear"):
       jax.vmap(g, spmd_axis_name='i')(xs)
+
+  def test_in_spec_none(self):
+    mesh = jtu.create_global_mesh((4, 2), ('i', 'j'))
+
+    x = jnp.arange(8).reshape(4, 2)
+
+    def f(o, x):
+      self.assertIs(o, obj)
+      return jnp.sin(x)
+
+    obj = object()
+    y = shard_map(f, mesh, (None, P('i')), P('i'))(obj, x)
+    self.assertAllClose(y, jnp.sin(x), check_dtypes=False)
+
+    obj = None
+    y = shard_map(f, mesh, (None, P('i')), P('i'))(None, x)
+    self.assertAllClose(y, jnp.sin(x), check_dtypes=False)
+
+    def f2(o, x):
+      self.assertIsInstance(o, dict)
+      self.assertIs(o['a'], obj['a'])
+      return jnp.sin(x)
+
+    obj = {'a': object()}
+    y = shard_map(f2, mesh, ({'a': None}, P('i')), P('i'))(obj, x)
+    self.assertAllClose(y, jnp.sin(x), check_dtypes=False)
+
+    def f3(x, o):
+      self.assertIs(o, obj)
+      return jnp.sin(x)
+
+    obj = object()
+    y = shard_map(f3, mesh, (P('i'), None), P('i'))(x, obj)
+    self.assertAllClose(y, jnp.sin(x), check_dtypes=False)
+
+    obj = None
+    y = shard_map(f3, mesh, (P('i'), None), P('i'))(x, obj)
+    self.assertAllClose(y, jnp.sin(x), check_dtypes=False)
+
+    def f4(o1, o2, x, o3):
+      self.assertIs(o1, obj1)
+      self.assertIs(o2[0], obj2[0])
+      self.assertIs(o2[1], obj2[1])
+      self.assertIs(o3, obj3)
+      return jnp.sin(x)
+
+    obj1 = object()
+    obj2 = (object(), object())
+    obj3 = object()
+    y = shard_map(f4, mesh, (None, None, P('i'), None), P('i'))(obj1, obj2, x, obj3)
+    self.assertAllClose(y, jnp.sin(x), check_dtypes=False)
+
+  def test_in_spec_none_divisibility_errors(self):
+    mesh = jtu.create_global_mesh((4, 2), ('i', 'j'))
+    x = jnp.arange(4).reshape(2, 2)
+
+    with self.assertRaisesRegex(ValueError, 'divisible'):
+      shard_map(lambda *_: None, mesh, (None, P('i')), None)(object(), x)
+
+    with self.assertRaisesRegex(ValueError, 'divisible'):
+      shard_map(lambda *_: None, mesh, (P('i'), None), None)(x, object())
+
+    with self.assertRaisesRegex(ValueError, 'divisible'):
+      shard_map(lambda *_: None, mesh, (P('i'), None), None
+                )(x, (object(), object()))
+
+    with self.assertRaisesRegex(ValueError, 'divisible'):
+      shard_map(lambda *_: None, mesh, (P('i'), (None, None)), None,
+                    )(x, (object(), object()))
+
+    with self.assertRaisesRegex(ValueError, 'divisible'):
+      shard_map(lambda *_: None, mesh, ((None, None), P('i')), None,
+                    )((object(), object()), x)
+
+  def test_in_spec_none_rank_errors(self):
+    mesh = jtu.create_global_mesh((4, 2), ('i', 'j'))
+    x = jnp.arange(4)
+
+    with self.assertRaisesRegex(ValueError, 'rank'):
+      shard_map(lambda *_: None, mesh, (None, P('i', 'j')), None)(object(), x)
+
+    with self.assertRaisesRegex(ValueError, 'rank'):
+      shard_map(lambda *_: None, mesh, (P('i', 'j'), None), None)(x, object())
+
+    with self.assertRaisesRegex(ValueError, 'rank'):
+      shard_map(lambda *_: None, mesh, (P('i', 'j'), None), None
+                )(x, (object(), object()))
+
+    with self.assertRaisesRegex(ValueError, 'rank'):
+      shard_map(lambda *_: None, mesh, (P('i', 'j'), (None, None)), None,
+                    )(x, (object(), object()))
+
+    with self.assertRaisesRegex(ValueError, 'rank'):
+      shard_map(lambda *_: None, mesh, ((None, None), P('i', 'j')), None,
+                    )((object(), object()), x)
 
 
 class FunSpec(NamedTuple):

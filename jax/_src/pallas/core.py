@@ -15,13 +15,14 @@
 """Module for pallas-core functionality."""
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
-import copy
+from collections.abc import Callable, Iterator, Sequence
 import contextlib
+import copy
 import dataclasses
 import functools
 import threading
-from typing import Any, Callable, Union
+from typing import Any, Union
+import warnings
 
 import jax
 from jax._src import api_util
@@ -171,10 +172,39 @@ IndexingMode = Union[Blocked, Unblocked]
 
 @dataclasses.dataclass(unsafe_hash=True)
 class BlockSpec:
-  index_map: Callable[..., Any] | None = None
+  """Specifies how an array should be sliced for each iteration of a kernel.
+
+  See :ref:`pallas_blockspec` for more details.
+  """
   block_shape: tuple[int | None, ...] | None = None
-  memory_space: Any | None = None
-  indexing_mode: IndexingMode = blocked
+  index_map: Callable[..., Any] | None = None
+  memory_space: Any | None = dataclasses.field(kw_only=True, default=None)
+  indexing_mode: IndexingMode = dataclasses.field(kw_only=True, default=blocked)
+
+  def __init__(
+      self,
+      block_shape: Any | None = None,
+      index_map: Any | None = None,
+      *,
+      memory_space: Any | None = None,
+      indexing_mode: IndexingMode = blocked,
+  ) -> None:
+    if callable(block_shape):
+      # TODO(slebedev): Remove this code path and update the signature of
+      # __init__ after October 1, 2024.
+      warnings.warn(
+          "BlockSpec now expects ``block_shape`` to be passed before"
+          " ``index_map``. Update your code by swapping the order of these"
+          " arguments. For example, ``pl.BlockSpace(lambda i: i, (42,))``"
+          " should be written as ``pl.BlockSpec((42,), lambda i: i)``.",
+          DeprecationWarning,
+      )
+      index_map, block_shape = block_shape, index_map
+
+    self.block_shape = block_shape
+    self.index_map = index_map
+    self.memory_space = memory_space
+    self.indexing_mode = indexing_mode
 
   def compute_index(self, *args):
     assert self.index_map is not None
@@ -297,6 +327,15 @@ def _tile_ref(ref: state.AbstractRef, block_shape: tuple[int, ...] | None
   return ref.update(inner_aval=ref.inner_aval.update(shape=shape))
 
 
+def _check_static_ref_shape(ref: state.AbstractRef) -> state.AbstractRef:
+  shape = ref.shape
+  if not jax_core.is_constant_shape(shape):
+    # TODO(necula): thread the tree labels so that we can localize the error
+    raise ValueError("shape polymorphism for Pallas does not support "
+                     f"dynamically-shaped blocks. Found block_shape: {shape}")
+  return ref
+
+
 def _get_ref_avals(grid, in_avals, in_specs, out_avals, out_specs):
   def _get_memory_space(spec):
     if spec is no_block_spec:
@@ -314,13 +353,13 @@ def _get_ref_avals(grid, in_avals, in_specs, out_avals, out_specs):
     in_specs = [None] * len(in_avals)
     out_specs = [None] * len(out_avals)
   tiled_in_ref_avals = [
-      aval if in_spec is no_block_spec
-      else _tile_ref(aval, in_spec.block_shape)
+      _check_static_ref_shape(aval if in_spec is no_block_spec
+                              else _tile_ref(aval, in_spec.block_shape))
       for aval, in_spec in zip(in_ref_avals, in_specs)
   ]
   tiled_out_ref_avals = [
-      aval if out_spec is no_block_spec
-      else _tile_ref(aval, out_spec.block_shape)
+      _check_static_ref_shape(aval if out_spec is no_block_spec
+                              else _tile_ref(aval, out_spec.block_shape))
       for aval, out_spec in zip(out_ref_avals, out_specs)
   ]
   return in_specs, tiled_in_ref_avals, out_specs, tiled_out_ref_avals

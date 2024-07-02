@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import contextmanager
 from functools import wraps
 import glob
@@ -24,7 +25,7 @@ import logging
 import os
 import socketserver
 import threading
-from typing import Callable, List, Optional, Union, Any
+from typing import Any
 
 from jax._src import traceback_util
 traceback_util.register_exclusion(__file__)
@@ -210,7 +211,7 @@ def stop_trace():
     _profile_state.reset()
 
 
-def stop_and_get_fdo_profile() -> Union[bytes, str]:
+def stop_and_get_fdo_profile() -> bytes | str:
   """Stops the currently-running profiler trace and export fdo_profile.
 
   Currently, this is only supported for GPU.
@@ -391,10 +392,10 @@ class PGLEProfiler:
     self.percentile: int = percentile
     self.collected_fdo: str | None = None
     self.called_times: int = 0
-    self.fdo_profiles: List[Any] = []
+    self.fdo_profiles: list[Any] = []
     self.current_session: xla_client.profiler.ProfilerSession | None = None
 
-  def consume_fdo_profile(self) -> Optional[str]:
+  def consume_fdo_profile(self) -> str | None:
     if self.collected_fdo is not None:
       return self.collected_fdo
 

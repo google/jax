@@ -22,6 +22,8 @@ kernelspec:
 (jit-compilation)=
 # Just-in-time compilation
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 In this section, we will further explore how JAX works, and how we can make it performant.
 We will discuss the {func}`jax.jit` transformation, which will perform *Just In Time* (JIT)
 compilation of a JAX Python function so it can be executed efficiently in XLA.

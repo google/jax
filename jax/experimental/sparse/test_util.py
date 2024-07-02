@@ -15,12 +15,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 import functools
 import itertools
 import math
-from typing import Any, Callable, Union
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import jax
 from jax import lax

@@ -15,9 +15,10 @@
 """Tests for splash_attention."""
 from __future__ import annotations
 
+from collections.abc import Callable
 import dataclasses
 import functools
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 import unittest
 
 from absl.testing import absltest
@@ -360,7 +361,7 @@ class SplashAttentionTest(AttentionTest):
 
     attn_logits_soft_cap = data.draw(attn_logits_soft_cap_strategy())
     masks = data.draw(mha_mask_strategy(q_seq_len, kv_seq_len, num_q_heads))
-    mask = mask_lib.MultiHeadMask(tuple((m.get_mask() for m in masks)))
+    mask = mask_lib.MultiHeadMask(tuple(m.get_mask() for m in masks))
     block_sizes = data.draw(block_sizes_strategy(q_seq_len, kv_seq_len))
 
     if is_mqa:
@@ -421,7 +422,7 @@ class SplashAttentionTest(AttentionTest):
       segment_ids = data.draw(segment_ids_strategy(q_seq_len))
     attn_logits_soft_cap = data.draw(attn_logits_soft_cap_strategy())
     masks = data.draw(mha_mask_strategy(q_seq_len, kv_seq_len, num_q_heads))
-    mask = mask_lib.MultiHeadMask(tuple((m.get_mask() for m in masks)))
+    mask = mask_lib.MultiHeadMask(tuple(m.get_mask() for m in masks))
     block_sizes = data.draw(block_sizes_strategy(q_seq_len, kv_seq_len))
     if is_mqa:
       attn_ref = splash.make_masked_mqa_reference(mask)

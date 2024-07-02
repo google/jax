@@ -51,20 +51,15 @@ setup(
     author_email='jax-dev@google.com',
     packages=find_packages(exclude=["examples", "jax/src/internal_test_util"]),
     package_data={'jax': ['py.typed', "*.pyi", "**/*.pyi"]},
-    python_requires='>=3.9',
+    python_requires='>=3.10',
     install_requires=[
         f'jaxlib >={_minimum_jaxlib_version}, <={_jax_version}',
         'ml_dtypes>=0.2.0',
-        'numpy>=1.22',
-        "numpy>=1.23.2; python_version>='3.11'",
+        'numpy>=1.24',
         "numpy>=1.26.0; python_version>='3.12'",
         'opt_einsum',
         'scipy>=1.9',
         "scipy>=1.11.1; python_version>='3.12'",
-        # Required by xla_bridge.discover_pjrt_plugins for forwards compat with
-        # Python versions < 3.10. Can be dropped when 3.10 is the minimum
-        # required Python version.
-        'importlib_metadata>=4.6;python_version<"3.10"',
     ],
     extras_require={
         # Minimum jaxlib version; used in testing.
@@ -112,7 +107,6 @@ setup(
     url='https://github.com/google/jax',
     license='Apache-2.0',
     classifiers=[
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",

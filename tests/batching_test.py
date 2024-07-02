@@ -14,10 +14,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import contextmanager
 from functools import partial
 import itertools as it
-from typing import Any, Callable, TypeVar, Union
+from typing import Any, TypeVar, Union
 
 import numpy as np
 from absl.testing import absltest

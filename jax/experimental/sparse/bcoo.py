@@ -1224,15 +1224,24 @@ def _bcoo_spdot_general_abstract_eval(lhs_data, lhs_indices, rhs_data, rhs_indic
   out_n_batch = lhs.n_batch + rhs.n_batch - len(lhs_batch)
   out_nse = min(out_nse, math.prod(out_aval.shape[out_n_batch:]))
 
+  lhs_batch_shape = np.broadcast_shapes(
+    tuple(lhs_data.shape[dim] for dim in range(lhs.n_batch) if dim not in lhs_batch),
+    tuple(lhs_indices.shape[dim] for dim in range(lhs.n_batch) if dim not in lhs_batch),
+  )
+  rhs_batch_shape = np.broadcast_shapes(
+    tuple(rhs_data.shape[dim] for dim in range(rhs.n_batch) if dim not in rhs_batch),
+    tuple(rhs_indices.shape[dim] for dim in range(rhs.n_batch) if dim not in rhs_batch),
+  )
+
   data_shape = (
     *(lhs_shape[dim] for dim in lhs_batch),
-    *(lhs_data.shape[dim] for dim in range(lhs.n_batch) if dim not in lhs_batch),
-    *(rhs_data.shape[dim] for dim in range(rhs.n_batch) if dim not in rhs_batch),
+    *lhs_batch_shape,
+    *rhs_batch_shape,
     out_nse)
   indices_shape = (
     *(lhs_shape[dim] for dim in lhs_batch),
-    *(lhs_indices.shape[dim] for dim in range(lhs.n_batch) if dim not in lhs_batch),
-    *(rhs_indices.shape[dim] for dim in range(rhs.n_batch) if dim not in rhs_batch),
+    *lhs_batch_shape,
+    *rhs_batch_shape,
     out_nse, lhs.n_sparse + rhs.n_sparse - 2 * len(lhs_contracting))
 
   data_aval = core.ShapedArray(data_shape, out_aval.dtype)

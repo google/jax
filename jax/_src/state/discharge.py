@@ -14,11 +14,11 @@
 """Module for discharging state primitives."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import dataclasses
 from functools import partial
 import operator
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 import numpy as np
 

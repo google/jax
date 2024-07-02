@@ -183,7 +183,7 @@ class NamedSharding(sharding.Sharding):
     mesh: A :class:`jax.sharding.Mesh` object.
     spec: A :class:`jax.sharding.PartitionSpec` object.
 
-  Example:
+  Examples:
 
     >>> from jax.sharding import Mesh
     >>> from jax.sharding import PartitionSpec as P
@@ -308,7 +308,7 @@ class SingleDeviceSharding(sharding.Sharding):
   Args:
     device: A single :py:class:`Device`.
 
-  Example:
+  Examples:
 
     >>> single_device_sharding = jax.sharding.SingleDeviceSharding(
     ...     jax.devices()[0])
@@ -635,7 +635,7 @@ class PositionalSharding(sharding.Sharding):
     return self._remake(self._devices, new_ids)
 
   def check_compatible_aval(self, aval_shape: Shape) -> None:
-    if len(aval_shape) != len(self.shape):
+    if len(aval_shape) != len(self.shape) and not self.is_fully_replicated:
       raise ValueError(
           f"Sharding {self} is only valid for values of rank "
           f"{len(self.shape)}, but was applied to a value of rank "
@@ -1296,10 +1296,7 @@ class NonUniformShardingError(ValueError):
 
 
 def get_process_index_and_count(
-    tensor_sharding: sharding.Sharding,
-    dim: int,
-    ndims: int,
-) -> tuple[int, int]:
+    tensor_sharding: sharding.Sharding, dim: int, ndims: int) -> tuple[int, int]:
   """Get current process index and number of unique processes for given dimension.
 
   This function facilitates mapping of process-level data to individual
@@ -1365,10 +1362,8 @@ def get_process_index_and_count(
   """
   # TODO(sandler, yashkatariya): Consider making this function public.
 
-  if (
-      tensor_sharding.is_fully_addressable
-      or tensor_sharding.is_fully_replicated
-  ):
+  if (tensor_sharding.is_fully_addressable or
+      tensor_sharding.is_fully_replicated):
     return (0, 1)
   num_devices = len(tensor_sharding.device_set)
   # Get device to indices map, we don't care about the concrete
@@ -1416,9 +1411,7 @@ def get_process_index_and_count(
 
 
 def local_to_global_shape(
-    sharding: sharding.Sharding,
-    local_shape: Shape,
-) -> tuple[int | None, ...]:
+    sharding: sharding.Sharding, local_shape: Shape) -> tuple[int | None, ...]:
   """Computes the global shape given the per process if possible.
 
   The returned shape will have the size of the global tensor in that dimension
@@ -1467,8 +1460,7 @@ def local_to_global_shape(
   for i, local_dim in enumerate(local_shape):
     try:
       _, shard_count = get_process_index_and_count(
-          sharding, i, ndims=len(local_shape)
-      )
+          sharding, i, ndims=len(local_shape))
       global_shape[i] = local_dim * shard_count
     except NonUniformShardingError:
       global_shape[i] = None
@@ -1478,10 +1470,7 @@ def local_to_global_shape(
 
 
 def num_addressable_indices(
-    tensor_sharding: sharding.Sharding,
-    dim: int,
-    global_shape: Shape,
-) -> int:
+    tensor_sharding: sharding.Sharding, dim: int, global_shape: Shape) -> int:
   """Returns the number of indices for given dimension this host has access to.
 
   Each host can have multiple number of devices that are spanning

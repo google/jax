@@ -22,6 +22,8 @@ kernelspec:
 (working-with-pytrees)=
 # Working with pytrees
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 JAX has built-in support for objects that look like dictionaries (dicts) of arrays, or lists of lists of dicts, or other nested structures — in JAX these are called pytrees.
 This section will explain how to use them, provide useful code examples, and point out common "gotchas" and patterns.
 

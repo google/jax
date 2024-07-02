@@ -48,11 +48,6 @@ jax_internal_test_harnesses_visibility = []
 jax_test_util_visibility = []
 loops_visibility = []
 
-def get_importlib_metadata():
-    if HERMETIC_PYTHON_VERSION == "3.9":
-        return ["@pypi_importlib_metadata//:pkg"]
-    return []
-
 # TODO(vam): remove this once zstandard builds against Python 3.13
 def get_zstandard():
     if HERMETIC_PYTHON_VERSION == "3.13":
@@ -69,7 +64,6 @@ _py_deps = {
     "filelock": ["@pypi_filelock//:pkg"],
     "flatbuffers": ["@pypi_flatbuffers//:pkg"],
     "hypothesis": ["@pypi_hypothesis//:pkg"],
-    "importlib_metadata": get_importlib_metadata(),
     "matplotlib": ["@pypi_matplotlib//:pkg"],
     "opt_einsum": ["@pypi_opt_einsum//:pkg"],
     "pil": ["@pypi_pillow//:pkg"],

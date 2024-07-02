@@ -1187,8 +1187,6 @@ class VectorLayoutInferer {
   LogicalResult infer(vector::ExtractStridedSliceOp op) {
     auto input_layout = getLayout(op.getVector());
     TPU_CHECK_OP(input_layout, "missing vector layout");
-    TPU_CHECK_OP(op.getType().getElementTypeBitWidth() == 32,
-                 "Only 32-bit types supported");
     auto offsets_attr = op.getOffsets().getValue();
     auto strides_attr = op.getStrides().getValue();
     auto offsets = llvm::map_to_vector(offsets_attr, [](auto attr) {

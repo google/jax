@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 GPU_LOCK = threading.Lock()
 LAST_CODE = 0
-base_dir="./logs"
+base_dir = "./logs"
 
 def extract_filename(path):
   base_name = os.path.basename(path)
@@ -32,7 +32,7 @@ def extract_filename(path):
 def generate_final_report(shell=False, env_vars={}):
   env = os.environ
   env = {**env, **env_vars}
-  cmd = ["pytest_html_merger", "-i", '{}'.format(base_dir), "-o", '{}/final_compiled_report.html'.format(base_dir)]
+  cmd = ["pytest_html_merger", "-i", f'{base_dir}', "-o", f'{base_dir}/final_compiled_report.html']
   result = subprocess.run(cmd,
                           shell=shell,
                           capture_output=True,
@@ -90,7 +90,7 @@ def run_test(testmodule, gpu_tokens):
       "XLA_PYTHON_CLIENT_ALLOCATOR": "default",
   }
   testfile = extract_filename(testmodule)
-  cmd = ["python3", "-m", "pytest", '--html={}/{}_log.html'.format(base_dir, testfile), "--reruns", "3", "-x", testmodule]
+  cmd = ["python3", "-m", "pytest", f'--html={base_dir}/{testfile}_log.html', "--reruns", "3", "-x", testmodule]
   return_code, stderr, stdout = run_shell_command(cmd, env_vars=env_vars)
   with GPU_LOCK:
     gpu_tokens.append(target_gpu)

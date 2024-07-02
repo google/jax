@@ -1,5 +1,7 @@
 # Using JAX in multi-host and multi-process environments
 
+<!--* freshness: { reviewed: '2024-06-10' } *-->
+
 ## Introduction
 
 This guide explains how to use JAX in environments such as

@@ -14,12 +14,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import functools
 import os
 import sys
 import traceback
 import types
-from typing import Any, Callable, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from jax._src import config
 from jax._src import util

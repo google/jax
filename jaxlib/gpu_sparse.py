@@ -41,11 +41,17 @@ if _cusparse:
   for _name, _value in _cusparse.registrations().items():
     xla_client.register_custom_call_target(_name, _value, platform="CUDA")
 
-try:
-  from .rocm import _sparse as _hipsparse  # pytype: disable=import-error
-except ImportError:
-  _hipsparse = None
-else:
+for rocm_module_name in [".rocm", "jax_rocm60_plugin"]:
+  try:
+    _hipsparse = importlib.import_module(
+        f"{rocm_module_name}._sparse", package="jaxlib"
+    )
+  except ImportError:
+    _hipsparse = None
+  else:
+    break
+
+if _hipsparse:
   for _name, _value in _hipsparse.registrations().items():
     xla_client.register_custom_call_target(_name, _value, platform="ROCM")
 

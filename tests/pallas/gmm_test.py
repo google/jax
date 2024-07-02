@@ -14,7 +14,7 @@
 
 import functools
 import itertools
-from typing import Any, Union
+from typing import Any
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -114,7 +114,7 @@ if CAN_USE_HYPOTHESIS:
       shape: tuple[int, ...],
       key: jax.Array,
       dtype: jnp.dtype,
-      limit: Union[int, None] = None,
+      limit: int | None = None,
   ) -> jnp.ndarray:
     if limit is None:
       limit = 1 / np.prod(shape)

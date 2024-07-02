@@ -1,5 +1,7 @@
 # GPU performance tips
 
+<!--* freshness: { reviewed: '2024-06-10' } *-->
+
 This document focuses on performance tips for neural network workloads
 
 ## Matmul precision
@@ -64,10 +66,6 @@ training on Nvidia GPUs](https://github.com/NVIDIA/JAX-Toolbox/blob/main/rosetta
 
 ### Communication flags
 
-* **--xla_gpu_enable_async_collectives** This flag enables the collective ops
-  such as `AllReduce`, `AllGather`, `ReduceScatter` and `CollectivePermute` to
-  be asynchronous. Asynchronous communication can overlap cross-core
-  communication with computation. The default value is False.
 * **--xla_gpu_enable_latency_hiding_scheduler** This flag enables latency hiding
   schedulers to overlap asynchronous communication with computation efficiently.
   The default value is False.

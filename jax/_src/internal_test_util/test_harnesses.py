@@ -38,11 +38,11 @@ to fail. A Limitation is specific to a harness.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 import operator
 import os
 from functools import partial
-from typing import Any, Callable, NamedTuple, Union
+from typing import Any, NamedTuple, Union
 
 from absl import testing
 import numpy as np

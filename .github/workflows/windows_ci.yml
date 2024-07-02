@@ -18,7 +18,7 @@ jobs:
       matrix:
         os: [windows-2019-32core]
         arch: [AMD64]
-        pyver: ['3.9']
+        pyver: ['3.10']
     name: Windows CI build
     runs-on: ${{ matrix.os }}
 

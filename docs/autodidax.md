@@ -39,6 +39,8 @@ Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.
 
 # Autodidax: JAX core from scratch
 
+<!--* freshness: { reviewed: '2024-04-08' } *-->
+
 Ever want to learn how JAX works, but the implementation seemed impenetrable?
 Well, you're in luck! By reading this tutorial, you'll learn every big idea in
 JAX's core system. You'll even get clued into our weird jargon!
@@ -146,15 +148,15 @@ more descriptive.
 ```{code-cell}
 from collections.abc import Sequence
 from contextlib import contextmanager
-from typing import Optional, Any
+from typing import Any
 
 class MainTrace(NamedTuple):
   level: int
   trace_type: type['Trace']
-  global_data: Optional[Any]
+  global_data: Any | None
 
 trace_stack: list[MainTrace] = []
-dynamic_trace: Optional[MainTrace] = None  # to be employed in Part 3
+dynamic_trace: MainTrace | None = None  # to be employed in Part 3
 
 @contextmanager
 def new_main(trace_type: type['Trace'], global_data=None):
@@ -703,7 +705,7 @@ class Store:
 
 from collections.abc import Hashable, Iterable, Iterator
 import itertools as it
-from typing import Callable
+from collections.abc import Callable
 
 class NodeType(NamedTuple):
   name: str
@@ -1293,7 +1295,7 @@ transformation and a pretty-printer:
 ```{code-cell}
 from functools import lru_cache
 
-@lru_cache()  # ShapedArrays are hashable
+@lru_cache  # ShapedArrays are hashable
 def make_jaxpr_v1(f, *avals_in):
   avals_in, in_tree = tree_flatten(avals_in)
   f, out_tree = flatten_fun(f, in_tree)
@@ -1413,7 +1415,7 @@ def new_dynamic(main: MainTrace):
   finally:
     dynamic_trace = prev_dynamic_trace
 
-@lru_cache()
+@lru_cache
 def make_jaxpr(f: Callable, *avals_in: ShapedArray,
                ) -> tuple[Jaxpr, list[Any], PyTreeDef]:
   avals_in, in_tree = tree_flatten(avals_in)
@@ -1562,7 +1564,7 @@ def xla_call_impl(*args, jaxpr: Jaxpr, num_consts: int):
   return execute(*args)
 impl_rules[xla_call_p] = xla_call_impl
 
-@lru_cache()
+@lru_cache
 def xla_callable(hashable_jaxpr: IDHashable,
                  hashable_consts: tuple[IDHashable, ...]):
   jaxpr: Jaxpr = hashable_jaxpr.val
@@ -1732,7 +1734,7 @@ def xla_call_jvp_rule(primals, tangents, *, jaxpr, num_consts):
   return primals_out, tangents_out
 jvp_rules[xla_call_p] = xla_call_jvp_rule
 
-@lru_cache()
+@lru_cache
 def jvp_jaxpr(jaxpr: Jaxpr) -> tuple[Jaxpr, list[Any]]:
   def jvp_traceable(*primals_and_tangents):
     n = len(primals_and_tangents) // 2
@@ -1753,7 +1755,7 @@ def xla_call_vmap_rule(axis_size, vals_in, dims_in, *, jaxpr, num_consts):
   return outs, [0] * len(outs)
 vmap_rules[xla_call_p] = xla_call_vmap_rule
 
-@lru_cache()
+@lru_cache
 def vmap_jaxpr(jaxpr: Jaxpr, axis_size: int, bdims_in: tuple[BatchAxis, ...]
                ) -> tuple[Jaxpr, list[Any]]:
   vmap_traceable = vmap(jaxpr_as_fun(jaxpr), tuple(bdims_in))
@@ -2063,7 +2065,7 @@ be either known or unknown:
 ```{code-cell}
 class PartialVal(NamedTuple):
   aval: ShapedArray
-  const: Optional[Any]
+  const: Any | None
 
   @classmethod
   def known(cls, val: Any):
@@ -2127,7 +2129,7 @@ JaxprRecipe = Union[LambdaBindingRecipe, ConstRecipe, JaxprEqnRecipe]
 ```{code-cell}
 class PartialEvalTracer(Tracer):
   pval: PartialVal
-  recipe: Optional[JaxprRecipe]
+  recipe: JaxprRecipe | None
 
   def __init__(self, trace, pval, recipe):
     self._trace = trace
@@ -2327,7 +2329,7 @@ def xla_call_partial_eval(trace, tracers, *, jaxpr, num_consts):
 partial_eval_rules[xla_call_p] = xla_call_partial_eval
 
 def partial_eval_jaxpr(jaxpr: Jaxpr, in_unknowns: list[bool],
-                       instantiate: Optional[list[bool]] = None,
+                       instantiate: list[bool] | None = None,
                        ) -> tuple[Jaxpr, Jaxpr, list[bool], int]:
   env: dict[Var, bool] = {}
   residuals: set[Var] = set()
@@ -2584,7 +2586,7 @@ def xla_call_transpose_rule(cts, *invals, jaxpr, num_consts):
   return [next(outs) if undef else None for undef in undef_primals]
 transpose_rules[xla_call_p] = xla_call_transpose_rule
 
-@lru_cache()
+@lru_cache
 def transpose_jaxpr(jaxpr: Jaxpr, undef_primals: tuple[bool, ...]
                     ) -> tuple[Jaxpr, list[Any]]:
   avals_in, avals_out = typecheck_jaxpr(jaxpr)

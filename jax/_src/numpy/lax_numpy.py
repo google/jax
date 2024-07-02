@@ -27,13 +27,13 @@ from __future__ import annotations
 
 import builtins
 import collections
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 import importlib
 import math
 import operator
 import types
-from typing import (cast, overload, Any, Callable, Literal, NamedTuple,
+from typing import (cast, overload, Any, Literal, NamedTuple,
                     Protocol, TypeVar, Union)
 from textwrap import dedent as _dedent
 import warnings
@@ -127,8 +127,37 @@ get_printoptions = np.get_printoptions
 printoptions = np.printoptions
 set_printoptions = np.set_printoptions
 
-@util.implements(np.iscomplexobj)
 def iscomplexobj(x: Any) -> bool:
+  """Check if the input is a complex number or an array containing complex elements.
+
+  JAX implementation of :func:`numpy.iscomplexobj`.
+
+  The function evaluates based on input type rather than value.
+  Inputs with zero imaginary parts are still considered complex.
+
+  Args:
+    x: input object to check.
+
+  Returns:
+    True if ``x`` is a complex number or an array containing at least one complex element,
+    False otherwise.
+
+  See Also:
+    - :func:`jax.numpy.isrealobj`
+    - :func:`jax.numpy.iscomplex`
+
+  Examples:
+    >>> jnp.iscomplexobj(True)
+    False
+    >>> jnp.iscomplexobj(0)
+    False
+    >>> jnp.iscomplexobj(jnp.array([1, 2]))
+    False
+    >>> jnp.iscomplexobj(1+2j)
+    True
+    >>> jnp.iscomplexobj(jnp.array([0, 1+2j]))
+    True
+  """
   if x is None:
     return False
   try:
@@ -347,6 +376,8 @@ def result_type(*args: Any) -> DType:
 @jit
 def trunc(x: ArrayLike) -> Array:
   util.check_arraylike('trunc', x)
+  if dtypes.isdtype(dtypes.dtype(x), ('integral', 'bool')):
+    return lax_internal.asarray(x)
   return where(lax.lt(x, _lax_const(x, 0)), ufuncs.ceil(x), ufuncs.floor(x))
 
 
@@ -872,7 +903,7 @@ def flip(m: ArrayLike, axis: int | Sequence[int] | None = None) -> Array:
     - :func:`jax.numpy.fliplr`: reverse the order along axis 1 (left/right)
     - :func:`jax.numpy.flipud`: reverse the order along axis 0 (up/down)
 
-  Example:
+  Examples:
     >>> x1 = jnp.array([[1, 2],
     ...                 [3, 4]])
     >>> jnp.flip(x1)
@@ -936,7 +967,7 @@ def fliplr(m: ArrayLike) -> Array:
     - :func:`jax.numpy.flip`: reverse the order along the given axis
     - :func:`jax.numpy.flipud`: reverse the order along axis 0
 
-  Example:
+  Examples:
     >>> x = jnp.array([[1, 2],
     ...                [3, 4]])
     >>> jnp.fliplr(x)
@@ -962,7 +993,7 @@ def flipud(m: ArrayLike) -> Array:
     - :func:`jax.numpy.flip`: reverse the order along the given axis
     - :func:`jax.numpy.fliplr`: reverse the order along axis 1
 
-  Example:
+  Examples:
     >>> x = jnp.array([[1, 2],
     ...                [3, 4]])
     >>> jnp.flipud(x)
@@ -972,15 +1003,49 @@ def flipud(m: ArrayLike) -> Array:
   util.check_arraylike("flipud", m)
   return _flip(asarray(m), 0)
 
-@util.implements(np.iscomplex)
 @jit
 def iscomplex(x: ArrayLike) -> Array:
+  """Return boolean array showing where the input is complex.
+
+  JAX implementation of :func:`numpy.iscomplex`.
+
+  Args:
+    x: Input array to check.
+
+  Returns:
+    A new array containing boolean values indicating complex elements.
+
+  See Also:
+    - :func:`jax.numpy.iscomplexobj`
+    - :func:`jax.numpy.isrealobj`
+
+  Examples:
+    >>> jnp.iscomplex(jnp.array([True, 0, 1, 2j, 1+2j]))
+    Array([False, False, False, True, True], dtype=bool)
+  """
   i = ufuncs.imag(x)
   return lax.ne(i, _lax_const(i, 0))
 
-@util.implements(np.isreal)
 @jit
 def isreal(x: ArrayLike) -> Array:
+  """Return boolean array showing where the input is real.
+
+  JAX implementation of :func:`numpy.isreal`.
+
+  Args:
+    x: input array to check.
+
+  Returns:
+    A new array containing boolean values indicating real elements.
+
+  See Also:
+    - :func:`jax.numpy.iscomplex`
+    - :func:`jax.numpy.isrealobj`
+
+  Examples:
+    >>> jnp.isreal(jnp.array([False, 0j, 1, 2.1, 1+2j]))
+    Array([ True,  True,  True,  True, False], dtype=bool)
+  """
   i = ufuncs.imag(x)
   return lax.eq(i, _lax_const(i, 0))
 
@@ -1000,7 +1065,7 @@ def angle(z: ArrayLike, deg: bool = False) -> Array:
     An array of counterclockwise angle of each element of ``z``, with the same
     shape as ``z`` of dtype float.
 
-  Example:
+  Examples:
 
     If ``z`` is a number
 
@@ -1157,8 +1222,37 @@ def gradient(f: ArrayLike, *varargs: ArrayLike,
   return a_grad[0] if len(axis_tuple) == 1 else a_grad
 
 
-@util.implements(np.isrealobj)
 def isrealobj(x: Any) -> bool:
+  """Check if the input is not a complex number or an array containing complex elements.
+
+  JAX implementation of :func:`numpy.isrealobj`.
+
+  The function evaluates based on input type rather than value.
+  Inputs with zero imaginary parts are still considered complex.
+
+  Args:
+    x: input object to check.
+
+  Returns:
+    False if ``x`` is a complex number or an array containing at least one complex element,
+    True otherwise.
+
+  See Also:
+    - :func:`jax.numpy.iscomplexobj`
+    - :func:`jax.numpy.isreal`
+
+  Examples:
+    >>> jnp.isrealobj(0)
+    True
+    >>> jnp.isrealobj(1.2)
+    True
+    >>> jnp.isrealobj(jnp.array([1, 2]))
+    True
+    >>> jnp.isrealobj(1+2j)
+    False
+    >>> jnp.isrealobj(jnp.array([0, 1+2j]))
+    False
+  """
   return not iscomplexobj(x)
 
 
@@ -1337,7 +1431,7 @@ def ravel_multi_index(multi_index: Sequence[ArrayLike], dims: Sequence[int],
   See also:
     :func:`jax.numpy.unravel_index`: inverse of this function.
 
-  Example:
+  Examples:
     Define a 2-dimensional array and a sequence of indices of even values:
 
     >>> x = jnp.array([[2., 3., 4.],
@@ -3295,11 +3389,40 @@ def copy(a: ArrayLike, order: str | None = None) -> Array:
   return array(a, copy=True, order=order)
 
 
-@util.implements(np.zeros_like)
 def zeros_like(a: ArrayLike | DuckTypedArray,
                dtype: DTypeLike | None = None,
                shape: Any = None, *,
                device: xc.Device | Sharding | None = None) -> Array:
+  """Create an array full of zeros with the same shape and dtype as an array.
+
+  JAX implementation of :func:`numpy.zeros_like`.
+
+  Args:
+    a: Array-like object with ``shape`` and ``dtype`` attributes.
+    shape: optionally override the shape of the created array.
+    dtype: optionally override the dtype of the created array.
+    device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Array of the specified shape and dtype, on the specified device if specified.
+
+  See also:
+    - :func:`jax.numpy.zeros`
+    - :func:`jax.numpy.empty_like`
+    - :func:`jax.numpy.ones_like`
+    - :func:`jax.numpy.full_like`
+
+  Examples:
+    >>> x = jnp.arange(4)
+    >>> jnp.zeros_like(x)
+    Array([0, 0, 0, 0], dtype=int32)
+    >>> jnp.zeros_like(x, dtype=bool)
+    Array([False, False, False, False], dtype=bool)
+    >>> jnp.zeros_like(x, shape=(2, 3))
+    Array([[0, 0, 0],
+           [0, 0, 0]], dtype=int32)
+  """
   if not (hasattr(a, 'dtype') and hasattr(a, 'shape')):  # support duck typing
     util.check_arraylike("zeros_like", a)
   dtypes.check_user_dtype_supported(dtype, "zeros_like")
@@ -3308,11 +3431,40 @@ def zeros_like(a: ArrayLike | DuckTypedArray,
   return lax.full_like(a, 0, dtype, shape, sharding=_normalize_to_sharding(device))
 
 
-@util.implements(np.ones_like)
 def ones_like(a: ArrayLike | DuckTypedArray,
               dtype: DTypeLike | None = None,
               shape: Any = None, *,
               device: xc.Device | Sharding | None = None) -> Array:
+  """Create an array of ones with the same shape and dtype as an array.
+
+  JAX implementation of :func:`numpy.ones_like`.
+
+  Args:
+    a: Array-like object with ``shape`` and ``dtype`` attributes.
+    shape: optionally override the shape of the created array.
+    dtype: optionally override the dtype of the created array.
+    device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Array of the specified shape and dtype, on the specified device if specified.
+
+  See also:
+    - :func:`jax.numpy.empty`
+    - :func:`jax.numpy.zeros_like`
+    - :func:`jax.numpy.ones_like`
+    - :func:`jax.numpy.full_like`
+
+  Examples:
+    >>> x = jnp.arange(4)
+    >>> jnp.ones_like(x)
+    Array([1, 1, 1, 1], dtype=int32)
+    >>> jnp.ones_like(x, dtype=bool)
+    Array([ True,  True,  True,  True], dtype=bool)
+    >>> jnp.ones_like(x, shape=(2, 3))
+    Array([[1, 1, 1],
+           [1, 1, 1]], dtype=int32)
+  """
   if not (hasattr(a, 'dtype') and hasattr(a, 'shape')):  # support duck typing
     util.check_arraylike("ones_like", a)
   dtypes.check_user_dtype_supported(dtype, "ones_like")
@@ -3321,13 +3473,42 @@ def ones_like(a: ArrayLike | DuckTypedArray,
   return lax.full_like(a, 1, dtype, shape, sharding=_normalize_to_sharding(device))
 
 
-@util.implements(np.empty_like, lax_description="""\
-Because XLA cannot create uninitialized arrays, the JAX version will
-return an array initialized with zeros.""")
 def empty_like(prototype: ArrayLike | DuckTypedArray,
                dtype: DTypeLike | None = None,
                shape: Any = None, *,
                device: xc.Device | Sharding | None = None) -> Array:
+  """Create an empty array with the same shape and dtype as an array.
+
+  JAX implementation of :func:`numpy.empty_like`. Because XLA cannot create
+  an un-initialized array, :func:`jax.numpy.empty` will always return an
+  array full of zeros.
+
+  Args:
+    a: Array-like object with ``shape`` and ``dtype`` attributes.
+    shape: optionally override the shape of the created array.
+    dtype: optionally override the dtype of the created array.
+    device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Array of the specified shape and dtype, on the specified device if specified.
+
+  See also:
+    - :func:`jax.numpy.empty`
+    - :func:`jax.numpy.zeros_like`
+    - :func:`jax.numpy.ones_like`
+    - :func:`jax.numpy.full_like`
+
+  Examples:
+    >>> x = jnp.arange(4)
+    >>> jnp.empty_like(x)
+    Array([0, 0, 0, 0], dtype=int32)
+    >>> jnp.empty_like(x, dtype=bool)
+    Array([False, False, False, False], dtype=bool)
+    >>> jnp.empty_like(x, shape=(2, 3))
+    Array([[0, 0, 0],
+           [0, 0, 0]], dtype=int32)
+  """
   if not (hasattr(prototype, 'dtype') and hasattr(prototype, 'shape')):  # support duck typing
     util.check_arraylike("empty_like", prototype)
   dtypes.check_user_dtype_supported(dtype, "empty_like")
@@ -3341,10 +3522,43 @@ def _normalize_to_sharding(device: xc.Device | Sharding | None) -> Sharding | No
     return device
 
 
-@util.implements(np.full)
 def full(shape: Any, fill_value: ArrayLike,
          dtype: DTypeLike | None = None, *,
          device: xc.Device | Sharding | None = None) -> Array:
+  """Create an array full of a specified value.
+
+  JAX implementation of :func:`numpy.full`.
+
+  Args:
+    shape: int or sequence of ints specifying the shape of the created array.
+    fill_value: scalar or array with which to fill the created array.
+    dtype: optional dtype for the created array; defaults to the dtype of the
+      fill value.
+    device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Array of the specified shape and dtype, on the specified device if specified.
+
+  See also:
+    - :func:`jax.numpy.full_like`
+    - :func:`jax.numpy.empty`
+    - :func:`jax.numpy.zeros`
+    - :func:`jax.numpy.ones`
+
+  Examples:
+    >>> jnp.full(4, 2, dtype=float)
+    Array([2., 2., 2., 2.], dtype=float32)
+    >>> jnp.full((2, 3), 0, dtype=bool)
+    Array([[False, False, False],
+           [False, False, False]], dtype=bool)
+
+    `fill_value` may also be an array that is broadcast to the specified shape:
+
+    >>> jnp.full((2, 3), fill_value=jnp.arange(3))
+    Array([[0, 1, 2],
+           [0, 1, 2]], dtype=int32)
+  """
   dtypes.check_user_dtype_supported(dtype, "full")
   util.check_arraylike("full", fill_value)
 
@@ -3356,11 +3570,46 @@ def full(shape: Any, fill_value: ArrayLike,
         broadcast_to(asarray(fill_value, dtype=dtype), shape), device)
 
 
-@util.implements(np.full_like)
 def full_like(a: ArrayLike | DuckTypedArray,
               fill_value: ArrayLike, dtype: DTypeLike | None = None,
               shape: Any = None, *,
               device: xc.Device | Sharding | None = None) -> Array:
+  """Create an array full of a specified value with the same shape and dtype as an array.
+
+  JAX implementation of :func:`numpy.full_like`.
+
+  Args:
+    a: Array-like object with ``shape`` and ``dtype`` attributes.
+    fill_value: scalar or array with which to fill the created array.
+    shape: optionally override the shape of the created array.
+    dtype: optionally override the dtype of the created array.
+    device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Array of the specified shape and dtype, on the specified device if specified.
+
+  See also:
+    - :func:`jax.numpy.full`
+    - :func:`jax.numpy.empty_like`
+    - :func:`jax.numpy.zeros_like`
+    - :func:`jax.numpy.ones_like`
+
+  Examples:
+    >>> x = jnp.arange(4.0)
+    >>> jnp.full_like(x, 2)
+    Array([2., 2., 2., 2.], dtype=float32)
+    >>> jnp.full_like(x, 0, shape=(2, 3))
+    Array([[0., 0., 0.],
+           [0., 0., 0.]], dtype=float32)
+
+    `fill_value` may also be an array that is broadcast to the specified shape:
+
+    >>> x = jnp.arange(6).reshape(2, 3)
+    >>> jnp.full_like(x, fill_value=jnp.array([[1], [2]]))
+    Array([[1, 1, 1],
+           [2, 2, 2]], dtype=int32)
+  """
   if hasattr(a, 'dtype') and hasattr(a, 'shape'):  # support duck typing
     util.check_arraylike("full_like", 0, fill_value)
   else:
@@ -3377,9 +3626,34 @@ def full_like(a: ArrayLike | DuckTypedArray,
         broadcast_to(asarray(fill_value, dtype=dtype), shape), device)
 
 
-@util.implements(np.zeros)
 def zeros(shape: Any, dtype: DTypeLike | None = None, *,
           device: xc.Device | Sharding | None = None) -> Array:
+  """Create an array full of zeros.
+
+  JAX implementation of :func:`numpy.zeros`.
+
+  Args:
+    shape: int or sequence of ints specifying the shape of the created array.
+    dtype: optional dtype for the created array; defaults to floating point.
+    device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Array of the specified shape and dtype, on the specified device if specified.
+
+  See also:
+    - :func:`jax.numpy.zeros_like`
+    - :func:`jax.numpy.empty`
+    - :func:`jax.numpy.ones`
+    - :func:`jax.numpy.full`
+
+  Examples:
+    >>> jnp.zeros(4)
+    Array([0., 0., 0., 0.], dtype=float32)
+    >>> jnp.zeros((2, 3), dtype=bool)
+    Array([[False, False, False],
+           [False, False, False]], dtype=bool)
+  """
   if isinstance(shape, types.GeneratorType):
     raise TypeError("expected sequence object with len >= 0 or a single integer")
   if (m := _check_forgot_shape_tuple("zeros", shape, dtype)): raise TypeError(m)
@@ -3387,9 +3661,35 @@ def zeros(shape: Any, dtype: DTypeLike | None = None, *,
   shape = canonicalize_shape(shape)
   return lax.full(shape, 0, _jnp_dtype(dtype), sharding=_normalize_to_sharding(device))
 
-@util.implements(np.ones)
+
 def ones(shape: Any, dtype: DTypeLike | None = None, *,
          device: xc.Device | Sharding | None = None) -> Array:
+  """Create an array full of ones.
+
+  JAX implementation of :func:`numpy.ones`.
+
+  Args:
+    shape: int or sequence of ints specifying the shape of the created array.
+    dtype: optional dtype for the created array; defaults to floating point.
+    device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Array of the specified shape and dtype, on the specified device if specified.
+
+  See also:
+    - :func:`jax.numpy.ones_like`
+    - :func:`jax.numpy.empty`
+    - :func:`jax.numpy.zeros`
+    - :func:`jax.numpy.full`
+
+  Examples:
+    >>> jnp.ones(4)
+    Array([1., 1., 1., 1.], dtype=float32)
+    >>> jnp.ones((2, 3), dtype=bool)
+    Array([[ True,  True,  True],
+           [ True,  True,  True]], dtype=bool)
+  """
   if isinstance(shape, types.GeneratorType):
     raise TypeError("expected sequence object with len >= 0 or a single integer")
   if (m := _check_forgot_shape_tuple("ones", shape, dtype)): raise TypeError(m)
@@ -3397,11 +3697,37 @@ def ones(shape: Any, dtype: DTypeLike | None = None, *,
   dtypes.check_user_dtype_supported(dtype, "ones")
   return lax.full(shape, 1, _jnp_dtype(dtype), sharding=_normalize_to_sharding(device))
 
-@util.implements(np.empty, lax_description="""\
-Because XLA cannot create uninitialized arrays, the JAX version will
-return an array initialized with zeros.""")
+
 def empty(shape: Any, dtype: DTypeLike | None = None, *,
           device: xc.Device | Sharding | None = None) -> Array:
+  """Create an empty array.
+
+  JAX implementation of :func:`numpy.empty`. Because XLA cannot create an
+  un-initialized array, :func:`jax.numpy.empty` will always return an array
+  full of zeros.
+
+  Args:
+    shape: int or sequence of ints specifying the shape of the created array.
+    dtype: optional dtype for the created array; defaults to floating point.
+    device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Array of the specified shape and dtype, on the specified device if specified.
+
+  See also:
+    - :func:`jax.numpy.empty_like`
+    - :func:`jax.numpy.zeros`
+    - :func:`jax.numpy.ones`
+    - :func:`jax.numpy.full`
+
+  Examples:
+    >>> jnp.empty(4)
+    Array([0., 0., 0., 0.], dtype=float32)
+    >>> jnp.empty((2, 3), dtype=bool)
+    Array([[False, False, False],
+           [False, False, False]], dtype=bool)
+  """
   if (m := _check_forgot_shape_tuple("empty", shape, dtype)): raise TypeError(m)
   dtypes.check_user_dtype_supported(dtype, "empty")
   return zeros(shape, dtype, device=device)
@@ -3415,8 +3741,38 @@ def _check_forgot_shape_tuple(name, shape, dtype) -> str | None:  # type: ignore
             "with a single tuple argument for the shape?")
 
 
-@util.implements(np.array_equal)
 def array_equal(a1: ArrayLike, a2: ArrayLike, equal_nan: bool = False) -> Array:
+  """Check if two arrays are element-wise equal.
+
+  JAX implementation of :func:`numpy.array_equal`.
+
+  Args:
+    a1: first input array to compare.
+    a2: second input array to compare.
+    equal_nan: Boolean. If ``True``, NaNs in ``a1`` will be considered
+      equal to NaNs in ``a2``. Default is ``False``.
+
+  Returns:
+    Boolean scalar array indicating whether the input arrays are element-wise equal.
+
+  See Also:
+    - :func:`jax.numpy.allclose`
+    - :func:`jax.numpy.array_equiv`
+
+  Examples:
+    >>> jnp.array_equal(jnp.array([1, 2, 3]), jnp.array([1, 2, 3]))
+    Array(True, dtype=bool)
+    >>> jnp.array_equal(jnp.array([1, 2, 3]), jnp.array([1, 2]))
+    Array(False, dtype=bool)
+    >>> jnp.array_equal(jnp.array([1, 2, 3]), jnp.array([1, 2, 4]))
+    Array(False, dtype=bool)
+    >>> jnp.array_equal(jnp.array([1, 2, float('nan')]),
+    ...                 jnp.array([1, 2, float('nan')]))
+    Array(False, dtype=bool)
+    >>> jnp.array_equal(jnp.array([1, 2, float('nan')]),
+    ...                 jnp.array([1, 2, float('nan')]), equal_nan=True)
+    Array(True, dtype=bool)
+  """
   a1, a2 = asarray(a1), asarray(a2)
   if shape(a1) != shape(a2):
     return bool_(False)
@@ -3509,8 +3865,66 @@ def fromstring(string: str, dtype: DTypeLike = float, count: int = -1, *, sep: s
   return asarray(np.fromstring(string=string, dtype=dtype, count=count, sep=sep))
 
 
-@util.implements(np.eye)
 def eye(N: DimSize, M: DimSize | None = None,
+        k: int | ArrayLike = 0,
+        dtype: DTypeLike | None = None,
+        *, device: xc.Device | Sharding | None = None) -> Array:
+  """Create a square or rectangular identity matrix
+
+  JAX implementation of :func:`numpy.eye`.
+
+  Args:
+    N: integer specifying the first dimension of the array.
+    M: optional integer specifying the second dimension of the array;
+      defaults to the same value as ``N``.
+    k: optional integer specifying the offset of the diagonal. Use positive
+      values for upper diagonals, and negative values for lower diagonals.
+      Default is zero.
+    dtype: optional dtype; defaults to floating point.
+    device: optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Identity array of shape ``(N, M)``, or ``(N, N)`` if ``M`` is not specified.
+
+  See also:
+    :func:`jax.numpy.identity`: Simpler API for generating square identity matrices.
+
+  Examples:
+    A simple 3x3 identity matrix:
+
+    >>> jnp.eye(3)
+    Array([[1., 0., 0.],
+           [0., 1., 0.],
+           [0., 0., 1.]], dtype=float32)
+
+    Integer identity matrices with offset diagonals:
+
+    >>> jnp.eye(3, k=1, dtype=int)
+    Array([[0, 1, 0],
+           [0, 0, 1],
+           [0, 0, 0]], dtype=int32)
+    >>> jnp.eye(3, k=-1, dtype=int)
+    Array([[0, 0, 0],
+           [1, 0, 0],
+           [0, 1, 0]], dtype=int32)
+
+    Non-square identity matrix:
+
+    >>> jnp.eye(3, 5, k=1)
+    Array([[0., 1., 0., 0., 0.],
+           [0., 0., 1., 0., 0.],
+           [0., 0., 0., 1., 0.]], dtype=float32)
+  """
+  # TODO(vfdev-5): optimize putting the array directly on the device specified
+  # instead of putting it on default device and then on the specific device
+  output = _eye(N, M=M, k=k, dtype=dtype)
+  if device is not None:
+    return jax.device_put(output, device=device)
+  return output
+
+
+def _eye(N: DimSize, M: DimSize | None = None,
         k: int | ArrayLike = 0,
         dtype: DTypeLike | None = None) -> Array:
   dtypes.check_user_dtype_supported(dtype, "eye")
@@ -3529,23 +3943,119 @@ def eye(N: DimSize, M: DimSize | None = None,
   return (i + offset == j).astype(dtype)
 
 
-@util.implements(np.identity)
 def identity(n: DimSize, dtype: DTypeLike | None = None) -> Array:
+  """Create a square identity matrix
+
+  JAX implementation of :func:`numpy.identity`.
+
+  Args:
+    n: integer specifying the size of each array dimension.
+    dtype: optional dtype; defaults to floating point.
+
+  Returns:
+    Identity array of shape ``(n, n)``.
+
+  See also:
+    :func:`jax.numpy.eye`: non-square and/or offset identity matrices.
+
+  Examples:
+    A simple 3x3 identity matrix:
+
+    >>> jnp.identity(3)
+    Array([[1., 0., 0.],
+           [0., 1., 0.],
+           [0., 0., 1.]], dtype=float32)
+
+    A 2x2 integer identity matrix:
+
+    >>> jnp.identity(2, dtype=int)
+    Array([[1, 0],
+           [0, 1]], dtype=int32)
+  """
   dtypes.check_user_dtype_supported(dtype, "identity")
   return eye(n, dtype=dtype)
 
 
-@util.implements(np.arange,lax_description= """
-.. note::
-
-   Using ``arange`` with the ``step`` argument can lead to precision errors,
-   especially with lower-precision data types like ``fp8`` and ``bf16``.
-   For more details, see the docstring of :func:`numpy.arange`.
-   To avoid precision errors, consider using an expression like
-   ``(jnp.arange(-600, 600) * .01).astype(jnp.bfloat16)`` to generate a sequence in a higher precision
-   and then convert it to the desired lower precision.
-""")
 def arange(start: DimSize, stop: DimSize | None = None,
+           step: DimSize | None = None, dtype: DTypeLike | None = None,
+           *, device: xc.Device | Sharding | None = None) -> Array:
+  """Create an array of evenly-spaced values.
+
+  JAX implementation of :func:`numpy.arange`, implemented in terms of
+  :func:`jax.lax.iota`.
+
+  Similar to Python's :func:`range` function, this can be called with a few
+  different positional signatures:
+
+  - ``jnp.arange(stop)``: generate values from 0 to ``stop``, stepping by 1.
+  - ``jnp.arange(start, stop)``: generate values from ``start`` to ``stop``,
+    stepping by 1.
+  - ``jnp.arange(start, stop, step)``: generate values from ``start`` to ``stop``,
+    stepping by ``step``.
+
+  Like with Python's :func:`range` function, the starting value is inclusive,
+  and the stop value is exclusive.
+
+  Args:
+    start: start of the interval, inclusive.
+    stop: optional end of the interval, exclusive. If not specified, then
+      ``(start, stop) = (0, start)``
+    step: optional step size for the interval. Default = 1.
+    dtype: optional dtype for the returned array; if not specified it will
+      be determined via type promotion of `start`, `stop`, and `step`.
+    device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Array of evenly-spaced values from ``start`` to ``stop``, separated by ``step``.
+
+  Note:
+    Using ``arange`` with a floating-point ``step`` argument can lead to unexpected
+    results due to accumulation of floating-point errors, especially with
+    lower-precision data types like ``float8_*`` and ``bfloat16``.
+    To avoid precision errors, consider generating a range of integers, and scaling
+    it to the desired range. For example, instead of this::
+
+       jnp.arange(-1, 1, 0.01, dtype='bfloat16')
+
+    it can be more accurate to generate a sequence of integers, and scale them::
+
+       (jnp.arange(-100, 100) * 0.01).astype('bfloat16')
+
+  Examples:
+    Single-argument version specifies only the ``stop`` value:
+
+    >>> jnp.arange(4)
+    Array([0, 1, 2, 3], dtype=int32)
+
+    Passing a floating-point ``stop`` value leads to a floating-point result:
+
+    >>> jnp.arange(4.0)
+    Array([0., 1., 2., 3.], dtype=float32)
+
+    Two-argument version specifies ``start`` and ``stop``, with ``step=1``:
+
+    >>> jnp.arange(1, 6)
+    Array([1, 2, 3, 4, 5], dtype=int32)
+
+    Three-argument version specifies ``start``, ``stop``, and ``step``:
+
+    >>> jnp.arange(0, 2, 0.5)
+    Array([0. , 0.5, 1. , 1.5], dtype=float32)
+
+  See Also:
+    - :func:`jax.numpy.linspace`: generate a fixed number of evenly-spaced values.
+    - :func:`jax.lax.iota`: directly generate integer sequences in XLA.
+  """
+  # TODO(vfdev-5): optimize putting the array directly on the device specified
+  # instead of putting it on default device and then on the specific device
+  output = _arange(start, stop=stop, step=step, dtype=dtype)
+  if device is not None:
+    return jax.device_put(output, device=device)
+  return output
+
+
+def _arange(start: DimSize, stop: DimSize | None = None,
            step: DimSize | None = None, dtype: DTypeLike | None = None) -> Array:
   dtypes.check_user_dtype_supported(dtype, "arange")
   if not config.dynamic_shapes.value:
@@ -3804,7 +4314,7 @@ def ix_(*args: ArrayLike) -> tuple[Array, ...]:
     - :obj:`jax.numpy.mgrid`
     - :func:`jax.numpy.meshgrid`
 
-  Example:
+  Examples:
     >>> rows = jnp.array([0, 2])
     >>> cols = jnp.array([1, 3])
     >>> open_mesh = jnp.ix_(rows, cols)
@@ -5240,7 +5750,7 @@ def einsum_path(
     A tuple containing the path that may be passed to :func:`~jax.numpy.einsum`, and a
     printable object representing this optimal path.
 
-  Example:
+  Examples:
     >>> key1, key2, key3 = jax.random.split(jax.random.key(0), 3)
     >>> x = jax.random.randint(key1, minval=-5, maxval=5, shape=(2, 3))
     >>> y = jax.random.randint(key2, minval=-5, maxval=5, shape=(3, 100))
@@ -6178,7 +6688,7 @@ def take(
     - :attr:`jax.numpy.ndarray.at`: take values via indexing syntax.
     - :func:`jax.numpy.take_along_axis`: take values along an axis
 
-  Example:
+  Examples:
     >>> x = jnp.array([[1., 2., 3.],
     ...                [4., 5., 6.]])
     >>> indices = jnp.array([2, 0])

@@ -1,5 +1,7 @@
 # Runtime value debugging in JAX
 
+<!--* freshness: { reviewed: '2024-04-11' } *-->
+
 Do you have exploding gradients? Are NaNs making you gnash your teeth? Just want to poke around the intermediate values in your computation? Check out the following JAX debugging tools! This page has TL;DR summaries and you can click the "Read more" links at the bottom to learn more.
 
 Table of contents:

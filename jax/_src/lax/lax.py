@@ -15,14 +15,14 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import enum
 import functools
 from functools import partial
 import itertools
 import math
 import operator
-from typing import Any, Callable, ClassVar, TypeVar, Union, cast as type_cast, overload, TYPE_CHECKING
+from typing import Any, ClassVar, TypeVar, Union, cast as type_cast, overload, TYPE_CHECKING
 import warnings
 
 import numpy as np
@@ -648,22 +648,26 @@ if TYPE_CHECKING:
 else:
 
   class Precision(enum.Enum):
-    """Precision enum for lax functions
+    """Precision enum for lax matrix multiply related functions.
 
-    The `precision` argument to JAX functions generally controls the tradeoff
-    between speed and accuracy for array computations on accelerator backends,
-    (i.e. TPU and GPU). Members are:
+    The device-dependent `precision` argument to JAX functions generally
+    controls the tradeoff between speed and accuracy for array computations on
+    accelerator backends, (i.e. TPU and GPU). Has no impact on CPU backends.
+    This only has an effect on float32 computations, and does not affect the
+    input/output datatypes. Members are:
 
     DEFAULT:
-      Fastest mode, but least accurate. Performs computations in bfloat16.
-      Aliases: ``'default'``, ``'fastest'``, ``'bfloat16'``.
+      Fastest mode, but least accurate. On TPU: performs float32 computations in
+      bfloat16. On GPU: uses tensorfloat32 if available (e.g. on A100 and H100
+      GPUs), otherwise standard float32 (e.g. on V100 GPUs). Aliases:
+      ``'default'``, ``'fastest'``.
     HIGH:
-      Slower but more accurate. Performs float32 computations in 3 bfloat16
-      passes, or using tensorfloat32 where available. Aliases: ``'high'``,
-      ``'bfloat16_3x'``, ``'tensorfloat32'``.
+      Slower but more accurate. On TPU: performs float32 computations in 3
+      bfloat16 passes. On GPU: uses tensorfloat32 where available, otherwise
+      float32. Aliases: ``'high'``..
     HIGHEST:
-      Slowest but most accurate. Performs computations in float32 or float64
-      as applicable. Aliases: ``'highest'``, ``'float32'``.
+      Slowest but most accurate. On TPU: performs float32 computations in 6
+      bfloat16. Aliases: ``'highest'``. On GPU: uses float32.
     """
 
     DEFAULT = 0
@@ -1241,7 +1245,7 @@ def top_k(operand: ArrayLike, k: int) -> tuple[Array, Array]:
     - :func:`jax.lax.approx_max_k`
     - :func:`jax.lax.approx_min_k`
 
-  Example:
+  Examples:
     Find the largest three values, and their indices, within an array:
 
     >>> x = jnp.array([9., 3., 6., 4., 10.])
@@ -1774,7 +1778,7 @@ def broadcast_hlo(
     if aval.shape != aval_out.shape:
       assert len(aval.shape) <= len(aval_out.shape), (aval, aval_out)
       dims = mlir.dense_int_array(
-          range(len(aval_out.shape) - len(aval.shape), len(aval_out.shape)))
+          list(range(len(aval_out.shape) - len(aval.shape), len(aval_out.shape))))
       if any(isinstance(d, ir.Value) for d in aval_out.shape):
         arg = hlo.dynamic_broadcast_in_dim(
             mlir.aval_to_ir_type(aval_out), arg,
@@ -2959,16 +2963,6 @@ def _dot_general_lower(ctx, lhs, rhs, *, dimension_numbers,
                               core.ShapedArray(rhs_aval.shape, aval_out.dtype))
         lhs_dtype = rhs_dtype = aval_out.dtype
 
-  # TODO(b/195364460): Work around slow XLA/CPU implementation of float16 matmul
-  if platform == "cpu":
-    if lhs_dtype == np.float16:
-      lhs = mlir.convert_hlo(ctx, lhs, lhs_aval,
-                             core.ShapedArray(lhs_aval.shape, np.float32))
-
-    if rhs_dtype == np.float16:
-      rhs = mlir.convert_hlo(ctx, rhs, rhs_aval,
-                             core.ShapedArray(rhs_aval.shape, np.float32))
-
 
   dot_dnums = hlo.DotDimensionNumbers.get(
       lhs_batching_dimensions=list(lhs_batch),
@@ -2996,10 +2990,10 @@ def _ragged_dot_shape_rule(lhs: Array, rhs: Array, group_sizes: Array, **_) -> S
   m, k = lhs.shape
   group_count, rk, n = rhs.shape
   if k != rk:
-    raise TypeError("ragged_dot requires that lhs.shape[1] == rhs.shape[1]: got {} and {}.".format(k, rk))
+    raise TypeError(f"ragged_dot requires that lhs.shape[1] == rhs.shape[1]: got {k} and {rk}.")
   num_groups = group_sizes.shape[0]
   if group_count != num_groups:
-    raise TypeError("ragged_dot requires that rhs.shape[0] == group_sizes.shape[0]: got {} and {}.".format(group_count, num_groups))
+    raise TypeError(f"ragged_dot requires that rhs.shape[0] == group_sizes.shape[0]: got {group_count} and {num_groups}.")
   return (m, n)
 
 # DotDimensionNumbers used in the dot_general call for ragged_dot().

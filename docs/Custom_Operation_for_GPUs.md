@@ -1,5 +1,7 @@
 # Custom operations for GPUs with C++ and CUDA
 
+<!--* freshness: { reviewed: '2024-06-07' } *-->
+
 JAX ships with a large number of built-in operations, but users occasionally run into a situation where they need a new operation that is not supported by JAX.
 
 To accommodate such scenarios, JAX allows users to define custom operations and this tutorial is to explain how we can define one for GPUs and use it in single-GPU and multi-GPU environments.

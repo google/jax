@@ -14,9 +14,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
-from typing import Callable
 import warnings
 
 from jax import tree_util

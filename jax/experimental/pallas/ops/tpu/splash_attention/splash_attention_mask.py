@@ -16,8 +16,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 import dataclasses
-from typing import Any, Callable, Sequence, Tuple
+from typing import Any
 import numpy as np
 
 # mypy: ignore-errors
@@ -26,7 +27,7 @@ class Mask:
   """A base class for splash attention masks."""
 
   @property
-  def shape(self) -> Tuple[int, ...]:
+  def shape(self) -> tuple[int, ...]:
     raise NotImplementedError
 
   def __getitem__(self, idx) -> np.ndarray:
@@ -38,14 +39,14 @@ class Mask:
         ' instead of bitwise operations on masks.'
     )
 
-  def __or__(self, other: 'Mask') -> 'Mask':
+  def __or__(self, other: Mask) -> Mask:
     if self.shape != other.shape:
       raise ValueError(
           f'Invalid shape for other: {other.shape}, expected: {self.shape}'
       )
     return LogicalOr(self, other)
 
-  def __and__(self, other: 'Mask') -> 'Mask':
+  def __and__(self, other: Mask) -> Mask:
     if self.shape != other.shape:
       raise ValueError(
           f'Invalid shape for other: {other.shape}, expected: {self.shape}'
@@ -53,7 +54,7 @@ class Mask:
     return LogicalAnd(self, other)
 
 
-def make_causal_mask(shape: Tuple[int, int], offset: int = 0) -> np.ndarray:
+def make_causal_mask(shape: tuple[int, int], offset: int = 0) -> np.ndarray:
   """Makes a causal attention mask.
 
   Args:
@@ -73,8 +74,8 @@ def make_causal_mask(shape: Tuple[int, int], offset: int = 0) -> np.ndarray:
 
 
 def make_local_attention_mask(
-    shape: Tuple[int, int],
-    window_size: Tuple[int | None, int | None],
+    shape: tuple[int, int],
+    window_size: tuple[int | None, int | None],
     *,
     offset: int = 0,
 ) -> np.ndarray:
@@ -92,7 +93,7 @@ def make_local_attention_mask(
 
 
 def make_random_mask(
-    shape: Tuple[int, int], sparsity: float, seed: int
+    shape: tuple[int, int], sparsity: float, seed: int
 ) -> np.ndarray:
   """Makes a random attention mask."""
   np.random.seed(seed)
@@ -111,7 +112,7 @@ class LogicalOr(Mask):
     self.right = right
 
   @property
-  def shape(self) -> Tuple[int, ...]:
+  def shape(self) -> tuple[int, ...]:
     return self.left.shape
 
   def __getitem__(self, idx) -> np.ndarray:
@@ -133,7 +134,7 @@ class LogicalAnd(Mask):
     self.right = right
 
   @property
-  def shape(self) -> Tuple[int, ...]:
+  def shape(self) -> tuple[int, ...]:
     return self.left.shape
 
   def __getitem__(self, idx) -> np.ndarray:
@@ -167,7 +168,7 @@ class MultiHeadMask(Mask):
       raise ValueError('Nesting MultiHeadMasks is not supported')
 
   @property
-  def shape(self) -> Tuple[int, ...]:
+  def shape(self) -> tuple[int, ...]:
     return (len(self.masks),) + self.masks[0].shape
 
   def __getitem__(self, idx) -> np.ndarray:
@@ -208,13 +209,13 @@ class _ComputableMask(Mask):
       mask rather than loading it.
   """
 
-  _shape: Tuple[int, int]
+  _shape: tuple[int, int]
   q_sequence: np.ndarray
   mask_function: Callable[..., Any]
 
   def __init__(
       self,
-      shape: Tuple[int, int],
+      shape: tuple[int, int],
       mask_function: Callable[..., Any],
       shard_count: int = 1,
   ):
@@ -231,7 +232,7 @@ class _ComputableMask(Mask):
     self.q_sequence = np.arange(q_seq_len, dtype=np.int32)
 
   @property
-  def shape(self) -> Tuple[int, ...]:
+  def shape(self) -> tuple[int, ...]:
     return self._shape
 
   def __getitem__(self, idx) -> np.ndarray:
@@ -271,7 +272,7 @@ class CausalMask(_ComputableMask):
 
   def __init__(
       self,
-      shape: Tuple[int, int],
+      shape: tuple[int, int],
       offset: int = 0,
       shard_count: int = 1,
   ):
@@ -329,15 +330,15 @@ class LocalMask(Mask):
 
   # TODO(amagni): Transform LocalMask into a _ComputableMask.
 
-  _shape: Tuple[int, int]
-  window_size: Tuple[int | None, int | None]
+  _shape: tuple[int, int]
+  window_size: tuple[int | None, int | None]
   offset: int
   _q_sequence: np.ndarray | None = None
 
   def __init__(
       self,
-      shape: Tuple[int, int],
-      window_size: Tuple[int | None, int | None],
+      shape: tuple[int, int],
+      window_size: tuple[int | None, int | None],
       offset: int,
       shard_count: int = 1,
   ):
@@ -352,7 +353,7 @@ class LocalMask(Mask):
       )
 
   @property
-  def shape(self) -> Tuple[int, int]:
+  def shape(self) -> tuple[int, int]:
     return self._shape
 
   def __getitem__(self, idx) -> np.ndarray:
@@ -429,7 +430,7 @@ class NumpyMask(Mask):
       raise ValueError('Mask must be a boolean array')
 
   @property
-  def shape(self) -> Tuple[int, ...]:
+  def shape(self) -> tuple[int, ...]:
     return self.array.shape
 
   def __getitem__(self, idx) -> np.ndarray:
@@ -467,7 +468,7 @@ class FullMask(Mask):
       raise ValueError(f'Unsupported shape type: {type(self.shape)}')
 
   @property
-  def shape(self) -> Tuple[int, ...]:
+  def shape(self) -> tuple[int, ...]:
     return self._shape
 
   def __getitem__(self, idx) -> np.ndarray:

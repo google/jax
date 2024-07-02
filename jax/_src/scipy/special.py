@@ -35,6 +35,8 @@ from jax._src.numpy.util import promote_args_inexact, promote_dtypes_inexact
 from jax._src.ops import special as ops_special
 from jax._src.third_party.scipy.betaln import betaln as _betaln_impl
 from jax._src.typing import Array, ArrayLike
+from jax._src.nn.functions import softmax as nn_softmax
+from jax._src.nn.functions import log_softmax as nn_log_softmax
 
 
 def gammaln(x: ArrayLike) -> Array:
@@ -2582,3 +2584,72 @@ hyp1f1.defjvps(
   lambda b_dot, primal_out, a, b, x: _hyp1f1_b_derivative(a, b, x) * b_dot,
   lambda x_dot, primal_out, a, b, x: _hyp1f1_x_derivative(a, b, x) * x_dot
 )
+
+
+def softmax(x: ArrayLike,
+            /,
+            *,
+            axis: int | tuple[int, ...] | None = None,
+            ) -> Array:
+  r"""Softmax function.
+
+  JAX implementation of :func:`scipy.special.softmax`.
+
+  Computes the function which rescales elements to the range :math:`[0, 1]`
+  such that the elements along :code:`axis` sum to :math:`1`.
+
+  .. math ::
+    \mathrm{softmax}(x) = \frac{\exp(x_i)}{\sum_j \exp(x_j)}
+
+  Args:
+    x : input array
+    axis: the axis or axes along which the softmax should be computed. The
+      softmax output summed across these dimensions should sum to :math:`1`.
+
+  Returns:
+    An array of the same shape as ``x``.
+
+  Note:
+    If any input values are ``+inf``, the result will be all ``NaN``: this
+    reflects the fact that ``inf / inf`` is not well-defined in the context of
+    floating-point math.
+
+  See also:
+    :func:`log_softmax`
+  """
+  return nn_softmax(x, axis=axis)
+
+
+def log_softmax(x: ArrayLike,
+                /,
+                *,
+                axis: int | tuple[int, ...] | None = None,
+                ) -> Array:
+  r"""Log-Softmax function.
+
+  JAX implementation of :func:`scipy.special.log_softmax`
+
+  Computes the logarithm of the :code:`softmax` function, which rescales
+  elements to the range :math:`[-\infty, 0)`.
+
+  .. math ::
+    \mathrm{log\_softmax}(x)_i = \log \left( \frac{\exp(x_i)}{\sum_j \exp(x_j)}
+    \right)
+
+  Args:
+    x : input array
+    axis: the axis or axes along which the :code:`log_softmax` should be
+      computed.
+
+  Returns:
+    An array of the same shape as ``x``
+
+  Note:
+    If any input values are ``+inf``, the result will be all ``NaN``: this
+    reflects the fact that ``inf / inf`` is not well-defined in the context of
+    floating-point math.
+
+  See also:
+    :func:`softmax`
+  """
+  return nn_log_softmax(x, axis=axis)

@@ -16,12 +16,12 @@
 from __future__ import annotations
 
 import importlib.util
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import functools
 import logging
 import string
 import sys
-from typing import Any, Callable, Union
+from typing import Any, Union
 import weakref
 
 import numpy as np

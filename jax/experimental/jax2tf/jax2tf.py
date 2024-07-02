@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from functools import partial
 import contextlib
 import math
@@ -23,7 +23,7 @@ import operator
 import os
 import re
 import threading
-from typing import Any, Callable, Union
+from typing import Any, Union
 import warnings
 
 from absl import logging
@@ -3019,9 +3019,9 @@ tf_impl_with_avals[lax.scatter_mul_p] = _scatter
 tf_impl_with_avals[lax.scatter_add_p] = _scatter
 
 
-def _cond(index: TfVal, *operands: TfVal, branches: Sequence[core.ClosedJaxpr],
-          linear: Sequence[bool]) -> Sequence[TfVal]:
-  del linear
+def _cond(
+    index: TfVal, *operands: TfVal, branches: Sequence[core.ClosedJaxpr]
+) -> Sequence[TfVal]:
   # tf.cond needs lambdas with no arguments.
   branches_tf = [
       partial(_interpret_jaxpr, jaxpr, *operands,
@@ -3132,7 +3132,7 @@ tf_impl_with_avals[lax.scan_p] = _convert_jax_impl(
     extra_name_stack="scan")
 
 tf_impl_with_avals[ad_checkpoint.remat_p] = \
-  _convert_jax_impl(partial(ad_checkpoint.remat_lowering,
+  _convert_jax_impl(partial(ad_checkpoint.remat_expansion,
                             # TODO: jax2tf cannot discriminate by platform
                             is_gpu_platform=False),
                     multiple_results=True,

@@ -215,6 +215,28 @@ pybind_extension(
     ],
 )
 
+pybind_extension(
+    name = "rocm_plugin_extension",
+    srcs = ["rocm_plugin_extension.cc"],
+    module_name = "rocm_plugin_extension",
+    deps = [
+        "//jaxlib:kernel_nanobind_helpers",
+        "@xla//third_party/python_runtime:headers",
+        "@xla//xla:status",
+        "@xla//xla:util",
+        "@xla//xla/ffi/api:c_api",
+        "@xla//xla/pjrt:status_casters",
+        "@xla//xla/pjrt/c:pjrt_c_api_gpu_extension_hdrs",
+        "@xla//xla/pjrt/c:pjrt_c_api_hdrs",
+        "@xla//xla/pjrt/c:pjrt_c_api_helpers",
+        "@xla//xla/python:py_client_gpu",
+        "@xla//xla/tsl/python/lib/core:numpy",
+        "@com_google_absl//absl/status",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@nanobind",
+    ],
+)
+
 # CPU kernels
 
 # TODO(phawkins): Remove this forwarding target.

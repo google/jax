@@ -17,11 +17,11 @@
 from __future__ import annotations
 
 import collections
-from collections.abc import Sequence
+from collections.abc import Callable, Generator, MutableMapping, Sequence
 import itertools
 import logging
 import math
-from typing import Any, Callable, Generator, MutableMapping
+from typing import Any
 
 from jax._src import xla_bridge as xb
 import numpy as np

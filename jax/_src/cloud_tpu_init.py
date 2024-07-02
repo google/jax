@@ -16,7 +16,6 @@ import os
 from jax import version
 from jax._src import config
 from jax._src import hardware_utils
-from typing import Optional
 
 running_in_cloud_tpu_vm: bool = False
 
@@ -35,7 +34,7 @@ def maybe_import_libtpu():
     return libtpu
 
 
-def get_tpu_library_path() -> Optional[str]:
+def get_tpu_library_path() -> str | None:
   path_from_env = os.getenv("TPU_LIBRARY_PATH")
   if path_from_env is not None and os.path.isfile(path_from_env):
     return path_from_env

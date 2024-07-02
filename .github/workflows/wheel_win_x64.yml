@@ -13,7 +13,7 @@ jobs:
       matrix:
         os: [windows-2019-32core]
         arch: [AMD64]
-        pyver: ['3.9', '3.10', '3.11', '3.12']
+        pyver: ['3.10', '3.11', '3.12']
     name: ${{ matrix.os }} ${{ matrix.pyver }} jaxlib wheel build
     runs-on: ${{ matrix.os }}
 

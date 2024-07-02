@@ -3,6 +3,11 @@
 
 .. automodule:: jax.export
 
+:mod:`jax.export` is a library for exporting and serializing JAX functions
+for persistent archival.
+
+See the :ref:`export` documentation.
+
 Classes
 -------
 

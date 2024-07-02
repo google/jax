@@ -17,12 +17,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import dataclasses
 import functools
 from functools import partial
 import itertools as it
-from typing import Any, Callable, Protocol, Union
+from typing import Any, Protocol, Union
 
 import numpy as np
 

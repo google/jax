@@ -19,15 +19,14 @@ import enum
 from contextlib import contextmanager
 import collections
 from collections import namedtuple
-from collections.abc import Sequence, Iterable
+from collections.abc import Callable, Sequence, Iterable, Iterator
 import dataclasses
 from functools import partial, lru_cache, cached_property
 import itertools as it
 import logging
 import math
 import threading
-from typing import Any, Callable, NamedTuple, TypeVar, Union, cast
-from collections.abc import Iterator
+from typing import Any, NamedTuple, TypeVar, Union, cast
 import warnings
 
 import numpy as np
@@ -1938,7 +1937,7 @@ def _maybe_get_default_layout(arg_layout, jit_in_layout, sharding, aval
   # first call you pass it a sharded array with layout and on second call you
   # pass a numpy array. The layouts should be the same to get cache hits.
   try:
-    al = DeviceLocalLayout(
+    al = DeviceLocalLayout.from_pjrt_layout(
         d.client.get_default_layout(aval.dtype, shard_shape, d))
   except:
     return None
@@ -2705,7 +2704,7 @@ def _get_layouts_from_executable(
 
   new_in_layouts = []
   for x, i in safe_zip(in_layouts_xla, in_layouts):
-    x = DeviceLocalLayout(x)
+    x = DeviceLocalLayout.from_pjrt_layout(x)
     if isinstance(i, DeviceLocalLayout):
       if i != x:
         raise AssertionError(
@@ -2717,7 +2716,7 @@ def _get_layouts_from_executable(
 
   new_out_layouts = []
   for x, o in safe_zip(out_layouts_xla, out_layouts):
-    x = DeviceLocalLayout(x)
+    x = DeviceLocalLayout.from_pjrt_layout(x)
     if isinstance(o, DeviceLocalLayout):
       if o != x:
         raise AssertionError(

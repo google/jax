@@ -14,11 +14,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 import math
 import operator
-from typing import Callable
 import warnings
 
 import numpy as np
@@ -501,7 +500,7 @@ def detrend(data: ArrayLike, axis: int = -1, type: str = 'linear', bp: int = 0,
   Returns:
     The detrended data array.
 
-  Example:
+  Examples:
     A simple detrend operation in one dimension:
 
     >>> data = jnp.array([1., 4., 8., 8., 9.])
@@ -1082,7 +1081,7 @@ def istft(Zxx: Array, fs: ArrayLike = 1.0, window: str = 'hann',
   See Also:
     :func:`jax.scipy.signal.stft`: short-time Fourier transform.
 
-  Example:
+  Examples:
     Demonstrate that this gives the inverse of :func:`~jax.scipy.signal.stft`:
 
     >>> x = jnp.array([1., 2., 3., 2., 1., 0., 1., 2.])

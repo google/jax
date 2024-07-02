@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 import inspect
 import operator
 from functools import partial, lru_cache
-from typing import Any, Callable, Type
+from typing import Any
 
 import numpy as np
 
@@ -713,6 +713,6 @@ class _HashableByObjectId:
   def __eq__(self, other):
     return self.val is other.val
 
-def register_class_with_attrs(t: Type) -> None:
+def register_class_with_attrs(t: type) -> None:
   _class_with_attrs.add(t)
-_class_with_attrs: set[Type] = set()
+_class_with_attrs: set[type] = set()

@@ -78,7 +78,7 @@ class AbstractSemaphoreTy(dtypes.ExtendedDType):
     return self.__class__ == other.__class__
 
   def __hash__(self) -> int:
-    return hash((self.__class__))
+    return hash(self.__class__)
 
 # TODO(sharadmv): implement dtype rules for AbstractSemaphoreTy
 
@@ -109,7 +109,7 @@ class SemaphoreType(enum.Enum):
       dtype = SemaphoreTy()
     return MemoryRef(shape, dtype, TPUMemorySpace.SEMAPHORE)
 
-  def get_aval(self) -> "AbstractMemoryRef":
+  def get_aval(self) -> AbstractMemoryRef:
     return self(()).get_aval()
 
 @dataclasses.dataclass(frozen=True)

@@ -13,7 +13,8 @@
 # limitations under the License.
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, TypeVar, overload
+from collections.abc import Callable, Iterable
+from typing import Any, TypeVar, overload
 
 from jax._src import tree_util
 
@@ -67,7 +68,7 @@ def flatten(tree: Any,
     A pair where the first element is a list of leaf values and the second
     element is a treedef representing the structure of the flattened tree.
 
-  Example:
+  Examples:
     >>> import jax
     >>> vals, treedef = jax.tree.flatten([1, (2, 3), [4, 5]])
     >>> vals
@@ -98,7 +99,7 @@ def leaves(tree: Any,
   Returns:
     leaves: a list of tree leaves.
 
-  Example:
+  Examples:
     >>> import jax
     >>> jax.tree.leaves([1, (2, 3), [4, 5]])
     [1, 2, 3, 4, 5]
@@ -211,7 +212,7 @@ def structure(tree: Any,
   Returns:
     pytreedef: a PyTreeDef representing the structure of the tree.
 
-  Example:
+  Examples:
     >>> import jax
     >>> jax.tree.structure([1, (2, 3), [4, 5]])
     PyTreeDef([*, (*, *), [*, *]])
@@ -270,7 +271,7 @@ def unflatten(treedef: tree_util.PyTreeDef,
     The reconstructed pytree, containing the ``leaves`` placed in the structure
     described by ``treedef``.
 
-  Example:
+  Examples:
     >>> import jax
     >>> vals, treedef = jax.tree.flatten([1, (2, 3), [4, 5]])
     >>> newvals = [100, 200, 300, 400, 500]

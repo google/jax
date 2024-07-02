@@ -36,6 +36,8 @@ limitations under the License.
 
 # Training a Simple Neural Network, with tensorflow/datasets Data Loading
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/neural_network_with_tfds_data.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/google/jax/blob/main/docs/notebooks/neural_network_with_tfds_data.ipynb)
 
 _Forked from_ `neural_network_and_data_loading.ipynb`

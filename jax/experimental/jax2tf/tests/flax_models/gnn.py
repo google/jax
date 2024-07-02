@@ -16,8 +16,7 @@
 https://github.com/google/flax/tree/main/examples/ogbg_molpcba
 """
 
-from collections.abc import Sequence
-from typing import Callable
+from collections.abc import Callable, Sequence
 
 from flax import linen as nn
 

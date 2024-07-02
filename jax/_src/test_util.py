@@ -15,7 +15,8 @@
 # pyformat: disable
 from __future__ import annotations
 
-from collections.abc import Generator, Iterable, Sequence
+import collections
+from collections.abc import Callable, Generator, Iterable, Sequence
 from contextlib import ExitStack, contextmanager
 import datetime
 import functools
@@ -27,7 +28,7 @@ import re
 import sys
 import tempfile
 import textwrap
-from typing import Any, Callable
+from typing import Any
 import unittest
 import warnings
 import zlib
@@ -315,6 +316,21 @@ def count_jit_tracing_cache_miss():
   finally:
     pjit_lib._create_pjit_jaxpr = original_create_pjit_jaxpr
 
+@contextmanager
+def count_jit_infer_params_cache_miss():
+  original_infer_params_impl = pjit_lib._infer_params_impl
+  count = collections.defaultdict(int)
+
+  def infer_params_impl_and_count(fun, *args, **kw):
+    count[fun] += 1
+    return original_infer_params_impl(fun, *args, **kw)
+
+  pjit_lib._infer_params_impl = infer_params_impl_and_count
+  try:
+    yield count
+  finally:
+    pjit_lib._infer_params_impl = original_infer_params_impl
+
 
 @contextmanager
 def count_aot_jit_cpp_cache_miss():
@@ -399,7 +415,7 @@ def supported_dtypes():
   return types
 
 def is_device_rocm():
-  return xla_bridge.get_backend().platform_version.startswith('rocm')
+  return 'rocm' in xla_bridge.get_backend().platform_version
 
 def is_device_cuda():
   return 'cuda' in xla_bridge.get_backend().platform_version
@@ -1501,7 +1517,7 @@ def register_event_duration_listener(callback):
 def set_env(**kwargs):
   """Context manager to temporarily set/unset one or more environment variables.
 
-  Example:
+  Examples:
 
     >>> import os
     >>> os.environ['my_var'] = 'original'

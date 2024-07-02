@@ -13,11 +13,11 @@
 # limitations under the License.
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 import re
 import textwrap
-from typing import Any, Callable, NamedTuple, TypeVar
+from typing import Any, NamedTuple, TypeVar
 
 import warnings
 

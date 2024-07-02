@@ -103,7 +103,7 @@ def cholesky(a: ArrayLike, *, upper: bool = False) -> Array:
     - :func:`jax.scipy.linalg.cholesky`: SciPy-style Cholesky API
     - :func:`jax.lax.linalg.cholesky`: XLA-style Cholesky API
 
-  Example:
+  Examples:
     A small real Hermitian positive-definite matrix:
 
     >>> x = jnp.array([[2., 1.],
@@ -250,7 +250,7 @@ def svd(
     - :func:`jax.scipy.linalg.svd`: SciPy-style SVD API
     - :func:`jax.lax.linalg.svd`: XLA-style SVD API
 
-  Example:
+  Examples:
     Consider the SVD of a small real-valued array:
 
     >>> x = jnp.array([[1., 2., 3.],
@@ -403,7 +403,7 @@ def matrix_rank(
   by the number of singular values greater than the specified tolerance.
 
   Args:
-    a: array of shape ``(..., M, N)`` whose rank is to be computed.
+    M: array of shape ``(..., N, K)`` whose rank is to be computed.
     rtol: optional array of shape ``(...)`` specifying the tolerance. Singular values
       smaller than `rtol * largest_singular_value` are considered to be zero. If
       ``rtol`` is None (the default), a reasonable default is chosen based the
@@ -1007,7 +1007,7 @@ def inv(a: ArrayLike) -> Array:
     - :func:`jax.scipy.linalg.inv`: SciPy-style API for matrix inverse
     - :func:`jax.numpy.linalg.solve`: direct linear solver
 
-  Example:
+  Examples:
     Compute the inverse of a 3x3 matrix
 
     >>> a = jnp.array([[1., 2., 3.],
@@ -1316,7 +1316,7 @@ def solve(a: ArrayLike, b: ArrayLike) -> Array:
     - :func:`jax.scipy.linalg.solve`: SciPy-style API for solving linear systems.
     - :func:`jax.lax.custom_linear_solve`: matrix-free linear solver.
 
-  Example:
+  Examples:
     A simple 3x3 linear system:
 
     >>> A = jnp.array([[1., 2., 3.],
@@ -1422,7 +1422,7 @@ def lstsq(a: ArrayLike, b: ArrayLike, rcond: float | None = None, *,
     - ``rank`` is the rank of the matrix ``a``.
     - ``s`` is the singular values of the matrix ``a``.
 
-  Example:
+  Examples:
     >>> a = jnp.array([[1, 2],
     ...                [3, 4]])
     >>> b = jnp.array([5, 6])
@@ -1454,7 +1454,7 @@ def cross(x1: ArrayLike, x2: ArrayLike, /, *, axis=-1):
   See Also:
     :func:`jax.numpy.cross`: more flexible cross-product API.
 
-  Example:
+  Examples:
 
     Showing that :math:`\hat{x} \times \hat{y} = \hat{z}`:
 
@@ -1497,7 +1497,7 @@ def outer(x1: ArrayLike, x2: ArrayLike, /) -> Array:
   See also:
     :func:`jax.numpy.outer`: similar function in the main :mod:`jax.numpy` module.
 
-  Example:
+  Examples:
     >>> x1 = jnp.array([1, 2, 3])
     >>> x2 = jnp.array([4, 5, 6])
     >>> jnp.linalg.outer(x1, x2)
@@ -1846,7 +1846,7 @@ def svdvals(x: ArrayLike, /) -> Array:
   See also:
     :func:`jax.numpy.linalg.svd`: compute singular values and singular vectors
 
-  Example:
+  Examples:
     >>> x = jnp.array([[1, 2, 3],
     ...                [4, 5, 6]])
     >>> jnp.linalg.svdvals(x)
@@ -1916,7 +1916,7 @@ def tensorinv(a: ArrayLike, ind: int = 2) -> Array:
     - :func:`jax.numpy.linalg.tensordot`
     - :func:`jax.numpy.linalg.tensorsolve`
 
-  Example:
+  Examples:
     >>> key = jax.random.key(1337)
     >>> x = jax.random.normal(key, shape=(2, 2, 4))
     >>> xinv = jnp.linalg.tensorinv(x, 2)

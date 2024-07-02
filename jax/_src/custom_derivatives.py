@@ -14,11 +14,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import dataclasses
 from functools import update_wrapper, reduce, partial
 import inspect
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from jax._src import config
 from jax._src import core
@@ -180,7 +180,7 @@ class custom_jvp(Generic[ReturnValue]):
     Returns:
       None.
 
-    Example::
+    Examples:
 
       @jax.custom_jvp
       def f(x, y):
@@ -212,7 +212,7 @@ class custom_jvp(Generic[ReturnValue]):
     Returns:
       None.
 
-    Example::
+    Examples:
 
       @jax.custom_jvp
       def f(x, y):
@@ -567,7 +567,7 @@ class custom_vjp(Generic[ReturnValue]):
     Returns:
       None.
 
-    Example::
+    Examples:
 
       @jax.custom_vjp
       def f(x, y):

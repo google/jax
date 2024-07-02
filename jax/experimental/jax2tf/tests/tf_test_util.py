@@ -14,12 +14,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import contextlib
 import dataclasses
 import re
 import os
-from typing import Any, Callable, Optional
+from typing import Any
 
 from absl.testing import absltest
 from absl import logging

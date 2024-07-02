@@ -15,8 +15,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable, Iterator
 from functools import partial, reduce, total_ordering, wraps
-from typing import Any, Callable, Iterator, NamedTuple
+from typing import Any, NamedTuple
 
 import jax
 from jax import lax

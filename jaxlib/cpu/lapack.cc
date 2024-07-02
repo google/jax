@@ -55,6 +55,10 @@ void GetLapackKernelsFromScipy() {
   AssignKernelFn<Getrf<double>>(lapack_ptr("dgetrf"));
   AssignKernelFn<Getrf<std::complex<float>>>(lapack_ptr("cgetrf"));
   AssignKernelFn<Getrf<std::complex<double>>>(lapack_ptr("zgetrf"));
+  AssignKernelFn<LuDecomposition<DataType::F32>>(lapack_ptr("sgetrf"));
+  AssignKernelFn<LuDecomposition<DataType::F64>>(lapack_ptr("dgetrf"));
+  AssignKernelFn<LuDecomposition<DataType::C64>>(lapack_ptr("cgetrf"));
+  AssignKernelFn<LuDecomposition<DataType::C128>>(lapack_ptr("zgetrf"));
 
   AssignKernelFn<Geqrf<float>>(lapack_ptr("sgeqrf"));
   AssignKernelFn<Geqrf<double>>(lapack_ptr("dgeqrf"));
@@ -178,6 +182,10 @@ nb::dict Registrations() {
   dict["lapack_zhetrd"] =
       EncapsulateFunction(Sytrd<std::complex<double>>::Kernel);
 
+  dict["lapack_sgetrf_ffi"] = EncapsulateFunction(lapack_sgetrf_ffi);
+  dict["lapack_dgetrf_ffi"] = EncapsulateFunction(lapack_dgetrf_ffi);
+  dict["lapack_cgetrf_ffi"] = EncapsulateFunction(lapack_cgetrf_ffi);
+  dict["lapack_zgetrf_ffi"] = EncapsulateFunction(lapack_zgetrf_ffi);
   dict["lapack_spotrf_ffi"] = EncapsulateFunction(lapack_spotrf_ffi);
   dict["lapack_dpotrf_ffi"] = EncapsulateFunction(lapack_dpotrf_ffi);
   dict["lapack_cpotrf_ffi"] = EncapsulateFunction(lapack_cpotrf_ffi);

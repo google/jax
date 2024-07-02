@@ -21,12 +21,12 @@ See README.md for how these are used.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import functools
 import logging
 import re
 import time
-from typing import Any, Callable, Optional
+from typing import Any
 from absl import flags
 
 import flax

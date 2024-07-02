@@ -16,6 +16,8 @@ kernelspec:
 
 # Generalized Convolutions in JAX
 
+<!--* freshness: { reviewed: '2024-04-08' } *-->
+
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/convolutions.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/google/jax/blob/main/docs/notebooks/convolutions.ipynb)
 
 JAX provides a number of interfaces to compute convolutions across data, including:

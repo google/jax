@@ -2048,9 +2048,6 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
 
   @jtu.sample_product(dtype=inexact_dtypes)
   def testUniqueNans(self, dtype):
-    if numpy_version == (1, 23, 0) and dtype == np.float16:
-      # https://github.com/numpy/numpy/issues/21838
-      self.skipTest("Known failure on numpy 1.23.0")
     def args_maker():
       x = [-0.0, 0.0, 1.0, 1.0, np.nan, -np.nan]
       if np.issubdtype(dtype, np.complexfloating):
@@ -2070,8 +2067,6 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
 
   @jtu.sample_product(dtype=inexact_dtypes, equal_nan=[True, False])
   def testUniqueEqualNan(self, dtype, equal_nan):
-    if numpy_version < (1, 24, 0):
-      self.skipTest("np.unique equal_nan requires NumPy 1.24 or newer.")
     shape = (20,)
     rng = jtu.rand_some_nan(self.rng())
     args_maker = lambda: [rng(shape, dtype)]
@@ -2784,10 +2779,7 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     else:
       args_maker = lambda: [[rng(shape, dtype) for dtype in dtypes]]
 
-    if numpy_version < (1, 24):
-      np_fun = jtu.promote_like_jnp(lambda *args: np.stack(*args, axis=axis).astype(out_dtype))
-    else:
-      np_fun = jtu.promote_like_jnp(partial(np.stack, axis=axis, dtype=out_dtype, casting='unsafe'))
+    np_fun = jtu.promote_like_jnp(partial(np.stack, axis=axis, dtype=out_dtype, casting='unsafe'))
 
     jnp_fun = partial(jnp.stack, axis=axis, dtype=out_dtype)
     with jtu.strict_promotion_if_dtypes_match(dtypes):
@@ -2814,7 +2806,7 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     else:
       args_maker = lambda: [[rng(shape, dtype) for dtype in dtypes]]
 
-    if numpy_version < (1, 24) or op == "dstack":
+    if op == "dstack":
       np_fun = jtu.promote_like_jnp(lambda *args: getattr(np, op)(*args).astype(out_dtype))
     else:
       np_fun = partial(jtu.promote_like_jnp(getattr(np, op)), dtype=out_dtype,
@@ -2994,6 +2986,30 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     sharding = SingleDeviceSharding(jax.devices()[-1])
     kwds = {'fill_value': 1} if func is jnp.full else {}
     out = func(**kwds, shape=shape, dtype=dtype, device=sharding)
+    self.assertEqual(out.sharding, sharding)
+
+  @jtu.sample_product(
+      func=[
+        lambda dtype, device: jnp.arange(5, dtype=dtype, device=device),
+        lambda dtype, device: jnp.eye(5, 6, dtype=dtype, device=device),
+      ],
+      dtype=default_dtypes,
+  )
+  def testArangeEyeWithDevice(self, func, dtype):
+    device = jax.devices()[-1]
+    out = func(dtype=dtype, device=device)
+    self.assertEqual(out.devices(), {device})
+
+  @jtu.sample_product(
+      func=[
+        lambda dtype, device: jnp.arange(5, dtype=dtype, device=device),
+        lambda dtype, device: jnp.eye(5, 6, dtype=dtype, device=device),
+      ],
+      dtype=default_dtypes,
+  )
+  def testArangeEyeWithSharding(self, func, dtype):
+    sharding = SingleDeviceSharding(jax.devices()[-1])
+    out = func(dtype=dtype, device=sharding)
     self.assertEqual(out.sharding, sharding)
 
   @jtu.sample_product(
@@ -4804,10 +4820,19 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     expected = jtu.with_jax_dtype_defaults(np.arange)(5)
     self.assertAllClose(ans, expected)
 
-  @jtu.sample_product(args=[(5,), (0, 5)])
-  def testArangeJaxpr(self, args):
-    jaxpr = jax.make_jaxpr(lambda: jnp.arange(*args))()
-    self.assertEqual(len(jaxpr.jaxpr.eqns), 1)
+  @jtu.sample_product(
+    args=[(5,), (0, 5)],
+    specify_device=[True, False],
+  )
+  def testArangeJaxpr(self, args, specify_device):
+    device = jax.devices()[-1] if specify_device else None
+    kwargs = {"device": device}
+    jaxpr = jax.make_jaxpr(lambda: jnp.arange(*args, **kwargs))()
+    # We have 2 statements in jaxpr:
+    # [a:i32[5] = iota[dimension=0 dtype=int32 shape=(5,)],
+    #  a:i32[5] = device_put[devices=[None] srcs=[None]] b]
+    num_eqs = 2 if device is not None else 1
+    self.assertEqual(len(jaxpr.jaxpr.eqns), num_eqs)
     self.assertEqual(jaxpr.jaxpr.eqns[0].primitive, lax.iota_p)
 
   def testIssue830(self):
@@ -5949,7 +5974,7 @@ class NumpySignaturesTest(jtu.JaxTestCase):
       'empty_like': ['subok', 'order'],
       'einsum': ['kwargs'],
       'einsum_path': ['einsum_call'],
-      'eye': ['device', 'order', 'like'],
+      'eye': ['order', 'like'],
       'hstack': ['casting'],
       'identity': ['like'],
       'isin': ['kind'],
@@ -5992,7 +6017,7 @@ class NumpySignaturesTest(jtu.JaxTestCase):
     mismatches = {}
 
     for name, (jnp_fun, np_fun) in func_pairs.items():
-      if numpy_version >= (1, 24) and name in ['histogram', 'histogram2d', 'histogramdd']:
+      if name in ['histogram', 'histogram2d', 'histogramdd']:
         # numpy 1.24 re-orders the density and weights arguments.
         # TODO(jakevdp): migrate histogram APIs to match newer numpy versions.
         continue
@@ -6090,10 +6115,11 @@ class NumpyDocTests(jtu.JaxTestCase):
     # Test that docstring wrapping & transformation didn't fail.
 
     unimplemented = ['fromfile', 'fromiter']
-    aliases = ['abs']
+    aliases = ['abs', 'acos', 'acosh', 'asin', 'asinh', 'atan', 'atanh', 'atan2',
+               'amax', 'amin']
 
     for name in dir(jnp):
-      if name.startswith('_') or name in unimplemented or name in aliases:
+      if name.startswith('_') or name in unimplemented:
         continue
 
       obj = getattr(jnp, name)
@@ -6113,6 +6139,8 @@ class NumpyDocTests(jtu.JaxTestCase):
             raise Exception(f"jnp.{name} does not contain wrapped docstring.")
           if obj.__doc__ and "*Original docstring below.*" not in obj.__doc__:
             raise Exception(f"jnp.{name} does not have a wrapped docstring.")
+      elif name in aliases:
+        assert "Alias of" in obj.__doc__
       else:
         # Other functions should have nontrivial docs including "Args" and "Returns".
         doc = obj.__doc__

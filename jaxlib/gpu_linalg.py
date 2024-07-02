@@ -42,14 +42,21 @@ if _cuda_linalg:
         _name, _value, platform="CUDA", api_version=api_version
     )
 
-try:
-  from .rocm import _linalg as _hip_linalg  # pytype: disable=import-error
+for rocm_module_name in [".rocm", "jax_rocm60_plugin"]:
+  try:
+    _hip_linalg = importlib.import_module(
+        f"{rocm_module_name}._linalg", package="jaxlib"
+    )
+  except ImportError:
+    _hip_linalg = None
+  else:
+    break
+
+if _hip_linalg:
   for _name, _value in _hip_linalg.registrations().items():
     xla_client.register_custom_call_target(
         _name, _value, platform="ROCM", api_version=1
     )
-except ImportError:
-  _hip_linalg = None
 
 _prod = lambda xs: functools.reduce(operator.mul, xs, 1)
 
@@ -59,12 +66,8 @@ def _lu_pivots_to_permutation_hlo(platform, gpu_linalg, pivots, *, permutation_s
   typ = ir.RankedTensorType(pivots.type)
   dims = typ.shape
   i32_type = ir.IntegerType.get_signless(32)
-  i64_type = ir.IntegerType.get_signless(64)
 
   assert typ.element_type == i32_type, typ
-
-  batch_size = _prod(dims[:-1])
-  pivot_size = dims[-1]
 
   if not gpu_linalg:
     raise GpuLibNotLinkedError()
@@ -80,8 +83,6 @@ def _lu_pivots_to_permutation_hlo(platform, gpu_linalg, pivots, *, permutation_s
       result_types=[permutations_type],
       operands=[pivots],
       backend_config=dict(
-          batch_size=ir.IntegerAttr.get(i64_type, batch_size),
-          pivot_size=ir.IntegerAttr.get(i32_type, pivot_size),
           permutation_size=ir.IntegerAttr.get(i32_type, permutation_size),
       ),
       operand_layouts=[pivots_layout],

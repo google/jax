@@ -1,5 +1,7 @@
 # Building on JAX
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 A great way to learn advanced JAX usage is to see how other libraries are using JAX,
 both how they integrate the library into their API,
 what functionality it adds mathematically,

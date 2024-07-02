@@ -315,7 +315,7 @@ class XlaLowering(Lowering):
   def hlo(self) -> xc.XlaComputation:
     """Return an HLO representation of this computation."""
     hlo = self.stablehlo()
-    m: Union[str, bytes]
+    m: str | bytes
     m = mlir.module_to_bytecode(hlo)
     return xla_extension.mlir.mlir_module_to_xla_computation(
         m, use_tuple_args=self.compile_args["tuple_args"])

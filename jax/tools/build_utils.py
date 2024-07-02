@@ -107,3 +107,13 @@ def update_setup_with_cuda_version(file_dir: pathlib.Path, cuda_version: str):
   )
   with open(src_file, "w") as f:
     f.write(content)
+
+def update_setup_with_rocm_version(file_dir: pathlib.Path, rocm_version: str):
+  src_file = file_dir / "setup.py"
+  with open(src_file) as f:
+    content = f.read()
+  content = content.replace(
+      "rocm_version = 0  # placeholder", f"rocm_version = {rocm_version}"
+  )
+  with open(src_file, "w") as f:
+    f.write(content)

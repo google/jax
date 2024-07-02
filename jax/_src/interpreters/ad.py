@@ -14,12 +14,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import contextlib
 import functools
 import itertools as it
 from functools import partial
-from typing import Any, Callable
+from typing import Any
 
 import jax
 from jax._src import config

@@ -14,12 +14,12 @@
 """Module for the loop primitives."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 import inspect
 import itertools
 import operator
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 import weakref
 
 import jax

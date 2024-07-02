@@ -26,8 +26,8 @@ customize this function as needed.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable, Sequence
+from typing import Any
 
 from jax.experimental import jax2tf
 import tensorflow as tf

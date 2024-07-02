@@ -144,7 +144,7 @@ class Mesh(contextlib.ContextDecorator):
       dimensions of the ``devices`` argument. Its length should match the
       rank of ``devices``.
 
-  Example:
+  Examples:
 
     >>> from jax.experimental.pjit import pjit
     >>> from jax.sharding import Mesh

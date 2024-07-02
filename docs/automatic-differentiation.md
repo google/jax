@@ -15,6 +15,8 @@ kernelspec:
 (automatic-differentiation)=
 # Automatic differentiation
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 In this section, you will learn about fundamental applications of automatic differentiation (autodiff) in JAX. JAX has a pretty general autodiff system.
 Computing gradients is a critical part of modern machine learning methods, and this tutorial will walk you through a few introductory autodiff topics, such as:
 

@@ -65,7 +65,7 @@ def dct(x: Array, type: int = 2, n: int | None = None,
     - :func:`jax.scipy.fft.idct`: inverse DCT
     - :func:`jax.scipy.fft.idctn`: multidimensional inverse DCT
 
-  Example:
+  Examples:
     >>> x = jax.random.normal(jax.random.key(0), (3, 3))
     >>> with jnp.printoptions(precision=2, suppress=True):
     ...   print(jax.scipy.fft.dct(x))
@@ -157,7 +157,7 @@ def dctn(x: Array, type: int = 2,
     - :func:`jax.scipy.fft.idct`: one-dimensional inverse DCT
     - :func:`jax.scipy.fft.idctn`: multidimensional inverse DCT
 
-  Example:
+  Examples:
 
     ``jax.scipy.fft.dctn`` computes the transform along both the axes by default
     when ``axes`` argument is ``None``.
@@ -240,7 +240,7 @@ def idct(x: Array, type: int = 2, n: int | None = None,
     - :func:`jax.scipy.fft.dctn`: multidimensional DCT
     - :func:`jax.scipy.fft.idctn`: multidimensional inverse DCT
 
-  Example:
+  Examples:
 
     >>> x = jax.random.normal(jax.random.key(0), (3, 3))
     >>> with jnp.printoptions(precision=2, suppress=True):
@@ -332,7 +332,7 @@ def idctn(x: Array, type: int = 2,
     - :func:`jax.scipy.fft.dctn`: multidimensional DCT
     - :func:`jax.scipy.fft.idct`: one-dimensional inverse DCT
 
-  Example:
+  Examples:
 
     ``jax.scipy.fft.idctn`` computes the transform along both the axes by default
     when ``axes`` argument is ``None``.

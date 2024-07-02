@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Converters for jax2tf."""
+
+from collections.abc import Callable
 import dataclasses
 import functools
 import tempfile
-from typing import Any, Callable
+from typing import Any
+
 from jax.experimental import jax2tf
 import tensorflow as tf
 import tensorflowjs as tfjs

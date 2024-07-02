@@ -406,7 +406,7 @@ class JaxprTypeChecks(jtu.JaxTestCase):
   def test_check_jaxpr_jit_invalid(self):
     jaxpr = make_jaxpr(jax.jit(lambda x, y: x + 1))(1., 2.).jaxpr
     pjit_eqn, = jaxpr.eqns
-    jaxpr._eqns[0] = pjit_eqn._replace(invars=())
+    jaxpr._eqns[0] = pjit_eqn.replace(invars=())
     self.assertRaisesRegex(
         core.JaxprTypeError,
         '0 operands cannot call jaxpr with 2 inputs',

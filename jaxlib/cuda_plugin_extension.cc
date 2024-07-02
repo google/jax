@@ -36,10 +36,11 @@ namespace nb = nanobind;
 
 namespace xla {
 namespace {
-Status RegisterCustomCallTarget(const PJRT_Api* c_api,
-                                const char* fn_name_c_str, size_t fn_name_size,
-                                nb::capsule fn, int api_version,
-                                XLA_FFI_Handler_Traits traits) {
+absl::Status RegisterCustomCallTarget(const PJRT_Api* c_api,
+                                      const char* fn_name_c_str,
+                                      size_t fn_name_size, nb::capsule fn,
+                                      int api_version,
+                                      XLA_FFI_Handler_Traits traits) {
   if (c_api->extension_start == nullptr) {
     return Unimplemented("The plugin does not have extension.");
   }
@@ -69,7 +70,7 @@ Status RegisterCustomCallTarget(const PJRT_Api* c_api,
   RETURN_STATUS_IF_PJRT_ERROR(
       reinterpret_cast<const PJRT_Gpu_Custom_Call*>(next)->custom_call(&args),
       c_api);
-  return OkStatus();
+  return absl::OkStatus();
 }
 
 nb::dict Registrations() {

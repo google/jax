@@ -14,9 +14,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import functools
 import operator
-from typing import Callable
 
 from jax import lax
 from jax._src import api

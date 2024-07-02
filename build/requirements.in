@@ -18,7 +18,6 @@ numpy~=2.0.0
 #
 scipy~=1.13.1
 
-importlib_metadata; python_version<"3.10"
 ml_dtypes>=0.4.0
 opt_einsum
 zstandard

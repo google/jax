@@ -76,6 +76,11 @@ jax_test(
 )
 
 jax_test(
+    name = "config_test",
+    srcs = ["config_test.py"],
+)
+
+jax_test(
     name = "core_test",
     srcs = ["core_test.py"],
     shard_count = {
@@ -139,6 +144,7 @@ jax_test(
     shard_count = {
         "tpu": 20,
         "cpu": 20,
+        "gpu": 10,
     },
 )
 
@@ -1087,6 +1093,11 @@ jax_test(
     main = "third_party/scipy/line_search_test.py",
 )
 
+jax_test(
+    name = "blocked_sampler_test",
+    srcs = ["blocked_sampler_test.py"],
+)
+
 py_test(
     name = "tree_util_test",
     srcs = ["tree_util_test.py"],
@@ -1455,7 +1466,6 @@ jax_test(
     ],
     deps = [
         "//jax:internal_test_harnesses",
-        "//jax/experimental/export",
     ],
 )
 
@@ -1464,6 +1474,7 @@ jax_test(
     srcs = ["export_harnesses_multi_platform_test.py"],
     disable_configs = [
         "gpu_a100",  # TODO(b/269593297): matmul precision issues
+        "gpu_h100",  # Scarce resources.
     ],
     shard_count = {
         "cpu": 40,
@@ -1478,7 +1489,6 @@ jax_test(
     ],
     deps = [
         "//jax:internal_test_harnesses",
-        "//jax/experimental/export",
     ],
 )
 

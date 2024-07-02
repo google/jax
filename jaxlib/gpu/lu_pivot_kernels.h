@@ -19,10 +19,12 @@ limitations under the License.
 #include <cstdint>
 
 #include "jaxlib/gpu/vendor.h"
-#include "xla/ffi/api/c_api.h"
+#include "xla/ffi/api/ffi.h"
 
 namespace jax {
 namespace JAX_GPU_NAMESPACE {
+
+namespace ffi = xla::ffi;
 
 void LaunchLuPivotsToPermutationKernel(gpuStream_t stream,
                                        std::int64_t batch_size,
@@ -31,7 +33,17 @@ void LaunchLuPivotsToPermutationKernel(gpuStream_t stream,
                                        const std::int32_t* pivots,
                                        std::int32_t* permutation);
 
-XLA_FFI_Error* LuPivotsToPermutation(XLA_FFI_CallFrame* call_frame);
+ffi::Error LuPivotsToPermutationImpl(
+    gpuStream_t stream, std::int32_t permutation_size,
+    ffi::Buffer<ffi::DataType::S32> pivots,
+    ffi::Result<ffi::Buffer<ffi::DataType::S32>> permutation);
+
+XLA_FFI_DEFINE_HANDLER(LuPivotsToPermutation, LuPivotsToPermutationImpl,
+                       ffi::Ffi::Bind()
+                           .Ctx<ffi::PlatformStream<gpuStream_t>>()
+                           .Attr<std::int32_t>("permutation_size")
+                           .Arg<ffi::Buffer<ffi::DataType::S32>>()
+                           .Ret<ffi::Buffer<ffi::DataType::S32>>());
 
 }  // namespace JAX_GPU_NAMESPACE
 }  // namespace jax

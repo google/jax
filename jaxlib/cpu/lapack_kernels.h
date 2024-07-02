@@ -104,6 +104,21 @@ struct Getrf {
   static void Kernel(void* out, void** data, XlaCustomCallStatus*);
 };
 
+// FFI Kernel
+
+template <::xla::ffi::DataType dtype>
+struct LuDecomposition {
+  using ValueType = ::xla::ffi::NativeType<dtype>;
+  using FnType = void(lapack_int* m, lapack_int* n, ValueType* a,
+                      lapack_int* lda, lapack_int* ipiv, lapack_int* info);
+
+  inline static FnType* fn = nullptr;
+  static ::xla::ffi::Error Kernel(
+      ::xla::ffi::Buffer<dtype> x, ::xla::ffi::ResultBuffer<dtype> x_out,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> ipiv,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info);
+};
+
 //== QR Factorization ==//
 
 // lapack geqrf

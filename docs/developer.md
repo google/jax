@@ -1,6 +1,8 @@
 (building-from-source)=
 # Building from source
 
+<!--* freshness: { reviewed: '2024-05-15' } *-->
+
 First, obtain the JAX source code:
 
 ```

@@ -15,6 +15,8 @@ kernelspec:
 (pseudorandom-numbers)=
 # Pseudorandom numbers
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 In this section we focus on {mod}`jax.random` and pseudo random number generation (PRNG); that is, the process of algorithmically generating sequences of numbers whose properties approximate the properties of sequences of random numbers sampled from an appropriate distribution.
 
 PRNG-generated sequences are not truly random because they are actually determined by their initial value, which is typically referred to as the `seed`, and each step of random sampling is a deterministic function of some `state` that is carried over from a sample to the next.

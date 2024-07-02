@@ -14,9 +14,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import itertools
-from typing import Any, Callable, Union
+from typing import Any
 
 import jax
 from jax._src import core
@@ -81,7 +81,7 @@ def value_and_grad(fun: Callable, argnums: int | Sequence[int] = 0,
   taking the gradient with respect to a :class:`jax.experimental.sparse` array, the
   gradient is computed in the subspace defined by the array's sparsity pattern.
 
-  Example:
+  Examples:
 
     >>> from jax.experimental import sparse
     >>> X = sparse.BCOO.fromdense(jnp.arange(6.))
@@ -109,7 +109,7 @@ def grad(fun: Callable, argnums: int | Sequence[int] = 0,
   the gradient with respect to a :class:`jax.experimental.sparse` array, the
   gradient is computed in the subspace defined by the array's sparsity pattern.
 
-  Example:
+  Examples:
 
     >>> from jax.experimental import sparse
     >>> X = sparse.BCOO.fromdense(jnp.arange(6.))

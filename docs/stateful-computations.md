@@ -14,6 +14,8 @@ kernelspec:
 
 # Stateful Computations
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 JAX transformations like {func}`~jax.jit`, {func}`~jax.vmap`, {func}`~jax.grad`, require the functions
 they wrap to be pure: that is, functions whose outputs depend *solely* on the inputs, and which have
 no side effects such as updating of global state.

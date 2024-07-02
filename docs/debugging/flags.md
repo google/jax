@@ -1,5 +1,7 @@
 # JAX debugging flags  
 
+<!--* freshness: { reviewed: '2024-04-11' } *-->
+
 JAX offers flags and context managers that enable catching errors more easily.
   
 ## `jax_debug_nans` configuration option and context manager

@@ -21,7 +21,7 @@ import logging
 import os
 import tempfile
 import time
-from typing import Any, Optional
+from typing import Any
 import warnings
 
 from jax._src import compilation_cache
@@ -393,7 +393,7 @@ def _share_fdo_profiles(
     backend: xc.Client,
     global_client: lib.xla_extension.DistributedRuntimeClient,
     min_process_id
-) -> Optional[bytes]:
+) -> bytes | None:
   sym_name = computation.operation.attributes['sym_name']
   module_name = ir.StringAttr(sym_name).value
   fdo_profile = compile_options.executable_build_options.fdo_profile

@@ -48,6 +48,7 @@ from jax.numpy import (
     add as add,
     all as all,
     any as any,
+    arange as arange,
     argmax as argmax,
     argmin as argmin,
     argsort as argsort,
@@ -66,6 +67,7 @@ from jax.numpy import (
     broadcast_arrays as broadcast_arrays,
     broadcast_to as broadcast_to,
     can_cast as can_cast,
+    ceil as ceil,
     complex128 as complex128,
     complex64 as complex64,
     concat as concat,
@@ -82,9 +84,11 @@ from jax.numpy import (
     exp as exp,
     expand_dims as expand_dims,
     expm1 as expm1,
+    eye as eye,
     flip as flip,
     float32 as float32,
     float64 as float64,
+    floor as floor,
     floor_divide as floor_divide,
     from_dlpack as from_dlpack,
     full as full,
@@ -160,6 +164,7 @@ from jax.numpy import (
     tile as tile,
     tril as tril,
     triu as triu,
+    trunc as trunc,
     uint16 as uint16,
     uint32 as uint32,
     uint64 as uint64,
@@ -180,9 +185,7 @@ from jax.experimental.array_api._manipulation_functions import (
 )
 
 from jax.experimental.array_api._creation_functions import (
-    arange as arange,
     asarray as asarray,
-    eye as eye,
     linspace as linspace,
 )
 
@@ -192,11 +195,8 @@ from jax.experimental.array_api._data_type_functions import (
 )
 
 from jax.experimental.array_api._elementwise_functions import (
-    ceil as ceil,
     clip as clip,
-    floor as floor,
     hypot as hypot,
-    trunc as trunc,
 )
 
 from jax.experimental.array_api._statistical_functions import (

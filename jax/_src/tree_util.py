@@ -14,14 +14,14 @@
 from __future__ import annotations
 
 import collections
-from collections.abc import Hashable, Iterable
+from collections.abc import Callable, Hashable, Iterable, Sequence
 from dataclasses import dataclass
 import difflib
 import functools
 from functools import partial
 import operator as op
 import textwrap
-from typing import Any, Callable, NamedTuple, Sequence, TypeVar, Union, overload
+from typing import Any, NamedTuple, TypeVar, Union, overload
 
 from jax._src import traceback_util
 from jax._src.lib import pytree
@@ -110,7 +110,7 @@ def treedef_tuple(treedefs: Iterable[PyTreeDef]) -> PyTreeDef:
   Returns:
     a single treedef representing a tuple of the structures
 
-  Example:
+  Examples:
     >>> import jax
     >>> x = [1, 2, 3]
     >>> y = {'a': 4, 'b': 5}
@@ -161,7 +161,7 @@ def treedef_is_leaf(treedef: PyTreeDef) -> bool:
   Returns:
     True if treedef is a leaf (i.e. has a single node); False otherwise.
 
-  Example:
+  Examples:
     >>> import jax
     >>> tree1 = jax.tree.structure(1)
     >>> jax.tree_util.treedef_is_leaf(tree1)
@@ -193,7 +193,7 @@ def all_leaves(iterable: Iterable[Any],
   Returns:
     A boolean indicating if all elements in the input are leaves.
 
-  Example:
+  Examples:
     >>> import jax
     >>> tree = {"a": [1, 2, 3]}
     >>> assert all_leaves(jax.tree_util.tree_leaves(tree))
@@ -236,7 +236,7 @@ def register_pytree_node(nodetype: type[T],
     - :func:`~jax.tree_util.register_pytree_node_class`
     - :func:`~jax.tree_util.register_pytree_with_keys_class`
 
-  Example:
+  Examples:
     First we'll define a custom type:
 
     >>> class MyContainer:
@@ -306,7 +306,7 @@ def register_pytree_node_class(cls: Typ) -> Typ:
     - :func:`~jax.tree_util.register_pytree_with_keys`
     - :func:`~jax.tree_util.register_pytree_with_keys_class`
 
-  Example:
+  Examples:
     Here we'll define a custom container that will be compatible with :func:`jax.jit`
     and other JAX transformations:
 
@@ -357,7 +357,7 @@ def build_tree(treedef: PyTreeDef, xs: Any) -> Any:
   See Also:
     - :func:`jax.tree.unflatten`
 
-  Example:
+  Examples:
     >>> import jax
     >>> tree = [(1, 2), {'a': 3, 'b': 4}]
     >>> treedef = jax.tree.structure(tree)
@@ -591,7 +591,7 @@ def flatten_one_level(pytree: Any) -> tuple[Iterable[Any], Hashable]:
     ValueError: If the given pytree is not a built-in or registered container
     via ``register_pytree_node`` or ``register_pytree_with_keys``.
 
-  Example:
+  Examples:
     >>> import jax
     >>> from jax._src.tree_util import flatten_one_level
     >>> flattened, meta = flatten_one_level({'a': [1, 2], 'b': {'c': 3}})
@@ -745,7 +745,7 @@ def keystr(keys: KeyPath):
   Returns:
     A string that joins all string representations of the keys.
 
-  Example:
+  Examples:
     >>> import jax
     >>> keys = (0, 1, 'a', 'b')
     >>> jax.tree_util.keystr(keys)
@@ -822,7 +822,7 @@ def register_pytree_with_keys(
       This argument is optional and only needed for faster traversal when
       calling functions without keys like ``tree_map`` and ``tree_flatten``.
 
-  Example:
+  Examples:
     First we'll define a custom type:
 
     >>> class MyContainer:
@@ -891,7 +891,7 @@ def register_pytree_with_keys_class(cls: Typ) -> Typ:
     - :func:`~jax.tree_util.register_pytree_with_keys`
     - :func:`~jax.tree_util.register_pytree_node_class`
 
-  Example:
+  Examples:
     >>> from jax.tree_util import register_pytree_with_keys_class, GetAttrKey
     >>> @register_pytree_with_keys_class
     ... class Special:
@@ -946,7 +946,7 @@ def register_dataclass(
     pytree registry. This return value allows ``register_dataclass`` to be partially
     evaluated and used as a decorator as in the example below.
 
-  Example:
+  Examples:
     >>> from dataclasses import dataclass
     >>> from functools import partial
     >>>

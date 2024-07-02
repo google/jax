@@ -16,6 +16,8 @@ language_info:
 
 # Pytrees
 
+<!--* freshness: { reviewed: '2024-03-13' } *-->
+
 ## What is a pytree?
 
 In JAX, we use the term *pytree* to refer to a tree-like structure built out of

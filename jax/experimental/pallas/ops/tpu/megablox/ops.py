@@ -14,8 +14,6 @@
 
 """Grouped matrix multiplication operations with custom VJPs."""
 
-from typing import Optional
-
 import jax
 from jax.experimental.pallas.ops.tpu.megablox import gmm as backend
 import jax.numpy as jnp
@@ -33,8 +31,8 @@ def _gmm_fwd(
     group_sizes: jnp.ndarray,
     preferred_element_type: jnp.dtype = jnp.float32,
     tiling: tuple[int, int, int] = (128, 128, 128),
-    group_offset: Optional[jnp.ndarray] = None,
-    existing_out: Optional[jnp.ndarray] = None,
+    group_offset: jnp.ndarray | None = None,
+    existing_out: jnp.ndarray | None = None,
     transpose_rhs: bool = False,
     interpret: bool = False,
 ) -> tuple[
@@ -43,7 +41,7 @@ def _gmm_fwd(
         jnp.ndarray,
         jnp.ndarray,
         jnp.ndarray,
-        Optional[jnp.ndarray],
+        jnp.ndarray | None,
         int,
     ],
 ]:
@@ -71,7 +69,7 @@ def _gmm_bwd(
         jnp.ndarray,
         jnp.ndarray,
         jnp.ndarray,
-        Optional[jnp.ndarray],
+        jnp.ndarray | None,
         int,
     ],
     grad: jnp.ndarray,

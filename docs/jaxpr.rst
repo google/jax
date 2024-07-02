@@ -103,7 +103,7 @@ Here there are no constvars, ``a`` and ``b`` are the input variables
 and they correspond respectively to
 ``first`` and ``second`` function parameters. The scalar literal ``3.0`` is kept
 inline.
-The ``reduce_sum`` primitive has named parameter ``axes``, in addition to the 
+The ``reduce_sum`` primitive has named parameter ``axes``, in addition to the
 operand ``e``.
 
 Note that even though execution of a program that calls into JAX builds a jaxpr,
@@ -218,18 +218,12 @@ For example:
         { lambda ; h:f32[]. let i:f32[] = sub h 2.0 in (i,) }
         { lambda ; j:f32[]. let k:f32[] = add j 3.0 in (k,) }
       )
-      linear=(False,)
     ] d b
   in (e,) }
 
-The cond primitive has a number of parameters:
-
-  * `branches` are jaxprs that correspond to the branch
-    functionals. In this example, those functionals each take one
-    input variable, corresponding to ``x``.
-  * `linear` is a tuple of booleans that is used internally by the
-    auto-differentiation machinery to encode which of the input
-    parameters are used linearly in the conditional.
+The `branches` parameter to the cond primitive corresponds to the branch
+functionals. In this example, those functionals each take one input variable,
+corresponding to ``x``.
 
 The above instance of the cond primitive takes two operands.  The first
 one (``d``) is the branch index, then ``b`` is the operand (``arg``) to
@@ -255,7 +249,6 @@ Another example, using :py:func:`lax.cond`:
         { lambda ; e:f32[]. let f:f32[] = sub e 3.0 in (f,) }
         { lambda ; g:f32[]. let h:f32[] = add g 3.0 in (h,) }
       )
-      linear=(False,)
     ] c a
   in (d,) }
 
@@ -287,7 +280,6 @@ contains a constant ``jnp.ones(1)`` that is hoisted as a `constvar`
           in (l,) }
         { lambda ; m_:i32[1] n:f32[1] o:f32[]. let  in (n,) }
       )
-      linear=(False, False, False)
     ] f a c d
   in (g,) }
 

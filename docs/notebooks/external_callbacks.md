@@ -15,6 +15,8 @@ kernelspec:
 
 # External Callbacks in JAX
 
+<!--* freshness: { reviewed: '2024-04-08' } *-->
+
 +++ {"id": "h6lXo6bSUYGq"}
 
 This guide outlines the uses of various callback functions, which allow JAX runtimes to execute Python code on the host, even while running under `jit`, `vmap`, `grad`, or another transformation.

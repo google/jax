@@ -516,7 +516,7 @@ def unique(ar: ArrayLike, return_index: bool = False, return_inverse: bool = Fal
            *, equal_nan: bool = True, size: int | None = None, fill_value: ArrayLike | None = None):
   """Return the unique values from an array.
 
-  JAX implementation of :func:`jax.numpy.unique`.
+  JAX implementation of :func:`numpy.unique`.
 
   Because the size of the output of ``unique`` is data-dependent, the function
   semantics are not typically compatible with :func:`~jax.jit` and other JAX

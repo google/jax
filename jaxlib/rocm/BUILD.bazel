@@ -201,6 +201,10 @@ cc_library(
         ":hip_gpu_kernel_helpers",
         ":hip_lu_pivot_kernels_impl",
         ":hip_vendor",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
         "@local_config_rocm//rocm:rocm_headers",
         "@xla//xla/ffi/api:c_api",
         "@xla//xla/ffi/api:ffi",
@@ -215,7 +219,7 @@ rocm_library(
         ":hip_gpu_kernel_helpers",
         ":hip_vendor",
         "@local_config_rocm//rocm:rocm_headers",
-        "@xla//xla/ffi/api:c_api",
+        "@xla//xla/ffi/api:ffi",
     ],
 )
 
@@ -397,4 +401,13 @@ py_library(
         ":_sparse",
         ":_triton",
     ],
+)
+
+py_library(
+    name = "gpu_only_test_deps",
+    # `if_rocm_is_configured` will default to `[]`.
+    deps = if_rocm_is_configured([
+        ":rocm_gpu_support",
+        "//jaxlib:rocm_plugin_extension",
+    ]),
 )

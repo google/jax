@@ -14,7 +14,6 @@
 
 from functools import partial, reduce
 import math
-from typing import Tuple
 
 import jax
 import jax.numpy as jnp
@@ -325,9 +324,9 @@ class RmsNormFwdClass:
         return RmsNormFwdClass.outer_primitive.bind(x, gamma, eps=eps), out_bdims
 
     @staticmethod
-    def infer_sharding_from_operands(eps : float, mesh : jax.sharding.Mesh,
-                                     arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
-                                     result_infos : Tuple[jax._src.core.ShapedArray]):
+    def infer_sharding_from_operands(eps: float, mesh : jax.sharding.Mesh,
+                                     arg_infos: tuple[jax._src.api.ShapeDtypeStruct, ...],
+                                     result_infos: tuple[jax._src.core.ShapedArray, ...]):
         del eps, result_infos  # Not needed for this example.
         x_info, weight_info = arg_infos
         assert len(x_info.shape) == 3
@@ -340,9 +339,9 @@ class RmsNormFwdClass:
         return (output_sharding, invvar_sharding)
 
     @staticmethod
-    def partition(eps : float, mesh : jax.sharding.Mesh,
-                  arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
-                  result_infos : Tuple[jax._src.api.ShapeDtypeStruct]):
+    def partition(eps: float, mesh : jax.sharding.Mesh,
+                  arg_infos: tuple[jax._src.api.ShapeDtypeStruct, ...],
+                  result_infos: tuple[jax._src.api.ShapeDtypeStruct, ...]):
         del result_infos  # Not needed for this example.
         x_info, weight_info = arg_infos
         assert len(x_info.shape) == 3
@@ -395,9 +394,9 @@ class RmsNormBwdClass:
         return RmsNormBwdClass.outer_primitive.bind(x, gamma, eps=eps), out_bdims
 
     @staticmethod
-    def infer_sharding_from_operands(eps : float, mesh : jax.sharding.Mesh,
-                                     arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
-                                     result_infos : Tuple[jax._src.core.ShapedArray]):
+    def infer_sharding_from_operands(eps: float, mesh : jax.sharding.Mesh,
+                                     arg_infos: tuple[jax._src.api.ShapeDtypeStruct, ...],
+                                     result_infos: tuple[jax._src.core.ShapedArray, ...]):
         del eps, result_infos  # Not needed for this example.
         g_info, invvar_info, x_info, weight_info = arg_infos
         assert len(g_info.shape) == 3
@@ -411,9 +410,9 @@ class RmsNormBwdClass:
         return (output_sharding, invvar_sharding, output_sharding, )
 
     @staticmethod
-    def partition(eps : float, mesh : jax.sharding.Mesh,
-                  arg_infos : Tuple[jax._src.api.ShapeDtypeStruct],
-                  result_infos : Tuple[jax._src.api.ShapeDtypeStruct]):
+    def partition(eps: float, mesh : jax.sharding.Mesh,
+                  arg_infos: tuple[jax._src.api.ShapeDtypeStruct, ...],
+                  result_infos: tuple[jax._src.api.ShapeDtypeStruct, ...]):
         del result_infos  # Not needed for this example.
         g_info, invvar_info, x_info, weight_info = arg_infos
         assert len(g_info.shape) == 3

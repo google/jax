@@ -30,6 +30,8 @@ limitations under the License.
 
 #include "absl/algorithm/container.h"
 #include "absl/base/dynamic_annotations.h"
+#include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "xla/ffi/api/c_api.h"
 #include "xla/ffi/api/ffi.h"
@@ -39,28 +41,61 @@ static_assert(sizeof(jax::lapack_int) == sizeof(int32_t),
 
 namespace ffi = xla::ffi;
 
+// TODO(danfm): These macros and the casting functions should be moved to a
+// separate header for use in other FFI kernels.
+#define ASSIGN_OR_RETURN_FFI_ERROR(lhs, rhs)                                \
+  if (!rhs.ok()) {                                                          \
+    return ffi::Error(static_cast<XLA_FFI_Error_Code>(rhs.status().code()), \
+                      std::string(rhs.status().message()));                 \
+  }                                                                         \
+  lhs = rhs.value()
+
+#define RETURN_IF_FFI_ERROR(...)    \
+  do {                              \
+    ffi::Error err = (__VA_ARGS__); \
+    if (err.failure()) {            \
+      return err;                   \
+    }                               \
+  } while (0)
+
 namespace {
 
 template <typename T>
-inline T CastNoOverflow(int64_t value, const std::string& source = __FILE__) {
+inline absl::StatusOr<T> MaybeCastNoOverflow(
+    int64_t value, const std::string& source = __FILE__) {
   if constexpr (sizeof(T) == sizeof(int64_t)) {
     return value;
   } else {
     if (value > std::numeric_limits<T>::max()) [[unlikely]] {
-      throw std::overflow_error{
+      return absl::InvalidArgumentError(
           absl::StrFormat("%s: Value (=%d) exceeds the maximum representable "
                           "value of the desired type",
-                          source, value)};
+                          source, value));
     }
     return static_cast<T>(value);
   }
 }
 
 template <typename T>
-std::tuple<int64_t, int64_t, int64_t> SplitBatch2D(ffi::Span<T> dims) {
-  if (dims.size() < 2) {
-    throw std::invalid_argument("Matrix must have at least 2 dimensions");
+inline T CastNoOverflow(int64_t value, const std::string& source = __FILE__) {
+  auto result = MaybeCastNoOverflow<T>(value, source);
+  if (!result.ok()) {
+    throw std::overflow_error{std::string(result.status().message())};
   }
+  return result.value();
+}
+
+template <typename T>
+ffi::Error CheckMatrixDimensions(ffi::Span<T> dims) {
+  if (dims.size() < 2) {
+    return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                      "Matrix must have at least 2 dimensions");
+  }
+  return ffi::Error::Success();
+}
+
+template <typename T>
+std::tuple<int64_t, int64_t, int64_t> SplitBatch2D(ffi::Span<T> dims) {
   auto matrix_dims = dims.last(2);
   return std::make_tuple(absl::c_accumulate(dims.first(dims.size() - 2), 1,
                                             std::multiplies<int64_t>()),
@@ -193,6 +228,44 @@ template struct Getrf<float>;
 template struct Getrf<double>;
 template struct Getrf<std::complex<float>>;
 template struct Getrf<std::complex<double>>;
+
+// FFI Kernel
+
+template <ffi::DataType dtype>
+ffi::Error LuDecomposition<dtype>::Kernel(
+    ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out,
+    ffi::ResultBuffer<LapackIntDtype> ipiv,
+    ffi::ResultBuffer<LapackIntDtype> info) {
+  RETURN_IF_FFI_ERROR(CheckMatrixDimensions(x.dimensions));
+  auto [batch_count, x_rows, x_cols] = SplitBatch2D(x.dimensions);
+  auto* x_out_data = x_out->data;
+  auto* ipiv_data = ipiv->data;
+  auto* info_data = info->data;
+
+  CopyIfDiffBuffer(x, x_out);
+
+  ASSIGN_OR_RETURN_FFI_ERROR(auto x_rows_v,
+                             MaybeCastNoOverflow<lapack_int>(x_rows));
+  ASSIGN_OR_RETURN_FFI_ERROR(auto x_cols_v,
+                             MaybeCastNoOverflow<lapack_int>(x_cols));
+  auto x_leading_dim_v = x_rows_v;
+
+  const int64_t x_out_step{x_rows * x_cols};
+  const int64_t ipiv_step{std::min(x_rows, x_cols)};
+  for (int64_t i = 0; i < batch_count; ++i) {
+    fn(&x_rows_v, &x_cols_v, x_out_data, &x_leading_dim_v, ipiv_data,
+       info_data);
+    x_out_data += x_out_step;
+    ipiv_data += ipiv_step;
+    ++info_data;
+  }
+  return ffi::Error::Success();
+}
+
+template struct LuDecomposition<ffi::DataType::F32>;
+template struct LuDecomposition<ffi::DataType::F64>;
+template struct LuDecomposition<ffi::DataType::C64>;
+template struct LuDecomposition<ffi::DataType::C128>;
 
 //== QR Factorization ==//
 
@@ -336,6 +409,7 @@ template <ffi::DataType dtype>
 ffi::Error CholeskyFactorization<dtype>::Kernel(
     ffi::Buffer<dtype> x, MatrixParams::UpLo uplo,
     ffi::ResultBuffer<dtype> x_out, ffi::ResultBuffer<LapackIntDtype> info) {
+  RETURN_IF_FFI_ERROR(CheckMatrixDimensions(x.dimensions));
   auto [batch_count, x_rows, x_cols] = SplitBatch2D(x.dimensions);
   auto* x_out_data = x_out->data;
   auto* info_data = info->data;
@@ -343,7 +417,8 @@ ffi::Error CholeskyFactorization<dtype>::Kernel(
   CopyIfDiffBuffer(x, x_out);
 
   auto uplo_v = static_cast<char>(uplo);
-  auto x_order_v = CastNoOverflow<lapack_int>(x.dimensions.back());
+  ASSIGN_OR_RETURN_FFI_ERROR(
+      auto x_order_v, MaybeCastNoOverflow<lapack_int>(x.dimensions.back()));
   auto x_leading_dim_v = x_order_v;
 
   const int64_t x_out_step{x_rows * x_cols};
@@ -1042,3 +1117,6 @@ template struct Sytrd<std::complex<float>>;
 template struct Sytrd<std::complex<double>>;
 
 }  // namespace jax
+
+#undef ASSIGN_OR_RETURN_FFI_ERROR
+#undef RETURN_IF_FFI_ERROR

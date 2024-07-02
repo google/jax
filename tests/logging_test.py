@@ -124,7 +124,7 @@ class LoggingTest(jtu.JaxTestCase):
       self.assertIn("Compiling <lambda>", log_output.getvalue())
 
     # Turn off all debug logging.
-    with jax_debug_log_modules(None):
+    with jax_debug_log_modules(""):
       with capture_jax_logs() as log_output:
         jax.jit(lambda x: x + 1)(1)
       self.assertEmpty(log_output.getvalue())
@@ -137,7 +137,7 @@ class LoggingTest(jtu.JaxTestCase):
       self.assertNotIn("Compiling <lambda>", log_output.getvalue())
 
     # Turn everything off again.
-    with jax_debug_log_modules(None):
+    with jax_debug_log_modules(""):
       with capture_jax_logs() as log_output:
         jax.jit(lambda x: x + 1)(1)
       self.assertEmpty(log_output.getvalue())

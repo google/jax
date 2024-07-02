@@ -148,7 +148,12 @@ JAX_SPECIAL_FUNCTION_RECORDS = [
         "rel_entr", 2, float_dtypes, jtu.rand_positive, True,
     ),
     op_record("poch", 2, float_dtypes, jtu.rand_positive, True),
-    op_record("hyp1f1", 3, float_dtypes, functools.partial(jtu.rand_uniform, low=0.5, high=30), True)
+    op_record(
+        "hyp1f1", 3, float_dtypes,
+        functools.partial(jtu.rand_uniform, low=0.5, high=30), True
+    ),
+    op_record("log_softmax", 1, float_dtypes, jtu.rand_default, True),
+    op_record("softmax", 1, float_dtypes, jtu.rand_default, True),
 ]
 
 

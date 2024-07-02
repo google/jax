@@ -1,6 +1,8 @@
 (installation)=
 # Installing JAX
 
+<!--* freshness: { reviewed: '2024-06-18' } *-->
+
 Using JAX requires installing two packages: `jax`, which is pure Python and
 cross-platform, and `jaxlib` which contains compiled binaries, and requires
 different builds for different operating systems and accelerators.
@@ -170,6 +172,9 @@ nvcc --version
 JAX uses `LD_LIBRARY_PATH` to find CUDA libraries and `PATH` to find binaries
 (`ptxas`, `nvlink`). Please make sure that these paths point to the correct CUDA
 installation.
+
+JAX requires libdevice10.bc, which typically comes from the cuda-nvvm package.
+Make sure that it is present in your CUDA installation.
 
 Please let the JAX team know on [the GitHub issue tracker](https://github.com/google/jax/issues)
 if you run into any errors or problems with the pre-built wheels.

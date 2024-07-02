@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 import itertools
 import logging
@@ -23,7 +23,6 @@ import os
 import re
 import threading
 import time
-from typing import Callable
 import unittest
 from unittest import skip, SkipTest
 
@@ -2722,8 +2721,7 @@ class OutfeedRewriterTest(jtu.JaxTestCase):
                                  { lambda  ; f_ a b c g h.
                                    let d = broadcast_in_dim[ broadcast_dimensions=(  )
                                                              shape=(5,) ] 0.00
-                                   in (a, d, g, h) } )
-                      linear=(False, False, False, False, False, False) ] e a 1 2 c h i
+                                   in (a, d, g, h) } ) ] e a 1 2 c h i
           in (f, g, j, k) }""", func, [y, 5])
 
   def test_while(self):

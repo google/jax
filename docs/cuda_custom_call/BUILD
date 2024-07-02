@@ -15,6 +15,7 @@
 load(
     "//jaxlib:jax.bzl",
     "cuda_library",
+    "jax_generate_backend_suites",
     "jax_test",
 )
 
@@ -25,19 +26,17 @@ package(
     default_visibility = ["//visibility:private"],
 )
 
+jax_generate_backend_suites()
+
 jax_test(
     name = "cuda_custom_call_test",
     srcs = ["cuda_custom_call_test.py"],
-    # libfoo.so is a runtime dependency for this test
     data = [":foo"],
     disable_backends = [
         "cpu",
         "tpu",
     ],
-    tags = [
-        "manual",
-        "notap",
-    ],
+    tags = ["notap"],
     deps = [
         "//jax:extend",
     ],
@@ -57,7 +56,6 @@ cuda_library(
     name = "foo_",
     srcs = ["foo.cu.cc"],
     deps = [
-        "@xla//xla/ffi/api",
         "@xla//xla/ffi/api:c_api",
         "@xla//xla/ffi/api:ffi",
         "@local_config_cuda//cuda:cuda_headers",

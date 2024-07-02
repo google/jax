@@ -20,11 +20,10 @@ these tests.
 from __future__ import annotations
 
 import base64
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import io
 import os
 import tarfile
-from typing import Callable, Optional
 
 from absl.testing import absltest
 import jax

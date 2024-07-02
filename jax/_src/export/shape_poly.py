@@ -19,7 +19,7 @@ See documentation at https://jax.readthedocs.io/en/latest/export/shape_poly.html
 from __future__ import annotations
 
 import enum
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import dataclasses
 from enum import Enum
 import functools
@@ -28,7 +28,7 @@ import io
 import copy
 import operator as op
 import tokenize
-from typing import Any, Callable, Union, overload
+from typing import Any, Union, overload
 import warnings
 
 import numpy as np

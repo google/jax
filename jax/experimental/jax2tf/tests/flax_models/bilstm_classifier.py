@@ -18,8 +18,9 @@ https://github.com/google/flax/tree/main/examples/sst2
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import functools
-from typing import Any, Callable, Optional
+from typing import Any
 
 from flax import linen as nn
 import jax

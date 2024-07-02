@@ -15,7 +15,6 @@
 """Test different parameterizations of FlashAttention."""
 
 import os
-import sys
 
 from absl.testing import absltest, parameterized
 from jax._src import config
@@ -23,8 +22,6 @@ from jax._src import test_util as jtu
 
 # pylint: disable=g-import-not-at-top
 try:
-  if sys.version_info < (3, 10):
-    raise ImportError("Mosaic GPU requires Python 3.10+")
   # We only import this to see if Mosaic is available.
   import jax.experimental.mosaic.gpu  # noqa: F401
 except ImportError:
@@ -72,7 +69,9 @@ class FlashAttentionTestCase(jtu.JaxTestCase):
         num_q_heads=num_q_heads,
         num_kv_heads=num_kv_heads,
         head_dim=head_dim,
-        exp_impl=exp_impl)
+        exp_impl=exp_impl,
+        blocks=flash_attention.BlockSizes(stages=2, q=64, kv=64)
+    )
 
 
 if __name__ == "__main__":

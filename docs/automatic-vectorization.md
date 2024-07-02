@@ -15,6 +15,8 @@ kernelspec:
 (automatic-vectorization)=
 # Automatic vectorization
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 In the previous section we discussed JIT compilation via the {func}`jax.jit` function.
 This notebook discusses another of JAX's transforms: vectorization via {func}`jax.vmap`.
 

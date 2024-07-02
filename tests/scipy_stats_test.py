@@ -1633,21 +1633,25 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
     self._CompileAndCheck(lax_fun, args_maker, rtol=tol)
 
   @jtu.sample_product(
-    [dict(shape=shape, axis=axis, ddof=ddof, nan_policy=nan_policy)
+    [dict(shape=shape, axis=axis, ddof=ddof, nan_policy=nan_policy, keepdims=keepdims)
       for shape in [(5,), (5, 6), (5, 6, 7)]
       for axis in [None, *range(len(shape))]
       for ddof in [0, 1, 2, 3]
       for nan_policy in ["propagate", "omit"]
+      for keepdims in [True, False]
     ],
     dtype=jtu.dtypes.integer + jtu.dtypes.floating,
   )
-  def testSEM(self, shape, dtype, axis, ddof, nan_policy):
+  def testSEM(self, shape, dtype, axis, ddof, nan_policy, keepdims):
 
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(shape, dtype)]
 
-    scipy_fun = partial(osp_stats.sem, axis=axis, ddof=ddof, nan_policy=nan_policy)
-    lax_fun = partial(lsp_stats.sem, axis=axis, ddof=ddof, nan_policy=nan_policy)
+    kwds = {} if scipy_version < (1, 11) else {'keepdims': keepdims}
+    scipy_fun = partial(osp_stats.sem, axis=axis, ddof=ddof, nan_policy=nan_policy,
+                        **kwds)
+    lax_fun = partial(lsp_stats.sem, axis=axis, ddof=ddof, nan_policy=nan_policy,
+                      **kwds)
     tol_spec = {np.float32: 2e-4, np.float64: 5e-6}
     tol = jtu.tolerance(dtype, tol_spec)
     self._CheckAgainstNumpy(scipy_fun, lax_fun, args_maker, check_dtypes=False,

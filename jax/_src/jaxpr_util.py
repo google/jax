@@ -17,11 +17,12 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Callable
 import gzip
 import itertools
 import json
 import types
-from typing import Any, Callable, Union
+from typing import Any, Union
 
 from jax._src import core
 from jax._src import util

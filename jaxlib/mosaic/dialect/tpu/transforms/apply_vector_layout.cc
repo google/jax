@@ -779,7 +779,8 @@ LogicalResult ext_op_rule_impl(RewriteContext &ctx, OpTy op,
     return op.emitOpError("Not implemented: Change of offsets during the cast");
   }
   const int packing = layout_in.packing();
-  if (layout_in.hasNativeTiling(ctx.target_shape)) {
+  if (layout_in.hasNativeTiling(ctx.target_shape) &&
+      layout_out.hasNativeTiling(ctx.target_shape)) {
     output_vregs.Each([&](absl::Span<const int64_t> idxs, Value *v) {
       SmallVector<int64_t> input_vreg_idxs(toArrayRef(idxs));
       int64_t vreg_part = *(input_vreg_idxs.end() - 2) % packing;

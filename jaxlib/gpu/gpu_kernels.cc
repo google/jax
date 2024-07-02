@@ -25,6 +25,8 @@ limitations under the License.
 #include "jaxlib/gpu/sparse_kernels.h"
 #include "jaxlib/gpu/triton_kernels.h"
 #include "jaxlib/gpu/vendor.h"
+#include "xla/ffi/api/c_api.h"
+#include "xla/ffi/api/ffi.h"
 #include "xla/service/custom_call_target_registry.h"
 
 namespace jax {
@@ -39,10 +41,14 @@ XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("cudnn_rnn", RNNForward, "CUDA");
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("cudnn_rnn_bwd", RNNBackward, "CUDA");
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("cu_cholesky_update",
                                          CholeskyUpdate, "CUDA");
+// TODO(b/350111820): use the new FFI registration mechanism
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("cu_lu_pivots_to_permutation",
                                          LuPivotsToPermutation, "CUDA");
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("cu_threefry2x32", ThreeFry2x32,
                                          "CUDA");
+// TODO(b/350111820): use the new FFI registration mechanism
+XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("cu_threefry2x32_ffi",
+                                         ThreeFry2x32Ffi, "CUDA");
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("cusolver_getrf", Getrf, "CUDA");
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("cusolver_geqrf", Geqrf, "CUDA");
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("cusolver_csrlsvqr", Csrlsvqr, "CUDA");

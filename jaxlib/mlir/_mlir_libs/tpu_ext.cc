@@ -18,6 +18,7 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -35,6 +36,7 @@ limitations under the License.
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallVectorExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "mlir-c/AffineMap.h"
 #include "mlir-c/Bindings/Python/Interop.h"
@@ -70,7 +72,9 @@ constexpr MlirTpuI64TargetTuple TARGET_SHAPE{8, 128};
 // TODO(tlongeri): For our use-case, we don't really need C++ exceptions - just
 // setting the exception object and returning NULL to Python should suffice, but
 // not sure if this is possible with pybind.
-class NotImplementedException : public std::exception {};
+class NotImplementedException : public std::runtime_error {
+  using runtime_error::runtime_error;
+};
 }  // namespace
 
 template <>
@@ -92,7 +96,7 @@ struct py::detail::type_caster<MlirTpuImplicitDim> {
     } else if (src.is(implicit_dim_cls.attr("SECOND_MINOR"))) {
       value = MlirTpuImplicitDimSecondMinor;
     } else {
-      throw NotImplementedException();
+      throw py::value_error();
     }
     return true;
   }
@@ -156,37 +160,59 @@ struct py::detail::type_caster<MlirTpuDirection> {
 };
 
 namespace {
-class NotImplementedDetector {
+// Handler for use with MLIR C API print functions. The 2nd parameter is an
+// opaque pointer to "user data" that should always be a string.
+void printToString(MlirStringRef c_mlir_str, void* opaque_string) {
+    std::string* str = static_cast<std::string*>(opaque_string);
+    CHECK(str != nullptr);
+    str->append(c_mlir_str.data, c_mlir_str.length);
+}
+
+class DiagnosticCapture {
  public:
-  NotImplementedDetector(MlirContext ctx)
+  DiagnosticCapture(MlirContext ctx)
       : ctx_(ctx),
         id_(mlirContextAttachDiagnosticHandler(ctx, handleDiagnostic, this,
                                                nullptr)) {}
 
-  ~NotImplementedDetector() { mlirContextDetachDiagnosticHandler(ctx_, id_); }
-  bool detected() const { return detected_; }
+  ~DiagnosticCapture() { mlirContextDetachDiagnosticHandler(ctx_, id_); }
 
- private:
-  static void handleDiagnosticMessage(MlirStringRef str,
-                                      void* opaque_detector) {
-    // Note that we receive each argument to the stream separately.
-    // "Not implemented" must be entirely in a single argument.
-    NotImplementedDetector* detector =
-        static_cast<NotImplementedDetector*>(opaque_detector);
-    if (llvm::StringRef(str.data, str.length).contains("Not implemented")) {
-      detector->detected_ = true;
+  void throwIfError() {
+    if (error_messages_.size() == 1) {
+      // Throw NotImplementedException if we got a single diagnostic that
+      // contains "Not implemented".
+      llvm::StringRef ref = error_messages_.front();
+      constexpr llvm::StringRef not_implemented = "Not implemented";
+      if (const size_t pos = ref.find(not_implemented);
+          pos != llvm::StringRef::npos) {
+        // We strip "Not implemented" only if it is a prefix. Sometimes it may
+        // come after another prefix (e.g. op prefix), in which case we leave it
+        if (pos == 0) {
+          ref = ref.drop_front(not_implemented.size());
+          ref.consume_front(": ");
+        }
+        throw NotImplementedException(ref.str());
+      }
+    }
+    if (!error_messages_.empty()) {
+      // Note that it is unusual/unexpected to get multiple diagnostics, so we
+      // just forward all the error messages.
+      throw std::runtime_error(llvm::join(error_messages_, "\n"));
     }
   }
+
+ private:
   static MlirLogicalResult handleDiagnostic(MlirDiagnostic diag,
                                             void* opaque_detector) {
-    NotImplementedDetector* detector =
-        static_cast<NotImplementedDetector*>(opaque_detector);
+    DiagnosticCapture* detector =
+        static_cast<DiagnosticCapture*>(opaque_detector);
     if (mlirDiagnosticGetSeverity(diag) == MlirDiagnosticError) {
-      mlirDiagnosticPrint(diag, handleDiagnosticMessage, detector);
+      std::string& message = detector->error_messages_.emplace_back();
+      mlirDiagnosticPrint(diag, printToString, &message);
     }
     return mlirLogicalResultFailure();  // Propagate to other handlers
   }
-  bool detected_ = false;
+  llvm::SmallVector<std::string, 1> error_messages_;
   const MlirContext ctx_;
   const MlirDiagnosticHandlerID id_;
 };
@@ -562,7 +588,13 @@ PYBIND11_MODULE(_tpu_ext, m) {
           "  shape: An optional shape of the vector to which both layouts "
           "apply. More layouts are considered equivalent when the shape is "
           "specified. Also see the docstring of the generalizes method.")
-      .def("__eq__", mlirTpuVectorLayoutEquals);
+      .def("__eq__", mlirTpuVectorLayoutEquals)
+      .def("__repr__",
+           [](MlirTpuVectorLayout self) {
+             std::string str;
+             mlirTpuVectorLayoutPrint(self, printToString, &str);
+             return str;
+           });
 
   // TODO(tlongeri): Can we make the first parameter a VectorType?
   m.def("assemble",
@@ -589,13 +621,11 @@ PYBIND11_MODULE(_tpu_ext, m) {
               TARGET_SHAPE);
         });
   m.def("disassemble", [](MlirTpuVectorLayout layout, MlirValue val) {
-    NotImplementedDetector detector(getDefaultContext());
+    DiagnosticCapture diag_capture(getDefaultContext());
     MlirTpuValueArray val_arr = mlirTpuDisassemble(getDefaultInsertionPoint(),
                                                    layout, val, TARGET_SHAPE);
     if (val_arr.vals == nullptr) {
-      if (detector.detected()) {
-        throw NotImplementedException();
-      }
+      diag_capture.throwIfError();
       throw py::value_error("Failed to disassemble");
     }
     py::array_t<PyObject*> np_vals(
@@ -609,25 +639,21 @@ PYBIND11_MODULE(_tpu_ext, m) {
   });
   m.def("apply_layout_op",
         [](int hardware_generation, const MlirOperation c_op) {
-          NotImplementedDetector detector(getDefaultContext());
+          DiagnosticCapture diag_capture(getDefaultContext());
           MlirLogicalResult res =
               mlirTpuApplyLayoutOp(hardware_generation, c_op, TARGET_SHAPE);
           if (mlirLogicalResultIsFailure(res)) {
-            if (detector.detected()) {
-              throw NotImplementedException();
-            }
+            diag_capture.throwIfError();
             throw std::runtime_error("applyLayoutOp failed");
           }
         });
   m.def("relayout",
         [](MlirValue v, MlirTpuVectorLayout src, MlirTpuVectorLayout dst) {
-          NotImplementedDetector detector(getDefaultContext());
+          DiagnosticCapture diag_capture(getDefaultContext());
           MlirValue new_v = mlirTpuRelayout(getDefaultInsertionPoint(), v, src,
                                             dst, TARGET_SHAPE);
           if (new_v.ptr == nullptr) {
-            if (detector.detected()) {
-              throw NotImplementedException();
-            }
+            diag_capture.throwIfError();
             throw py::value_error("Failed to relayout");
           }
           return new_v;
@@ -636,7 +662,7 @@ PYBIND11_MODULE(_tpu_ext, m) {
     try {
       if (p) std::rethrow_exception(p);
     } catch (const NotImplementedException& e) {
-      PyErr_SetNone(PyExc_NotImplementedError);
+      PyErr_SetString(PyExc_NotImplementedError, e.what());
     }
   });
 

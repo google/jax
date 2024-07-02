@@ -15,6 +15,8 @@ kernelspec:
 (jax-internals-jax-primitives)=
 # JAX Internals: primitives
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 ## Introduction to JAX primitives
 
 A JAX primitive is the basic computational unit of a JAX program. This document explains the interface that a JAX primitive must support to allow JAX to perform all its transformations (this is not a how-to guide).

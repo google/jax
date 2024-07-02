@@ -14,8 +14,8 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict, deque, namedtuple
-from collections.abc import (Collection, Generator, Hashable, Iterable,
-                             Iterator, Set, Sequence, MutableSet,
+from collections.abc import (Callable, Collection, Generator, Hashable,
+                             Iterable, Iterator, Set, Sequence, MutableSet,
                              MutableMapping)
 from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass
@@ -28,7 +28,7 @@ import math
 import operator
 import threading
 import types
-from typing import (Any, Callable, ClassVar, Generic, NamedTuple, TypeVar,
+from typing import (Any, ClassVar, Generic, NamedTuple, TypeVar,
                     cast, overload, Union)
 import warnings
 from weakref import ref
@@ -282,7 +282,7 @@ class JaxprEqnContext:
             f"threefry_partitionable={self.threefry_partitionable})")
 
 
-class JaxprEqn(NamedTuple):
+class JaxprEqn:
   invars: list[Atom]
   outvars: list[Var]
   primitive: Primitive
@@ -290,6 +290,20 @@ class JaxprEqn(NamedTuple):
   effects: Effects
   source_info: source_info_util.SourceInfo
   ctx: JaxprEqnContext
+
+  # It's slightly faster to use a class with __slots__ than a NamedTuple.
+  __slots__ = ['invars', 'outvars', 'primitive', 'params', 'effects',
+               'source_info', 'ctx']
+
+  def __init__(self, invars, outvars, primitive, params, effects, source_info,
+               ctx):
+    self.invars = invars
+    self.outvars = outvars
+    self.primitive = primitive
+    self.params = params
+    self.effects = effects
+    self.source_info = source_info
+    self.ctx = ctx
 
   def __repr__(self):
     return str(pp_eqn(self, JaxprPpContext(), JaxprPpSettings())).rstrip()
@@ -304,7 +318,6 @@ class JaxprEqn(NamedTuple):
       source_info: source_info_util.SourceInfo | None = None,
       ctx: JaxprEqnContext | None = None
   ):
-    # It is slightly faster to rebuild the tuple directly than to call _replace.
     return JaxprEqn(
       self.invars if invars is None else invars,
       self.outvars if outvars is None else outvars,
@@ -686,7 +699,7 @@ class Tracer(typing.Array, metaclass=StrictABCMeta):
   def _error_repr(self):
     if self.aval is None:
       return f"traced array with aval {self.aval}"
-    return f"traced array with shape {raise_to_shaped(self.aval).str_short()}."
+    return f"traced array with shape {raise_to_shaped(self.aval).str_short()}"
 
   def __array__(self, *args, **kw):
     raise TracerArrayConversionError(self)
@@ -1040,13 +1053,8 @@ class TraceState:
 
 
 def _update_thread_local_jit_state(dynamic):
-  # Copies the MainTrace instance, removing any .debug_info or .jaxpr_stack
-  # fields that should not be kept alive as part of a cache key.
-  # TODO(mattjj): split debug_info and jaxpr_stack out of MainTrace.
-  # TODO(mattjj): add a test that verifies that JIT-ted functions are not kept
-  # alive by the JIT cache, particularly for nested JIT-ted functions.
-  copy = MainTrace(dynamic.level, dynamic.trace_type, **dynamic.payload)
-  config.update_thread_local_jit_state(dynamic_trace_state=copy)
+  state = (dynamic.level, dynamic.trace_type)
+  config.update_thread_local_jit_state(dynamic_trace_state=state)
 
 
 # The global state of the tracer is accessed by a thread-local object.
@@ -1071,8 +1079,8 @@ def _initialize_jax_jit_thread_local_state():
   tls = jax_jit.thread_local_state()
   if tls.extra_jit_context is None:
     dynamic = thread_local_state.trace_state.trace_stack.dynamic
-    copy = MainTrace(dynamic.level, dynamic.trace_type, **dynamic.payload)
-    config.update_thread_local_jit_state(dynamic_trace_state=copy)
+    state = (dynamic.level, dynamic.trace_type)
+    config.update_thread_local_jit_state(dynamic_trace_state=state)
 
 
 jax_jit.set_thread_local_state_initialization_callback(

@@ -24,7 +24,8 @@ https://github.com/google/flax/tree/main/examples/wmt
 
 from __future__ import annotations
 
-from typing import Callable, Any, Optional
+from collections.abc import Callable
+from typing import Any
 
 from flax import linen as nn
 from flax import struct

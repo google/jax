@@ -9,7 +9,6 @@ python_init_rules()
 load("@xla//third_party/py:python_init_repositories.bzl", "python_init_repositories")
 python_init_repositories(
     requirements = {
-        "3.9": "//build:requirements_lock_3_9.txt",
         "3.10": "//build:requirements_lock_3_10.txt",
         "3.11": "//build:requirements_lock_3_11.txt",
         "3.12": "//build:requirements_lock_3_12.txt",

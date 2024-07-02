@@ -13,10 +13,10 @@
 # limitations under the License.
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 import functools
 import re
-from typing import Any, Callable
+from typing import Any
 
 from jax._src import api
 from jax import lax

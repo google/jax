@@ -14,7 +14,6 @@
 
 from functools import partial
 from absl.testing import absltest
-from typing import Optional
 import os
 
 os.environ["XLA_FLAGS"] = \
@@ -43,8 +42,8 @@ def sdpa_train(query: Array,
                key: Array,
                value: Array,
                grad: Array,
-               bias: Optional[Array] = None,
-               mask: Optional[Array] = None,
+               bias: Array | None = None,
+               mask: Array | None = None,
                scale: float = 0.5,
                mask_type: MaskType = MaskType.NO_MASK,
                is_bnth: bool = False,
@@ -74,8 +73,8 @@ def sdpa_train(query: Array,
 def sdpa_ref(query: Array,
       key: Array,
       value: Array,
-      bias: Optional[Array] = None,
-      mask: Optional[Array] = None,
+      bias: Array | None = None,
+      mask: Array | None = None,
       scale: float = 0.5,
       mask_type: MaskType = MaskType.NO_MASK,
       dropout_rate: float = 0.1) -> Array:
@@ -150,8 +149,8 @@ def sdpa_train_ref(query: Array,
             key: Array,
             value: Array,
             grad: Array,
-            bias: Optional[Array] = None,
-            mask: Optional[Array] = None,
+            bias: Array | None = None,
+            mask: Array | None = None,
             scale: float = 0.5,
             mask_type: MaskType = MaskType.NO_MASK,
             dropout_rate: float = 0.1) -> Array:

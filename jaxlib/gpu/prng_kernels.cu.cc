@@ -105,6 +105,23 @@ __global__ void ThreeFry2x32Kernel(const std::uint32_t* key0,
 
 }  // namespace
 
+void LaunchThreeFry2x32KernelFfi(gpuStream_t stream,
+                                 std::int64_t n,
+                                 std::uint32_t *keys0,
+                                 std::uint32_t *keys1,
+                                 std::uint32_t *data0,
+                                 std::uint32_t *data1,
+                                 std::uint32_t *out0,
+                                 std::uint32_t *out1) {
+  const int block_dim = 128;
+  const std::int64_t grid_dim =
+      std::min<std::int64_t>(1024, (n + block_dim - 1) / block_dim);
+  ThreeFry2x32Kernel<<<grid_dim, block_dim, /*dynamic_shared_mem_bytes=*/0,
+                       stream>>>(keys0, keys1, data0, data1, out0,
+                                 out1, n, nullptr);
+}
+
+// TODO(b/338022728): remove after 6 months
 void LaunchThreeFry2x32Kernel(gpuStream_t stream, void** buffers,
                               ThreeFry2x32Descriptor descriptor) {
   std::array<const std::uint32_t*, 2> keys;

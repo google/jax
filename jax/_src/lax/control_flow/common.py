@@ -15,10 +15,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import os
 from functools import partial
-from typing import Any, Callable
+from typing import Any
 
 from jax._src import core
 from jax._src import linear_util as lu

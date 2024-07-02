@@ -15,11 +15,11 @@
 """Module for lowering JAX to Mosaic-compatible MLIR dialects."""
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import dataclasses
 import functools
 import string
-from typing import Any, Callable
+from typing import Any
 
 import jax
 from jax import core as jax_core
@@ -71,7 +71,7 @@ TPUMemorySpace = tpu_core.TPUMemorySpace
 VMEM = tpu_core.TPUMemorySpace.VMEM
 SMEM = tpu_core.TPUMemorySpace.SMEM
 
-# The value interpreter as a dynamic dimension by MLIR.
+# The value interpreted as a dynamic dimension by MLIR.
 MLIR_DYNAMIC = -9223372036854775808
 
 partial = functools.partial
@@ -1005,14 +1005,15 @@ def _prng_key_load_lowering_rule(ctx: LoweringRuleContext, *args_flat, args_tree
   assert isinstance(aval_out.dtype, prng.KeyTy)
   ref_block_shape = aval_out.dtype._impl.key_shape
 
-  if len(ref_block_shape) != 1:
-    raise NotImplementedError("Seed key_data must be 1D.")
-  if ref_block_shape[0] != 1:
-    raise NotImplementedError("Seed key_data of shape != (1,) not supported.")
+  if len(ref_block_shape) != 2:
+    raise NotImplementedError("Seed key_data must be 2D.")
+  if tuple(ref_block_shape) != (1, 1):
+    raise NotImplementedError(
+      f"Seed key_data of shape != (1, 1) not supported. Got: {ref_block_shape}")
 
   load_ops = []
   for i in range(ref_block_shape[0]):
-    idx = NDIndexer(indices=(i,), shape=ref_block_shape,
+    idx = NDIndexer(indices=(0, i), shape=ref_block_shape,
                     int_indexer_shape=tuple())
     starts, _, _, _, _ = _indexer_to_start_size_stride(
         idx,
@@ -2079,7 +2080,7 @@ def _while_lowering_rule(
 
 lowering_rules[lax.while_p] = _while_lowering_rule
 
-def _cond_lowering_rule(ctx: LoweringRuleContext, *args, branches, linear):
+def _cond_lowering_rule(ctx: LoweringRuleContext, *args, branches):
   index, *args = args
   out_types = map(aval_to_ir_type, ctx.avals_out)
   pred = arith.CmpIOp(
@@ -2098,7 +2099,6 @@ def _cond_lowering_rule(ctx: LoweringRuleContext, *args, branches, linear):
           arith.SubIOp(index, ir_constant(1, index.type)).result,
           *args,
           branches=branches[1:],
-          linear=linear,
       )
     else:
       out = jaxpr_subcomp(lowering_context, branches[1].jaxpr, *args)
@@ -2478,7 +2478,8 @@ def _prng_seed_lowering_rule(ctx: LoweringRuleContext, *seeds):
   # takes in a list of integers as input.
   all_integers = all(isinstance(seed.type, ir.IntegerType) for seed in seeds)
   if not all_integers:
-    raise ValueError("All seed data must be integers.")
+    seed_types = [seed.type for seed in seeds]
+    raise ValueError(f"All seed data must be scalar integers. Got {seed_types}")
   return tpu.PRNGSeed32Op(seeds).results
 lowering_rules[tpu_primitives.prng_seed_p] = _prng_seed_lowering_rule
 
@@ -2531,12 +2532,14 @@ def random_wrap_lowering(ctx, key_data, *, impl):
     # If the key data lives in vregs, need to unpack it to sregs.
     key_data_list = []
     key_data_shape = key_data.type.shape
-    if len(key_data_shape) != 1:
-      raise NotImplementedError("Seed key_data must be 1D.")
-    if key_data_shape[0] != 1:
-      raise NotImplementedError("key_data with shape != (1,) not supported.")
-    for i in range(key_data_shape[0]):
-      key_data_list.append(vector.ExtractOp(key_data, [], [i]))
+    if len(key_data_shape) != 2:
+      raise NotImplementedError("Seed key_data must be 2D.")
+    if tuple(key_data_shape) != (1, 1):
+      raise NotImplementedError(
+        "Seed key_data of shape != (1, 1) not supported. "
+        f"Got: {key_data_shape}")
+    for i in range(key_data_shape[1]):
+      key_data_list.append(vector.ExtractOp(key_data, [], [0, i]))
     return KeyScalarBundle(scalars=key_data_list)
   if isinstance(key_data, KeyScalarBundle):
     return key_data

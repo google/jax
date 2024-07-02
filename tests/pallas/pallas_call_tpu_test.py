@@ -87,10 +87,11 @@ class PallasCallScalarPrefetchTest(PallasTPUTest):
         grid_spec=pltpu.PrefetchScalarGridSpec(
             num_scalar_prefetch=1,
             in_specs=[
-                pl.BlockSpec(_x_transform, (x.shape[0] // 8, x.shape[1])),
+                pl.BlockSpec((x.shape[0] // 8, x.shape[1]), _x_transform),
             ],
-            out_specs=pl.BlockSpec(lambda i, _: (i, 0),
-                                   (x.shape[0] // 8, x.shape[1])),
+            out_specs=pl.BlockSpec(
+                (x.shape[0] // 8, x.shape[1]), lambda i, _: (i, 0)
+            ),
             grid=8,
         ),
         interpret=self.interpret,
@@ -132,10 +133,11 @@ class PallasCallScalarPrefetchTest(PallasTPUTest):
           grid_spec=pltpu.PrefetchScalarGridSpec(
               num_scalar_prefetch=1,
               in_specs=[
-                  pl.BlockSpec(_x_transform, (x.shape[0] // 8, x.shape[1])),
+                  pl.BlockSpec((x.shape[0] // 8, x.shape[1]), _x_transform),
               ],
-              out_specs=pl.BlockSpec(lambda i, _: (i, 0),
-                                     (x.shape[0] // 8, x.shape[1])),
+              out_specs=pl.BlockSpec(
+                  (x.shape[0] // 8, x.shape[1]), lambda i, _: (i, 0)
+              ),
               grid=8,
           ),
           interpret=self.interpret,
@@ -165,9 +167,9 @@ class PallasCallScalarPrefetchTest(PallasTPUTest):
         grid_spec=pltpu.PrefetchScalarGridSpec(
             num_scalar_prefetch=2,
             in_specs=[
-                pl.BlockSpec(_x_transform, (8, 128)),
+                pl.BlockSpec((8, 128), _x_transform),
             ],
-            out_specs=pl.BlockSpec(_o_transform, (8, 128)),
+            out_specs=pl.BlockSpec((8, 128), _o_transform),
             grid=8,
         ),
         interpret=self.interpret,
@@ -215,10 +217,10 @@ class PallasCallScalarPrefetchTest(PallasTPUTest):
         ],
         grid_spec=pltpu.PrefetchScalarGridSpec(
             num_scalar_prefetch=1,
-            in_specs=[pl.BlockSpec(lambda i, *_: (i, 0), (8, 128))],
+            in_specs=[pl.BlockSpec((8, 128), lambda i, *_: (i, 0))],
             out_specs=[
-                pl.BlockSpec(lambda i, *_: (i, 0), (8, 128)),
-                pl.BlockSpec(lambda *_: (0, 0), (8, 128)),
+                pl.BlockSpec((8, 128), lambda i, *_: (i, 0)),
+                pl.BlockSpec((8, 128), lambda *_: (0, 0)),
             ],
             grid=8,
         ),
@@ -252,7 +254,7 @@ class PallasCallScalarPrefetchTest(PallasTPUTest):
         out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
         grid_spec=pltpu.PrefetchScalarGridSpec(
             num_scalar_prefetch=1,
-            out_specs=pl.BlockSpec(lambda *_: (0, 0), (8, 128)),
+            out_specs=pl.BlockSpec((8, 128), lambda *_: (0, 0)),
             grid=1,
         ),
         interpret=self.interpret,
@@ -276,20 +278,23 @@ class PallasCallScalarPrefetchTest(PallasTPUTest):
     s = s[None]
     x = x[None]
 
-    out = jax.vmap(pl.pallas_call(
-        body,
-        out_shape=jax.ShapeDtypeStruct(x.shape[1:], x.dtype),
-        grid_spec=pltpu.PrefetchScalarGridSpec(
-            num_scalar_prefetch=1,
-            in_specs=[
-                pl.BlockSpec(_x_transform, (x.shape[1] // 8, x.shape[2])),
-            ],
-            out_specs=pl.BlockSpec(lambda i, _: (i, 0),
-                                   (x.shape[1] // 8, x.shape[2])),
-            grid=8,
-        ),
-        interpret=self.interpret,
-    ))(s, x)
+    out = jax.vmap(
+        pl.pallas_call(
+            body,
+            out_shape=jax.ShapeDtypeStruct(x.shape[1:], x.dtype),
+            grid_spec=pltpu.PrefetchScalarGridSpec(
+                num_scalar_prefetch=1,
+                in_specs=[
+                    pl.BlockSpec((x.shape[1] // 8, x.shape[2]), _x_transform),
+                ],
+                out_specs=pl.BlockSpec(
+                    (x.shape[1] // 8, x.shape[2]), lambda i, _: (i, 0)
+                ),
+                grid=8,
+            ),
+            interpret=self.interpret,
+        )
+    )(s, x)
     np.testing.assert_allclose(
         out, x.reshape((1, 8, 8, -1))[:, s].reshape(x.shape)
     )
@@ -316,10 +321,10 @@ class PallasCallScalarPrefetchTest(PallasTPUTest):
           grid_spec=pltpu.PrefetchScalarGridSpec(
               num_scalar_prefetch=1,
               in_specs=[
-                  pl.BlockSpec(_x_transform, (x.shape[0] // 8, x.shape[1])),
+                  pl.BlockSpec((x.shape[0] // 8, x.shape[1]), _x_transform),
               ],
               out_specs=pl.BlockSpec(
-                  lambda i, _: (i, 0), (x.shape[0] // 8, x.shape[1])
+                  (x.shape[0] // 8, x.shape[1]), lambda i, _: (i, 0)
               ),
               grid=8,
           ),
@@ -361,7 +366,7 @@ class PallasCallDynamicGridTest(PallasTPUTest):
       return 0
     pl.pallas_call(
         kernel,
-        in_specs=[pl.BlockSpec(x_index_map, (8, 128))],
+        in_specs=[pl.BlockSpec((8, 128), x_index_map)],
         out_shape=None,
         grid=(2,),
     )(jnp.ones((8, 128)))
@@ -395,7 +400,7 @@ class PallasCallDynamicGridTest(PallasTPUTest):
       return self.pallas_call(
           kernel,
           grid=(steps * 2,),
-          out_specs=pl.BlockSpec(lambda i: (0, 0), shape),
+          out_specs=pl.BlockSpec(shape, lambda i: (0, 0)),
           out_shape=result_ty,
       )()
     np.testing.assert_array_equal(
@@ -419,7 +424,7 @@ class PallasCallDynamicGridTest(PallasTPUTest):
       return self.pallas_call(
           kernel,
           grid=(steps * 2, steps + 1, 3),
-          out_specs=pl.BlockSpec(lambda *_: (0, 0), shape),
+          out_specs=pl.BlockSpec(shape, lambda *_: (0, 0)),
           out_shape=result_ty,
       )()
     np.testing.assert_array_equal(
@@ -440,7 +445,7 @@ class PallasCallDynamicGridTest(PallasTPUTest):
           kernel,
           out_shape=result_ty,
           in_specs=[pl.BlockSpec(memory_space=pltpu.SMEM)],
-          out_specs=pl.BlockSpec(lambda i: (0, 0), shape),
+          out_specs=pl.BlockSpec(shape, lambda i: (0, 0)),
           grid=(steps * 2,),
       )(jnp.array([[42]], dtype=jnp.int32))
 
@@ -464,8 +469,8 @@ class PallasCallDynamicGridTest(PallasTPUTest):
       return self.pallas_call(
           kernel,
           grid=(steps * 2,),
-          in_specs=[pl.BlockSpec(lambda i: (0, 0), shape)],
-          out_specs=pl.BlockSpec(lambda i: (0, 0), shape),
+          in_specs=[pl.BlockSpec(shape, lambda i: (0, 0))],
+          out_specs=pl.BlockSpec(shape, lambda i: (0, 0)),
           out_shape=result_ty,
       )(x)
     x = jnp.arange(8 * 128., dtype=jnp.float32).reshape((1, *shape))
@@ -491,7 +496,7 @@ class PallasCallDynamicGridTest(PallasTPUTest):
       return self.pallas_call(
           kernel,
           grid=(steps * 2,),
-          out_specs=pl.BlockSpec(lambda i: (0, 0), shape),
+          out_specs=pl.BlockSpec(shape, lambda i: (0, 0)),
           out_shape=result_ty,
       )()
     out = dynamic_kernel(jnp.array([4, 8], jnp.int32))
@@ -515,7 +520,7 @@ class PallasCallDynamicGridTest(PallasTPUTest):
       return self.pallas_call(
           kernel,
           grid=(steps * 2,),
-          out_specs=pl.BlockSpec(lambda i: (0, 0), shape),
+          out_specs=pl.BlockSpec(shape, lambda i: (0, 0)),
           out_shape=result_ty,
       )(x)
     x = jnp.arange(4 * 8 * 128., dtype=jnp.float32).reshape((4, *shape))
@@ -549,7 +554,7 @@ class PallasCallDynamicGridTest(PallasTPUTest):
     kernel_call = self.pallas_call(
         kernel,
         grid=(8,),
-        out_specs=pl.BlockSpec(lambda i: (0, 0), result_ty.shape),
+        out_specs=pl.BlockSpec(result_ty.shape, lambda i: (0, 0)),
         out_shape=result_ty,
     )
 
@@ -571,12 +576,12 @@ class PallasCallDynamicGridTest(PallasTPUTest):
           grid=(steps * 2,),
           in_specs=[
               pl.BlockSpec(
+                  (8, 128),
                   # Should always evaluate to (1, 0)
                   lambda i: (1 + 8 - pl.num_programs(0), 0),
-                  (8, 128),
               )
           ],
-          out_specs=pl.BlockSpec(lambda i: (0, 0), (8, 128)),
+          out_specs=pl.BlockSpec((8, 128), lambda i: (0, 0)),
           out_shape=jax.ShapeDtypeStruct((8, 128), jnp.int32),
       )(x)
 
@@ -604,8 +609,8 @@ class PallasCallDMATest(PallasTPUTest):
     x = jnp.ones((8, 128), dtype=jnp.float32)
     y = self.pallas_call(
         kernel,
-        in_specs=[pl.BlockSpec(None, None, pltpu.TPUMemorySpace.ANY)],
-        out_specs=pl.BlockSpec(None, None, pltpu.TPUMemorySpace.ANY),
+        in_specs=[pl.BlockSpec(memory_space=pltpu.TPUMemorySpace.ANY)],
+        out_specs=pl.BlockSpec(memory_space=pltpu.TPUMemorySpace.ANY),
         out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
     )(x)
     jax.block_until_ready(y)
@@ -790,14 +795,16 @@ class PallasCallDMATest(PallasTPUTest):
       pltpu.run_scoped(body, pltpu.SemaphoreType.REGULAR((4, 3)))
 
     # TODO(b/345534352): Add interpret support for semaphore signal/wait.
-    jax.block_until_ready(pl.pallas_call(
-        kernel,
-        in_specs=[],
-        out_specs=pl.BlockSpec(lambda i: (0, 0), (8, 128)),
-        out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
-        grid=4,
-        debug=True,
-    )())
+    jax.block_until_ready(
+        pl.pallas_call(
+            kernel,
+            in_specs=[],
+            out_specs=pl.BlockSpec((8, 128), lambda i: (0, 0)),
+            out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
+            grid=4,
+            debug=True,
+        )()
+    )
 
   def test_can_read_semaphore(self):
     m, n = 2, 3
@@ -1124,10 +1131,10 @@ class PallasCallDMATest(PallasTPUTest):
         grid_spec=pltpu.PrefetchScalarGridSpec(
             num_scalar_prefetch=0,
             in_specs=[
-                pl.BlockSpec(lambda i: (0, 0), (8, 128)),
+                pl.BlockSpec((8, 128), lambda i: (0, 0)),
             ],
             scratch_shapes=[pltpu.VMEM((8, 128), jnp.float32)],
-            out_specs=pl.BlockSpec(lambda i: (0, 0), (8, 128)),
+            out_specs=pl.BlockSpec((8, 128), lambda i: (0, 0)),
             grid=(3,),
         ),
         interpret=interpret,
@@ -1149,7 +1156,7 @@ class PallasCallDMATest(PallasTPUTest):
             num_scalar_prefetch=0,
             in_specs=[],
             scratch_shapes=[pltpu.SMEM((1, 1), jnp.int32)],
-            out_specs=pl.BlockSpec(lambda i: (i, 0, 0), (None, 8, 128)),
+            out_specs=pl.BlockSpec((None, 8, 128), lambda i: (i, 0, 0)),
             grid=(2,),
         ),
         debug=True,
@@ -1472,8 +1479,8 @@ class PallasCallTest(PallasTPUTest):
       return pl.pallas_call(
           kernel,
           grid=(3,),
-          in_specs=[pl.BlockSpec(lambda i: (i, 0, 0), (1, 128, 128))],
-          out_specs=pl.BlockSpec(lambda i: (i, 0, 0), (1, 128, 128)),
+          in_specs=[pl.BlockSpec((1, 128, 128), lambda i: (i, 0, 0))],
+          out_specs=pl.BlockSpec((1, 128, 128), lambda i: (i, 0, 0)),
           out_shape=x,
           compiler_params=dict(mosaic=dict(allow_input_fusion=[True])),
       )(z)
@@ -1530,10 +1537,10 @@ class PallasCallUnblockedIndexingTest(PallasTPUTest):
         grid=(15,),
         in_specs=(
             pl.BlockSpec(
-                lambda i: (i * 8, 0), (2 * 8, 128), indexing_mode=pl.unblocked
+                (2 * 8, 128), lambda i: (i * 8, 0), indexing_mode=pl.unblocked
             ),
         ),
-        out_specs=pl.BlockSpec(lambda i: (i, 0), (8, 128)),
+        out_specs=pl.BlockSpec((8, 128), lambda i: (i, 0)),
         out_shape=result_ty,
         interpret=self.interpret,
     )(x)
@@ -1556,12 +1563,12 @@ class PallasCallUnblockedIndexingTest(PallasTPUTest):
         grid=(1,),
         in_specs=(
             pl.BlockSpec(
-                lambda i: (0, 0),
                 (2 * 8, 128),
+                lambda i: (0, 0),
                 indexing_mode=pl.Unblocked(((0, 8), (0, 0))),
             ),
         ),
-        out_specs=pl.BlockSpec(lambda i: (0, 0), (8, 128)),
+        out_specs=pl.BlockSpec((8, 128), lambda i: (0, 0)),
         out_shape=result_ty,
         interpret=self.interpret,
     )(x)
@@ -1618,8 +1625,8 @@ class PallasCallInputOutputAliasingTest(PallasTPUTest):
       return pl.pallas_call(
           kernel,
           out_shape=x,
-          in_specs=[pl.BlockSpec(lambda i: (i, 0, 0), (None, 1024, 1024))],
-          out_specs=pl.BlockSpec(lambda i: (i, 0, 0), (None, 1024, 1024)),
+          in_specs=[pl.BlockSpec((None, 1024, 1024), lambda i: (i, 0, 0))],
+          out_specs=pl.BlockSpec((None, 1024, 1024), lambda i: (i, 0, 0)),
           grid=(x.shape[0],),
           input_output_aliases={0: 0},
           interpret=self.interpret,
@@ -1645,13 +1652,17 @@ class PallasCallInputOutputAliasingTest(PallasTPUTest):
           out_shape=x,
           grid_spec=pltpu.PrefetchScalarGridSpec(
               num_scalar_prefetch=1,
-              in_specs=[pl.BlockSpec(lambda i, _: (i, 0, 0), (None, 1024, 1024))],
-              out_specs=pl.BlockSpec(lambda i, _: (i, 0, 0), (None, 1024, 1024)),
+              in_specs=[
+                  pl.BlockSpec((None, 1024, 1024), lambda i, _: (i, 0, 0))
+              ],
+              out_specs=pl.BlockSpec(
+                  (None, 1024, 1024), lambda i, _: (i, 0, 0)
+              ),
               grid=(x.shape[0],),
           ),
           input_output_aliases={1: 0},
           interpret=self.interpret,
-      )(jnp.array([1,2,3]), x)
+      )(jnp.array([1, 2, 3]), x)
     o = f(x)
     np.testing.assert_array_equal(o, expected)
     compiled = f.lower(jax.ShapeDtypeStruct(x.shape, x.dtype)).compile()
@@ -1688,19 +1699,21 @@ class PallasMegacoreTest(PallasTPUTest):
     x = jax.random.uniform(k1, (3, 3, 512, 512))
     y = jax.random.uniform(k2, (3, 3, 512, 512))
 
-    z = jax.vmap(jax.vmap(
-        pl.pallas_call(
-            matmul_kernel,
-            out_shape=jax.ShapeDtypeStruct((512, 512), jnp.float32),
-            grid=(4, 4, 4),
-            in_specs=[
-                pl.BlockSpec(lambda i, j, k: (i, k), (128, 128)),
-                pl.BlockSpec(lambda i, j, k: (k, j), (128, 128)),
-            ],
-            out_specs=pl.BlockSpec(lambda i, j, k: (i, j), (128, 128)),
-            debug=True,
+    z = jax.vmap(
+        jax.vmap(
+            pl.pallas_call(
+                matmul_kernel,
+                out_shape=jax.ShapeDtypeStruct((512, 512), jnp.float32),
+                grid=(4, 4, 4),
+                in_specs=[
+                    pl.BlockSpec((128, 128), lambda i, j, k: (i, k)),
+                    pl.BlockSpec((128, 128), lambda i, j, k: (k, j)),
+                ],
+                out_specs=pl.BlockSpec((128, 128), lambda i, j, k: (i, j)),
+                debug=True,
+            )
         )
-    ))(x, y)
+    )(x, y)
     np.testing.assert_allclose(z, jax.vmap(jax.vmap(jnp.dot))(x, y))
 
 
@@ -1731,8 +1744,8 @@ class PallasCallVmapTest(PallasTPUTest):
             out_shape=jax.ShapeDtypeStruct(array_shape, jnp.int32),
             grid_spec=pltpu.PrefetchScalarGridSpec(
                 num_scalar_prefetch=0,
-                in_specs=[pl.BlockSpec(lambda i, j: (i, j), tile_shape)],
-                out_specs=pl.BlockSpec(lambda i, j: (i, j), tile_shape),
+                in_specs=[pl.BlockSpec(tile_shape, lambda i, j: (i, j))],
+                out_specs=pl.BlockSpec(tile_shape, lambda i, j: (i, j)),
                 scratch_shapes=[pltpu.VMEM(tile_shape, dtype=jnp.int32)],
                 grid=(2, 2),
             ),
@@ -1777,7 +1790,7 @@ class PallasCallControlFlowTest(PallasTPUTest):
     pl.pallas_call(
         kernel,
         grid=(1,),
-        out_specs=pl.BlockSpec(lambda i: (0, 0), (8, 128)),
+        out_specs=pl.BlockSpec((8, 128), lambda i: (0, 0)),
         out_shape=jax.ShapeDtypeStruct((8, 128), jnp.int32),
     )()
     return
@@ -1823,12 +1836,12 @@ class PallasCallWhileLoopTest(PallasTPUTest):
     r = pl.pallas_call(
         kernel,
         grid=(1,),
-        out_specs=pl.BlockSpec(block_shape=(1, 1), memory_space=pltpu.SMEM),
+        out_specs=pl.BlockSpec((1, 1), memory_space=pltpu.SMEM),
         out_shape=jax.ShapeDtypeStruct([1, 1], jnp.int32),
         in_specs=[
             pl.BlockSpec(
+                (1, 8, 128),
                 lambda i: (i, 0, 0),
-                block_shape=(1, 8, 128),
                 memory_space=pltpu.SMEM,
             )
         ],
@@ -1887,12 +1900,12 @@ class PallasCallWhileLoopTest(PallasTPUTest):
     r = pl.pallas_call(
         kernel,
         grid=(4,),
-        out_specs=pl.BlockSpec(block_shape=(1, 1), memory_space=pltpu.SMEM),
+        out_specs=pl.BlockSpec((1, 1), memory_space=pltpu.SMEM),
         out_shape=jax.ShapeDtypeStruct([1, 1], jnp.int32),
         in_specs=[
             pl.BlockSpec(
+                (1, 8, 128),
                 lambda i: (i, 0, 0),
-                block_shape=(1, 8, 128),
                 memory_space=pltpu.SMEM,
             )
         ],
@@ -1916,8 +1929,8 @@ class PallasCallWhileLoopTest(PallasTPUTest):
     fn = pl.pallas_call(
         kernel,
         grid=(1,),
-        in_specs=[pl.BlockSpec(lambda i: (0, 0), (8, 128))],
-        out_specs=pl.BlockSpec(lambda i: (0, 0), (8, 128)),
+        in_specs=[pl.BlockSpec((8, 128), lambda i: (0, 0))],
+        out_specs=pl.BlockSpec((8, 128), lambda i: (0, 0)),
         out_shape=jax.ShapeDtypeStruct((8, 128), jnp.int32),
     )
     r = fn(x)
@@ -1959,9 +1972,7 @@ class PallasCallWhileLoopTest(PallasTPUTest):
         kernel,
         grid=(1,),
         out_specs=[
-            pl.BlockSpec(
-                lambda i: (0, 0), block_shape=shape, memory_space=pltpu.SMEM
-            ),
+            pl.BlockSpec(shape, lambda i: (0, 0), memory_space=pltpu.SMEM),
         ],
         out_shape=[
             jax.ShapeDtypeStruct(shape, jnp.int32),
@@ -2024,17 +2035,13 @@ class PallasCallWhileLoopTest(PallasTPUTest):
         grid=(1,),
         in_specs=[
             # keys.
-            pl.BlockSpec(
-                lambda i: (0, 0),
-                block_shape=(8, 128),
-                memory_space=pltpu.SMEM,
-            ),
+            pl.BlockSpec((8, 128), lambda i: (0, 0), memory_space=pltpu.SMEM),
         ],
         out_specs=[
             # Segments found.
-            pl.BlockSpec(block_shape=(1, 1), memory_space=pltpu.SMEM),
+            pl.BlockSpec((1, 1), memory_space=pltpu.SMEM),
             # Segment sizes.
-            pl.BlockSpec(block_shape=(8, 128), memory_space=pltpu.SMEM),
+            pl.BlockSpec((8, 128), memory_space=pltpu.SMEM),
         ],
         out_shape=[
             jax.ShapeDtypeStruct((1, 1), jnp.int32),
@@ -2072,9 +2079,9 @@ class PallasCallReductionTest(PallasTPUTest):
     result = pl.pallas_call(
         kernel,
         in_specs=[
-            pl.BlockSpec(lambda *_: (0, 0), (8, 128)),
+            pl.BlockSpec((8, 128), lambda *_: (0, 0)),
         ],
-        out_specs=pl.BlockSpec(block_shape=(1, 1), memory_space=pltpu.SMEM),
+        out_specs=pl.BlockSpec((1, 1), memory_space=pltpu.SMEM),
         out_shape=jax.ShapeDtypeStruct([1, 1], jnp.float32),
         grid=(1,),
     )(x)
@@ -2096,9 +2103,9 @@ class PallasCallReductionTest(PallasTPUTest):
     result = pl.pallas_call(
         kernel,
         in_specs=[
-            pl.BlockSpec(lambda *_: (0, 0), (8, 128)),
+            pl.BlockSpec((8, 128), lambda *_: (0, 0)),
         ],
-        out_specs=pl.BlockSpec(block_shape=(1, 1), memory_space=pltpu.SMEM),
+        out_specs=pl.BlockSpec((1, 1), memory_space=pltpu.SMEM),
         out_shape=jax.ShapeDtypeStruct([1, 1], jnp.float32),
         grid=(1,),
     )(x)
@@ -2234,7 +2241,7 @@ class PallasCallComparisonTest(PallasTPUTest):
             pl.BlockSpec(memory_space=pltpu.SMEM),
         ],
         out_specs=pl.BlockSpec(
-            lambda i: (0, 0), (1, 128), memory_space=pltpu.SMEM
+            (1, 128), lambda i: (0, 0), memory_space=pltpu.SMEM
         ),
         grid=(1,),
     )(x, y)
@@ -2290,10 +2297,10 @@ class PallasCallComparisonTest(PallasTPUTest):
         kernel,
         out_shape=jax.ShapeDtypeStruct([6, 8, 128], jnp.int32),
         in_specs=[
-            pl.BlockSpec(lambda *_: (0, 0), (8, 128)),
-            pl.BlockSpec(lambda *_: (0, 0), (8, 128)),
+            pl.BlockSpec((8, 128), lambda *_: (0, 0)),
+            pl.BlockSpec((8, 128), lambda *_: (0, 0)),
         ],
-        out_specs=pl.BlockSpec(lambda *_: (0, 0, 0), (6, 8, 128)),
+        out_specs=pl.BlockSpec((6, 8, 128), lambda *_: (0, 0, 0)),
         grid=(1,),
     )(x, y)
     np.testing.assert_array_equal(r[0], result[0])
@@ -2527,10 +2534,11 @@ class PallasCallTPUCheckifyTest(PallasTPUTest):
         grid_spec=pltpu.PrefetchScalarGridSpec(
             num_scalar_prefetch=1,
             in_specs=[
-                pl.BlockSpec(_x_transform, (x.shape[0] // 8, x.shape[1])),
+                pl.BlockSpec((x.shape[0] // 8, x.shape[1]), _x_transform),
             ],
-            out_specs=pl.BlockSpec(lambda i, _: (i, 0),
-                                   (x.shape[0] // 8, x.shape[1])),
+            out_specs=pl.BlockSpec(
+                (x.shape[0] // 8, x.shape[1]), lambda i, _: (i, 0)
+            ),
             grid=8,
         ),
     )
@@ -2557,9 +2565,9 @@ class PallasCallTPUCheckifyTest(PallasTPUTest):
         grid_spec=pltpu.PrefetchScalarGridSpec(
             num_scalar_prefetch=0,
             in_specs=[
-                pl.BlockSpec(lambda i, j: (i, j), (32, 32)),
+                pl.BlockSpec((32, 32), lambda i, j: (i, j)),
             ],
-            out_specs=pl.BlockSpec(lambda i, j: (i, j), (32, 32)),
+            out_specs=pl.BlockSpec((32, 32), lambda i, j: (i, j)),
             scratch_shapes=[pltpu.VMEM((32, 32), dtype=jnp.float32)],
             grid=(4, 4),
         ),
@@ -2591,7 +2599,7 @@ class PallasCallTPUCheckifyTest(PallasTPUTest):
       pallas_call = self.pallas_call(
           kernel,
           grid=(steps * 2,),
-          out_specs=pl.BlockSpec(lambda i: (0, 0), shape),
+          out_specs=pl.BlockSpec(shape, lambda i: (0, 0)),
           out_shape=result_ty,
       )
       return checkify.checkify(pallas_call)()
@@ -2604,6 +2612,101 @@ class PallasCallTPUCheckifyTest(PallasTPUTest):
     np.testing.assert_array_equal(
         result, np.full(shape, grid_size * 2.0, np.float32)
     )
+
+
+class MiscellaneousTest(PallasTPUTest):
+  """Tests for recently reported bugs; only pass in interpret mode."""
+
+  interpret: bool = True
+
+  def test_float32_stack(self):
+    """b/347761105"""
+    x = np.arange(128, dtype=jnp.float32).reshape(1, 128)
+    y = x + 128
+
+    def kernel(x_ref, y_ref, out_ref):
+      out_ref[...] = jnp.stack([x_ref[...], y_ref[...]], axis=1)
+
+    out = self.pallas_call(
+        kernel, out_shape=jax.ShapeDtypeStruct((1, 2, 128), jnp.float32)
+    )(x, y)
+    np.testing.assert_array_equal(out, np.stack([x, y], axis=1))
+
+  def test_lane_to_chunk_reshape_bf16(self):
+    """b/348038320"""
+    x = np.arange(256 * 1024, dtype=jnp.bfloat16).reshape(1, 256, 1024)
+
+    def kernel(x_ref, out_ref):
+      out_ref[...] = jnp.reshape(x_ref[...], (1, 256, 8, 128))
+
+    out = self.pallas_call(
+        kernel, out_shape=jax.ShapeDtypeStruct((1, 256, 8, 128), jnp.bfloat16)
+    )(x)
+    np.testing.assert_array_equal(out, np.reshape(x, (1, 256, 8, 128)))
+
+  def test_lane_to_chunk_broadcast_fp32(self):
+    """b/348033362"""
+    x = np.arange(256 * 128, dtype=jnp.float32).reshape(1, 256, 128)
+
+    def kernel(x_ref, out_ref):
+      out_ref[...] = jnp.broadcast_to(
+          jnp.expand_dims(x_ref[...], 2), (1, 256, 8, 128)
+      )
+
+    out = self.pallas_call(
+        kernel, out_shape=jax.ShapeDtypeStruct((1, 256, 8, 128), jnp.float32)
+    )(x)
+    np.testing.assert_array_equal(
+        out, np.broadcast_to(np.expand_dims(x, 2), (1, 256, 8, 128))
+    )
+
+  def test_lane_dynamic_slice(self):
+    """b/346849973"""
+    x = np.arange(128, dtype=jnp.float32)
+
+    def kernel(x_ref, out_ref):
+      out_ref[...] = lax.dynamic_slice_in_dim(x_ref[...], 64, 1, 0)
+
+    out = self.pallas_call(
+        kernel, out_shape=jax.ShapeDtypeStruct((1,), jnp.float32)
+    )(x)
+    np.testing.assert_array_equal(out, x[64:65])
+
+  def test_lane_broadcast_bf16(self):
+    """b/346654106"""
+    x = np.arange(256, dtype=jnp.bfloat16).reshape(256, 1)
+
+    def kernel(x_ref, out_ref):
+      out_ref[...] = jnp.broadcast_to(x_ref[...], (256, 512))
+
+    out = self.pallas_call(
+        kernel, out_shape=jax.ShapeDtypeStruct((256, 512), jnp.bfloat16)
+    )(x)
+    np.testing.assert_array_equal(out, np.broadcast_to(x, (256, 512)))
+
+  def test_bfloat16_to_uint32_bitcast(self):
+    """b/347771903"""
+    x = np.arange(16 * 2 * 256, dtype=jnp.bfloat16).reshape(16, 2, 256)
+
+    def kernel(x_ref, out_ref):
+      out_ref[...] = pltpu.bitcast(x_ref[...], jnp.uint32)
+
+    out = self.pallas_call(
+        kernel, out_shape=jax.ShapeDtypeStruct((16, 1, 256), jnp.uint32)
+    )(x)
+    # FIXME: Add correctness test for result.
+
+  def test_roll_partial(self):
+    """b/337384645"""
+    x = np.arange(8192, dtype=jnp.float32).reshape(128, 64)
+
+    def kernel(x_ref, out_ref):
+      out_ref[...] = pltpu.roll(x_ref[...], 3, 1)
+
+    out = self.pallas_call(
+        kernel, out_shape=jax.ShapeDtypeStruct((128, 64), jnp.float32)
+    )(x)
+    np.testing.assert_array_equal(out, np.roll(x, 3, 1))
 
 
 if __name__ == '__main__':

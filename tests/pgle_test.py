@@ -81,6 +81,36 @@ class PgleTest(jtu.JaxTestCase):
     self.assertIsNotNone(fdo_profile)
     self.assertIn(b'custom', fdo_profile)
 
+  @unittest.skip("Test failing in CI")
+  def testPGLEProfilerGetFDOProfileLarge(self):
+    mesh = jtu.create_global_mesh((2,), ('x',))
+    its = 500
+
+    @partial(
+        jax.jit,
+        in_shardings=NamedSharding(mesh, PartitionSpec('x')),
+        out_shardings=NamedSharding(mesh, PartitionSpec('x')),
+    )
+    def f(x):
+      agg = x
+      for _ in range(its):
+        agg = agg @ x
+      return agg
+
+    shape = (16, 16)
+    x = jnp.arange(math.prod(shape)).reshape(shape).astype(np.float32)
+
+    with config.pgle_profiling_runs(0):
+      f_lowered = f.lower(x)
+      f_compiled = f_lowered.compile()
+
+    pgle_profiler = profiler.PGLEProfiler(1, 90)
+    with config.enable_pgle(False):
+      with profiler.PGLEProfiler.trace(pgle_profiler):
+        f_compiled(x)
+    fdo_profile = pgle_profiler.consume_fdo_profile()
+    self.assertEqual(fdo_profile.count(b'custom'), its)
+
   def testAutoPgle(self):
     mesh = jtu.create_global_mesh((2,), ('x',))
 

@@ -48,6 +48,5 @@ py_library(
     visibility = jax_visibility("jax2tf_internal"),
     deps = [
         "//jax",
-        "//jax/experimental/export",
     ] + py_deps("numpy") + py_deps("tensorflow_core") + jax2tf_deps,
 )

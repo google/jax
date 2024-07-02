@@ -52,7 +52,8 @@ r"""Jet is an experimental module for higher-order automatic differentiation
     `outstanding primitive rules <https://github.com/google/jax/issues/2431>`__.
 """
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from functools import partial
 

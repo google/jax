@@ -43,16 +43,24 @@ parser.add_argument(
     "--cpu", default=None, required=True, help="Target CPU architecture. Required."
 )
 parser.add_argument(
-    "--cuda_version",
+    "--platform_version",
     default=None,
     required=True,
-    help="Target CUDA version. Required.",
+    help="Target CUDA/ROCM version. Required.",
 )
 parser.add_argument(
     "--editable",
     action="store_true",
-    help="Create an 'editable' jax cuda plugin build instead of a wheel.",
+    help="Create an 'editable' jax cuda/rocm plugin build instead of a wheel.",
 )
+parser.add_argument(
+    "--enable-cuda",
+    default=False,
+    help="Should we build with CUDA enabled? Requires CUDA and CuDNN.")
+parser.add_argument(
+    "--enable-rocm",
+    default=False,
+    help="Should we build with ROCM enabled?")
 args = parser.parse_args()
 
 r = runfiles.Create()
@@ -70,7 +78,7 @@ plat-name={tag}
 """)
 
 
-def prepare_wheel(
+def prepare_wheel_cuda(
     sources_path: pathlib.Path, *, cpu, cuda_version
 ):
   """Assembles a source tree for the cuda kernel wheel in `sources_path`."""
@@ -91,10 +99,6 @@ def prepare_wheel(
 
   plugin_dir = sources_path / f"jax_cuda{cuda_version}_plugin"
   copy_runfiles(
-      dst_dir=plugin_dir / "nvvm" / "libdevice",
-      src_files=["local_config_cuda/cuda/cuda/nvvm/libdevice/libdevice.10.bc"],
-  )
-  copy_runfiles(
       dst_dir=plugin_dir,
       src_files=[
           f"__main__/jaxlib/cuda/_solver.{pyext}",
@@ -112,15 +116,58 @@ def prepare_wheel(
       ],
   )
 
+def prepare_wheel_rocm(
+    sources_path: pathlib.Path, *, cpu, rocm_version
+):
+  """Assembles a source tree for the rocm kernel wheel in `sources_path`."""
+  copy_runfiles = functools.partial(build_utils.copy_file, runfiles=r)
+
+  copy_runfiles(
+      "__main__/jax_plugins/rocm/plugin_pyproject.toml",
+      dst_dir=sources_path,
+      dst_filename="pyproject.toml",
+  )
+  copy_runfiles(
+      "__main__/jax_plugins/rocm/plugin_setup.py",
+      dst_dir=sources_path,
+      dst_filename="setup.py",
+  )
+  build_utils.update_setup_with_rocm_version(sources_path, rocm_version)
+  write_setup_cfg(sources_path, cpu)
+
+  plugin_dir = sources_path / f"jax_rocm{rocm_version}_plugin"
+  copy_runfiles(
+      dst_dir=plugin_dir,
+      src_files=[
+          f"__main__/jaxlib/rocm/_solver.{pyext}",
+          f"__main__/jaxlib/rocm/_blas.{pyext}",
+          f"__main__/jaxlib/rocm/_linalg.{pyext}",
+          f"__main__/jaxlib/rocm/_prng.{pyext}",
+          f"__main__/jaxlib/rocm/_sparse.{pyext}",
+          f"__main__/jaxlib/rocm/_triton.{pyext}",
+          f"__main__/jaxlib/rocm_plugin_extension.{pyext}",
+          "__main__/jaxlib/version.py",
+      ],
+  )
+
 # Build wheel for cuda kernels
-tmpdir = tempfile.TemporaryDirectory(prefix="jax_cuda_plugin")
+if args.enable_rocm:
+  tmpdir = tempfile.TemporaryDirectory(prefix="jax_rocm_plugin")
+else:
+  tmpdir = tempfile.TemporaryDirectory(prefix="jax_cuda_plugin")
 sources_path = tmpdir.name
 try:
   os.makedirs(args.output_path, exist_ok=True)
-  prepare_wheel(
-      pathlib.Path(sources_path), cpu=args.cpu, cuda_version=args.cuda_version
-  )
-  package_name = f"jax cuda{args.cuda_version} plugin"
+  if args.enable_cuda:
+    prepare_wheel_cuda(
+        pathlib.Path(sources_path), cpu=args.cpu, cuda_version=args.platform_version
+    )
+    package_name = f"jax cuda{args.platform_version} plugin"
+  elif args.enable_rocm:
+    prepare_wheel_rocm(
+        pathlib.Path(sources_path), cpu=args.cpu, rocm_version=args.platform_version
+    )
+    package_name = f"jax rocm{args.platform_version} plugin"
   if args.editable:
     build_utils.build_editable(sources_path, args.output_path, package_name)
   else:

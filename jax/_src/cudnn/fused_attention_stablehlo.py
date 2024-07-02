@@ -15,7 +15,6 @@
 from enum import Enum
 from functools import partial, reduce
 import operator
-from typing import Optional
 import json
 
 import jax
@@ -927,10 +926,10 @@ _dot_product_attention.defvjp(_dot_product_attention_fwd_rule, _dot_product_atte
 def dot_product_attention(query: Array,
                           key: Array,
                           value: Array,
-                          bias: Optional[Array] = None,
-                          mask: Optional[Array] = None,
-                          q_seqlen: Optional[Array] = None,
-                          kv_seqlen: Optional[Array] = None,
+                          bias: Array | None = None,
+                          mask: Array | None = None,
+                          q_seqlen: Array | None = None,
+                          kv_seqlen: Array | None = None,
                           *,
                           scale: float = 1.0,
                           mask_type: MaskType = MaskType.NO_MASK,

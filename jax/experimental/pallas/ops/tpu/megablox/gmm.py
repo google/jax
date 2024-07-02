@@ -14,8 +14,9 @@
 
 """Grouped matrix multiplication kernels for TPU written in Pallas."""
 
+from collections.abc import Callable
 import functools
-from typing import Any, Callable, Optional, Union
+from typing import Any, Optional
 
 import jax
 from jax import lax
@@ -315,9 +316,9 @@ def gmm(
     rhs: jnp.ndarray,
     group_sizes: jnp.ndarray,
     preferred_element_type: jnp.dtype = jnp.float32,
-    tiling: Optional[Union[tuple[int, int, int], LutFn]] = (128, 128, 128),
-    group_offset: Optional[jnp.ndarray] = None,
-    existing_out: Optional[jnp.ndarray] = None,
+    tiling: tuple[int, int, int] | LutFn | None = (128, 128, 128),
+    group_offset: jnp.ndarray | None = None,
+    existing_out: jnp.ndarray | None = None,
     transpose_rhs: bool = False,
     interpret: bool = False,
 ) -> jnp.ndarray:
@@ -577,10 +578,10 @@ def tgmm(
     rhs: jnp.ndarray,
     group_sizes: jnp.ndarray,
     preferred_element_type: jnp.dtype = jnp.float32,
-    tiling: Optional[Union[tuple[int, int, int], LutFn]] = (128, 128, 128),
-    group_offset: Optional[jnp.ndarray] = None,
-    num_actual_groups: Optional[int] = None,
-    existing_out: Optional[jnp.ndarray] = None,
+    tiling: tuple[int, int, int] | LutFn | None = (128, 128, 128),
+    group_offset: jnp.ndarray | None = None,
+    num_actual_groups: int | None = None,
+    existing_out: jnp.ndarray | None = None,
     interpret: bool = False,
 ) -> jnp.ndarray:
   """Compute lhs[:, sizes[i-1]:sizes[i]] @ rhs[sizes[i-1]:sizes[i], :].

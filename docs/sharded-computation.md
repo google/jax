@@ -14,6 +14,8 @@ kernelspec:
 (sharded-computation)=
 # Introduction to sharded computation
 
+<!--* freshness: { reviewed: '2024-05-10' } *-->
+
 This tutorial serves as an introduction to device parallelism for Single-Program Multi-Data (SPMD) code in JAX. SPMD is a parallelism technique where the same computation, such as the forward pass of a neural network, can be run on different input data (for example, different inputs in a batch) in parallel on different devices, such as several GPUs or Google TPUs.
 
 The tutorial covers three modes of parallel computation:

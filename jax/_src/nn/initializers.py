@@ -372,7 +372,7 @@ def glorot_uniform(in_axis: int | Sequence[int] = -2,
   Returns:
     An initializer.
 
-  Example:
+  Examples:
 
   >>> import jax, jax.numpy as jnp
   >>> initializer = jax.nn.initializers.glorot_uniform()
@@ -410,7 +410,7 @@ def glorot_normal(in_axis: int | Sequence[int] = -2,
   Returns:
     An initializer.
 
-  Example:
+  Examples:
 
   >>> import jax, jax.numpy as jnp
   >>> initializer = jax.nn.initializers.glorot_normal()
@@ -448,7 +448,7 @@ def lecun_uniform(in_axis: int | Sequence[int] = -2,
   Returns:
     An initializer.
 
-  Example:
+  Examples:
 
   >>> import jax, jax.numpy as jnp
   >>> initializer = jax.nn.initializers.lecun_uniform()
@@ -484,7 +484,7 @@ def lecun_normal(in_axis: int | Sequence[int] = -2,
   Returns:
     An initializer.
 
-  Example:
+  Examples:
 
   >>> import jax, jax.numpy as jnp
   >>> initializer = jax.nn.initializers.lecun_normal()
@@ -520,7 +520,7 @@ def he_uniform(in_axis: int | Sequence[int] = -2,
   Returns:
     An initializer.
 
-  Example:
+  Examples:
 
   >>> import jax, jax.numpy as jnp
   >>> initializer = jax.nn.initializers.he_uniform()
@@ -558,7 +558,7 @@ def he_normal(in_axis: int | Sequence[int] = -2,
   Returns:
     An initializer.
 
-  Example:
+  Examples:
 
   >>> import jax, jax.numpy as jnp
   >>> initializer = jax.nn.initializers.he_normal()
@@ -591,7 +591,7 @@ def orthogonal(scale: RealNumeric = 1.0,
   Returns:
     An orthogonal initializer.
 
-  Example:
+  Examples:
 
   >>> import jax, jax.numpy as jnp
   >>> initializer = jax.nn.initializers.orthogonal()
@@ -634,7 +634,7 @@ def delta_orthogonal(
     A `delta orthogonal initializer`_. The shape passed to the initializer must
     be 3D, 4D, or 5D.
 
-  Example:
+  Examples:
 
   >>> import jax, jax.numpy as jnp
   >>> initializer = jax.nn.initializers.delta_orthogonal()

@@ -1939,6 +1939,18 @@ class BCSRTest(sptu.SparseTestCase):
     if jnp.issubdtype(dtype, jnp.floating):
       self._CheckGradsSparse(dense_func, sparse_func, args_maker)
 
+  def test_bcoo_spdot_abstract_eval_bug(self):
+    # Regression test for https://github.com/google/jax/issues/21921
+    lhs = sparse.BCOO(
+      (jnp.float32([[1]]), lax.broadcasted_iota(jnp.int32, (10, 1, 1), 0)),
+      shape=(10, 10))
+    rhs = sparse.BCOO(
+        (jnp.float32([1]), jnp.int32([[3]])),
+        shape=(10,))
+    args_maker = lambda: [lhs, rhs]
+    def func(lhs, rhs):
+      return (lhs @ rhs).todense()
+    self._CompileAndCheck(func, args_maker)
 
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())

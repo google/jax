@@ -15,12 +15,12 @@
 from __future__ import annotations
 
 from collections import OrderedDict, abc
-from collections.abc import Iterable, Sequence, Mapping
+from collections.abc import Callable, Iterable, Sequence, Mapping
 import contextlib
 from functools import wraps, partial, partialmethod, lru_cache
 import itertools as it
 import math
-from typing import Callable, Any, NamedTuple, Union, cast as type_cast
+from typing import Any, NamedTuple, Union, cast as type_cast
 
 import numpy as np
 
@@ -116,7 +116,7 @@ class SerialLoop:
   jointly over chunks of multiple axes (with the usual requirement that they
   do not coincide in a named shape of any value in the program).
 
-  Example::
+  Examples:
 
       # Processes `x` in a vectorized way, but in 20 micro-batches.
       xmap(f, in_axes=['i'], out_axes=[i], axis_resources={'i': SerialLoop(20)})(x)
@@ -161,7 +161,7 @@ def serial_loop(name: ResourceAxisName, length: int):
     name: Name of the loop in the resource environment.
     length: Number of iterations.
 
-  Example::
+  Examples:
 
     >>> x = jnp.linspace(0, jnp.pi, 4)
     ...
@@ -1816,6 +1816,7 @@ def _fix_inferred_spmd_sharding(jaxpr, resource_env, gen_fresh_name = None):
           [tmpvar], [outvar], sharding_constraint_p,
           dict(resource_env=resource_env,
                sharding=gspmd_sharding,
+               layout=None,
                unconstrained_dims=unconstrained_dims),
           set(),
           eqn.source_info, eqn.ctx))

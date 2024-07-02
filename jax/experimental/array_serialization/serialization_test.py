@@ -17,7 +17,6 @@ import asyncio
 import contextlib
 import math
 from functools import partial
-import re
 import os
 import pathlib
 import tracemalloc as tm
@@ -44,13 +43,6 @@ def setUpModule():
 
 def tearDownModule():
   _exit_stack.close()
-
-
-pattern = re.compile(r"\{(.*?):")
-
-def extract_minor_to_major(l):
-  match = re.search(pattern, str(l))
-  return tuple(int(i) for i in match.groups()[0].split(','))
 
 
 class CheckpointTest(jtu.JaxTestCase):
@@ -436,8 +428,8 @@ class CheckpointTest(jtu.JaxTestCase):
 
     out_layout = jax.jit(lambda x: x.T, out_shardings=Layout(DLL.AUTO)).lower(
         arr).compile().output_layouts()
-    self.assertEqual(extract_minor_to_major(arr.layout),
-                     extract_minor_to_major(out_layout)[::-1])
+    self.assertEqual(arr.layout.device_local_layout.major_to_minor,
+                     out_layout.device_local_layout.major_to_minor[::-1])
 
     ckpt_dir = pathlib.Path(self.create_tempdir('ckpt').full_path)
     ckpt_path = pathlib.Path(self.create_tempdir(f'{ckpt_dir}/first').full_path)

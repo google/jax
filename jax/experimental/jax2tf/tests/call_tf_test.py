@@ -13,10 +13,10 @@
 # limitations under the License.
 """Tests for call_tf."""
 
+from collections.abc import Callable
 import contextlib
 from functools import partial
 import os
-from typing import Callable
 import unittest
 
 from absl import logging

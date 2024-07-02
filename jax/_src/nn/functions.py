@@ -69,7 +69,7 @@ def relu(x: ArrayLike) -> Array:
   Returns:
     An array.
 
-  Example:
+  Examples:
     >>> jax.nn.relu(jax.numpy.array([-2., -1., -0.5, 0, 0.5, 1., 2.]))
     Array([0. , 0. , 0. , 0. , 0.5, 1. , 2. ], dtype=float32)
 

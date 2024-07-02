@@ -129,18 +129,18 @@ mlir::FailureOr<mlir::OpPassManager> GetPassPipeline(
         lower-affine,
         convert-arith-to-llvm{index-bitwidth=0},
         convert-index-to-llvm{index-bitwidth=64},
-        canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=true test-convergence=false top-down=true},
+        canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true},
         cse,
         gpu.module(strip-debuginfo),
         gpu.module(convert-gpu-to-nvvm{has-redux=false index-bitwidth=64 use-bare-ptr-memref-call-conv=false}),
-        gpu.module(canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=true test-convergence=false top-down=true}),
+        gpu.module(canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}),
         gpu.module(cse),
         gpu.module(reconcile-unrealized-casts),
         mosaic-convert-gpu-to-llvm,
         gpu-module-to-binary{format=)" +
       mlir::gpu::stringifyCompilationTarget(target).str() + R"(},
         convert-math-to-llvm{approximate-log1p=true},
-        canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=true test-convergence=false top-down=true},
+        canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true},
         cse,
         )" +
       (target != mlir::gpu::CompilationTarget::Assembly ? "gpu-launch-lowering,"
@@ -156,6 +156,9 @@ mlir::LogicalResult RunPasses(mlir::OpPassManager&& passes,
                               mlir::ModuleOp module) {
   mlir::PassManager pm(module.getContext());
   *static_cast<mlir::OpPassManager*>(&pm) = std::move(passes);
+  if (getenv("MOSAIC_GPU_DUMP_MLIR_PASSES") != nullptr) {
+    pm.enableIRPrinting();
+  }
   return pm.run(module);
 }
 

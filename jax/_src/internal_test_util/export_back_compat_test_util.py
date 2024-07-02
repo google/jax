@@ -70,13 +70,13 @@ then update `test_custom_call_coverage`, and then update your `test_foo_call`:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 import dataclasses
 import datetime
 import os
 import re
 import sys
-from typing import Any, Callable
+from typing import Any
 
 from absl import logging
 

@@ -81,7 +81,6 @@ class MetadataTest(jtu.JaxTestCase):
     def f(which, x):
       return jax.lax.cond(which, x, true_fun, x, false_fun)
     hlo = module_to_string(jax.jit(f).lower(True, 1.).compiler_ir())
-    self.assertRegex(hlo, r'loc\(".*cond\[linear=\(False, False\)\]"')
     self.assertRegex(hlo, r'loc\(".*cond/branch_0_fun/cos"')
     self.assertRegex(hlo, r'loc\(".*cond/branch_1_fun/sin"')
 

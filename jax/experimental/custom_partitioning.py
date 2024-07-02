@@ -299,7 +299,7 @@ class custom_partitioning:
   Positional arguments can be specified as static using static_argnums. JAX uses
   :code:`inspect.signature(fun)` to resolve these positional arguments.
 
-  Example:
+  Examples:
 
     As an example, assume we want to enhance the existing ``jax.numpy.fft.fft``. This function computes
     the discrete Fourier transform of an N-dimensional input along the last dimension, and is batched

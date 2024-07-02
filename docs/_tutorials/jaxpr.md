@@ -15,6 +15,8 @@ kernelspec:
 (jax-internals-jaxpr)=
 # JAX internals: The jaxpr language
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 Jaxprs are JAX’s internal intermediate representation (IR) of programs. They are explicitly typed, functional, first-order, and in algebraic normal form (ANF).
 
 Conceptually, one can think of JAX transformations, such as {func}`jax.jit` or {func}`jax.grad`, as first trace-specializing the Python function to be transformed into a small and well-behaved intermediate form that is then interpreted with transformation-specific interpretation rules.

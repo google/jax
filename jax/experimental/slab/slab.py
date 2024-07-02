@@ -14,10 +14,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from functools import partial, reduce
-from typing import Iterable, NamedTuple, Sequence, Union
 import sys
 import typing
+from typing import NamedTuple, Union
 
 import numpy as np
 

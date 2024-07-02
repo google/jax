@@ -135,11 +135,6 @@ def _cuda_path() -> str | None:
   path = _jaxlib_path.parent / "nvidia" / "cuda_nvcc"
   if path.is_dir():
     return str(path)
-  # Failing that, we use the copy of libdevice.10.bc we include with jaxlib and
-  # hope that the user has ptxas in their PATH.
-  path = _jaxlib_path / "cuda"
-  if path.is_dir():
-    return str(path)
   return None
 
 cuda_path = _cuda_path()

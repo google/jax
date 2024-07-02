@@ -15,6 +15,8 @@ kernelspec:
 
 ## Control autodiff's saved values with `jax.checkpoint` (aka `jax.remat`)
 
+<!--* freshness: { reviewed: '2024-04-08' } *-->
+
 ```{code-cell}
 import jax
 import jax.numpy as jnp

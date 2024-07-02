@@ -14,10 +14,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import functools
 from functools import partial
 import math
-from typing import Any, Callable, Literal, TypeVar, overload
+from typing import Any, Literal, TypeVar, overload
 
 import numpy as np
 

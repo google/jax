@@ -16,12 +16,12 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 import dataclasses
 from functools import partial, wraps
 import math
 import string
-from typing import Any, Callable, Optional
+from typing import Any
 
 from jax._src import core
 from jax import lax

@@ -14,10 +14,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 import itertools as it
-from typing import Any, Callable, NamedTuple, Union
+from typing import Any, NamedTuple, Union
 
 from absl.testing import absltest
 from absl.testing import parameterized

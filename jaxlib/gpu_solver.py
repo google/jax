@@ -59,21 +59,34 @@ if _cusolver:
   for _name, _value in _cusolver.registrations().items():
     xla_client.register_custom_call_target(_name, _value, platform="CUDA")
 
-
 try:
   from .rocm import _blas as _hipblas  # pytype: disable=import-error
+except ImportError:
+  for rocm_module_name in ["jax_rocm60_plugin"]:
+    try:
+      _hipblas = importlib.import_module(f"{rocm_module_name}._blas")
+    except:
+      _hipblas = None
+    else:
+      break
+
+if _hipblas:
   for _name, _value in _hipblas.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="ROCM")
-except ImportError:
-  _hipblas = None
+      xla_client.register_custom_call_target(_name, _value, platform="ROCM")
 
-try:
-  from .rocm import _solver as _hipsolver  # pytype: disable=import-error
+for rocm_module_name in [".rocm", "jax_rocm60_plugin"]:
+  try:
+    _hipsolver = importlib.import_module(
+        f"{rocm_module_name}._solver", package="jaxlib"
+    )
+  except ImportError:
+    _hipsolver = None
+  else:
+    break
+
+if _hipsolver:
   for _name, _value in _hipsolver.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="ROCM")
-except ImportError:
-  _hipsolver = None
-
+      xla_client.register_custom_call_target(_name, _value, platform="ROCM")
 
 def _real_type(dtype):
   """Returns the real equivalent of 'dtype'."""

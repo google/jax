@@ -181,7 +181,6 @@ py_library(
     ] + jax_internal_export_back_compat_test_util_visibility,
     deps = [
         ":jax",
-        "//jax/experimental/export",
     ] + py_deps("numpy"),
 )
 
@@ -205,6 +204,7 @@ py_library_providing_imports_info(
         "_src/ad_checkpoint.py",
         "_src/api.py",
         "_src/array.py",
+        "_src/blocked_sampler.py",
         "_src/callback.py",
         "_src/checkify.py",
         "_src/custom_batching.py",
@@ -799,10 +799,11 @@ pytype_strict_library(
     name = "layout",
     srcs = ["_src/layout.py"],
     deps = [
+        ":dtypes",
         ":sharding",
         ":sharding_impls",
         "//jax/_src/lib",
-    ],
+    ] + py_deps("numpy"),
 )
 
 pytype_strict_library(
@@ -962,7 +963,7 @@ pytype_strict_library(
         ":traceback_util",
         ":util",
         "//jax/_src/lib",
-    ] + py_deps("importlib_metadata"),
+    ],
 )
 
 # Public JAX libraries below this point.

@@ -46,7 +46,7 @@ class WGSplatFragLayout:
   wants. This means we can trivially broadcast, reshape and do
   elementwise operations with all other layouts.
 
-  Example:
+  Examples:
 
   To load a value in
   ```

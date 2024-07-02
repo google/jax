@@ -38,11 +38,8 @@ jax_test(
             "ondemand": False,  # Include in presubmit.
         },
     },
-    disable_backends = [
-        "cpu",
-        "tpu",
-    ],
     disable_configs = [
+        "cpu",  # The 64-bit variant
         "gpu",
         "gpu_x32",
         "gpu_a100",
@@ -54,11 +51,17 @@ jax_test(
         "gpu_a100_x32",
         "gpu_h100_x32",
     ],
-    shard_count = 4,
+    shard_count = {
+        "cpu": 8,
+        "gpu": 4,
+        "tpu": 4,
+    },
     deps = [
         "//jax:pallas",
         "//jax:pallas_gpu",
         "//jax:pallas_gpu_ops",
+        "//jax:pallas_tpu",
+        "//jax:pallas_tpu_ops",
     ] + py_deps("absl/testing") + py_deps("numpy"),
 )
 
@@ -211,6 +214,11 @@ jax_test(
     ],
     main = "pallas_pipeline_tpu_test.py",
     shard_count = 2,
+    tags = [
+        "noasan",  # Times out.
+        "nomsan",  # Times out.
+        "notsan",  # Times out.
+    ],
     deps = [
         "//jax:extend",
         "//jax:pallas_tpu",
@@ -344,6 +352,32 @@ jax_test(
         "gpu",
         "gpu_x32",
         "gpu_a100",
+        "gpu_h100",
+        "gpu_p100",
+        "gpu_p100_x32",
+        "gpu_pjrt_c_api",
+    ],
+    enable_configs = [
+        "gpu_a100_x32",
+    ],
+    tags = [],
+    deps = [
+        "//jax:pallas",
+        "//jax:pallas_gpu",  # build_cleaner: keep
+        "//jax:pallas_tpu",  # build_cleaner: keep
+    ],
+)
+
+jax_test(
+    name = "pallas_shape_poly_test",
+    srcs = ["pallas_shape_poly_test.py"],
+    config_tags_overrides = {
+        "gpu_a100_x32": {
+            "ondemand": False,  # Include in presubmit.
+        },
+    },
+    disable_configs = [
+        "gpu_x32",
         "gpu_h100",
         "gpu_p100",
         "gpu_p100_x32",

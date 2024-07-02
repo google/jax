@@ -15,6 +15,8 @@ kernelspec:
 (key-concepts)=
 # Key Concepts
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 This section briefly introduces some key concepts of the JAX package.
 
 (key-concepts-jax-arrays)=

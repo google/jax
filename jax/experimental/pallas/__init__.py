@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Module for pallas, a JAX extension for custom kernels."""
+"""Module for Pallas, a JAX extension for custom kernels.
+
+See the Pallas documentation at https://jax.readthedocs.io/en/latest/pallas.html.
+"""
 
 from jax._src import pallas
 from jax._src.pallas.core import BlockSpec

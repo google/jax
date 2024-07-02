@@ -15,7 +15,6 @@
 """Tests for splash_attention_masks."""
 from __future__ import annotations
 
-from typing import List
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
@@ -733,7 +732,7 @@ class SplashAttentionMaskInfoTest(jtu.JaxTestCase):
 
   _expected_local_mask_next_dkv = _expected_local_mask_next
 
-  def _stack(self, arrays: List[np.ndarray]) -> np.ndarray:
+  def _stack(self, arrays: list[np.ndarray]) -> np.ndarray:
     return np.stack(arrays, axis=0)
 
   # For each test, check both the lazy and the dense versions of the mask.

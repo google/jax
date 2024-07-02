@@ -21,7 +21,7 @@ XLA. There are also a handful of related casting utilities.
 from __future__ import annotations
 
 import atexit
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 import dataclasses
 from functools import lru_cache, partial
 import importlib
@@ -30,10 +30,9 @@ import logging
 import os
 import pkgutil
 import platform as py_platform
-import sys
 import threading
 import traceback
-from typing import Any, Callable, Union
+from typing import Any, Union
 import warnings
 
 from jax._src import config
@@ -367,7 +366,7 @@ def _check_cuda_versions(raise_on_first_error: bool = False,
       # versions:
       # https://docs.nvidia.com/deeplearning/cudnn/developer-guide/index.html#api-compat
       scale_for_comparison=100,
-      min_supported_version=8900
+      min_supported_version=9000
   )
   _version_check("cuFFT", cuda_versions.cufft_get_version,
                  cuda_versions.cufft_build_version,
@@ -570,12 +569,7 @@ def discover_pjrt_plugins() -> None:
     logger.debug("No jax_plugins namespace packages available")
 
   # Augment with advertised entrypoints.
-  if sys.version_info < (3, 10):
-    # Use the backport library because it provides a forward-compatible
-    # implementation.
-    from importlib_metadata import entry_points
-  else:
-    from importlib.metadata import entry_points
+  from importlib.metadata import entry_points
 
   for entry_point in entry_points(group="jax_plugins"):
     logger.debug("Discovered entry-point based JAX plugin: %s",

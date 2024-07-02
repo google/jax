@@ -15,6 +15,8 @@ kernelspec:
 (gradient-checkpointing)=
 ## Gradient checkpointing with `jax.checkpoint` (`jax.remat`)
 
+<!--* freshness: { reviewed: '2024-05-03' } *-->
+
 In this tutorial, you will learn how to control JAX automatic differentiation's saved values using {func}`jax.checkpoint` (also known as {func}`jax.remat`), which can be particularly helpful in machine learning.
 
 If you are new to automatic differentiation (autodiff) or need to refresh your memory, JAX has {ref}`automatic-differentiation` and {ref}`advanced-autodiff` tutorials.

@@ -1,5 +1,7 @@
 # `jax.debug.print` and `jax.debug.breakpoint`
 
+<!--* freshness: { reviewed: '2024-03-13' } *-->
+
 The {mod}`jax.debug` package offers some useful tools for inspecting values
 inside of JIT-ted functions.
 

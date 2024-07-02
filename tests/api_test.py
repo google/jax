@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import collections
 import collections.abc
+from collections.abc import Callable
 import concurrent.futures
 from contextlib import contextmanager
 import copy
@@ -33,7 +34,7 @@ import re
 import subprocess
 import sys
 import types
-from typing import Callable, NamedTuple
+from typing import NamedTuple
 import unittest
 import weakref
 
@@ -53,11 +54,13 @@ from jax._src import linear_util as lu
 from jax._src import test_util as jtu
 from jax._src import xla_bridge
 from jax._src import debugging
+from jax._src import pjit as pjit_lib
 from jax._src.ad_checkpoint import saved_residuals
 from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.lib import xla_client
 from jax._src.lib import xla_extension
+from jax._src.lib import xla_extension_version
 import jax._src.util as jax_util
 from jax.ad_checkpoint import checkpoint_name, checkpoint as new_checkpoint
 import jax.custom_batching
@@ -2587,7 +2590,7 @@ class APITest(jtu.JaxTestCase):
 
   def test_eval_shape_trace_cache_share(self):
     def f(x):
-      return x * 2
+      return x
 
     inp = np.arange(8)
 
@@ -2595,8 +2598,32 @@ class APITest(jtu.JaxTestCase):
       jax.eval_shape(f, inp)
       jax.jit(f)(inp)
 
-    # one for `f` and another for mul (`x * 2`) which is jitted.
-    self.assertEqual(count[0], 2)
+    self.assertEqual(count[0], 1)
+
+  @unittest.skipIf(xla_extension_version <= 273, "requires jaxlib 0.4.31")
+  def test_jit_infer_params_cache(self):
+    def f(x):
+      return x
+
+    f_jit = jax.jit(f)
+
+    def g(x):
+      x = f_jit(x)  # noqa: F821
+      x = f_jit(x)  # noqa: F821
+      return x
+
+    g_jit = jax.jit(g)
+
+    inp = np.arange(8)
+    with jtu.count_jit_infer_params_cache_miss() as count:
+      g_jit(inp)
+
+    self.assertDictEqual(count, {f: 1, g: 1})
+    cache_size = pjit_lib._infer_params_cached.cache_info().currsize
+    del count, f, f_jit, g, g_jit
+    # Cache should only keep a weak reference to f and g.
+    self.assertLess(pjit_lib._infer_params_cached.cache_info().currsize,
+                    cache_size, msg=pjit_lib._infer_params_cached.cache_keys())
 
   def test_eval_shape_out_shardings(self):
     s = jax.sharding.SingleDeviceSharding(jax.devices()[0])
@@ -4354,9 +4381,14 @@ class APITest(jtu.JaxTestCase):
     g = jax.grad(f, argnums=-1)
     g(x, y)  # doesn't crash
 
+  @unittest.skipIf(xla_extension_version < 272, "requires jaxlib 0.4.31")
   def test_jit_negative_static_argnums(self):
-    g = jax.jit(lambda x, y: x * y, static_argnums=-1)
-    g(1, 2)  # doesn't crash
+    @partial(jax.jit, static_argnums=-1)
+    def g(x, y):
+      assert isinstance(y, int)
+      return x * y
+    for i in range(3):  # Loop verifies we exercise both Python and C++ dispatch
+      self.assertEqual(2 * i, g(2, i), msg=i)
 
   def test_fastpath_cache_confusion(self):
     # https://github.com/google/jax/issues/12542
@@ -4733,6 +4765,27 @@ class APITest(jtu.JaxTestCase):
       return x * 2
 
     f.trace(jnp.arange(8)).lower(lowering_platforms=('tpu',))  # doesn't crash
+
+  def test_no_double_dots_in_error_message(self):
+    @jax.jit
+    def f(x):
+      return 1 if x > 0 else 0
+
+    with self.assertRaisesRegex(TracerBoolConversionError, r"with shape bool\[\]\.[^\.]"):
+      f(0)
+
+  def test_inlined_literals_with_error(self):
+    @jax.jit
+    def f():
+      @partial(jax.jit, inline=True)
+      def g():
+        return jnp.sin(1.)
+      if g() > 0:
+        return 1.
+      return 0.
+
+    with self.assertRaisesRegex(TracerBoolConversionError, "Attempted boolean"):
+      f()
 
 
 class RematTest(jtu.JaxTestCase):
@@ -6395,7 +6448,6 @@ class JaxprTest(jtu.JaxTestCase):
             p:f32[] = add n l
           in (p,) }
       )
-      linear=(False, False, False, False)
     ] e a a c d
   in (f,) }"""
     jaxpr = api.make_jaxpr(f)(jnp.float32(3.))
@@ -9975,8 +10027,7 @@ class CustomTransposeTest(jtu.JaxTestCase):
       return x + fn(y, x)
 
     def cond_wrap(f):
-      return lambda i, x: lax.cond(i > 0, f, lambda x: x, x,
-                                   linear=(True,))
+      return lambda i, x: lax.cond(i > 0, f, lambda x: x, x)
 
     i = 7.
     x = jnp.ones(2) * 6.
@@ -10000,8 +10051,7 @@ class CustomTransposeTest(jtu.JaxTestCase):
       return x + fn(y, x)
 
     def cond_wrap(f):
-      return lambda i, x: lax.cond(i > 0, f, lambda x: x, x,
-                                   linear=(True,))
+      return lambda i, x: lax.cond(i > 0, f, lambda x: x, x)
 
     i = 7.
     x = jnp.ones(2) * 6.

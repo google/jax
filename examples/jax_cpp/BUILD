@@ -21,9 +21,9 @@ cc_binary(
     srcs = ["main.cc"],
     tags = ["manual"],
     deps = [
+        "//third_party/absl/status:statusor",
         "@xla//xla:literal",
         "@xla//xla:literal_util",
-        "@xla//xla:statusor",
         "@xla//xla/pjrt:pjrt_client",
         "@xla//xla/pjrt/cpu:cpu_client",
         "@xla//xla/tools:hlo_module_loader",

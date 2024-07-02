@@ -176,6 +176,9 @@ MLIR_CAPI_EXPORTED bool mlirTpuVectorLayoutEquivalentTo(
     MlirTpuVectorLayout layout, MlirTpuVectorLayout other,
     MlirTpuI64ArrayRef shape, MlirTpuI64TargetTuple target_shape);
 
+MLIR_CAPI_EXPORTED void mlirTpuVectorLayoutPrint(
+    MlirTpuVectorLayout layout, MlirStringCallback callback, void* user_data);
+
 MLIR_CAPI_EXPORTED void mlirTpuVregDataBoundsDestroy(
     MlirTpuVregDataBounds data_bounds);
 

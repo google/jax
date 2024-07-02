@@ -18,7 +18,7 @@ through the outside computation, using tf.GradientTape on the host.
 
 This is separate from host_callback_test because it needs a TF dependency.
 """
-from typing import Callable
+from collections.abc import Callable
 import unittest
 
 from absl.testing import absltest
