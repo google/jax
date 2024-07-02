@@ -43,7 +43,6 @@ from jax._src import config
 from jax._src import source_info_util
 from jax._src import traceback_util
 from jax._src import tree_util
-from jax._src.tree_util import tree_unflatten, keystr
 from jax._src import util
 from jax._src.sharding_impls import is_unspecified_or_auto
 from jax._src.layout import Layout
@@ -590,11 +589,7 @@ class Compiled(Stage):
           f"keyword arguments, but called with keyword arguments: {kws}")
     args_flat, in_tree = tree_util.tree_flatten((args, kwargs))
     if in_tree != params.in_tree:
-      leaf = PytreeLeaf()
-      this_dummy = tree_unflatten(in_tree, [leaf] * in_tree.num_leaves)
-      other_dummy = tree_unflatten(
-          params.in_tree, [leaf] * params.in_tree.num_leaves)
-      errs = list(tree_util.equality_errors(this_dummy, other_dummy))
+      errs = list(tree_util.equality_errors_pytreedef(in_tree, in_tree))
       msg = []
       msg.append(
           "Function compiled with input pytree does not match the input pytree"
@@ -603,7 +598,7 @@ class Compiled(Stage):
         fst, *rest = path
         base = ['args', 'kwargs'][fst.idx]
         msg.append(
-            f"    * at {base}{keystr(tuple(rest))}, seen {thing2} but now"
+            f"    * at {base}{tree_util.keystr(tuple(rest))}, seen {thing2} but now"
             f" given {thing1}, so {explanation}")
       raise TypeError('\n'.join(msg))
     try:
@@ -639,10 +634,6 @@ class Compiled(Stage):
           return outs
         self._call = cpp_call_fallback
     return self._call(*args, **kwargs)
-
-
-class PytreeLeaf:
-  def __repr__(self): return "pytree leaf"
 
 
 class Lowered(Stage):

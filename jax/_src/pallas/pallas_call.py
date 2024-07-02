@@ -23,7 +23,6 @@ from typing import Any
 import jax
 from jax import api_util
 from jax import lax
-from jax import tree_util
 from jax._src import ad_util
 from jax._src import checkify
 from jax._src import config
@@ -31,6 +30,7 @@ from jax._src import core as jax_core
 from jax._src import effects
 from jax._src import linear_util as lu
 from jax._src import state
+from jax._src import tree_util
 from jax._src.interpreters import ad
 from jax._src.interpreters import batching
 from jax._src.interpreters import mlir
@@ -45,6 +45,7 @@ from jax._src.util import (
     safe_zip,
     split_list,
     tuple_insert,
+    unzip2,
     weakref_lru_cache,
 )
 import jax.numpy as jnp
@@ -893,10 +894,16 @@ def pallas_call_checkify_rule(error: checkify.Error,
 checkify.error_checks[pallas_call_p] = pallas_call_checkify_rule
 
 @weakref_lru_cache
-def _trace_to_jaxpr(fun: Callable, grid_spec: GridSpec, flat_in_avals,
-                    flat_out_avals, in_tree, out_tree, interpret: bool):
-  avals, grid_mapping = grid_spec.get_grid_mapping(flat_in_avals, in_tree,
-                                                   flat_out_avals, out_tree)
+def _trace_to_jaxpr(fun: Callable, grid_spec: GridSpec,
+                    flat_in_avals: Sequence[jax_core.AbstractValue],
+                    flat_out_avals: Sequence[jax_core.AbstractValue],
+                    in_tree: tree_util.PyTreeDef,
+                    in_paths: Sequence[tree_util.KeyPath],
+                    out_tree: tree_util.PyTreeDef,
+                    out_paths: Sequence[tree_util.KeyPath],
+                    interpret: bool):
+  avals, grid_mapping = grid_spec.get_grid_mapping(flat_in_avals, in_tree, in_paths,
+                                                   flat_out_avals, out_tree, out_paths)
   if interpret:
     avals = jax.tree_util.tree_map(_logical_aval_to_interpret_mode_aval, avals)
   jaxpr_flat_avals, jaxpr_in_tree = tree_util.tree_flatten(avals)
@@ -1058,19 +1065,25 @@ def pallas_call(
   grid_spec, dynamic_grid_bounds = grid_spec.unzip_dynamic_grid_bounds()
   if isinstance(out_shape, list):
     out_shape = tuple(out_shape)
-  flat_out_shapes, out_tree = tree_util.tree_flatten(out_shape)
-  flat_out_shapes = [jax.ShapeDtypeStruct(x.shape, x.dtype)
+  flat_out_shapes_with_paths, out_tree = tree_util.tree_flatten_with_path(out_shape)
+  out_paths, flat_out_shapes = unzip2(flat_out_shapes_with_paths)
+  flat_out_shapes = [jax.ShapeDtypeStruct(x.shape, x.dtype)  # type: ignore
                      for x in flat_out_shapes]
   @jax.jit
   def wrapped(*args):
-    flat_args, in_tree = tree_util.tree_flatten(args)
+    flat_args_with_paths, in_tree = tree_util.tree_flatten_with_path(args)
+    in_paths, flat_args = unzip2(flat_args_with_paths)
     flat_in_avals = tuple(jax_core.raise_to_shaped(jax_core.get_aval(a))
                           for a in flat_args)
     flat_out_avals = tuple(jax_core.ShapedArray(v.shape, v.dtype)
                            for v in flat_out_shapes)
-    grid_mapping, jaxpr, consts, _ = _trace_to_jaxpr(
-        f, grid_spec, flat_in_avals, flat_out_avals, in_tree,
-        out_tree, interpret=interpret)
+    grid_mapping, jaxpr, consts, f_out_tree = _trace_to_jaxpr(
+        f, grid_spec, flat_in_avals, flat_out_avals, in_tree, in_paths,
+        out_tree, out_paths, interpret=interpret)
+    if f_out_tree != tree_util.tree_flatten(None)[1]:
+      raise ValueError(
+          "The kernel function in a pallas_call should return None. "
+          f"Found a PyTree: {f_out_tree}")
     out_flat = pallas_call_p.bind(
         *dynamic_grid_bounds, *consts, *flat_args,
         jaxpr=jaxpr, name=name,
