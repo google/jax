@@ -648,7 +648,7 @@ def emit_tf_embedded_graph_custom_call(
       util.flatten([mlir.aval_to_ir_types(aval) for aval in result_avals])
   )
   if ordered:
-    operands.insert(0, ctx.tokens_in.get(call_tf_ordered_effect)[0])
+    operands.insert(0, ctx.tokens_in.get(call_tf_ordered_effect))
     result_types.insert(0, mlir.token_type()[0])
 
   custom_call = hlo.CustomCallOp(
@@ -668,7 +668,7 @@ def emit_tf_embedded_graph_custom_call(
   results = list(custom_call.results)
   if ordered:
     token = results.pop(0)
-    ctx.set_tokens_out(mlir.TokenSet({call_tf_ordered_effect: (token,)}))
+    ctx.set_tokens_out(mlir.TokenSet({call_tf_ordered_effect: token}))
 
   return results
 

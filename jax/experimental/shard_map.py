@@ -677,8 +677,7 @@ def _xla_shard(ctx: mlir.LoweringRuleContext, mesh, auto, names,
   return [mlir.wrap_with_full_to_shard_op(ctx, sx, aval_out, manual_proto, unspecified)]
 
 def _xla_unshard(ctx: mlir.LoweringRuleContext, mesh, auto, names,
-                 aval_in, aval_out, xs):
-  x, = xs
+                 aval_in, aval_out, x):
   axes = {name: i for i, ns in names.items() for name in ns}
   ns = _make_scoped_manual_sharding(ctx, mesh, axes)
   if dtypes.issubdtype(aval_out.dtype, dtypes.extended):

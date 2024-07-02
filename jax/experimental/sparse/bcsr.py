@@ -671,8 +671,8 @@ def _bcsr_dot_general_gpu_lowering(
 
   # Account for a bug in cusparse: it references indices and data beyond
   # the extent of indptr.
-  (lhs_data,), (lhs_indices,) = _bcsr_correct_out_of_bound_indices_lowered(
-      ctx, lhs_data, lhs_indices, lhs_indptr, rhs, shape=lhs_spinfo.shape)
+  lhs_data, lhs_indices = _bcsr_correct_out_of_bound_indices_lowered(
+    ctx, lhs_data, lhs_indices, lhs_indptr, rhs, shape=lhs_spinfo.shape)
 
   if rhs_aval.ndim == 1:
     dot_general_fn = csr_matvec_lowering

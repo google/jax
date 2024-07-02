@@ -1051,7 +1051,7 @@ basearray.Array.register(ArrayImpl)
 
 def _array_mlir_constant_handler(val):
   try:
-    return mlir.ir_constants(val._value)
+    return mlir.ir_constant(val._value)
   except RuntimeError as e:
     # TODO(yashkatariya): Ideally we would catch a custom exception from
     # `_value` function in ArrayImpl instead of checking the error string.

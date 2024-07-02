@@ -1387,13 +1387,12 @@ def _unravel_index_hlo(axis_env):
   mod = mlir.ir_constant(np.array(axis_env.sizes[-1], np.uint32))
   return hlo.remainder(hlo.divide(hlo.replica_id(), div), mod)
 
-def _hlo_shard(aval, axis_env, xs, in_axis):
+def _hlo_shard(aval, axis_env, x, in_axis):
   if aval is core.abstract_token:
-    return xs
+    return x
   elif isinstance(aval, core.ShapedArray):
     if dtypes.issubdtype(aval.dtype, dtypes.extended):
       aval = aval.dtype._rules.physical_element_aval(aval.dtype)
-    x, = xs
     dims = list(aval.shape)
     zero = mlir.ir_constant(np.zeros((), dtype=np.uint32))
     idxs = [zero] * len(dims)
@@ -1402,9 +1401,7 @@ def _hlo_shard(aval, axis_env, xs, in_axis):
     dims_unsqueezed.insert(in_axis, 1)
     dynamic_slice_result = hlo.dynamic_slice(
         x, idxs, mlir.dense_int_array(dims_unsqueezed))
-    return [
-      hlo.reshape(mlir.aval_to_ir_type(aval), dynamic_slice_result)
-    ]
+    return hlo.reshape(mlir.aval_to_ir_type(aval), dynamic_slice_result)
   else:
     raise TypeError(aval)
 
@@ -1442,11 +1439,10 @@ def _axis_groups(mesh_spec, mesh_axes):
 
 
 # TODO(b/110096942): more efficient gather
-def _hlo_unshard(ctx: mlir.LoweringRuleContext, aval, axis_env, out_axis, xs):
+def _hlo_unshard(ctx: mlir.LoweringRuleContext, aval, axis_env, out_axis, x):
   if aval is core.abstract_token:
-    return xs
+    return x
   elif isinstance(aval, core.ShapedArray):
-    x, = xs
     dims = list(aval.shape)
     padded_aval = aval.update(shape=[axis_env.sizes[-1]] + dims)
     padded = mlir.full_like_aval(ctx, 0, padded_aval)
@@ -1489,8 +1485,8 @@ def _pmap_lowering(ctx, *in_nodes, axis_name,
   # Shard the in_nodes that are mapped
   in_avals = [v.aval for v in call_jaxpr.invars]
   in_nodes_sharded = (
-    _hlo_shard(aval, new_env, mlir.wrap_singleton_ir_values(in_node), in_axis)
-    if in_axis is not None else mlir.wrap_singleton_ir_values(in_node)
+    _hlo_shard(aval, new_env, in_node, in_axis)
+    if in_axis is not None else in_node
     for aval, in_node, in_axis in zip(in_avals, in_nodes, in_axes))
 
   with maybe_extend_axis_env(axis_name, global_axis_size, None):

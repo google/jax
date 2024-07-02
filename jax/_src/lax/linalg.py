@@ -1097,10 +1097,10 @@ def _triangular_solve_cpu_lower(
   if len(a_aval.shape) == 2 and np.dtype(a_aval.dtype) in _cpu_lapack_types:
     alpha = mlir.ir_constant(np.array(1, dtype=a_aval.dtype))
     b_shape_vals = mlir.eval_dynamic_shape_as_ivals(ctx, b_aval.shape)
-    return [lapack.trsm_hlo(
+    return lapack.trsm_hlo(
       a_aval.dtype, alpha,
       a, b, left_side, lower, transpose_a, conjugate_a, unit_diagonal,
-      b_shape_vals=b_shape_vals)]
+      b_shape_vals=b_shape_vals)
   else:
     # Fall back to the HLO implementation for unsupported types or batching.
     # TODO: Consider swapping XLA for LAPACK in batched case
@@ -1189,7 +1189,7 @@ def _lu_pivots_to_permutation_batching_rule(batched_args, batch_dims, *,
 
 def _lu_pivots_to_permutation_gpu_lowering(lowering, ctx, pivots, *,
                                            permutation_size):
-  return [lowering(pivots, permutation_size=permutation_size)]
+  return lowering(pivots, permutation_size=permutation_size)
 
 
 lu_pivots_to_permutation_p = Primitive('lu_pivots_to_permutation')

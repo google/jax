@@ -27,7 +27,6 @@ from jax import tree_util
 from jax._src import core
 from jax._src import dtypes
 from jax._src import sharding_impls
-from jax._src import util
 from jax._src.core import AxisName, ShapedArray, raise_to_shaped
 from jax._src.interpreters import ad
 from jax._src.interpreters import batching
@@ -772,7 +771,7 @@ def _allreduce_lowering(prim, pos_fn, ctx, *args, axes, axis_index_groups):
           shape=np.delete(np.array(aval.shape, dtype=np.int64),
                           positional_axes))
       reducer_ctx = ctx.replace(primitive=None, avals_in=[aval], avals_out=[aval_out])
-      out, = reducer(reducer_ctx, arg, axes=tuple(positional_axes))[0]
+      out, = reducer(reducer_ctx, arg, axes=tuple(positional_axes))
       return out
     args = map(_positional_reduce, ctx.avals_in, args)
   if not named_axes:
@@ -805,9 +804,8 @@ def _allreduce_lowering(prim, pos_fn, ctx, *args, axes, axis_index_groups):
       lower_reducer = mlir.lower_fun(prim.bind, multiple_results=False)
       reducer_ctx = ctx.replace(primitive=None,
                                 avals_in=[scalar_aval] * 2, avals_out=[scalar_aval])
-      out_nodes = lower_reducer(
-          reducer_ctx, *([a] for a in reducer_block.arguments))
-      hlo.return_(util.flatten(out_nodes))
+      out_nodes = lower_reducer(reducer_ctx, *reducer_block.arguments)
+      hlo.return_(mlir.flatten_ir_values(out_nodes))
     return op.result
 
   return [all_reduce(aval, x) for aval, x in zip(ctx.avals_in, args)]
@@ -1410,9 +1408,8 @@ def _reduce_scatter_lowering(
     reducer_ctx = ctx.replace(primitive=None,
                               avals_in=[scalar_aval] * 2,
                               avals_out=[scalar_aval])
-    out_nodes = lower_reducer(
-        reducer_ctx, *([a] for a in reducer_block.arguments))
-    hlo.return_(util.flatten(out_nodes))
+    out_nodes = lower_reducer(reducer_ctx, *reducer_block.arguments)
+    hlo.return_(mlir.flatten_ir_values(out_nodes))
 
   if tiled:
     return op.results

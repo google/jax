@@ -81,7 +81,7 @@ from jax._src.tree_util import (
 from jax._src.util import (
     HashableFunction, safe_map, safe_zip, wraps,
     distributed_debug_log, split_list, weakref_lru_cache,
-    merge_lists, flatten, unflatten, subs_list, fun_name)
+    merge_lists, flatten, subs_list, fun_name)
 
 map, unsafe_map = safe_map, map
 zip, unsafe_zip = safe_zip, zip
@@ -1926,9 +1926,9 @@ def _pjit_lowering(ctx, *args, name, jaxpr, in_shardings,
   args = (*ctx.dim_var_values, *tokens_in, *args)
   call = func_dialect.CallOp(flat_output_types,
                              ir.FlatSymbolRefAttr.get(func.name.value),
-                             mlir.flatten_lowering_ir_args(args))
+                             mlir.flatten_ir_values(args))
   mlir.wrap_compute_type_in_place(ctx, call)
-  out_nodes = unflatten(call.results, map(len, output_types))
+  out_nodes = mlir.unflatten_ir_values(call.results, map(len, output_types))
   tokens, out_nodes = split_list(out_nodes, [len(effects)])
   tokens_out = ctx.tokens_in.update_tokens(mlir.TokenSet(zip(effects, tokens)))
   ctx.set_tokens_out(tokens_out)

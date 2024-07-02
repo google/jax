@@ -441,9 +441,9 @@ def _generic_reduce_window_lower(
     if jaxpr.effects:
       raise NotImplementedError('Cannot lower effectful `reduce_window`.')
     out_nodes, _ = mlir.jaxpr_subcomp(ctx.module_context, jaxpr, ctx.name_stack,
-        mlir.TokenSet(), consts, *([a] for a in reducer.arguments),
+        mlir.TokenSet(), consts, *reducer.arguments,  # type: ignore[misc]
         dim_var_values=ctx.dim_var_values)
-    return util.flatten(out_nodes)
+    return mlir.flatten_ir_values(out_nodes)
 
   return mlir.reduce_window(
       ctx,
@@ -675,9 +675,9 @@ def _select_and_scatter_lower(
     out_nodes, _ = mlir.jaxpr_subcomp(ctx.module_context, select_jaxpr,
                                       ctx.name_stack,
                                       mlir.TokenSet(), select_consts,
-                                      *([a] for a in select.arguments),
+                                      *select.arguments,
                                       dim_var_values=ctx.dim_var_values)
-    hlo.return_(util.flatten(out_nodes))
+    hlo.return_(mlir.flatten_ir_values(out_nodes))
   scatter = op.scatter.blocks.append(scalar_type, scalar_type)
   with ir.InsertionPoint(scatter):
     if scatter_jaxpr.effects:
@@ -685,9 +685,9 @@ def _select_and_scatter_lower(
     out_nodes, _ = mlir.jaxpr_subcomp(ctx.module_context, scatter_jaxpr,
                                       ctx.name_stack,
                                       mlir.TokenSet(), scatter_consts,
-                                      *([a] for a in scatter.arguments),
+                                      *scatter.arguments,
                                       dim_var_values=ctx.dim_var_values)
-    hlo.return_(util.flatten(out_nodes))
+    hlo.return_(mlir.flatten_ir_values(out_nodes))
   return op.results
 
 mlir.register_lowering(select_and_scatter_p, _select_and_scatter_lower)

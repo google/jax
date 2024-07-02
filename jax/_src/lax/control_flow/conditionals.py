@@ -842,16 +842,16 @@ def _cond_lowering(ctx, index, *args, branches):
   for i, jaxpr in enumerate(branches):
     branch = case_op.regions[i].blocks.append()
     with ir.InsertionPoint(branch):
-      consts = [mlir.ir_constants(xla.canonicalize_dtype(x)) for x in jaxpr.consts]
+      consts = [mlir.ir_constant(xla.canonicalize_dtype(x)) for x in jaxpr.consts]
       out_vals, tokens_out = mlir.jaxpr_subcomp(
           ctx.module_context, jaxpr.jaxpr, name_stack.extend(f'branch_{i}_fun'),
-          tokens_in, consts, *map(mlir.wrap_singleton_ir_values, args),
+          tokens_in, consts, *args,
           dim_var_values=ctx.dim_var_values)
       out_tokens = [tokens_out.get(eff) for eff in ordered_effects]
       out_vals = [*out_tokens, *out_vals]
-      hlo.return_(util.flatten(out_vals))
+      hlo.return_(mlir.flatten_ir_values(out_vals))
 
-  tokens_and_outputs = util.unflatten(case_op.results, map(len, output_types))
+  tokens_and_outputs = mlir.unflatten_ir_values(case_op.results, map(len, output_types))
   tokens, outputs = util.split_list(tokens_and_outputs, [num_tokens])
   ctx.set_tokens_out(mlir.TokenSet(zip(ordered_effects, tokens)))
   return outputs
@@ -981,7 +981,9 @@ def _platform_index_lowering(ctx: mlir.LoweringRuleContext,
   def lower_constant(
       ctx: mlir.LoweringRuleContext, *, i: int
   ) -> Sequence[ir.Value]:
-    return mlir.ir_constants(np.int32(i))
+    v = mlir.ir_constant(np.int32(i))
+    assert isinstance(v, ir.Value), v
+    return [v]
   platform_rules: dict[str, mlir.LoweringRule] = {}
   for i, ps in enumerate(platforms):
     rule = partial(lower_constant, i=i)

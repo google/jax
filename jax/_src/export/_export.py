@@ -23,7 +23,7 @@ import dataclasses
 import functools
 import itertools
 import re
-from typing import Any, Union
+from typing import Any, Union, cast
 import warnings
 
 from absl import logging
@@ -729,7 +729,7 @@ def _wrap_main_func(
   context = mlir.make_ir_context()
   with context, ir.Location.unknown(context):
     # Make a copy, do not mutate because it may be cached
-    wrapped_module = ir.Module.parse(mlir.module_to_bytecode(module))  # type: ignore
+    wrapped_module = ir.Module.parse(mlir.module_to_bytecode(module))  # type: ignore[arg-type]
     symbol_table = ir.SymbolTable(wrapped_module.operation)
     orig_main = symbol_table["main"]
     orig_main.attributes["sym_visibility"] = ir.StringAttr.get("private")
@@ -838,7 +838,7 @@ def _wrap_main_func(
       orig_main_args: list[ir.Value] = []
       # The platform index and the dimension variables
       for arg, arg_type in zip(
-          list(new_main_op.arguments[0:nr_platform_index_args]) + util.flatten(dim_values),
+          list(new_main_op.arguments[0:nr_platform_index_args]) + mlir.flatten_ir_values(dim_values),
           platform_input_types + dim_var_input_types):
         if arg.type != arg_type:
           orig_main_args.append(hlo.convert(arg_type, arg))
@@ -1327,7 +1327,7 @@ def _call_exported_lowering(ctx: mlir.LoweringRuleContext, *args,
     if len(lowering_platforms) > 1:
       current_platform_idx = ctx.dim_var_values[0]
     else:
-      current_platform_idx = mlir.ir_constant(np.int32(0))
+      current_platform_idx = cast(ir.Value, mlir.ir_constant(np.int32(0)))
     # Compute the rule index based on the current platform
     i32_type = mlir.aval_to_ir_types(core.ShapedArray((), dtype=np.int32))[0]
     if current_platform_idx.type != i32_type:
@@ -1338,8 +1338,8 @@ def _call_exported_lowering(ctx: mlir.LoweringRuleContext, *args,
     for i in range(len(lowering_platforms)):
       branch = callee_platform_idx.regions[i].blocks.append()
       with ir.InsertionPoint(branch):
-        hlo.return_(mlir.ir_constants(
-          np.int32(callee_lowering_platform_index[i])))
+        hlo.return_([mlir.ir_constant(
+          np.int32(callee_lowering_platform_index[i]))])
     if callee_platform_idx.result.type != callee_type.inputs[0]:
       callee_platform_idx = hlo.ConvertOp(callee_type.inputs[0],
                                           callee_platform_idx)
@@ -1350,7 +1350,7 @@ def _call_exported_lowering(ctx: mlir.LoweringRuleContext, *args,
 
   ordered_effects = exported.ordered_effects
   for eff in ordered_effects:
-    token_in = ctx.tokens_in.get(eff)[0]
+    token_in = ctx.tokens_in.get(eff)
     submodule_args.append(token_in)
   kept_args = [
       convert_shape(a, a_aval, exported_in_aval)

@@ -97,7 +97,7 @@ def function_effect_lowering(ctx, *, effect):
   flat_output_types = util.flatten(output_types)
   call = mlir.func_dialect.CallOp(flat_output_types,
                                   mlir.ir.FlatSymbolRefAttr.get(func.name.value),
-                                  mlir.flatten_lowering_ir_args(in_tokens))
+                                  mlir.flatten_ir_values(in_tokens))
   tokens, out = util.split_list(call.results, [len(ctx.tokens_in)])
   ctx.set_tokens_out(mlir.TokenSet(zip(effs, tokens)))
   return out
@@ -120,7 +120,7 @@ def callback_effect_lowering(ctx: mlir.LoweringRuleContext, *args, callback, out
   del out_avals
   token_in = None
   if effects.ordered_effects.contains(effect):
-    token_in = ctx.tokens_in.get(effect)[0]
+    token_in = ctx.tokens_in.get(effect)
 
   out_op, token_out, _ = mlir.emit_python_callback(
       ctx, callback, token_in, list(args), list(ctx.avals_in),

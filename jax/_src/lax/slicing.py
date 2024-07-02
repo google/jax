@@ -2473,7 +2473,7 @@ def _scatter_lower(ctx, operand, indices, updates, *,
 
   if mode == GatherScatterMode.CLIP:
     clip_fn = mlir.lower_fun(_clamp_scatter_indices, multiple_results=False)
-    (indices,), = clip_fn(ctx.replace(avals_out=None), operand, indices,
+    (indices,) = clip_fn(ctx.replace(avals_out=None), operand, indices,
                           updates, dnums=dimension_numbers)
 
   dnums = dimension_numbers
@@ -2504,9 +2504,9 @@ def _scatter_lower(ctx, operand, indices, updates, *,
       raise NotImplementedError('Cannot lower effectful `scatter`.')
     out_nodes, _ = mlir.jaxpr_subcomp(
         ctx.module_context, update_jaxpr, name_stack, mlir.TokenSet(),
-        update_consts, (update.arguments[0],), (update.arguments[1],),
+        update_consts, update.arguments[0], update.arguments[1],
         dim_var_values=ctx.dim_var_values)
-    hlo.return_(util.flatten(out_nodes))
+    hlo.return_(mlir.flatten_ir_values(out_nodes))
   return op.results
 
 mlir.register_lowering(scatter_p, _scatter_lower)
@@ -2532,8 +2532,8 @@ def _scatter_add_lower_gpu(ctx, operand, indices, updates,
 
   if mode == GatherScatterMode.CLIP:
     clip_fn = mlir.lower_fun(_clamp_scatter_indices, multiple_results=False)
-    (indices,), = clip_fn(ctx.replace(avals_out=None), operand, indices, updates,
-                          dnums=dimension_numbers)
+    indices, = clip_fn(ctx.replace(avals_out=None), operand, indices, updates,
+                       dnums=dimension_numbers)
 
   aval_out, = ctx.avals_out
   dnums = dimension_numbers
