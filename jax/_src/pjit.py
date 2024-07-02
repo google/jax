@@ -369,10 +369,7 @@ def _split_layout_and_sharding(entries):
   layouts, shardings = [], []
 
   for e in entries_flat:
-    if e is None or is_unspecified_or_auto(e):
-      layouts.append(None)
-      shardings.append(e)
-    elif isinstance(e, Layout):
+    if isinstance(e, Layout):
       layouts.append(e.device_local_layout)
       shardings.append(e.sharding)
     elif isinstance(e, (DeviceLocalLayout, AutoLayout)):
@@ -1430,7 +1427,8 @@ def _resolve_in_layouts(args, jit_in_layouts, resolved_in_shardings, in_avals):
   for arg, jit_in_l, rs, aval in safe_zip(
       args, jit_in_layouts, resolved_in_shardings, in_avals):
     arg_layout, committed = (
-        pxla._maybe_get_default_layout(getattr(arg, 'layout', None), jit_in_l, rs, aval),
+        pxla._maybe_get_default_layout(getattr(arg, 'layout', None), jit_in_l,
+                                       rs, aval),
         getattr(arg, '_committed', True))
     # Sharding can be unspecified when array is committed if it's a PmapSharding.
     is_pmap_sharding = (is_unspecified(rs) or
