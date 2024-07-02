@@ -158,7 +158,8 @@ class TPU_Op<string mnemonic, list<Trait> traits = []> :
 
 def TPU_ReductionKind : I32EnumAttr<"ReductionKind", "Reduction kind", [
   I32EnumAttrCase<"SUM", 0, "sum">,
-  I32EnumAttrCase<"MAX", 1, "max">
+  I32EnumAttrCase<"MAX", 1, "max">,
+  I32EnumAttrCase<"MIN", 2, "min">
 ]> {
     let genSpecializedAttr = 0;
     let cppNamespace = "::mlir::tpu";

@@ -2059,20 +2059,48 @@ class PallasCallWhileLoopTest(PallasTPUTest):
 
 class PallasCallReductionTest(PallasTPUTest):
 
-  def setUp(self):
-    if jtu.device_under_test() != 'tpu':
-      self.skipTest('Test only works on TPU')
+  @parameterized.parameters(
+      ('all_true', jnp.all, True),
+      ('all_false', jnp.all, False),
+      ('one_false', jnp.all, False),
+      ('all_true', jnp.any, True),
+      ('all_false', jnp.any, False),
+      ('one_false', jnp.any, True),
+  )
+  def test_reduce_boolean(self, input_type, reduction_op, expected_result):
+    def kernel(x_ref, ones_ref, o_ref):
+      # Convert float to bool with a comparison.
+      bool_x = x_ref[...] == ones_ref[...]
+      reduced_as_bool = reduction_op(bool_x, keepdims=True)
+      # Convert bool to float with a select.
+      float_value = jnp.where(reduced_as_bool, 1.0, 0.0)
+      o_ref[0, 0] = float_value[0, 0]
 
-    super().setUp()
+    if input_type == 'all_true':
+      x = jnp.ones((8, 128), dtype=jnp.float32)
+    elif input_type == 'all_false':
+      x = jnp.zeros((8, 128), dtype=jnp.float32)
+    elif input_type == 'one_false':
+      x = jnp.ones((8, 128), dtype=jnp.float32)
+      x = x.at[0, 0].set(0.0)
+    ones = jnp.ones_like(x)
 
-  def test_integer_sum(self):
+    result = pl.pallas_call(
+        kernel,
+        in_specs=[
+            pl.BlockSpec(lambda *_: (0, 0), (8, 128)),
+            pl.BlockSpec(lambda *_: (0, 0), (8, 128)),
+        ],
+        out_specs=pl.BlockSpec(block_shape=(1, 1), memory_space=pltpu.SMEM),
+        out_shape=jax.ShapeDtypeStruct([1, 1], jnp.float32),
+        grid=(1,),
+    )(x, ones)
+    np.testing.assert_array_equal(result[0, 0], float(expected_result))
+
+  def test_float_sum(self):
     def kernel(x_ref, o_ref):
       x = x_ref[:]
-      # We'd prefer to say:
-      # o_ref[0, 0] = jnp.sum(x)
-      # But this currently hits issues in both Pallas and Mosaic lowering.
-      r = jnp.sum(x, keepdims=True, axis=1)
-      r = jnp.sum(r, keepdims=True, axis=0)
+      r = jnp.sum(x, keepdims=True)
       o_ref[0, 0] = r[0, 0]
 
     x = jnp.full([8, 128], 2.0)
@@ -2088,14 +2116,10 @@ class PallasCallReductionTest(PallasTPUTest):
 
     np.testing.assert_array_equal(result[0, 0], 2048.0)
 
-  def test_integer_max(self):
+  def test_float_max(self):
     def kernel(x_ref, o_ref):
       x = x_ref[:]
-      # We'd prefer to say:
-      # o_ref[0, 0] = jnp.max(x)
-      # But this currently hits issues in both Pallas and Mosaic lowering.
-      x = jnp.max(x, keepdims=True, axis=1)
-      x = jnp.max(x, keepdims=True, axis=0)
+      x = jnp.max(x, keepdims=True)
       o_ref[0, 0] = x[0, 0]
 
     x = jnp.arange(1024.0)
