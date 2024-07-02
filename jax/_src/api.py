@@ -40,7 +40,7 @@ from jax._src import stages
 from jax._src.tree_util import (
     tree_map, tree_flatten, tree_unflatten, tree_structure, tree_transpose,
     tree_leaves, Partial, PyTreeDef, all_leaves, keystr, broadcast_prefix,
-    prefix_errors, generate_key_paths)
+    prefix_errors, generate_key_paths, tree_flatten_with_path)
 from jax._src import api_util
 from jax._src import config
 from jax._src import core
@@ -1211,11 +1211,20 @@ def vmap(fun: F,
     in_axes_flat = flatten_axes("vmap in_axes", in_tree, (in_axes, 0), kws=True)
     axis_size_ = (axis_size if axis_size is not None else
                   _mapped_axis_size(fun, in_tree, args_flat, in_axes_flat, "vmap"))
-    out_flat = batching.batch(
-        flat_fun, axis_name, axis_size_, in_axes_flat,
-        lambda: flatten_axes("vmap out_axes", out_tree(), out_axes),
-        spmd_axis_name=spmd_axis_name
-    ).call_wrapped(*args_flat)
+    try:
+      out_flat = batching.batch(
+          flat_fun, axis_name, axis_size_, in_axes_flat,
+          lambda: flatten_axes("vmap out_axes", out_tree(), out_axes),
+          spmd_axis_name=spmd_axis_name
+      ).call_wrapped(*args_flat)
+    except batching.SpecMatchError as e:
+      out_axes_flat = flatten_axes("vmap out_axes", out_tree(), out_axes)
+      out_axes_full = tree_unflatten(out_tree(), out_axes_flat)
+      pairs, _ = tree_flatten_with_path(out_axes_full, is_leaf=lambda x: x is None)
+
+      path, _ = pairs[e.leaf_idx]
+      raise ValueError(f'at vmap out_axes{keystr(path)}, got axis spec {e.dst} '
+                       f'but output was batched on axis {e.src}') from None
     return tree_unflatten(out_tree(), out_flat)
 
   return cast(F, vmap_f)

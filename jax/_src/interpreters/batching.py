@@ -254,11 +254,13 @@ def to_elt(trace: Trace, get_idx: GetIdx, x: Vmappable, spec: MapSpec) -> Elt:
     assert False
 to_elt_handlers: dict[type, ToEltHandler] = {}
 
-def from_elt(trace: BatchTrace, axis_size: AxisSize, x: Elt, spec: MapSpec
-             ) -> Vmappable:
+def from_elt(trace: BatchTrace, axis_size: AxisSize, i: int,
+             x: Elt, spec: MapSpec) -> Vmappable:
   handler = from_elt_handlers.get(type(x))
   if handler:
-    return handler(partial(from_elt, trace), axis_size, x, spec)
+    def _cont(axis_size, elt, axis):
+      return from_elt(trace, axis_size, i, elt, axis)
+    return handler(_cont, axis_size, x, spec)
   x_ = trace.full_raise(x)
   val, bdim = x_.val, x_.batch_dim
   if type(bdim) is RaggedAxis:
@@ -267,7 +269,10 @@ def from_elt(trace: BatchTrace, axis_size: AxisSize, x: Elt, spec: MapSpec
       raise TypeError("ragged output without using jumble_axis out_axes spec")
     return _jumble_result(axis_size, bdim.stacked_axis, bdim.ragged_axes, val)
   else:
-    return matchaxis(trace.axis_name, axis_size, x_.batch_dim, spec, x_.val)
+    try:
+      return matchaxis(trace.axis_name, axis_size, x_.batch_dim, spec, x_.val)
+    except SpecMatchError:
+      raise SpecMatchError(i, x_.batch_dim, spec) from None
 from_elt_handlers: dict[type, FromEltHandler] = {}
 
 def make_iota(axis_size: AxisSize) -> Array:
@@ -635,7 +640,8 @@ def _batch_inner(axis_size, out_dim_dests, main, in_dims, *in_vals):
   in_tracers = map(partial(to_elt, trace, idx), in_vals, in_dims)
   outs = yield in_tracers, {}
   out_dim_dests = out_dim_dests() if callable(out_dim_dests) else out_dim_dests
-  out_vals = map(partial(from_elt, trace, axis_size), outs, out_dim_dests)
+  out_vals = map(partial(from_elt, trace, axis_size), range(len(outs)),
+                 outs, out_dim_dests)
   yield out_vals
 
 # NOTE: This divides the in_axes by the tile_size and multiplies the out_axes by it.
@@ -1119,7 +1125,13 @@ def matchaxis(axis_name, sz, src, dst, x, sum_match=False):
         axis_name is not core.no_axis_name):
       raise ValueError(f'vmap has mapped output ({axis_name=}) but out_axes is {dst}')
     else:
-      raise ValueError(f'vmap has mapped output but out_axes is {dst}')
+      raise SpecMatchError(None, None, None)
+
+class SpecMatchError(Exception):
+  def __init__(self, leaf_idx, src, dst):
+    self.leaf_idx = leaf_idx
+    self.src = src
+    self.dst = dst
 
 def bdim_at_front(x, bdim, size):
   if bdim is not_mapped:
