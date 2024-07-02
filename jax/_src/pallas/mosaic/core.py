@@ -170,7 +170,7 @@ class PrefetchScalarGridSpec(pallas_core.GridSpec):
     self.scratch_shapes = tuple(scratch_shapes)
 
   def get_grid_mapping(
-      self, in_avals, in_tree, out_avals, out_tree
+      self, in_avals, in_tree, in_paths, out_avals, out_tree, out_paths
   ) -> tuple[tuple[jax_core.AbstractValue, ...], GridMapping]:
     assert all(i is None or isinstance(i, int) for i in self.grid)
     grid_mapping_grid = tuple(
@@ -189,8 +189,8 @@ class PrefetchScalarGridSpec(pallas_core.GridSpec):
         in_avals, in_avals_tree, out_avals, out_tree)
     in_specs, in_ref_avals, out_specs, out_ref_avals = (
         pallas_core._get_ref_avals(
-            self.grid, in_avals, flat_in_specs,
-            out_avals, flat_out_specs))
+            self.grid, in_avals, flat_in_specs, in_paths[num_flat_scalar_prefetch:],
+            out_avals, flat_out_specs, out_paths))
     scalar_ref_avals = [
         AbstractMemoryRef(jax_core.ShapedArray(aval.shape, aval.dtype),
                           TPUMemorySpace.SMEM)

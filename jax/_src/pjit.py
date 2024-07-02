@@ -1209,11 +1209,7 @@ def explain_tracing_cache_miss(
     p(f"  never seen input pytree{in_tree_str}")
     dont_match = [t for t, *_ in seen_keys if t != in_tree]
     closest_tree = min(dont_match, key=lambda t: abs(t.num_leaves - in_tree.num_leaves))
-    # TODO(mattjj): make equality_errors not print type name, avoid metaclass
-    leaf = type('LeafMeta', (type,), dict(__repr__=lambda _: 'leaf'))('Leaf', (), {})()
-    this_dummy = tree_unflatten(in_tree, [leaf] * in_tree.num_leaves)
-    close_dummy = tree_unflatten(closest_tree, [leaf] * closest_tree.num_leaves)  # type: ignore
-    errs = list(tree_util.equality_errors(this_dummy, close_dummy))
+    errs = list(tree_util.equality_errors_pytreedef(in_tree, closest_tree))  # type: ignore[arg-type]
     p(f"  closest seen input pytree has {len(errs)} mismatches, including:")
     for path, thing1, thing2, explanation in errs:
       fst, *path = path  # type: ignore

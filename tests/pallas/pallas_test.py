@@ -16,6 +16,7 @@ import contextlib
 import functools
 import itertools
 import os
+import re
 import sys
 
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"
@@ -232,6 +233,27 @@ class PallasCallTest(PallasTest):
     for i in range(5):
       np.testing.assert_allclose(index(x, i), x[i])
 
+  def test_pallas_call_no_outputs(self):
+    a = np.arange(256, dtype=np.int32)
+    f = self.pallas_call(lambda x_ref: None, ())
+    self.assertAllClose((), f(a))
+
+  def test_pallas_call_out_shape_is_singleton_tuple(self):
+    a = np.arange(256, dtype=np.int32)
+    f = self.pallas_call(lambda x_ref, o1_ref: None,
+                         out_shape=(a,))
+    res = f(a)
+    self.assertIsInstance(res, tuple)
+    self.assertLen(res, 1)
+
+  def test_pallas_call_out_shape_is_list(self):
+    a = np.arange(256, dtype=np.int32)
+    f = self.pallas_call(lambda x_ref, o1_ref: None,
+                         out_shape=[a])
+    res = f(a)
+    # TODO(necula): we normalize out_shape to a tuple, we shouldn't.
+    self.assertIsInstance(res, tuple)
+
   def test_hoisted_consts(self):
     # See https://github.com/google/jax/issues/21557.
     x = jnp.zeros(32)
@@ -442,6 +464,88 @@ class PallasCallTest(PallasTest):
 
 
 class PallasCallInterpreterTest(PallasCallTest):
+  INTERPRET = True
+
+
+class ApiErrorTest(PallasTest):
+
+  def test_pallas_kernel_args_mismatch(self):
+    a = np.arange(256, dtype=np.int32)
+    f = self.pallas_call(lambda x_ref: None,  # Missing o_ref
+                         out_shape=a)
+    with self.assertRaisesRegex(
+        TypeError,
+        "takes 1 positional argument but 2 were given"):
+      f(a)
+
+  @parameterized.named_parameters(
+      ("array", 0),
+      ("empty_tuple", ())
+  )
+  def test_pallas_call_error_kernel_returns(self, returns):
+    a = np.arange(256, dtype=np.int32)
+    # The kernel should not return anything
+    f = self.pallas_call(lambda x_ref, o1_ref, o2_ref: returns,
+                         out_shape=(a, a))
+    with self.assertRaisesRegex(
+        ValueError,
+        # TODO: improve the error message
+        # With interpreter we get "body_fun output and input must have same type structure"
+        # On GPU we get assert len(jaxpr.outvars) == 0
+        # On TPU we get INTERNAL: Mosaic failed to compile TPU kernel: has 1 operands, but enclosing function (@main) returns 0
+        "The kernel function in a pallas_call should return None"):
+      f(a)
+
+  def test_pallas_call_in_specs_mismatch(self):
+    a = np.arange(256, dtype=np.int32)
+    f = self.pallas_call(lambda x_ref, o1_ref: None,
+                         out_shape=a,
+                         in_specs=[pl.BlockSpec(lambda: 0, (4,)),
+                                   pl.BlockSpec(lambda: 0, (4,))])
+    with self.assertRaisesRegex(
+        ValueError,
+        re.compile("Pytree for `in_specs` and inputs do not match. "
+                   "There are 1 mismatches, including:"
+                   ".* at \\[1\\], `in_specs` is a pytree leaf but "
+                   "inputs is a.*", re.DOTALL)):
+      f(a, dict(a=a))
+
+  def test_pallas_call_out_shape_mismatch_out_specs(self):
+    a = np.arange(256, dtype=np.int32)
+    f = self.pallas_call(lambda x_ref, o1_ref: None,
+                         out_shape=[a, a],
+                         out_specs=[pl.BlockSpec(lambda i: i, (6,))])
+    with self.assertRaisesRegex(
+        ValueError,
+        re.compile("Pytree for `out_specs` and `out_shape` do not match. There are 1 mismatches, including:"
+         ".* `out_specs` is a tuple of length 1 but `out_shape` is a tuple of length 2.*", re.DOTALL)):
+      f(a)
+
+  def test_pallas_call_block_shape_ndim_mismatch(self):
+    a = np.arange(256, dtype=np.int32)
+    f = self.pallas_call(lambda x_ref, o1_ref: None,
+                         out_shape=[a],
+                         in_specs=[pl.BlockSpec(lambda: 0, (1, 1))])
+    with self.assertRaisesRegex(
+        ValueError,
+        re.compile("The rank of the input\\[0\\] block_shape \\(= \\(1, 1\\)\\) "
+                   "does not match the rank of the corresponding array "
+                   "shape \\(= \\(256,\\)\\)")):
+
+      f(a)
+
+    f = self.pallas_call(lambda x_ref, o1_ref: None,
+                         out_shape=[a],
+                         out_specs=[pl.BlockSpec(lambda: 0, (1, 1))])
+    with self.assertRaisesRegex(
+        ValueError,
+        re.compile("The rank of the output\\[0\\] block_shape \\(= \\(1, 1\\)\\) "
+                   "does not match the rank of the corresponding array "
+                   "shape \\(= \\(256,\\)\\)")):
+      f(a)
+
+
+class ApiErrorInterpreterTest(ApiErrorTest):
   INTERPRET = True
 
 
