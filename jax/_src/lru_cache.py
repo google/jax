@@ -17,6 +17,7 @@ from __future__ import annotations
 import heapq
 import logging
 import pathlib
+import time
 import warnings
 
 from jax._src.compilation_cache_interface import CacheInterface
@@ -29,6 +30,10 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+
+
+_CACHE_SUFFIX = "-cache"
+_ATIME_SUFFIX = "-atime"
 
 
 class LRUCache(CacheInterface):
@@ -87,19 +92,25 @@ class LRUCache(CacheInterface):
     if not key:
       raise ValueError("key cannot be empty")
 
-    file = self.path / key
+    cache_path = self.path / f"{key}{_CACHE_SUFFIX}"
+    atime_path = self.path / f"{key}{_ATIME_SUFFIX}"
 
     if self.eviction_enabled:
       self.lock.acquire(timeout=self.lock_timeout_secs)
 
     try:
-      if not file.exists():
+      if not cache_path.exists():
         logger.debug(f"Cache miss for key: {key!r}")
         return None
 
       logger.debug(f"Cache hit for key: {key!r}")
-      file.touch()  # update mtime
-      return file.read_bytes()
+
+      val = cache_path.read_bytes()
+
+      timestamp = time.time_ns().to_bytes(8, "little")
+      atime_path.write_bytes(timestamp)
+
+      return val
 
     finally:
       if self.eviction_enabled:
@@ -125,17 +136,22 @@ class LRUCache(CacheInterface):
       warnings.warn(msg)
       return
 
-    file = self.path / key
+    cache_path = self.path / f"{key}{_CACHE_SUFFIX}"
+    atime_path = self.path / f"{key}{_ATIME_SUFFIX}"
 
     if self.eviction_enabled:
       self.lock.acquire(timeout=self.lock_timeout_secs)
 
     try:
-      if file.exists():
+      if cache_path.exists():
         return
 
       self._evict_if_needed(additional_size=len(val))
-      file.write_bytes(val)
+
+      cache_path.write_bytes(val)
+
+      timestamp = time.time_ns().to_bytes(8, "little")
+      atime_path.write_bytes(timestamp)
 
     finally:
       if self.eviction_enabled:
@@ -153,26 +169,34 @@ class LRUCache(CacheInterface):
     if not self.eviction_enabled:
       return
 
-    # a priority queue, each element is a tuple `(file_mtime, file, file_size)`
-    h: list[tuple[int, pathlib.Path, int]] = []
+    # a priority queue, each element is a tuple `(file_atime, key, file_size)`
+    h: list[tuple[int, str, int]] = []
     dir_size = 0
-    for file in self.path.iterdir():
-      if file.is_file() and file != self.lock_path:
-        file_size = file.stat().st_size
-        file_mtime = file.stat().st_mtime_ns
+    for cache_path in self.path.glob(f"*{_CACHE_SUFFIX}"):
+      file_size = cache_path.stat().st_size
 
-        dir_size += file_size
-        heapq.heappush(h, (file_mtime, file, file_size))
+      key = cache_path.name.removesuffix(_CACHE_SUFFIX)
+      atime_path = self.path / f"{key}{_ATIME_SUFFIX}"
+      file_atime = int.from_bytes(atime_path.read_bytes(), "little")
+
+      dir_size += file_size
+      heapq.heappush(h, (file_atime, key, file_size))
 
     target_size = self.max_size - additional_size
     # evict files until the directory size is less than or equal
     # to `target_size`
     while dir_size > target_size:
-      file_mtime, file, file_size = heapq.heappop(h)
-      msg = (f"Evicting cache file {file.name}: file size {file_size} bytes, "
-             f"target cache size {target_size} bytes")
-      logger.debug(msg)
-      file.unlink()
+      file_atime, key, file_size = heapq.heappop(h)
+
+      logger.debug("Evicting cache entry %r: file size %d bytes, "
+                   "target cache size %d bytes", key, file_size, target_size)
+
+      cache_path = self.path / f"{key}{_CACHE_SUFFIX}"
+      atime_path = self.path / f"{key}{_ATIME_SUFFIX}"
+
+      cache_path.unlink()
+      atime_path.unlink()
+
       dir_size -= file_size
 
   # See comments in `jax.src.compilation_cache.get_file_cache()` for details.
