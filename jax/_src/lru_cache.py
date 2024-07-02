@@ -173,9 +173,6 @@ class LRUCache(CacheInterface):
     h: list[tuple[int, str, int]] = []
     dir_size = 0
     for cache_path in self.path.glob(f"*{_CACHE_SUFFIX}"):
-      if not cache_path.is_file():
-        continue
-
       file_size = cache_path.stat().st_size
 
       key = cache_path.name.removesuffix(_CACHE_SUFFIX)
