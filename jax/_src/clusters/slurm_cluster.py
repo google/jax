@@ -25,6 +25,9 @@ _LOCAL_PROCESS_ID = 'SLURM_LOCALID'
 _NUM_NODES = 'SLURM_STEP_NUM_NODES'
 
 class SlurmCluster(clusters.ClusterEnv):
+
+  name: str = "slurm"
+
   @classmethod
   def is_env_present(cls) -> bool:
     return _JOBID_PARAM in os.environ

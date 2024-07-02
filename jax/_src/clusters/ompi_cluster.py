@@ -25,6 +25,9 @@ _PROCESS_ID = 'OMPI_COMM_WORLD_RANK'
 _LOCAL_PROCESS_ID = 'OMPI_COMM_WORLD_LOCAL_RANK'
 
 class OmpiCluster(clusters.ClusterEnv):
+
+  name: str = "ompi"
+
   @classmethod
   def is_env_present(cls) -> bool:
     return _ORTE_URI in os.environ
