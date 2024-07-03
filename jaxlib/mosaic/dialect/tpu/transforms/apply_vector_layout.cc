@@ -626,7 +626,9 @@ FailureOr<SmallVector<Layout>> getOutLayouts(
   FAILUREOR_ASSIGN_OR_RETURN(const SmallVector<Layout> out_layouts,
                              getLayoutArrayFromAttr(op.getAttr("out_layout")));
   if (out_layouts.size() != op.getNumResults()) {
-    return op.emitOpError("out_layout size does not match number of results");
+    return op.emitOpError(
+               "out_layout size does not match number of results. Layouts: ")
+           << out_layouts.size() << " results: " << op.getNumResults();
   }
   for (const auto [l, res] : llvm::zip_equal(out_layouts, op.getResults())) {
     if (!layoutIsValidForValue(l, res, target_shape)) {
@@ -2054,6 +2056,114 @@ LogicalResult tpu_assume_layout_rule(RewriteContext &ctx, Operation &op,
   return success();
 }
 
+// TODO(mvoz): Fold me into tpu_rotate_rule
+FailureOr<xla::Array<Value>> tpu_rotate_rule_helper(
+    OpBuilder &builder, const std::array<int64_t, 2> target_shape,
+    const Value &in_val, int64_t dim, int64_t amount,
+    const VectorLayout &layout_in, const VectorLayout &layout_out) {
+  auto layout =
+      VectorLayout(32, {0, 0}, target_shape, VectorLayout::ImplicitDim::kNone);
+  if (layout_in != layout) {
+    return emitError(in_val.getLoc(),
+                     "Not implemented: unsupported layout for input");
+  }
+  if (layout_out != layout) {
+    return emitError(in_val.getLoc(),
+                     "Not implemented: unsupported layout for output");
+  }
+  auto vty = dyn_cast<VectorType>(in_val.getType());
+  if (vty.getRank() < 2) {
+    return emitError(in_val.getLoc(), "Not implemented: unsupported 1D shape");
+  }
+
+  FAILUREOR_ASSIGN_OR_RETURN(
+      VectorType res_vreg_ty,
+      getNativeVregType(vty.getElementType(), target_shape));
+  FAILUREOR_ASSIGN_OR_RETURN(
+      const xla::Array<Value> in_tiles,
+      disassemble(builder, layout_in, cast<TypedValue<VectorType>>(in_val),
+                  target_shape));
+
+  FAILUREOR_ASSIGN_OR_RETURN(
+      const VectorType i32_vreg,
+      getNativeVregType(builder.getI32Type(), target_shape));
+  auto getVmaskByPaddingEnd = [&](int dim, int padding) {
+    CHECK(dim == 0 || dim == 1);
+    CHECK(padding >= 0 && padding <= target_shape[dim]);
+    Value padding_vreg = builder.create<arith::ConstantOp>(
+        in_val.getLoc(),
+        DenseElementsAttr::get(
+            i32_vreg, builder.getI32IntegerAttr(target_shape[dim] - padding)));
+
+    return builder.create<arith::CmpIOp>(
+        in_val.getLoc(), arith::CmpIPredicate::slt,
+        builder.create<tpu::IotaOp>(in_val.getLoc(), i32_vreg,
+                                    builder.getI32IntegerAttr(dim)),
+        padding_vreg);
+  };
+  auto splitVregs = [](const xla::Array<Value> &vregs, int axis) {
+    CHECK(axis >= 0 && axis < vregs.num_dimensions());
+    SmallVector<xla::Array<Value>> chunks;
+    chunks.reserve(vregs.dim(axis));
+    for (int64_t i = 0; i < vregs.dim(axis); ++i) {
+      SmallVector<int64_t> starts(vregs.num_dimensions(), 0);
+      starts[axis] = i;
+      SmallVector<int64_t> limits(vregs.dimensions().begin(),
+                                  vregs.dimensions().end());
+      limits[axis] = i + 1;
+      chunks.push_back(vregs.Slice(starts, limits));
+    }
+    return chunks;
+  };
+  auto roll = [&](const xla::Array<Value> &vregs, int64_t shift, int axis) {
+    xla::Array<Value> result(vregs.dimensions());
+    CHECK(axis >= 0 && axis < vregs.num_dimensions());
+    auto chunks = splitVregs(vregs, axis);
+    if (axis >= vregs.num_dimensions() - 2) {
+      int tiling_dim = axis - (vregs.num_dimensions() - 2);
+      int64_t shift_in_vreg = shift % target_shape[tiling_dim];
+      shift /= target_shape[tiling_dim];
+      if (shift_in_vreg != 0) {
+        for (int64_t i = 0; i < chunks.size(); ++i) {
+          chunks[i].Each([&](absl::Span<const int64_t> idxs, Value *v) {
+            *v = builder.create<tpu::RotateOp>(in_val.getLoc(), res_vreg_ty, *v,
+                                               shift_in_vreg, tiling_dim,
+                                               nullptr, nullptr);
+          });
+        }
+        // After rotation on each vreg, we need to select the wrapped data
+        // from the previous vreg and overwrite them to the current vreg.
+        auto mask = getVmaskByPaddingEnd(
+            tiling_dim, target_shape[tiling_dim] - shift_in_vreg);
+        xla::Array<Value> last_chunk_copy(chunks[chunks.size() - 1]);
+        for (int64_t i = chunks.size() - 1; i > 0; --i) {
+          chunks[i].Each([&](absl::Span<const int64_t> idxs, Value *v) {
+            *v = builder.create<arith::SelectOp>(in_val.getLoc(), mask,
+                                                 chunks[i - 1](idxs), *v);
+          });
+        }
+        chunks[0].Each([&](absl::Span<const int64_t> idxs, Value *v) {
+          *v = builder.create<arith::SelectOp>(in_val.getLoc(), mask,
+                                               last_chunk_copy(idxs), *v);
+        });
+      }
+    }
+    // Now we only need to shuffle vregs.
+    for (int64_t i = 0; i < chunks.size(); ++i) {
+      SmallVector<int64_t> starts(result.num_dimensions(), 0);
+      starts[axis] = (i + shift) % result.dim(axis);
+      result.UpdateSlice(chunks[i], starts);
+    }
+    return result;
+  };
+
+  xla::Array<Value> out_tiles(in_tiles.dimensions());
+
+  out_tiles = roll(in_tiles, amount, dim);
+
+  return out_tiles;
+}
+
 // TODO(b/347016737): Deprecate tpu.rotate and only use tpu.dynamic_rotate. So
 // we do not need template for the op type and to explicitly force amount
 // argument to dynamic.
@@ -2426,54 +2536,244 @@ LogicalResult tpu_concatenate_rule(RewriteContext &ctx, Operation &op,
   TPU_ASSERT_OP(
       llvm::all_of(layouts_in, [](const Layout &l) { return l.has_value(); }));
   TPU_ASSERT_OP(layouts_out.front().has_value());
-  const VectorLayout &layout = *layouts_out.front();
-  for (const Layout &l : layouts_in) {
-    if (l != layout) {
-      return op.emitOpError("Not implemented: Inconsistent layouts");
-    }
-  }
   OpBuilder builder(&op);
   auto concatenate_op = cast<tpu::ConcatenateOp>(op);
   const VectorType res_ty = concatenate_op.getResult().getType();
   const uint32_t dimension = concatenate_op.getDimension();
-  if (dimension - res_ty.getRank() >= -2) {
-    if (!layout.hasNativeTiling(ctx.target_shape) ||
-        layout.offsets() != LayoutOffsets{0, 0}) {
-      return op.emitOpError(
-          "Not implemented: Only native tiling with offset (0, 0) is supported "
-          "when concatenation along tiling dims.");
-    }
-    // Check if shapes of src and res are aligned to native tiling.
-    auto check_aligned = [&](const VectorType &vty) {
-      return vty.getRank() >= 2 &&
-             *(vty.getShape().end() - 2) % *(layout.tiling().end() - 2) == 0 &&
-             *(vty.getShape().end() - 1) % *(layout.tiling().end() - 1) == 0;
-    };
-    bool is_aligned = check_aligned(res_ty);
-    int op_idx = 0;
-    while (is_aligned && op_idx < op.getNumOperands()) {
-      auto vty = dyn_cast<VectorType>(op.getOperand(op_idx++).getType());
-      is_aligned = check_aligned(vty);
-    }
-    if (!is_aligned) {
-      return op.emitOpError(
-          "Not implemented: Only aligned shapes are supported when "
-          "concatenation along tiling dims");
-    }
-  }
 
-  SmallVector<xla::Array<Value>> tiles;
-  tiles.reserve(concatenate_op->getNumOperands());
-  for (Value operand : concatenate_op.getOperands()) {
+  std::vector<xla::Array<Value>> vregs;
+  vregs.reserve(op.getNumOperands());
+
+  std::vector<int64_t> sublane_offsets;
+  sublane_offsets.reserve(op.getNumOperands());
+
+  std::vector<int64_t> lane_offsets;
+  lane_offsets.reserve(op.getNumOperands());
+
+  // Check if shapes of operands are aligned to native tiling.
+  auto check_aligned_2nd_minor = [&](const VectorType &vty,
+                                     const VectorLayout &layout) {
+    return vty.getRank() >= 2 &&
+           *(vty.getShape().end() - 2) % *(layout.tiling().end() - 2) == 0;
+  };
+  auto check_aligned_minor = [&](const VectorType &vty,
+                                 const VectorLayout &layout) {
+    return vty.getRank() >= 2 &&
+           *(vty.getShape().end() - 1) % *(layout.tiling().end() - 1) == 0;
+  };
+
+  std::optional<VectorType> last_operand_type;
+  // TODO(mvoz) - There's an optimization opportunity here, which is to
+  // only do rotations in this loop against the first operand, instead of
+  // rotating all operands against (0, 0) offsets.
+  for (int i = 0; i < op.getNumOperands(); ++i) {
+    auto operand = op.getOperand(i);
+    auto layout = layouts_in[i];
+    auto vty = dyn_cast<VectorType>(operand.getType());
+    if (last_operand_type.has_value()) {
+      if (vty != *last_operand_type) {
+        op.emitOpError("Not implemented: mismatched operand types or shapes");
+      }
+    }
+    last_operand_type = vty;
+    auto vreg_slice = layout->vregSlice(ctx.target_shape);
+
+    bool aligned_2nd_minor = true;
+    bool aligned_minor = true;
+    if (dimension - res_ty.getRank() >= -2) {
+      aligned_2nd_minor = check_aligned_2nd_minor(vty, *layout);
+      aligned_minor = check_aligned_minor(vty, *layout);
+    }
+
+    if (!aligned_2nd_minor && dimension < vty.getShape().size() - 1) {
+      if (!layouts_in.front()->hasNativeTiling(ctx.target_shape)) {
+        return op.emitOpError(
+            "Not implemented: misaligned, non native tiling.");
+      }
+      auto rows = vty.getShape()[vty.getRank() - 2];
+      auto sublane_start =
+          layout->offsets()[vreg_slice.size() - 2].value_or(0) +
+          (i * rows) % vreg_slice[vreg_slice.size() - 2];
+      // todo(mvoz): Move to infer.
+      // This is where we need to do the rotation - ideally
+      // this should actually be done in infer, not apply. However,
+      // there is more nuance for generic multi-lane shift, so we will
+      // do this in apply for now.
+      FAILUREOR_ASSIGN_OR_RETURN(
+          auto rotated_operand,
+          tpu_rotate_rule_helper(builder, ctx.target_shape, operand,
+                                 /*dim*/ vty.getShape().size() - 2,
+                                 sublane_start, *layouts_in.front(),
+                                 *layouts_out.front()));
+      sublane_offsets.push_back(sublane_start);
+      operand = assemble(builder, vty, *layouts_in.front(), rotated_operand,
+                         ctx.target_shape);
+    } else {
+      sublane_offsets.push_back(0);
+    }
+    if (!aligned_minor && dimension != vty.getShape().size() - 2) {
+      if (!layouts_in.front()->hasNativeTiling(ctx.target_shape)) {
+        return op.emitOpError(
+            "Not implemented: misaligned minor, non native tiling.");
+      }
+      auto cols = vty.getShape()[vty.getRank() - 1];
+      auto lane_start = layout->offsets()[vreg_slice.size() - 1].value_or(0) +
+                        (i * cols) % vreg_slice[vreg_slice.size() - 1];
+      // todo(mvoz): Move to infer.
+      // This is where we need to do the rotation - ideally
+      // this should actually be done in infer, not apply. However,
+      // there is more nuance for generic multi-lane shift, so we will
+      // do this in apply for now.
+      FAILUREOR_ASSIGN_OR_RETURN(
+          auto rotated_operand,
+          tpu_rotate_rule_helper(builder, ctx.target_shape, operand,
+                                 /*dim*/ vty.getShape().size() - 1, lane_start,
+                                 *layouts_in.front(), *layouts_out.front()));
+      lane_offsets.push_back(lane_start);
+      operand = assemble(builder, vty, *layouts_in.front(), rotated_operand,
+                         ctx.target_shape);
+    } else {
+      lane_offsets.push_back(0);
+    }
+
     FAILUREOR_ASSIGN_OR_RETURN(
-        xla::Array<Value> t,
-        disassemble(builder, layout, cast<TypedValue<VectorType>>(operand),
+        xla::Array<Value> vreg_array,
+        disassemble(builder, *layout, cast<TypedValue<VectorType>>(operand),
                     ctx.target_shape));
-    tiles.emplace_back(std::move(t));
+
+    vregs.push_back(vreg_array);
+
+    op.setOperand(i, operand);
   }
-  const xla::Array<Value> res_tiles = concatenate(tiles, dimension);
-  op.replaceAllUsesWith(
-      assemble(builder, res_ty, layout, res_tiles, ctx.target_shape));
+  auto res_layout = layouts_out.front();
+  const SmallVector<int64_t> vreg_array_shape =
+      res_layout->tileArrayShape(res_ty.getShape(), ctx.target_shape);
+  xla::Array<Value> out_vregs(vreg_array_shape);
+  const int num_batch_dims = res_ty.getRank() - 2;
+  const ArrayRef<int64_t> batch_dims =
+      last_operand_type.value().getShape().take_front(num_batch_dims);
+  SmallVector<int64_t> batch_idx(num_batch_dims);
+
+  // Helper to avoid allocating per loop step
+  SmallVector<int64_t> read_idx(vreg_array_shape.size(), 0);
+  auto get_read_idx = [&](int64_t _2nd_minor_idx,
+                          int64_t minor_idx) -> ArrayRef<int64_t> {
+    for (size_t i = 0; i < batch_idx.size(); ++i) {
+      read_idx[i] = batch_idx[i];
+    }
+    *(read_idx.end() - 2) = _2nd_minor_idx;
+    *(read_idx.end() - 1) = minor_idx;
+    return read_idx;
+  };
+
+  SmallVector<int64_t> write_idx(vreg_array_shape.size(), 0);
+  auto get_write_idx = [&](int64_t _2nd_minor_idx,
+                           int64_t minor_idx) -> ArrayRef<int64_t> {
+    for (size_t i = 0; i < batch_idx.size(); ++i) {
+      write_idx[i] = batch_idx[i];
+    }
+    *(write_idx.end() - 2) = _2nd_minor_idx;
+    *(write_idx.end() - 1) = minor_idx;
+    return write_idx;
+  };
+
+  auto boundIdxConst =
+      std::bind(IdxConst, std::placeholders::_1, builder, op.getLoc());
+  do {
+    int64_t offset = 0;
+    int64_t res_row = 0;
+    int64_t res_col = 0;
+    for (int i = 0; i < vregs.size(); ++i) {
+      const auto &curr_vregs = vregs[i];
+      auto curr_vregs_shape = curr_vregs.dimensions();
+      auto curr_row = 0;
+      auto curr_col = 0;
+      // Middle between prior and current is blended
+      if (sublane_offsets[i] > 0 && lane_offsets[i] > 0) {
+        // todo(mvoz): Implement this - should not be onerous, we can
+        // probably simplify the rotation above into a single offset
+        // tuple and implement a generic offset handler, rather
+        // than doing sublane and lane separately, but, this doesn't
+        // seem to be a common case, so we will do this later.
+        return op.emitOpError("Not implemented: both dims misalgined");
+      }
+
+      if (sublane_offsets[i] > 0 && dimension < curr_vregs_shape.size() - 1) {
+        const auto &prior_vregs = vregs[i - 1];
+        // We need to blend the last row of the prior vreg with the first
+        // row of the current vreg, into the prior row of the result.
+        auto last_row_of_prior_vreg =
+            prior_vregs.dim(prior_vregs.num_dimensions() - 2) - 1;
+        for (int64_t col = 0;
+             col < curr_vregs_shape[curr_vregs_shape.size() - 1]; ++col) {
+          Value mask = builder.create<tpu::CreateMaskOp>(
+              op.getLoc(),
+              VectorType::get(ctx.target_shape, builder.getI1Type()),
+              ArrayRef<Value>{boundIdxConst(0), boundIdxConst(0)},
+              ArrayRef<Value>{boundIdxConst(sublane_offsets[i]),
+                              boundIdxConst(layouts_in[i]->tiling()[1])});
+
+          auto write_idx_ = get_write_idx(res_row, col);
+          auto read_idx_lhs = get_read_idx(last_row_of_prior_vreg, col);
+          auto lhs_ = prior_vregs(read_idx_lhs);
+          auto read_idx_rhs = get_read_idx(curr_row, col);
+          auto rhs_ = curr_vregs(read_idx_rhs);
+          out_vregs(write_idx_) =
+              builder.create<arith::SelectOp>(op.getLoc(), mask, lhs_, rhs_);
+        }
+        // Advance the row pointer
+        curr_row =
+            (curr_row + 1) % curr_vregs_shape[curr_vregs_shape.size() - 2];
+        // Trim offset down by 1
+        offset -= 1;
+      }
+      if (lane_offsets[i] > 0 && dimension != curr_vregs_shape.size() - 2) {
+        const auto &prior_vregs = vregs[i - 1];
+        auto last_col_of_prior_vreg =
+            prior_vregs.dim(prior_vregs.num_dimensions() - 1) - 1;
+        for (int64_t row = 0;
+             row < curr_vregs_shape[curr_vregs_shape.size() - 2]; ++row) {
+          Value mask = builder.create<tpu::CreateMaskOp>(
+              op.getLoc(),
+              VectorType::get(ctx.target_shape, builder.getI1Type()),
+              ArrayRef<Value>{boundIdxConst(0), boundIdxConst(0)},
+              ArrayRef<Value>{boundIdxConst(layouts_in[i]->tiling()[0]),
+                              boundIdxConst(lane_offsets[i])});
+
+          auto write_idx_ = get_write_idx(row, res_col);
+          auto read_idx_lhs = get_read_idx(row, last_col_of_prior_vreg);
+          auto lhs_ = prior_vregs(read_idx_lhs);
+          auto read_idx_rhs = get_read_idx(row, curr_col);
+          auto rhs_ = curr_vregs(read_idx_rhs);
+          out_vregs(write_idx_) =
+              builder.create<arith::SelectOp>(op.getLoc(), mask, lhs_, rhs_);
+        }
+        curr_col =
+            (curr_col + 1) % curr_vregs_shape[curr_vregs_shape.size() - 1];
+        offset -= 1;
+      }
+      // Aligned vreg flow, or, unaligned post/pre blend.
+      for (int64_t row = curr_row;
+           row < curr_vregs_shape[curr_vregs_shape.size() - 2]; ++row) {
+        for (int64_t col = curr_col;
+             col < curr_vregs_shape[curr_vregs_shape.size() - 1]; ++col) {
+          auto read_idx = get_read_idx(row, col);
+          auto write_idx_ = get_write_idx(row, col);
+          *(write_idx.begin() + dimension) += offset;
+          out_vregs(write_idx_) = curr_vregs(read_idx);
+          // Update the col pointer from the write_idx
+          res_col = write_idx[write_idx.size() - 1];
+        }
+        // Update the row pointer from the write_idx
+        res_row = write_idx[write_idx.size() - 2];
+      }
+      offset += curr_vregs.dim(dimension);
+    }
+  } while (incrementIndex(batch_idx, batch_dims));
+
+  auto assembled =
+      assemble(builder, res_ty, *res_layout, out_vregs, ctx.target_shape);
+  op.replaceAllUsesWith(assembled);
   op.erase();
   return success();
 }
