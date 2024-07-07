@@ -18,6 +18,8 @@ from __future__ import annotations
 import collections
 from collections.abc import Callable, Generator, Iterable, Sequence
 from contextlib import ExitStack, contextmanager
+from ctypes.util import find_library
+from ctypes import cdll
 import datetime
 import functools
 from functools import partial
@@ -222,8 +224,12 @@ def capture_stdout() -> Generator[Callable[[], str], None, None]:
     try:
       yield get_captured
     finally:
-      # Python also has its own buffers, make sure everything is flushed.
+      # Python also has its own buffers, make sure everything is
+      # flushed. Python is not obligated, and indeed does not, ask the
+      # OS to also flush its buffers so we need do some more low level
+      # flushing before capturing.
       sys.stdout.flush()
+      os.fsync(sys.stdout.fileno())
       f.seek(0)
       captured = f.read()
       os.dup2(original_stdout, sys.stdout.fileno())

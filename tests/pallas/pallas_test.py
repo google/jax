@@ -1383,9 +1383,6 @@ class PallasOpsTest(PallasTest):
     np.testing.assert_allclose(kernel(x), jnp.tanh(x), atol=5e-3, rtol=5e-3)
 
   def test_debug_print(self):
-    # TODO: this test flakes on gpu
-    if jtu.test_device_matches(["gpu"]):
-      self.skipTest("This test flakes on gpu")
     @functools.partial(
         self.pallas_call,
         out_shape=jax.ShapeDtypeStruct((2,), jnp.float32),
