@@ -14,11 +14,9 @@
 
 """Test TPU-specific extensions to pallas_call."""
 
-import contextlib
 import functools
-import io
 import re
-import sys
+
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
@@ -44,15 +42,6 @@ jax.config.parse_flags_with_absl()
 P = jax.sharding.PartitionSpec
 
 partial = functools.partial
-
-@contextlib.contextmanager
-def string_stdout():
-  """Redirects stdout to a string."""
-  initial_stdout = sys.stdout
-  stringio = io.StringIO()
-  sys.stdout = stringio
-  yield stringio
-  sys.stdout = initial_stdout
 
 
 class PallasTPUTest(jtu.JaxTestCase):
@@ -2530,14 +2519,14 @@ class PallasCallTraceTest(PallasTPUTest):
       with jax.named_scope('scope1'):
         o_ref[...] = jnp.zeros_like(o_ref[...])
 
-    with string_stdout() as msg:
+    with jtu.capture_stdout() as get_captured:
       _ = self.pallas_call(
         kernel,
         out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
         debug=True,
       )()
-      # TODO(justinfu): Add an official lowering API to get the MLIR.
-      mlir = self.parse_debug_string(msg.getvalue())['mlir']
+    # TODO(justinfu): Add an official lowering API to get the MLIR.
+    mlir = self.parse_debug_string(get_captured())['mlir']
 
     num_start = mlir.count('tpu.trace_start')
     num_stop = mlir.count('tpu.trace_stop')
@@ -2556,14 +2545,14 @@ class PallasCallTraceTest(PallasTPUTest):
           o_ref[...] = o_ref[...] + 1
       pltpu.run_scoped(scope2)
 
-    with string_stdout() as msg:
+    with jtu.capture_stdout() as get_captured:
       _ = self.pallas_call(
         kernel,
         out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
         debug=True,
       )()
-      # TODO(justinfu): Add an official lowering API to get the MLIR.
-      mlir = self.parse_debug_string(msg.getvalue())['mlir']
+    # TODO(justinfu): Add an official lowering API to get the MLIR.
+    mlir = self.parse_debug_string(get_captured())['mlir']
 
     num_start = mlir.count('tpu.trace_start')
     num_stop = mlir.count('tpu.trace_stop')
