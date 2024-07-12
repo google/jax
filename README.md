@@ -383,7 +383,7 @@ Some standouts:
 
 ### Supported platforms
 
-|            | Linux x86_64 | Linux aarch64 | Mac x86_64   | Mac ARM      | Windows x86_64 | Windows WSL2 x86_64 |
+|            | Linux x86_64 | Linux aarch64 | Mac x86_64   | Mac aarch64  | Windows x86_64 | Windows WSL2 x86_64 |
 |------------|--------------|---------------|--------------|--------------|----------------|---------------------|
 | CPU        | yes          | yes           | yes          | yes          | yes            | yes                 |
 | NVIDIA GPU | yes          | yes           | no           | n/a          | no             | experimental        |
@@ -400,7 +400,7 @@ Some standouts:
 | NVIDIA GPU      | `pip install -U "jax[cuda12]"`                                                                                  |
 | Google TPU      | `pip install -U "jax[tpu]" -f https://storage.googleapis.com/jax-releases/libtpu_releases.html`                 |
 | AMD GPU (Linux) | Use [Docker](https://hub.docker.com/r/rocm/jax) or [build from source](https://jax.readthedocs.io/en/latest/developer.html#additional-notes-for-building-a-rocm-jaxlib-for-amd-gpus). |
-| Mac             | Follow [Apple's instructions](https://developer.apple.com/metal/jax/).                                          |
+| Mac GPU         | Follow [Apple's instructions](https://developer.apple.com/metal/jax/).                                          |
 
 See [the documentation](https://jax.readthedocs.io/en/latest/installation.html)
 for information on alternative installation strategies. These include compiling
