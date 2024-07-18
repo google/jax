@@ -102,11 +102,20 @@ _CPU_ENABLE_GLOO_COLLECTIVES = config.bool_flag(
     help="Deprecated, please use jax_cpu_collectives_implementation instead.",
 )
 
-_CPU_COLLECTIVES_IMPLEMENTATION = config.string_flag(
-    name='jax_cpu_collectives_implementation',
-    default='none',
-    help='Cross-process collective implementation used on CPU. Either "none", '
-         '"gloo" or "mpi"'
+_CPU_COLLECTIVES_IMPLEMENTATIONS = [
+    "none",
+    "gloo",
+    "mpi",
+    "megascale",  # copybara:strip(internal-only - used in jax_google.py)
+]
+CPU_COLLECTIVES_IMPLEMENTATION = config.enum_flag(
+    name="jax_cpu_collectives_implementation",
+    default="none",
+    enum_values=_CPU_COLLECTIVES_IMPLEMENTATIONS,
+    help=(
+        "Cross-process collective implementation used on CPU. Must be one of"
+        f" {_CPU_COLLECTIVES_IMPLEMENTATIONS}"
+    ),
 )
 
 # TODO(yueshengys): turn default back to True after resolving memory increase
@@ -129,7 +138,6 @@ def _at_fork():
 _at_fork_handler_installed = False
 
 # Backends
-
 
 
 def tpu_client_timer_callback(timer_secs: float) -> xla_client.Client | None:
@@ -221,30 +229,35 @@ def register_backend_factory(name: str, factory: BackendFactory, *,
     _topology_factories[name] = make_topology
 
 
-def make_cpu_client() -> xla_client.Client:
-  collectives: xla_client._xla.CpuCollectives | None = None
+def make_cpu_client(
+    collectives: xla_client._xla.CpuCollectives | None = None,
+) -> xla_client.Client:
+  if collectives is None:
+    collectives_impl = CPU_COLLECTIVES_IMPLEMENTATION.value
+    if _CPU_ENABLE_GLOO_COLLECTIVES.value:
+      collectives_impl = "gloo"
+      warnings.warn(
+          "Setting `jax_cpu_enable_gloo_collectives` is deprecated. "
+          "Please use `jax.config.update("
+          '"jax_cpu_collectives_implementation", "gloo")` instead.',
+          DeprecationWarning,
+      )
+    if collectives_impl == "gloo":
+      collectives = xla_client._xla.make_gloo_tcp_collectives(
+          distributed_client=distributed.global_state.client,
+      )
+    elif collectives_impl == "mpi":
+      collectives = xla_client._xla.make_mpi_collectives()
+      collectives.Init()
+      atexit.register(collectives.Finalize)
+    elif collectives_impl != "none":
+      collectives_impls = ["none", "gloo", "mpi"]
+      raise RuntimeError(
+          "Unknown collectives implementation "
+          f"{collectives_impl}. Available implementations are "
+          f"{collectives_impls}."
+      )
 
-  collectives_impl = _CPU_COLLECTIVES_IMPLEMENTATION.value
-  if _CPU_ENABLE_GLOO_COLLECTIVES.value:
-      collectives_impl = 'gloo'
-      warnings.warn('Setting `jax_cpu_enable_gloo_collectives` is deprecated. '
-                    'Please use `jax.config.update('
-                    '"jax_cpu_collectives_implementation", "gloo")` instead.',
-                    DeprecationWarning,
-                    )
-  if collectives_impl == 'gloo':
-    collectives = xla_client._xla.make_gloo_tcp_collectives(
-      distributed_client=distributed.global_state.client,
-    )
-  elif collectives_impl == 'mpi':
-    collectives = xla_client._xla.make_mpi_collectives()
-    collectives.Init()
-    atexit.register(collectives.Finalize)
-  elif collectives_impl != 'none':
-    collectives_impls = ['none', 'gloo', 'mpi']
-    raise RuntimeError(f"Unknown collectives implementation "
-                       f"{collectives_impl}. Available implementations are "
-                       f"{collectives_impls}.")
   return xla_client.make_cpu_client(
     asynchronous=_CPU_ENABLE_ASYNC_DISPATCH.value,
     distributed_client=distributed.global_state.client,
