@@ -213,7 +213,6 @@ class MutableArrayTest(jtu.JaxTestCase):
     def body_fun(_, index_x):
       (index, x) = index_x
       x[...] += index
-      # breakpoint()
       return ((), x[...])
 
     x_mut = core.mutable_array(np.arange(5))
@@ -222,6 +221,28 @@ class MutableArrayTest(jtu.JaxTestCase):
       doit = jax.jit(doit)
     _, xs = doit()
     self.assertAllClose(xs, (np.arange(5) * 2), check_dtypes=False)
+
+  @parameterized.parameters([True, False])
+  def test_stop_gradient_error(self, jit):
+
+    def f():
+      x = core.mutable_array(jnp.arange(3.))
+      return jax.lax.stop_gradient(x)
+
+    if jit:
+      f = jax.jit(f)
+
+    with self.assertRaisesRegex(TypeError, 'stop_gradient to mutable array'):
+      f()
+
+    x = core.mutable_array(jnp.arange(3.))
+    def g():
+      return jax.lax.stop_gradient(x)
+    if jit:
+      g = jax.jit(g)
+
+    with self.assertRaisesRegex(TypeError, 'stop_gradient to mutable array'):
+      g()
 
 if __name__ == '__main__':
   absltest.main(testLoader=jtu.JaxTestLoader())
