@@ -3960,7 +3960,7 @@ class APITest(jtu.JaxTestCase):
         x = g(x)
         return x
 
-      msg = r'Leaked trace MainTrace\(2,DynamicJaxprTrace\)'
+      msg = r'Leaked trace MainTrace\(None,DynamicJaxprTrace\)'
       with self.assertRaisesRegex(Exception, f"{msg}"):
         f(3)
 

@@ -45,6 +45,11 @@ def top_trace():
   finally:
     stack.append(main)
 
+def full_raise(trace, x):
+  if isinstance(x, core.Tracer) and x._trace.main is trace.main:
+    return x
+  return trace.lift(x)
+
 def jax_getattr(obj: Any, attr: str):
   with top_trace() as trace:
     return trace.process_getattr(obj, attr)
@@ -141,7 +146,7 @@ def jvp_subtrace2(main, primals, tangents):
   yield out_primals, out_tangents, tangent_attrs_out
 
 def _setattr_jvp(trace, obj, attr, maybe_tracer):
-  tracer = trace.full_raise(maybe_tracer)
+  tracer = full_raise(trace, maybe_tracer)
   if isinstance(tracer.tangent, ad.Zero):
     return setattr(obj, attr, tracer.primal)
   if (obj, attr) not in trace.main.attrs_tracked:

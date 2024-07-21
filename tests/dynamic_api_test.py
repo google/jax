@@ -228,6 +228,11 @@ class DynamicShapeStagingTest(jtu.JaxTestCase):
     self.assertLen(c.aval.shape, 1)
     self.assertIs(a, c.aval.shape[0])
 
+    def g(n):
+      x = jnp.zeros(n)
+      return jax.jit(lambda: x, inline=True)()
+    jax.make_jaxpr(g)(3)  # don't crash
+
   def test_closing_over_dynamic_shape(self):
     def f(n):
       m = 2 * n
@@ -250,6 +255,12 @@ class DynamicShapeStagingTest(jtu.JaxTestCase):
     self.assertIs(b, c.aval.shape[0])
     self.assertLen(d.aval.shape, 1)
     self.assertIs(b, d.aval.shape[0])
+
+    def g(n):
+      m = 2 * n
+      x = jnp.zeros(m)
+      return jax.jit(jnp.sin, inline=True)(x)
+    jax.make_jaxpr(g)(3)
 
   def test_closing_over_polymorphic_shape_and_adding(self):
     def f(n):
@@ -280,6 +291,17 @@ class DynamicShapeStagingTest(jtu.JaxTestCase):
     self.assertIs(a, c.aval.shape[0])
     self.assertIs(a, d.aval.shape[0])
 
+    def f2(n):
+      x = jnp.zeros(n)
+      y = jnp.zeros(n)
+
+      @partial(jax.jit, inline=True)
+      def g():
+        return x + y
+      return g()
+
+    jax.make_jaxpr(f2)(3)  # don't crash
+
   def test_passing_in_equal_polymorphic_shapes_and_adding(self):
     def f(n):
       x = jnp.zeros(n)
@@ -303,6 +325,16 @@ class DynamicShapeStagingTest(jtu.JaxTestCase):
     c, = jaxpr.jaxpr.outvars
     self.assertLen(c.aval.shape, 1)
     self.assertIs(a, c.aval.shape[0])
+
+    def f2(n):
+      x = jnp.zeros(n)
+
+      @partial(jax.jit, inline=True)
+      def g(x, y):
+        return x + y
+      return g(x, x)
+
+    jax.make_jaxpr(f2)(3)  # don't crash
 
   @unittest.skip("doesn't work yet: shape error b/c we don't notice x and y same")
   def test_closing_over_and_passing_arg_addition(self):
@@ -354,6 +386,15 @@ class DynamicShapeStagingTest(jtu.JaxTestCase):
     c, = jaxpr.jaxpr.outvars
     self.assertLen(c.aval.shape, 1)
     self.assertIs(a, c.aval.shape[0])
+
+    def f2(n):
+      x = jnp.zeros(n)
+      @partial(jax.jit, inline=True)
+      def g():
+        return jnp.zeros(n) + x
+      return g()
+
+    jax.make_jaxpr(f2)(3)  # don't crash
 
   def test_closing_over_repeated_shapes(self):
     def zeros(shape):

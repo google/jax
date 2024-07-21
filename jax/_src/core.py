@@ -429,8 +429,9 @@ class Primitive:
     return self.bind_with_trace(find_top_trace(args), args, params)
 
   def bind_with_trace(self, trace, args, params):
+    tracers = map(trace.full_raise, args)
     with pop_level(trace.level):
-      out = trace.process_primitive(self, map(trace.full_raise, args), params)
+      out = trace.process_primitive(self, tracers, params)
     return map(full_lower, out) if self.multiple_results else full_lower(out)
 
   def def_impl(self, impl):
@@ -510,16 +511,16 @@ def eval_jaxpr(jaxpr: Jaxpr, consts, *args, propagate_source_info=True) -> list[
 TracerType = TypeVar('TracerType', bound='Tracer')
 
 class Trace(Generic[TracerType]):
-  __slots__ = ['main', 'level', 'sublevel']
+  __slots__ = ['main', 'sublevel']
 
   main: MainTrace
-  level: int
   sublevel: Sublevel
 
   def __init__(self, main: MainTrace, sublevel: Sublevel) -> None:
     self.main = main
-    self.level = main.level
     self.sublevel = sublevel
+
+  level = property(lambda self: self.main.level)
 
   def full_raise(self, val) -> TracerType:
     if not isinstance(val, Tracer):
@@ -955,24 +956,26 @@ class EvalTrace(Trace):
 
 
 class MainTrace:
-  level: int
   trace_type: type[Trace]
   payload: dict[str, Any]
 
-  def __init__(self, level, trace_type, **payload) -> None:
-    self.level = level
+  def __init__(self, trace_type, **payload) -> None:
     self.trace_type = trace_type
     self.payload = payload
+
+  @property
+  def level(self):
+    stack = thread_local_state.trace_state.trace_stack.stack
+    return next((i for i, t in enumerate(stack) if t is self), None)
 
   def __repr__(self) -> str:
     return f"MainTrace({self.level},{self.trace_type.__name__})"
 
   def __hash__(self) -> int:
-    return hash((self.level, self.trace_type))
+    return hash(self.trace_type)
 
   def __eq__(self, other: object) -> bool:
     return (isinstance(other, MainTrace) and
-            self.level == other.level and
             self.trace_type == other.trace_type and
             self.payload == other.payload)
 
@@ -985,7 +988,7 @@ class TraceStack:
   dynamic: MainTrace
 
   def __init__(self):
-    eval_trace = MainTrace(0, EvalTrace)
+    eval_trace = MainTrace(EvalTrace)
     self.stack = [eval_trace]
     self.dynamic = eval_trace
 
@@ -1086,8 +1089,9 @@ def trace_state_clean() -> bool:
   trace_state = thread_local_state.trace_state
   return (trace_state.substack == [Sublevel(0)] and
           trace_state.axis_env == [] and
-          trace_state.trace_stack.stack == [MainTrace(0, EvalTrace)] and
-          trace_state.trace_stack.dynamic == MainTrace(0, EvalTrace))
+          len(trace_state.trace_stack.stack) == 1 and
+          trace_state.trace_stack.stack[0].trace_type is EvalTrace and
+          trace_state.trace_stack.dynamic is trace_state.trace_stack.stack[0])
 
 def reset_trace_state() -> bool:
   """Resets the global trace state and returns True if it was already clean."""
@@ -1198,7 +1202,7 @@ def new_main(trace_type: type[Trace], dynamic: bool = False,
   # See comments in https://github.com/google/jax/pull/3370
   stack = thread_local_state.trace_state.trace_stack
   level = stack.next_level()
-  main = MainTrace(level, trace_type, **payload)
+  main = MainTrace(trace_type, **payload)
   stack.push(main)
   if dynamic:
     prev_dynamic, stack.dynamic = stack.dynamic, main
@@ -1238,7 +1242,7 @@ def new_base_main(trace_type: type[Trace],
                   **payload) -> Generator[MainTrace, None, None]:
   # See comments in https://github.com/google/jax/pull/3370
   stack = thread_local_state.trace_state.trace_stack
-  main = MainTrace(0, trace_type, **payload)
+  main = MainTrace(trace_type, **payload)
   prev_dynamic, stack.dynamic = stack.dynamic, main
   prev_base, stack.stack[0] = stack.stack[0], main
   _update_thread_local_jit_state(stack.dynamic)
@@ -2082,7 +2086,7 @@ raise_to_shaped_mappings : dict[type, Callable] = {
   UnshapedArray: lambda aval, _: aval,
   ShapedArray: lambda aval, weak_type: ShapedArray(
       aval.shape, aval.dtype, weak_type, aval.named_shape),
-  DConcreteArray: lambda aval, weak_type: DShapedArray(
+  DShapedArray: lambda aval, weak_type: DShapedArray(
       aval.shape, aval.dtype, weak_type),
 }
 
