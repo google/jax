@@ -508,6 +508,10 @@ def xeinsum(spec: str, *operands):
     raise ValueError("Found subscript(s) "
                      f"{set(out_subs) - set().union(*all_in_subs)} "
                      "appearing in the output spec but not in the input")
+  if len(out_named) != len(set(out_named)):
+    raise ValueError("Output axes should be unique.")
+  if len(out_subs) != len(set(out_subs)):
+    raise ValueError("Output subscripts should be unique.")
 
   xs = list(operands)
   for idx, (in_subs, in_named) in enumerate(safe_zip(all_in_subs, all_in_named)):
