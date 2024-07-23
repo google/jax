@@ -13,6 +13,7 @@
 # limitations under the License.
 # ==============================================================================
 
+from .activations import (sigmoid, relu, gelu)
 from .fragmented_array import (
     FragmentedArray,
     FragmentedLayout,

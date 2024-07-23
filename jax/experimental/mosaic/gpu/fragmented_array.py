@@ -15,6 +15,7 @@
 """Utilities for code generator."""
 
 import dataclasses
+import functools
 
 import jax
 from jaxlib.mlir import ir
@@ -312,6 +313,16 @@ class FragmentedArray:
       raise NotImplementedError
     return self._pointwise(arith.maximumf, other)
 
+  def __neg__(self):
+    if not ir.FloatType.isinstance(self.mlir_dtype):
+      raise NotImplementedError
+    return self._pointwise(arith.negf)
+
+  def tanh(self, fastmath=arith.FastMathFlags.none):
+    if not ir.FloatType.isinstance(self.mlir_dtype):
+      raise NotImplementedError
+    return self._pointwise(functools.partial(mlir_math.tanh, fastmath=fastmath))
+
   def exp(self, approx: bool = False):
     if not ir.FloatType.isinstance(self.mlir_dtype):
       raise NotImplementedError
@@ -339,6 +350,10 @@ class FragmentedArray:
 
   def rsqrt(self):
     return self._pointwise(mlir_math.rsqrt)
+
+  def const_like(self, val):
+    scalar = c(val, self.mlir_dtype)
+    return FragmentedArray.splat(scalar, self.shape, self.layout)
 
   def __and__(self, other):
     if not ir.IntegerType.isinstance(self.mlir_dtype):
