@@ -269,7 +269,7 @@ class MultiProcessGpuTest(jtu.JaxTestCase):
 class SlurmMultiNodeGpuTest(jtu.JaxTestCase):
 
   def sorted_devices(self):
-    devices = sorted(jax.devices(), key=lambda d: (d.id, d.host_id))
+    devices = sorted(jax.devices(), key=lambda d: (d.process_index, d.id))
     if len(devices) != 16:
       raise unittest.SkipTest(
           "Test assumes that it runs on 16 devices (2 nodes)")

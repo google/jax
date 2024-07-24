@@ -1358,7 +1358,7 @@ def create_global_mesh(mesh_shape, axis_names):
   size = math.prod(mesh_shape)
   if len(jax.devices()) < size:
     raise unittest.SkipTest(f"Test requires {size} global devices.")
-  devices = sorted(jax.devices(), key=lambda d: d.id)
+  devices = sorted(jax.devices(), key=lambda d: (d.process_index, d.id))
   mesh_devices = np.array(devices[:size]).reshape(mesh_shape)
   global_mesh = jax.sharding.Mesh(mesh_devices, axis_names)
   return global_mesh
@@ -1941,7 +1941,7 @@ class numpy_with_mpmath:
       # On branch cut, mpmath.mp.asin returns different value compared
       # to mpmath.fp.asin and numpy.arcsin (see
       # mpmath/mpmath#786). The following if-block ensures
-      # compatibiliy with numpy.arcsin.
+      # compatibility with numpy.arcsin.
       if x.real > 1 and x.imag == 0:
         return ctx.asin(x).conjugate()
 
@@ -1969,7 +1969,7 @@ class numpy_with_mpmath:
       # On branch cut, mpmath.mp.asinh returns different value
       # compared to mpmath.fp.asinh and numpy.arcsinh (see
       # mpmath/mpmath#786).  The following if-block ensures
-      # compatibiliy with numpy.arcsinh.
+      # compatibility with numpy.arcsinh.
       if x.real == 0 and x.imag < -1:
         return (-ctx.asinh(x)).conjugate()
     return ctx.asinh(x)

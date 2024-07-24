@@ -150,7 +150,8 @@ def tpu_client_timer_callback(timer_secs: float) -> xla_client.Client | None:
   try:
     client = xla_client.make_tpu_client( # type: ignore
         get_tpu_library_path(),
-        _options_from_jax_configs("tpu"))
+        _options_from_jax_configs("tpu"),
+        distributed.global_state.client)
   finally:
     t.cancel()
 
@@ -641,6 +642,10 @@ def _options_from_jax_configs(plugin_name):
     options['enable_mock_nccl'] = _USE_MOCK_GPU_CLIENT.value
     if options['enable_mock_nccl']:
       options['num_nodes'] = _MOCK_NUM_GPUS.value
+  # TODO(b/353788247): Maybe integrate with other platforms.
+  if plugin_name == "tpu" and distributed.global_state.client:
+    options['process_index'] = distributed.global_state.process_id
+    options['num_processes'] = distributed.global_state.num_processes
 
   return options
 

@@ -56,7 +56,7 @@ def create_mesh(shape, axis_names, state):
   if len(jax.devices()) < size:
     state.skip_with_error(f"Requires {size} devices")
     return None
-  devices = sorted(jax.devices(), key=lambda d: d.id)
+  devices = sorted(jax.devices(), key=lambda d: (d.process_index, d.id))
   mesh_devices = np.array(devices[:size]).reshape(shape)
   global_mesh = jax.sharding.Mesh(mesh_devices, axis_names)
   return global_mesh

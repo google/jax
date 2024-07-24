@@ -36,7 +36,7 @@ class DeviceTest(jtu.JaxTestCase):
       self.assertEqual(device.platform, 'tpu')
       self.assertEqual(
           repr(device),
-          'TpuDevice(id=0, process_index=0, coords=(0,0,0), core_on_chip=0)',
+          'TpuDevice(process_index=0, id=0, coords=(0,0,0), core_on_chip=0)',
       )
     elif jtu.test_device_matches(['cpu']):
       self.assertEqual(device.platform, 'cpu')
@@ -49,7 +49,7 @@ class DeviceTest(jtu.JaxTestCase):
     if jtu.is_device_cuda():
       self.assertEqual(str(device), 'cuda:0')
     elif jtu.test_device_matches(['tpu']):
-      self.assertEqual(str(device), 'TPU_0(process=0,(0,0,0,0))')
+      self.assertEqual(str(device), 'TPU(process=0,id=0,(0,0,0,0))')
     elif jtu.test_device_matches(['cpu']):
       self.assertEqual(str(device), 'TFRT_CPU_0')
 
