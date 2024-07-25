@@ -65,7 +65,12 @@ DTypeLike = Union[
 # Shapes are tuples of dimension sizes, which are normally integers. We allow
 # modules to extend the set of dimension sizes to contain other types, e.g.,
 # symbolic dimensions in export.DimExpr.
-DimSize = Union[int, Any]  # extensible
+class SymbolicDimSize(Protocol):
+  @property
+  def dimension_as_value(self) -> Array: ...
+
+
+DimSize = Union[int, SymbolicDimSize, Any]  # Without Any
 Shape = Sequence[DimSize]
 
 class DuckTypedArray(Protocol):

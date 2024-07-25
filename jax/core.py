@@ -159,11 +159,11 @@ _deprecations = {
     "pp_vars": ("jax.core.pp_vars is deprecated.", _src_core.pp_vars),
     # Finalized 2024-05-13; remove after 2024-08-13
     "DimSize": (
-        "jax.core.DimSize is deprecated. Use DimSize = int | Any.",
+        "jax.core.DimSize is deprecated. Use jax.typing.DimSize.",
         None,
     ),
     "Shape": (
-        "jax.core.Shape is deprecated. Use Shape = Sequence[int | Any].",
+        "jax.core.Shape is deprecated. Use jax.typing.Shape.",
         None,
     ),
     # Finalized 2024-06-24; remove after 2024-09-24

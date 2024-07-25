@@ -124,8 +124,8 @@ class _DecisionByElimination:
 
   def combine_and_add_constraint(self,
                                  cmp: Comparator,
-                                 e1: _DimExpr | int | float,
-                                 e2: _DimExpr | int | float,
+                                 e1: DimSize | float,
+                                 e2: DimSize | float,
                                  debug_str: str | None = None):
     """Adds a constraint "e1 >= e2" to the internal state."""
     if isinstance(e1, float):

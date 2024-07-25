@@ -46,6 +46,7 @@ from jax._src.interpreters import mlir
 from jax._src.numpy import lax_numpy
 from jax._src import source_info_util
 from jax._src import tree_util
+from jax._src.typing import SymbolicDimSize
 from jax._src import util
 
 
@@ -383,7 +384,7 @@ class _DimTerm:
 _DimTerm_one = _DimTerm(())
 
 
-class _DimExpr:
+class _DimExpr(SymbolicDimSize):
   """Symbolic expressions using dimension variables.
 
   A dimension expression is an addition of terms (_DimTerm), which themselves
