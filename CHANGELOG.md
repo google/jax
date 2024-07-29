@@ -41,6 +41,8 @@ Remember to align the itemized text with the first line of an item within a list
     or `enable_xla=False` is now deprecated and this support will be removed in
     a future version.
     Native serialization has been the default since JAX 0.4.16 (September 2023).
+  * The previously-deprecated function `jax.random.shuffle` has been removed;
+    instead use `jax.random.permutation` with `independent=True`.
 
 ## jaxlib 0.4.31
 

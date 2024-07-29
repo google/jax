@@ -1468,9 +1468,10 @@ bot = Bot()
 def lattice_join(x: AbstractValue | None,
                  y: AbstractValue | None) -> AbstractValue:
   if x is None:
-    return cast(AbstractValue, y)
+    assert y is not None
+    return y
   elif y is None:
-    return cast(AbstractValue, x)
+    return x
   elif isinstance(x, type(y)):
     return y.join(x)
   elif isinstance(y, type(x)):

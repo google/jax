@@ -201,7 +201,6 @@ Parallel operators
 
     all_gather
     all_to_all
-    pdot
     psum
     psum_scatter
     pmax

@@ -17,12 +17,14 @@ from __future__ import annotations
 import heapq
 import logging
 import time
+from typing import Any
 import warnings
 
+filelock: Any | None = None
 try:
-  import filelock
+  import filelock  # type: ignore[no-redef]
 except ImportError:
-  filelock = None
+  pass
 
 from jax._src import path as pathlib
 from jax._src.compilation_cache_interface import CacheInterface

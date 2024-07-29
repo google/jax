@@ -241,7 +241,7 @@ def put_executable_and_time(
   cache = _get_cache(backend)
   if cache is None:
     logger.log(log_priority,
-               "Not writing persistent cache entry with key %s"
+               "Not writing persistent cache entry with key %r"
                " since cache is disabled/not initialized", cache_key)
     return
 
@@ -254,12 +254,12 @@ def put_executable_and_time(
   entry_size = len(executable_and_time)
   if entry_size < min_entry_size:
     logger.log(log_priority,
-        "Not writing persistent cache entry with key %s since its size"
+        "Not writing persistent cache entry with key %r since its size"
         " (%d bytes) is less than threshold (%d bytes)", cache_key, entry_size,
         min_entry_size)
   else:
     logger.log(log_priority,
-               "Writing %s to persistent compilation cache with key %s.",
+               "Writing %s to persistent compilation cache with key %r",
                module_name, cache_key)
     monitoring.record_event('/jax/compilation_cache/cache_misses')
     cache.put(cache_key, executable_and_time)

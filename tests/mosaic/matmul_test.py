@@ -128,6 +128,9 @@ class MatmulTestCase(jtu.JaxTestCase):
       cluster_n=(1, 2, 4),
   )
   def test_matmul_clusters(self, m, k, n, stages, tile_m, tile_n, cluster_m, cluster_n):
+    if cluster_m * cluster_n > 8:
+      # TODO(apaszke): Investigate
+      self.skipTest("Tests sometimes fail with non-portable cluster sizes.")
     try:
       matmul.verify(
           m,

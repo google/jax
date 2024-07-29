@@ -141,7 +141,7 @@ class VectorLayoutInferer {
       // TODO: b/342235360 - This check is temporary while we increase and test
       // support for offsets outside of the first tile. When support is more
       // broad, any op without support should check it within their own rule.
-      if (!isa<vector::ExtractStridedSliceOp>(any_op)) {
+      if (!isa<vector::BroadcastOp, vector::ExtractStridedSliceOp>(any_op)) {
         const SmallVector<Layout> layouts_in = getLayoutFromOperands(&any_op);
         for (const Layout &layout : layouts_in) {
           if (layout && layout->offsets()[1].has_value() &&
@@ -1054,9 +1054,20 @@ class VectorLayoutInferer {
       auto some_layout = getLayout(op.getSource());
       TPU_CHECK_OP(some_layout.has_value(), "missing vector layout");
       auto &layout = *some_layout;
+      if (layout.implicit_dim() != ImplicitDim::kNone) {
+        VectorLayout layout_2d(layout.bitwidth(), layout.offsets(),
+                               layout.tiling(), ImplicitDim::kNone);
+        if (layout_2d.equivalentTo(layout, src_ty.getShape(), target_shape_)) {
+          // TODO(b/342237796): Stop preferring 2D layouts (if given the choice)
+          // and defer the work, if any, to relayout.
+          layout = layout_2d;
+        }
+      }
+      auto src_tiled_ishape = layout.getImplicitTiledDims(src_ty.getShape(), 1);
+      auto dst_tiled_ishape = layout.getImplicitTiledDims(res_ty.getShape(), 1);
       // Since we can only do sublane broadcasts in the (8, 128) tiling, we
       // should always use that when sublane broadcasting is required.
-      if (*(src_ty.getShape().end() - 2) != *(res_ty.getShape().end() - 2)) {
+      if (src_tiled_ishape[0] != dst_tiled_ishape[0]) {
         if (layout.bitwidth() != kNativeBitwidth) {
           NYI("Only 32-bit broadcasts supported");
         }
@@ -1069,20 +1080,9 @@ class VectorLayoutInferer {
         layout = VectorLayout(layout.bitwidth(), offsets, default_tiling_,
                               layout.implicit_dim());
       }
-      if (layout.implicit_dim() != ImplicitDim::kNone) {
-        VectorLayout layout_2d(layout.bitwidth(), layout.offsets(),
-                               layout.tiling(), ImplicitDim::kNone);
-        if (layout_2d.equivalentTo(layout, src_ty.getShape(), target_shape_)) {
-          // TODO(b/342237796): Stop preferring 2D layouts (if given the choice)
-          // and defer the work, if any, to relayout.
-          layout = layout_2d;
-        }
-      }
-      auto src_tiled_shape = src_ty.getShape().take_back(2);
-      auto dst_tiled_shape = res_ty.getShape().take_back(2);
       LayoutOffsets offsets = layout.offsets();
       for (int i = 0; i < 2; ++i) {
-        if (src_tiled_shape[i] != dst_tiled_shape[i]) {
+        if (src_tiled_ishape[i] != dst_tiled_ishape[i]) {
           offsets[i] = std::nullopt;
         }
       }

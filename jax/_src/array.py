@@ -634,8 +634,7 @@ class ArrayImpl(basearray.Array):
         npy_value[ind] = self._arrays[i]._single_device_array_to_np_array()
       self._npy_value = npy_value
       self._npy_value.flags.writeable = False
-    # https://docs.python.org/3/library/typing.html#typing.cast
-    return cast(np.ndarray, self._npy_value)
+    return self._npy_value
 
 
 # TODO(b/273265390): ideally we would write this as a decorator on the ArrayImpl

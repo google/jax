@@ -508,7 +508,7 @@ def convert_element_type(operand: ArrayLike,
   Similar to a C++ `static_cast`.
 
   Args:
-    operand: an array or scalar value to be cast
+    operand: an array or scalar value to be cast.
     new_dtype: a NumPy dtype representing the target type.
 
   Returns:
@@ -561,7 +561,7 @@ def _convert_element_type(
       not (isinstance(operand, core.Tracer) and
            isinstance(core.get_aval(operand), core.ConcreteArray)) and
       (sharding is None or getattr(operand, 'sharding', None) == sharding)):
-    return type_cast(Array, operand)
+    return operand
   else:
     return convert_element_type_p.bind(
         operand, new_dtype=new_dtype, weak_type=bool(weak_type),
@@ -627,7 +627,7 @@ def concatenate(operands: Array | Sequence[ArrayLike], dimension: int) -> Array:
   if len(operands) == 1:
     op, = operands
     if isinstance(op, Array):
-      return type_cast(Array, op)
+      return op
   return concatenate_p.bind(*operands, dimension=dimension)
 
 
@@ -862,7 +862,7 @@ def broadcast_in_dim(operand: ArrayLike, shape: Shape,
     jax.lax.broadcast : simpler interface to add new leading dimensions.
   """
   if np.ndim(operand) == len(shape) and not len(broadcast_dimensions) and isinstance(operand, Array):
-    return type_cast(Array, operand)
+    return operand
   if config.dynamic_shapes.value:
     # We must gate this behavior under a flag because otherwise the errors
     # raised are different (and have worse source provenance information).
@@ -929,7 +929,7 @@ def reshape(operand: ArrayLike, new_sizes: Shape,
     dims = api_util._ensure_index_tuple(dimensions)
     same_dims = tuple(dims) == tuple(range(np.ndim(operand)))
   if np.shape(operand) and same_shape and same_dims and isinstance(operand, Array):
-    return type_cast(Array, operand)
+    return operand
   else:
     dyn_shape, static_new_sizes = _extract_tracers_dyn_shape(new_sizes)
 
@@ -1025,7 +1025,7 @@ def transpose(operand: ArrayLike,
   """
   permutation = tuple(operator.index(d) for d in permutation)
   if permutation == tuple(range(np.ndim(operand))) and isinstance(operand, Array):
-    return type_cast(Array, operand)
+    return operand
   else:
     return transpose_p.bind(operand, permutation=permutation)
 
@@ -1429,7 +1429,7 @@ def squeeze(array: ArrayLike, dimensions: Sequence[int]) -> Array:
   ndim = np.ndim(array)
   dimensions = tuple(sorted(canonicalize_axis(i, ndim) for i in dimensions))
   if not dimensions and isinstance(array, Array):
-    return type_cast(Array, array)
+    return array
   return squeeze_p.bind(array, dimensions=dimensions)
 
 def expand_dims(array: ArrayLike, dimensions: Sequence[int]) -> Array:
@@ -5217,20 +5217,19 @@ def canonicalize_precision(precision: PrecisionLike) -> tuple[Precision, Precisi
     if config.default_matmul_precision.value is None:
       return None
     try:
-      return type_cast(
-          tuple[Precision, Precision],
-          (Precision(config.default_matmul_precision.value),
-           Precision(config.default_matmul_precision.value)))
+      return (
+          Precision(config.default_matmul_precision.value),
+          Precision(config.default_matmul_precision.value),
+      )
     except TypeError:
       raise ValueError(
           "jax_default_matmul_precision flag must be set to None or a value in "
           f"{list(_precision_strings)}, but got {config.default_matmul_precision.value}"
       ) from None
   elif isinstance(precision, str) and precision in _precision_strings:
-    return type_cast(tuple[Precision, Precision],
-                     (Precision(precision), Precision(precision)))
+    return Precision(precision), Precision(precision)
   elif isinstance(precision, Precision):
-    return type_cast(tuple[Precision, Precision], (precision, precision))
+    return precision, precision
   elif (isinstance(precision, (list, tuple)) and len(precision) == 2 and
         all(isinstance(p, Precision) for p in precision)):
     return type_cast(tuple[Precision, Precision], precision)

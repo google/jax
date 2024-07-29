@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import math
-from typing import Any, Union, cast as type_cast
+from typing import Any
 
 import jax
 from jax._src.numpy import lax_numpy as jnp
@@ -203,11 +203,11 @@ def conv_general_dilated_local(
   lhs_array = jnp.asarray(lhs)
 
   c_precision = lax.canonicalize_precision(precision)
-  lhs_precision = type_cast(
-      Union[lax.Precision, None],
-      (c_precision[0]
-       if (isinstance(c_precision, tuple) and len(c_precision) == 2)
-       else c_precision))
+  lhs_precision = (
+      c_precision[0]
+      if (isinstance(c_precision, tuple) and len(c_precision) == 2)
+      else c_precision
+  )
 
   patches = conv_general_dilated_patches(
       lhs=lhs_array,

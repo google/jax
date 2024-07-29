@@ -516,24 +516,6 @@ def _randint(key, shape, minval, maxval, dtype) -> Array:
   return lax.add(minval, lax.convert_element_type(random_offset, dtype))
 
 
-def shuffle(key: KeyArrayLike, x: ArrayLike, axis: int = 0) -> Array:
-  """Shuffle the elements of an array uniformly at random along an axis.
-
-  Args:
-    key: a PRNG key used as the random key.
-    x: the array to be shuffled.
-    axis: optional, an int axis along which to shuffle (default 0).
-
-  Returns:
-    A shuffled version of x.
-  """
-  msg = ("jax.random.shuffle is deprecated and will be removed in a future release. "
-         "Use jax.random.permutation with independent=True.")
-  warnings.warn(msg, FutureWarning)
-  key, _ = _check_prng_key("shuffle", key)
-  return _shuffle(key, x, axis)
-
-
 def permutation(key: KeyArrayLike,
                 x: int | ArrayLike,
                 axis: int = 0,
@@ -1252,7 +1234,7 @@ mlir.register_lowering(random_gamma_p, mlir.lower_fun(
     partial(_gamma_impl, use_vmap=True),
     multiple_results=False))
 mlir.register_lowering(random_gamma_p, mlir.lower_fun(
-    partial(_gamma_impl, use_vmap=False),
+    partial(_gamma_impl, use_vmap=True),
     multiple_results=False), platform='cpu')
 batching.primitive_batchers[random_gamma_p] = _gamma_batching_rule
 

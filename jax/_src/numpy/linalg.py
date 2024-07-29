@@ -22,7 +22,7 @@ import warnings
 
 import numpy as np
 import operator
-from typing import Literal, NamedTuple, cast, overload
+from typing import Literal, NamedTuple, overload
 
 import jax
 from jax import jit, custom_jvp
@@ -1163,7 +1163,7 @@ def norm(x: ArrayLike, ord: int | str | None = None,
       return ufuncs.power(out, ord_inv)
 
   elif num_axes == 2:
-    row_axis, col_axis = cast(tuple[int, ...], axis)
+    row_axis, col_axis = axis  # pytype: disable=bad-unpacking
     if ord is None or ord in ('f', 'fro'):
       return ufuncs.sqrt(reductions.sum(ufuncs.real(x * ufuncs.conj(x)), axis=axis,
                                         keepdims=keepdims))

@@ -1535,7 +1535,6 @@ tf_not_yet_impl = [
     "pgather",
     "reduce_scatter",
     "axis_index",
-    "pdot",
     "all_gather",
     "lu_pivots_to_permutation",
     "xla_pmap",

@@ -33,7 +33,7 @@ import importlib
 import math
 import operator
 import types
-from typing import (cast, overload, Any, Literal, NamedTuple,
+from typing import (overload, Any, Literal, NamedTuple,
                     Protocol, TypeVar, Union)
 from textwrap import dedent as _dedent
 import warnings
@@ -1579,7 +1579,7 @@ def unravel_index(indices: ArrayLike, shape: Shape) -> tuple[Array, ...]:
   except TypeError:
     # TODO: Consider warning here since shape is supposed to be a sequence, so
     # this should not happen.
-    shape = cast(list[Any], [shape])
+    shape = [shape]
   if any(ndim(s) != 0 for s in shape):
     raise ValueError("unravel_index: shape should be a scalar or 1D sequence.")
   out_indices: list[ArrayLike] = [0] * len(shape)
@@ -3351,7 +3351,10 @@ https://jax.readthedocs.io/en/latest/faq.html).
 
 deprecations.register("jax-numpy-array-none")
 
-@util.implements(np.array, lax_description=_ARRAY_DOC)
+@util.implements(np.array, lax_description=_ARRAY_DOC, extra_params="""
+device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+  to which the created array will be committed.
+""")
 def array(object: Any, dtype: DTypeLike | None = None, copy: bool = True,
           order: str | None = "K", ndmin: int = 0,
           *, device: xc.Device | Sharding | None = None) -> Array:
@@ -3453,7 +3456,6 @@ def array(object: Any, dtype: DTypeLike | None = None, copy: bool = True,
     out = np.array(object) if copy else np.asarray(object)
   else:
     raise TypeError(f"Unexpected input type for array: {type(object)}")
-
   out_array: Array = lax_internal._convert_element_type(
       out, dtype, weak_type=weak_type, sharding=sharding)
   if ndmin > ndim(out_array):
@@ -3544,9 +3546,13 @@ def astype(x: ArrayLike, dtype: DTypeLike | None,
   return _array_copy(result) if copy else result
 
 
-@util.implements(np.asarray, lax_description=_ARRAY_DOC)
+@util.implements(np.asarray, lax_description=_ARRAY_DOC, extra_params="""
+device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+  to which the created array will be committed.
+""")
 def asarray(a: Any, dtype: DTypeLike | None = None, order: str | None = None,
-            *, copy: bool | None = None) -> Array:
+            *, copy: bool | None = None,
+            device: xc.Device | Sharding | None = None) -> Array:
   # For copy=False, the array API specifies that we raise a ValueError if the input supports
   # the buffer protocol but a copy is required. Since array() supports the buffer protocol
   # via numpy, this is only the case when the default device is not 'cpu'
@@ -3559,7 +3565,7 @@ def asarray(a: Any, dtype: DTypeLike | None = None, order: str | None = None,
   dtypes.check_user_dtype_supported(dtype, "asarray")
   if dtype is not None:
     dtype = dtypes.canonicalize_dtype(dtype, allow_extended_dtype=True)  # type: ignore[assignment]
-  return array(a, dtype=dtype, copy=bool(copy), order=order)
+  return array(a, dtype=dtype, copy=bool(copy), order=order, device=device)
 
 
 @util.implements(np.copy, lax_description=_ARRAY_DOC)
@@ -4329,36 +4335,45 @@ def _arange_dynamic(
 def linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
              endpoint: bool = True, retstep: Literal[False] = False,
              dtype: DTypeLike | None = None,
-             axis: int = 0) -> Array: ...
+             axis: int = 0,
+             *, device: xc.Device | Sharding | None = None) -> Array: ...
 @overload
 def linspace(start: ArrayLike, stop: ArrayLike, num: int,
              endpoint: bool, retstep: Literal[True],
              dtype: DTypeLike | None = None,
-             axis: int = 0) -> tuple[Array, Array]: ...
+             axis: int = 0,
+             *, device: xc.Device | Sharding | None = None) -> tuple[Array, Array]: ...
 @overload
 def linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
              endpoint: bool = True, *, retstep: Literal[True],
              dtype: DTypeLike | None = None,
-             axis: int = 0) -> tuple[Array, Array]: ...
+             axis: int = 0,
+             device: xc.Device | Sharding | None = None) -> tuple[Array, Array]: ...
 @overload
 def linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
              endpoint: bool = True, retstep: bool = False,
              dtype: DTypeLike | None = None,
-             axis: int = 0) -> Array | tuple[Array, Array]: ...
-@util.implements(np.linspace)
+             axis: int = 0,
+             *, device: xc.Device | Sharding | None = None) -> Array | tuple[Array, Array]: ...
+@util.implements(np.linspace, extra_params="""
+device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+  to which the created array will be committed.
+""")
 def linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
              endpoint: bool = True, retstep: bool = False,
              dtype: DTypeLike | None = None,
-             axis: int = 0) -> Array | tuple[Array, Array]:
+             axis: int = 0,
+             *, device: xc.Device | Sharding | None = None) -> Array | tuple[Array, Array]:
   num = core.concrete_dim_or_error(num, "'num' argument of jnp.linspace")
   axis = core.concrete_or_error(operator.index, axis, "'axis' argument of jnp.linspace")
-  return _linspace(start, stop, num, endpoint, retstep, dtype, axis)
+  return _linspace(start, stop, num, endpoint, retstep, dtype, axis, device=device)
 
-@partial(jit, static_argnames=('num', 'endpoint', 'retstep', 'dtype', 'axis'))
+@partial(jit, static_argnames=('num', 'endpoint', 'retstep', 'dtype', 'axis', 'device'))
 def _linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
               endpoint: bool = True, retstep: bool = False,
               dtype: DTypeLike | None = None,
-              axis: int = 0) -> Array | tuple[Array, Array]:
+              axis: int = 0,
+              *, device: xc.Device | Sharding | None = None) -> Array | tuple[Array, Array]:
   """Implementation of linspace differentiable in start and stop args."""
   dtypes.check_user_dtype_supported(dtype, "linspace")
   if num < 0:
@@ -4406,10 +4421,9 @@ def _linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
   if issubdtype(dtype, integer) and not issubdtype(out.dtype, integer):
     out = lax.floor(out)
 
-  if retstep:
-    return lax.convert_element_type(out, dtype), delta
-  else:
-    return lax.convert_element_type(out, dtype)
+  sharding = canonicalize_device_to_sharding(device)
+  result = lax_internal._convert_element_type(out, dtype, sharding=sharding)
+  return (result, delta) if retstep else result
 
 
 @util.implements(np.logspace)

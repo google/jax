@@ -92,21 +92,21 @@ def use_detailed_logging(module: ir.Module) -> bool:
   return _walk_operations(module.operation, bound) < 0
 
 
-def log_persistent_cache_hit(module_name: str) -> None:
+def log_persistent_cache_hit(module_name: str, cache_key: str) -> None:
   hit_log_priority = (logging.WARNING if config.log_compiles.value
                       else logging.DEBUG)
-  logger.log(hit_log_priority, "Persistent compilation cache hit for '%s'",
-             module_name)
+  logger.log(hit_log_priority, "Persistent compilation cache hit for '%s' with key %r",
+             module_name, cache_key)
 
 
-def log_persistent_cache_miss(module_name: str) -> None:
+def log_persistent_cache_miss(module_name: str, cache_key: str) -> None:
   miss_log_priority = (logging.WARNING
                         if config.explain_cache_misses.value
                         and compilation_cache.is_persistent_cache_enabled()
                         else logging.DEBUG)
   # all caps to match the tracing cache "TRACING CACHE MISS"
-  logger.log(miss_log_priority, "PERSISTENT COMPILATION CACHE MISS for '%s'",
-             module_name)
+  logger.log(miss_log_priority, "PERSISTENT COMPILATION CACHE MISS for '%s' with key %r",
+             module_name, cache_key)
 
 
 def get_compile_options(
@@ -349,7 +349,7 @@ def compile_or_get_cached(
 
   if retrieved_executable is not None:
     assert retrieved_compile_time is not None
-    log_persistent_cache_hit(module_name)
+    log_persistent_cache_hit(module_name, cache_key)
 
     monitoring.record_event('/jax/compilation_cache/cache_hits')
     monitoring.record_event_duration_secs(
@@ -368,7 +368,7 @@ def compile_or_get_cached(
       # them.
       and len(host_callbacks) == 0
   ):
-    log_persistent_cache_miss(module_name)
+    log_persistent_cache_miss(module_name, cache_key)
     return _compile_and_share_module(
         backend,
         computation,
@@ -384,7 +384,7 @@ def compile_or_get_cached(
       and is_multi_process
       and distributed.global_state.client is not None
   ):
-    log_persistent_cache_miss(module_name)
+    log_persistent_cache_miss(module_name, cache_key)
     return _compile_and_write_autotune_config(
         backend,
         computation,
@@ -396,7 +396,7 @@ def compile_or_get_cached(
         min_device_process_id
     )
   else:
-    log_persistent_cache_miss(module_name)
+    log_persistent_cache_miss(module_name, cache_key)
     return _compile_and_write_cache(
         backend,
         computation,

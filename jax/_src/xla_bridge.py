@@ -143,7 +143,7 @@ def tpu_client_timer_callback(timer_secs: float) -> xla_client.Client | None:
   t.start()
 
   try:
-    client = xla_client.make_tpu_client( # type: ignore
+    client = xla_client.make_tpu_client(
         get_tpu_library_path(),
         _options_from_jax_configs("tpu"))
   finally:

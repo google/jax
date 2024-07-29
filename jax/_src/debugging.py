@@ -391,7 +391,7 @@ def _inspect_sharding_lowering_rule(ctx: mlir.LoweringRuleContext, value, *,
                    has_side_effect=ir.BoolAttr.get(True),
                    api_version=mlir.i32_attr(1),
                    called_computations=ir.ArrayAttr.get([]),
-                   backend_config=ir.StringAttr.get(key),  # type: ignore[arg-type]
+                   backend_config=ir.StringAttr.get(key),
                    operand_layouts=None,
                    result_layouts=None)
   return []

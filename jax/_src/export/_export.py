@@ -729,7 +729,7 @@ def _wrap_main_func(
   context = mlir.make_ir_context()
   with context, ir.Location.unknown(context):
     # Make a copy, do not mutate because it may be cached
-    wrapped_module = ir.Module.parse(mlir.module_to_bytecode(module))  # type: ignore[arg-type]
+    wrapped_module = ir.Module.parse(mlir.module_to_bytecode(module))
     symbol_table = ir.SymbolTable(wrapped_module.operation)
     orig_main = symbol_table["main"]
     orig_main.attributes["sym_visibility"] = ir.StringAttr.get("private")

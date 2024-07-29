@@ -820,7 +820,7 @@ lhs_spec = P('i', None)
 lhs = device_put(jax.random.normal(jax.random.key(0), (8, 8)), lhs_spec)
 ```
 
-And wee shard the right-hand side argument (can think: activations) on its
+And we shard the right-hand side argument (can think: activations) on its
 contracting dimension, with a similar sharding for the output:
 
 ```{code-cell}

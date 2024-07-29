@@ -2998,25 +2998,37 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
       func=[
         lambda dtype, device: jnp.arange(5, dtype=dtype, device=device),
         lambda dtype, device: jnp.eye(5, 6, dtype=dtype, device=device),
+        lambda dtype, device: jnp.linspace(5, 6, 7, dtype=dtype, device=device),
+        lambda dtype, device: jnp.linspace(5, 6, 7, retstep=True, dtype=dtype, device=device),
+        lambda dtype, device: jnp.array([1, 2, 3, 4, 5], dtype=dtype, device=device),
       ],
       dtype=default_dtypes,
   )
-  def testArangeEyeWithDevice(self, func, dtype):
+  def testArangeEyeLinspaceArrayWithDevice(self, func, dtype):
     device = jax.devices()[-1]
-    out = func(dtype=dtype, device=device)
-    self.assertEqual(out.devices(), {device})
+    output = func(dtype=dtype, device=device)
+    if isinstance(output, tuple):
+      self.assertEqual(output[0].devices(), {device})
+    else:
+      self.assertEqual(output.devices(), {device})
 
   @jtu.sample_product(
       func=[
         lambda dtype, device: jnp.arange(5, dtype=dtype, device=device),
         lambda dtype, device: jnp.eye(5, 6, dtype=dtype, device=device),
+        lambda dtype, device: jnp.linspace(5, 6, 7, dtype=dtype, device=device),
+        lambda dtype, device: jnp.linspace(5, 6, 7, retstep=True, dtype=dtype, device=device),
+        lambda dtype, device: jnp.array([1, 2, 3, 4, 5], dtype=dtype, device=device),
       ],
       dtype=default_dtypes,
   )
-  def testArangeEyeWithSharding(self, func, dtype):
+  def testArangeEyeLinspaceArrayWithSharding(self, func, dtype):
     sharding = SingleDeviceSharding(jax.devices()[-1])
-    out = func(dtype=dtype, device=sharding)
-    self.assertEqual(out.sharding, sharding)
+    output = func(dtype=dtype, device=sharding)
+    if isinstance(output, tuple):
+      self.assertEqual(output[0].sharding, sharding)
+    else:
+      self.assertEqual(output.sharding, sharding)
 
   @jtu.sample_product(
       func=[jnp.empty_like, jnp.zeros_like, jnp.ones_like, jnp.full_like],
@@ -6066,7 +6078,6 @@ class NumpySignaturesTest(jtu.JaxTestCase):
       'histogram': ['normed'],
       'histogram2d': ['normed'],
       'histogramdd': ['normed'],
-      'linspace': ['device'],
       'nanpercentile': ['weights'],
       'nanquantile': ['weights'],
       'nanstd': ['correction', 'mean'],

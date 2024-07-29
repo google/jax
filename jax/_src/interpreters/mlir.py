@@ -97,8 +97,7 @@ def _is_not_block_argument(x: IrValues) -> bool:
 
 
 def dense_int_elements(xs) -> ir.DenseIntElementsAttr:
-  return type_cast(ir.DenseIntElementsAttr,
-                   ir.DenseIntElementsAttr.get(np.asarray(xs, np.int64)))
+  return ir.DenseIntElementsAttr.get(np.asarray(xs, np.int64))
 
 dense_int_array = ir.DenseI64ArrayAttr.get
 
@@ -112,7 +111,7 @@ def dense_bool_elements(xs: Sequence[bool]) -> ir.DenseElementsAttr:
       a, type=ir.IntegerType.get_signless(1), shape=[len(xs)])
 
 def dense_bool_array(xs: Sequence[bool]) -> ir.DenseBoolArrayAttr:
-  return ir.DenseBoolArrayAttr.get(xs)  # type: ignore[arg-type]
+  return ir.DenseBoolArrayAttr.get(xs)
 
 def i32_attr(i): return ir.IntegerAttr.get(ir.IntegerType.get_signless(32), i)
 def i64_attr(i): return ir.IntegerAttr.get(ir.IntegerType.get_signless(64), i)
@@ -2808,7 +2807,7 @@ def custom_call(
   if backend_config is None:
     backend_config_attr = ir.StringAttr.get("")
   elif isinstance(backend_config, (str, bytes)):
-    backend_config_attr = ir.StringAttr.get(backend_config)  # type: ignore[arg-type]
+    backend_config_attr = ir.StringAttr.get(backend_config)
   elif isinstance(backend_config, dict):
     # TODO(necula): it seems that the CustomCallOp constructor requires that
     # backend_config_attr be a string attribute, even though in some cases we

@@ -1793,6 +1793,27 @@ lowering_rules[lax.neg_p] = _neg_lowering_rule
 skip_mlir_conversions.add(lax.neg_p)
 
 
+def _sign_lowering_helper(x):
+  if jnp.issubdtype(x.dtype, jnp.unsignedinteger):
+    return (x != 0).astype(x.dtype)
+
+  if jnp.issubdtype(x.dtype, jnp.integer):
+    return (x > 0).astype(x.dtype) - (x < 0).astype(x.dtype)
+
+  if jnp.issubdtype(x.dtype, jnp.floating):
+    out = (x > 0.).astype(x.dtype) - (x < 0.).astype(x.dtype)
+    return jnp.where(jnp.isnan(x), jnp.nan, out)
+
+  raise NotImplementedError
+
+
+def _sign_lowering_rule(ctx: LoweringRuleContext, x):
+  return lower_fun(_sign_lowering_helper, multiple_results=False)(ctx, x)
+
+
+lowering_rules[lax.sign_p] = _sign_lowering_rule
+
+
 def _rsqrt_lowering_rule(ctx: LoweringRuleContext, x):
   return math.RsqrtOp(x).result
 

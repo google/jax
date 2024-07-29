@@ -122,6 +122,10 @@ class Array(abc.ABC):
     returns a Sharding.
     """
 
+  @abc.abstractmethod
+  def copy_to_host_async(self):
+    """Copies jax.Array to host asynchronously."""
+
 
 Array.__module__ = "jax"
 

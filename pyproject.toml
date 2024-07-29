@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 show_error_codes = true
 disable_error_code = "attr-defined, name-defined, annotation-unchecked"
 no_implicit_optional = true
+warn_redundant_casts = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
@@ -54,7 +55,7 @@ filterwarnings = [
     "default:Error (reading|writing) persistent compilation cache entry for 'jit_equal'",
     "default:Error (reading|writing) persistent compilation cache entry for 'jit__lambda_'",
     "default:jax.extend.mlir.dialects.mhlo is deprecated.*:DeprecationWarning",
-    
+
     # TODO(jakevdp): remove when array_api_tests stabilize
     "default:.*not machine-readable.*:UserWarning",
     "default:Special cases found for .* but none were parsed.*:UserWarning",

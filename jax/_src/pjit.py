@@ -1967,7 +1967,8 @@ def _pjit_batcher(spmd_axis_name, axis_size, axis_name, main_type,
   # TODO(yashkatariya): Figure out layouts should change under vmap.
   if not (all(l is None for l in in_layouts) and
           all(l is None for l in out_layouts)):
-    raise NotImplementedError
+    raise NotImplementedError(
+        'Concrete layouts are not supported for vmap(jit).')
 
   vals_out = pjit_p.bind(
     *vals_in,
@@ -2539,7 +2540,9 @@ def _sharding_constraint_batcher(
 
   # TODO(yashkatariya): Figure out layouts should change under vmap.
   if layout is not None:
-    raise NotImplementedError
+    raise NotImplementedError(
+        'Concrete layout is not supported for vmap(with_sharding_constraint). '
+        f'Got layout {layout}')
 
   y = sharding_constraint_p.bind(
       x,

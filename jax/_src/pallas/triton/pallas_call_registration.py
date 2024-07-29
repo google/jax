@@ -89,7 +89,7 @@ def pallas_call_lowering(
   module_op.write_bytecode(buf)
   backend_config = dict(
       name=ir.StringAttr.get(name),
-      ir=ir.StringAttr.get(buf.getvalue()),  # type: ignore
+      ir=ir.StringAttr.get(buf.getvalue()),
       num_stages=mlir.i32_attr(num_stages),
       num_warps=mlir.i32_attr(num_warps),
       grid_x=mlir.i32_attr(grid_x),
