@@ -140,12 +140,14 @@ def _serialize_ir(m: ir.Module, remove_custom_partitioning_ptr_for_cache_key: bo
   m_bytecode = output.getvalue()
 
   if remove_custom_partitioning_ptr_for_cache_key and "CustomSPMDPartitioning" in str_m:
-    pattern = r'backend_config\s*=\s*"([^"]*)"'
-    matches = re.findall(pattern, str_m)
-    for match in matches:
-      b_backend_config = match.encode('utf-8')
+    pattern = r'stablehlo\.custom_call @CustomSPMDPartitioning\((.*?)\) \{(.*?backend_config\s*=\s*"([^"]*)".*?)\}'
+    matches = re.findall(pattern, str_m, re.DOTALL)
+    bcs = [match[2] for match in matches]
+    backend_config_idx = 0
+    for bc in bcs:
+      b_backend_config = bc.encode('utf-8')
       b_zeros = ('0' * len(b_backend_config)).encode('utf-8')
-      backend_config_idx = m_bytecode.find(b_backend_config)
+      backend_config_idx = m_bytecode.find(b_backend_config, backend_config_idx)
       m_bytecode = (m_bytecode[:backend_config_idx] + 
                     b_zeros + 
                     m_bytecode[(backend_config_idx + len(b_backend_config)):])
