@@ -35,9 +35,11 @@ class MockGPUTest(jtu.JaxTestCase):
       self.skipTest("Mocking devices only works on the GPU backend.")
     super().setUp()
 
+  @jtu.skip_under_pytest("Test must run in an isolated process")
   def testMockDeviceCount(self):
     self.assertEqual(jax.device_count(), jax.local_device_count() * NUM_SHARDS)
 
+  @jtu.skip_under_pytest("Test must run in an isolated process")
   def testMockWithSharding(self):
     mesh = jax.sharding.Mesh(jax.devices(), ('x',))
     @partial(

@@ -17,6 +17,13 @@ Remember to align the itemized text with the first line of an item within a list
   * {class}`jax.experimental.pallas.BlockSpec` now expects `block_shape` to
     be passed *before* `index_map`. The old argument order is deprecated and
     will be removed in a future release.
+  * {class}`jax.experimental.pallas.GridSpec` does not have anymore the `in_specs_tree`,
+    and the `out_specs_tree` fields, and the `in_specs` and `out_specs` tree now
+    store the values as pytrees of BlockSpec. Previously, `in_specs` and
+    `out_specs` were flattened ({jax-issue}`#22552`).
+  * The method `compute_index` of {class}`jax.experimental.pallas.GridSpec` has
+    been removed because it is private. Similarly, the `get_grid_mapping` and
+    `unzip_dynamic_bounds` have been removed from `BlockSpec` ({jax-issue}`#22593`).
   * Fixed the interpreter mode to work with BlockSpec that involve padding
     ({jax-issue}`#22275`).
     Padding in interpreter mode will be with NaN, to help debug out-of-bounds
@@ -37,6 +44,9 @@ Remember to align the itemized text with the first line of an item within a list
   * Added initial support for shape polymorphism for the Pallas TPU custom kernels\
     ({jax-issue}`#22084`).
   * Added TPU support for checkify. ({jax-issue}`#22480`)
+  * Added clearer error messages when the block sizes do not match the TPU
+    requirements. Previously, the errors were coming from the Mosaic backend
+    and did not have useful Python stack traces.
 
 ## Released with JAX 0.4.30 (June 18, 2024)
 

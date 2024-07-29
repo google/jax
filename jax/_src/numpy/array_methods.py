@@ -39,6 +39,7 @@ from jax._src.api_util import _ensure_index_tuple
 from jax._src.array import ArrayImpl
 from jax._src.lax import lax as lax_internal
 from jax._src.lib import xla_client as xc
+from jax._src.numpy import array_api_metadata
 from jax._src.numpy import lax_numpy
 from jax._src.numpy import reductions
 from jax._src.numpy import ufuncs
@@ -665,6 +666,7 @@ _array_operators = {
 }
 
 _array_methods = {
+  "__array_namespace__": array_api_metadata.__array_namespace__,
   "all": reductions.all,
   "any": reductions.any,
   "argmax": lax_numpy.argmax,

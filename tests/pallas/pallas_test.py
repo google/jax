@@ -32,6 +32,7 @@ from jax._src import config
 from jax._src import dtypes
 from jax._src import test_util as jtu
 from jax._src.lax.control_flow.for_loop import for_loop
+from jax._src.lib import version as jaxlib_version
 from jax._src.pallas.pallas_call import _trace_kernel_to_jaxpr
 from jax.experimental import pallas as pl
 import jax.numpy as jnp
@@ -236,7 +237,7 @@ class PallasCallTest(PallasBaseTest):
     self.assertAllClose((), f(a))
 
   def test_pallas_call_out_shape_is_singleton_tuple(self):
-    a = np.arange(256, dtype=np.int32)
+    a = np.arange(1024, dtype=np.int32).reshape((8, 128))
     f = self.pallas_call(lambda x_ref, o1_ref: None,
                          out_shape=(a,))
     res = f(a)
@@ -244,7 +245,7 @@ class PallasCallTest(PallasBaseTest):
     self.assertLen(res, 1)
 
   def test_pallas_call_out_shape_is_list(self):
-    a = np.arange(256, dtype=np.int32)
+    a = np.arange(1024, dtype=np.int32).reshape((8, 128))
     f = self.pallas_call(lambda x_ref, o1_ref: None,
                          out_shape=[a])
     res = f(a)
@@ -333,6 +334,18 @@ class PallasCallTest(PallasBaseTest):
           dict(shape=(16, 128), block_shape=(4, 128)),
           dict(shape=(16, 128), block_shape=(2, 128)),
           dict(shape=(16, 128), block_shape=(8, 64)),
+          # Blocks larger than the number of lands and sublanes.
+          dict(shape=(9, 128), block_shape=(9, 64)),
+          dict(shape=(9, 128), block_shape=(9, 128)),
+          dict(shape=(18, 128), block_shape=(9, 128)),
+          dict(shape=(8, 129), block_shape=(8, 129)),
+          dict(shape=(9, 129), block_shape=(8, 129)),
+          dict(shape=(9, 129), block_shape=(9, 129)),
+          # Tiling of small arrays
+          dict(shape=(1, 128), block_shape=(4, 128)),
+          dict(shape=(2, 128), block_shape=(4, 128)),
+          dict(shape=(3, 128), block_shape=(4, 128)),
+          dict(shape=(5, 128), block_shape=(8, 128)),
       ]
   )
   def test_block_spec_valid_block_shapes(self, *, shape, block_shape):
@@ -345,24 +358,28 @@ class PallasCallTest(PallasBaseTest):
 
     test_context = contextlib.nullcontext()
     if jtu.test_device_matches(["tpu"]) and not self.INTERPRET:
-      if len(block_shape) == 0:
+      if len(block_shape) < 2:
+        self.skipTest("TODO(necula): enable this check")
+      if len(block_shape) < 2:
         test_context = self.assertRaisesRegex(
-            Exception,
-            "Indexing into a \\(\\)-shaped Ref not yet supported on TPU")
-      elif len(block_shape) == 1:
-        test_context = self.assertRaisesRegex(
-            RuntimeError,
-            "1D windows not implemented")
+            ValueError,
+            "TPU lowering currently supports only blocks of rank >= 2")
       else:
-        evenly_divisible = (
-            (block_shape[-1] % 128 == 0
-            if shape[-1] >= 128 else block_shape[-1] == shape[-1]) and
-            (block_shape[-2] % 8 == 0
-            if shape[-2] >= 8 else block_shape[-2] == shape[-2]))
+        if jaxlib_version < (0, 4, 31):
+          evenly_divisible = (
+              (block_shape[-1] % 128 == 0
+              if shape[-1] >= 128 else block_shape[-1] == shape[-1]) and
+              (block_shape[-2] % 8 == 0
+              if shape[-2] >= 8 else block_shape[-2] == shape[-2]))
+        else:
+          evenly_divisible = (
+              (block_shape[-1] == shape[-1] or block_shape[-1] % 128 == 0) and
+              (block_shape[-2] == shape[-2] or block_shape[-2] % 8 == 0))
+
         if not evenly_divisible:
           test_context = self.assertRaisesRegex(
-              RuntimeError,
-              "is not divisible by tiling evenly")
+              ValueError,
+              "last two dimensions of your block shape are divisible by 8 and 128")
 
     elif jtu.test_device_matches(["gpu"]) and not self.INTERPRET:
       block_size = math.prod(block_shape)
@@ -388,9 +405,9 @@ class PallasCallTest(PallasBaseTest):
       o_ref[...] = jnp.full(o_ref.shape, 42, dtype=np.int32)
 
     pids = self.pallas_call(kernel,
-                            jax.ShapeDtypeStruct((8,), dtype=np.int32))()
-    self.assertAllClose(pids, np.array([42] * 8, dtype=np.int32))
-    self.assertEqual(o_ref_shape, (8,))
+                            jax.ShapeDtypeStruct((8, 128), dtype=np.int32))()
+    self.assertAllClose(pids, np.full((8, 128), 42, dtype=np.int32))
+    self.assertEqual(o_ref_shape, (8, 128))
 
   def test_pallas_call_no_block_spec(self):
     if jtu.test_device_matches(["tpu"]) and not self.INTERPRET:
@@ -811,7 +828,11 @@ class PallasCallInputOutputAliasingTest(PallasBaseTest):
 
   def test_basic_input_output_aliasing(self):
     # Input needs to be big so it doesn't fit in VMEM
-    x = jnp.ones((32, 1024, 1024))
+    size = 1024
+    if jtu.is_device_cuda():
+      # Reduce the size on CUDA to avoid OOM.
+      size = 256
+    x = jnp.ones((32, size, size))
     expected = x + 1
 
     def kernel(x_ref, y_ref):
@@ -821,8 +842,8 @@ class PallasCallInputOutputAliasingTest(PallasBaseTest):
       return self.pallas_call(
           kernel,
           out_shape=x,
-          in_specs=[pl.BlockSpec((None, 1024, 1024), lambda i: (i, 0, 0))],
-          out_specs=pl.BlockSpec((None, 1024, 1024), lambda i: (i, 0, 0)),
+          in_specs=[pl.BlockSpec((None, size, size), lambda i: (i, 0, 0))],
+          out_specs=pl.BlockSpec((None, size, size), lambda i: (i, 0, 0)),
           grid=(x.shape[0],),
           input_output_aliases={0: 0},
       )(x)

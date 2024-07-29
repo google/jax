@@ -10,6 +10,7 @@ Classes
   :toctree: _autosummary
 
   BlockSpec
+  GridSpec
   Slice
 
 Functions

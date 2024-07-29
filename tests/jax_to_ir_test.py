@@ -81,6 +81,10 @@ class JaxToIRTest(absltest.TestCase):
       jax_to_ir.parse_shape_str('foo[]')
 
   @unittest.skipIf(tf is None, 'TensorFlow not installed.')
+  @jtu.ignore_warning(
+      category=UserWarning,
+      message='jax2tf.convert with native_serialization=False is deprecated.'
+  )
   def test_jax_to_tf_axpy(self):
     tf_proto, tf_text = jax_to_ir.jax_to_tf(axpy, [
         ('y', jax_to_ir.parse_shape_str('f32[128]')),

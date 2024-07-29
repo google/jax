@@ -13,8 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "jaxlib/cpu/lapack.h"
-
 #include <complex>
 
 #include "nanobind/nanobind.h"

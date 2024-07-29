@@ -67,7 +67,7 @@ class barrier_semaphore(semaphore_dtype): pass
 class AbstractSemaphoreTyRules:
   @staticmethod
   def pallas_interpret_element_aval(_) -> jax_core.ShapedArray:
-    return jax_core.ShapedArray((), jnp.dtype('int32'))
+    return pallas_core.index_map_grid_aval
 
 class AbstractSemaphoreTy(dtypes.ExtendedDType):
   name: str
@@ -145,8 +145,8 @@ class PrefetchScalarGridSpec(pallas_core.GridSpec):
   grid: TupleGrid
   grid_names: tuple[Hashable, ...] | None
   num_scalar_prefetch: int
-  in_specs: tuple[BlockSpec | NoBlockSpec, ...] | NoBlockSpec
-  out_specs: tuple[BlockSpec | NoBlockSpec, ...] | NoBlockSpec
+  in_specs: pallas_core.BlockSpecTree
+  out_specs: pallas_core.BlockSpecTree
   scratch_shapes: tuple[Any, ...]
 
   def __init__(
@@ -172,14 +172,6 @@ class PrefetchScalarGridSpec(pallas_core.GridSpec):
       return obj.get_aval()
     raise ValueError(f"No registered conversion for {type(obj)}. "
                      "Only VMEM and SemaphoreType are supported.")
-
-  def get_grid_mapping(  # type: ignore[override]
-      self, in_avals, in_tree, in_paths, out_avals, out_tree, out_paths
-  ) -> tuple[tuple[jax_core.AbstractValue, ...], GridMapping]:
-    return super().get_grid_mapping(in_avals, in_tree, in_paths,
-                                    out_avals, out_tree, out_paths,
-                                    num_scalar_prefetch=self.num_scalar_prefetch,
-                                    scratch_shapes=self.scratch_shapes)
 
 
 @dataclasses.dataclass(frozen=True)

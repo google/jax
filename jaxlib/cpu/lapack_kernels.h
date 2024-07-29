@@ -475,6 +475,32 @@ struct Sytrd {
   static int64_t Workspace(lapack_int lda, lapack_int n);
 };
 
+// Declare all the handler symbols
+XLA_FFI_DECLARE_HANDLER_SYMBOL(blas_strsm_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(blas_dtrsm_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(blas_ctrsm_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(blas_ztrsm_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_sgetrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_dgetrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_cgetrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_zgetrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_sgeqrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_dgeqrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_cgeqrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_zgeqrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_sorgqr_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_dorgqr_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_cungqr_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_zungqr_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_spotrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_dpotrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_cpotrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_zpotrf_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_sgesdd_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_dgesdd_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_cgesdd_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_zgesdd_ffi);
+
 }  // namespace jax
 
 #endif  // JAXLIB_CPU_LAPACK_KERNELS_H_

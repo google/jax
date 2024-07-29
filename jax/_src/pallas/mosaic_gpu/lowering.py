@@ -147,7 +147,7 @@ def lower_jaxpr_to_module(
     name: str,
     compiler_params: dict[str, Any],
 ) -> LoweringResult:
-  in_structs = grid_mapping.in_shapes
+  in_structs = tuple(grid_mapping.in_shapes)
   out_structs = grid_mapping.out_shapes
   assert len(jaxpr.outvars) == 0
   assert not grid_mapping.vmapped_dims

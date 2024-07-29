@@ -67,8 +67,12 @@ def flatten_fun_for_sparse_ad(fun, argnums: int | tuple[int, ...], args: tuple[A
     return f_recons(grad_out)
 
   def postprocess_gradients(grads_out):
-    out = [reconstruct(*args) for args in safe_zip(argnums_flat1, grads_out)]
-    return out[0] if isinstance(argnums, int) else out
+    leaf_grads = [None] * tree1.num_leaves
+    for i, grad in safe_zip(argnums_flat1, grads_out):
+      leaf_grads[i] = reconstruct(i, grad)
+    grad_tree = tree_util.tree_unflatten(tree1, leaf_grads)
+    grad_tree = tuple(filter(lambda x: jax.tree.leaves(x), grad_tree))
+    return grad_tree[0] if len(grad_tree) == 1 else grad_tree
 
   return fun_flat, argnums_flat, args_flat, postprocess_gradients
 

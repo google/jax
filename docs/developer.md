@@ -114,9 +114,6 @@ particular before each `jaxlib` release.
 
 On Windows, follow [Install Visual Studio](https://docs.microsoft.com/en-us/visualstudio/install/install-visual-studio?view=vs-2019)
 to set up a C++ toolchain. Visual Studio 2019 version 16.5 or newer is required.
-If you need to build with CUDA enabled, follow the
-[CUDA Installation Guide](https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html)
-to set up a CUDA environment.
 
 JAX builds use symbolic links, which require that you activate
 [Developer Mode](https://docs.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development).
@@ -139,16 +136,10 @@ Once coreutils is installed, the realpath command should be present in your shel
 
 Once everything is installed. Open PowerShell, and make sure MSYS2 is in the
 path of the current session. Ensure `bazel`, `patch` and `realpath` are
-accessible. Activate the conda environment. The following command builds with
-CUDA enabled, adjust it to whatever suitable for you:
+accessible. Activate the conda environment.
 
 ```
-python .\build\build.py `
-  --enable_cuda `
-  --cuda_path='C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v10.1' `
-  --cudnn_path='C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v10.1' `
-  --cuda_version='10.1' `
-  --cudnn_version='7.6.5'
+python .\build\build.py
 ```
 
 To build with debug information, add the flag `--bazel_options='--copt=/Z7'`.

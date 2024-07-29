@@ -36,10 +36,13 @@ and implements most of the API listed in the standard.
 
 from __future__ import annotations
 
-from jax.experimental.array_api._version import __array_api_version__ as __array_api_version__
-
 from jax.experimental.array_api import fft as fft
 from jax.experimental.array_api import linalg as linalg
+
+from jax._src.numpy.array_api_metadata import (
+    __array_api_version__ as __array_api_version__,
+    __array_namespace_info__ as __array_namespace_info__,
+)
 
 from jax.numpy import (
     abs as abs,
@@ -197,11 +200,3 @@ from jax.experimental.array_api._elementwise_functions import (
     clip as clip,
     hypot as hypot,
 )
-
-from jax.experimental.array_api._utility_functions import (
-    __array_namespace_info__ as __array_namespace_info__,
-)
-
-from jax.experimental.array_api import _array_methods
-_array_methods.add_array_object_methods()
-del _array_methods

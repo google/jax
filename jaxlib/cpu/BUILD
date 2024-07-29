@@ -54,7 +54,6 @@ cc_library(
 pybind_extension(
     name = "_lapack",
     srcs = ["lapack.cc"],
-    hdrs = ["lapack.h"],
     copts = [
         "-fexceptions",
         "-fno-strict-aliasing",
@@ -77,7 +76,6 @@ pybind_extension(
 cc_library(
     name = "cpu_kernels",
     srcs = ["cpu_kernels.cc"],
-    hdrs = ["lapack.h"],
     visibility = ["//visibility:public"],
     deps = [
         ":lapack_kernels",

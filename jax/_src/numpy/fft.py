@@ -25,7 +25,8 @@ from jax._src.util import safe_zip
 from jax._src.numpy.util import check_arraylike, implements, promote_dtypes_inexact
 from jax._src.numpy import lax_numpy as jnp
 from jax._src.numpy import ufuncs, reductions
-from jax._src.typing import Array, ArrayLike
+from jax._src.sharding import Sharding
+from jax._src.typing import Array, ArrayLike, DTypeLike
 
 Shape = Sequence[int]
 
@@ -716,12 +717,28 @@ def irfft2(a: ArrayLike, s: Shape | None = None, axes: Sequence[int] = (-2,-1),
                       norm=norm)
 
 
-@implements(np.fft.fftfreq, extra_params="""
-dtype : Optional
-    The dtype of the returned frequencies. If not specified, JAX's default
-    floating point dtype will be used.
-""")
-def fftfreq(n: int, d: ArrayLike = 1.0, *, dtype=None) -> Array:
+def fftfreq(n: int, d: ArrayLike = 1.0, *, dtype: DTypeLike | None = None,
+            device: xla_client.Device | Sharding | None = None) -> Array:
+  """Return sample frequencies for the discrete Fourier transform.
+
+  JAX implementation of :func:`numpy.fft.fftfreq`. Returns frequencies appropriate
+  for use with the outputs of :func:`~jax.numpy.fft` and :func:`~jax.numpy.ifft`.
+
+  Args:
+    n: length of the FFT window
+    d: optional scalar sample spacing (default: 1.0)
+    dtype: optional dtype of returned frequencies. If not specified, JAX's default
+      floating point dtype will be used.
+    device: optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Array of sample frequencies, length ``n``.
+
+  See also:
+    - :func:`jax.numpy.fft.rfftfreq`: frequencies for use with :func:`~jax.numpy.rfft`
+      and :func:`~jax.numpy.irfft`.
+  """
   dtype = dtype or dtypes.canonicalize_dtype(jnp.float_)
   if isinstance(n, (list, tuple)):
     raise ValueError(
@@ -748,15 +765,35 @@ def fftfreq(n: int, d: ArrayLike = 1.0, *, dtype=None) -> Array:
     # k[(n - 1) // 2 + 1:] = jnp.arange(-(n - 1) // 2, -1)
     k = k.at[(n - 1) // 2 + 1:].set(jnp.arange(-(n - 1) // 2, 0, dtype=dtype))
 
-  return k / jnp.array(d * n, dtype=dtype)
+  result = k / jnp.array(d * n, dtype=dtype)
+
+  if device is not None:
+    return result.to_device(device)
+  return result
 
 
-@implements(np.fft.rfftfreq, extra_params="""
-dtype : Optional
-    The dtype of the returned frequencies. If not specified, JAX's default
-    floating point dtype will be used.
-""")
-def rfftfreq(n: int, d: ArrayLike = 1.0, *, dtype=None) -> Array:
+def rfftfreq(n: int, d: ArrayLike = 1.0, *, dtype: DTypeLike | None = None,
+             device: xla_client.Device | Sharding | None = None) -> Array:
+  """Return sample frequencies for the discrete Fourier transform.
+
+  JAX implementation of :func:`numpy.fft.fftfreq`. Returns frequencies appropriate
+  for use with the outputs of :func:`~jax.numpy.rfft` and :func:`~jax.numpy.irfft`.
+
+  Args:
+    n: length of the FFT window
+    d: optional scalar sample spacing (default: 1.0)
+    dtype: optional dtype of returned frequencies. If not specified, JAX's default
+      floating point dtype will be used.
+    device: optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    Array of sample frequencies, length ``n // 2 + 1``.
+
+  See also:
+    - :func:`jax.numpy.fft.rfftfreq`: frequencies for use with :func:`~jax.numpy.fft`
+      and :func:`~jax.numpy.ifft`.
+  """
   dtype = dtype or dtypes.canonicalize_dtype(jnp.float_)
   if isinstance(n, (list, tuple)):
     raise ValueError(
@@ -774,7 +811,11 @@ def rfftfreq(n: int, d: ArrayLike = 1.0, *, dtype=None) -> Array:
   else:
     k = jnp.arange(0, (n - 1) // 2 + 1, dtype=dtype)
 
-  return k / jnp.array(d * n, dtype=dtype)
+  result = k / jnp.array(d * n, dtype=dtype)
+
+  if device is not None:
+    return result.to_device(device)
+  return result
 
 
 @implements(np.fft.fftshift)

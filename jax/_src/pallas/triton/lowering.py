@@ -250,11 +250,29 @@ def _new_ir_context() -> ir.Context:
 
 def lower_jaxpr_to_triton_module(
     jaxpr: jax_core.Jaxpr,
-    in_out_shapes,
     grid_mapping: GridMapping,
     name: str,
     platform: str
 ) -> LoweringResult:
+  if grid_mapping.num_dynamic_grid_bounds:
+    raise NotImplementedError(
+        "dynamic grid bounds not supported in the Triton backend"
+    )
+  # TODO(necula): this fails many tests, figure it out
+  # for bm in grid_mapping.block_mappings:
+  #   block_size = math.prod(d for d in bm.block_shape  # type: ignore[misc]
+  #                          if d is not pallas_core.mapped)
+  #   power_of_2 = (block_size & (block_size - 1)) == 0
+
+  #   if not power_of_2:
+  #     raise ValueError(
+  #         "The Pallas GPU lowering currently requires that the block sizes be "
+  #         f"a power of 2. Found block spec for {bm.origin} with "
+  #         f"shape {bm.block_shape}")
+  if grid_mapping.num_index_operands:
+    raise NotImplementedError(
+        "scalar prefetch not implemented in the Triton backend"
+    )
   with grid_mapping.trace_env():
     jaxpr, _ = pe.dce_jaxpr(
         jaxpr, [True] * len(jaxpr.outvars), instantiate=True
@@ -294,23 +312,22 @@ def lower_jaxpr_to_triton_module(
         raise NotImplementedError(
             "Scalar prefetch not supported in Triton lowering."
         )
-      for bm in grid_mapping.block_mappings:
-        if not isinstance(bm.indexing_mode, Blocked):
-          raise NotImplementedError(
-              "Only Blocked indexing mode is supported in Triton lowering."
-          )
+      if not all(isinstance(bm.indexing_mode, Blocked)
+                 for bm in grid_mapping.block_mappings):
+        raise NotImplementedError(
+            "Only Blocked indexing mode is supported in Triton lowering."
+        )
       start_indices = map(
           functools.partial(_eval_index_map, ctx, program_ids),
           grid_mapping.block_mappings,
       )
       block_infos = [
           BlockInfo(
-              jax.ShapeDtypeStruct(shape_dtype.shape, shape_dtype.dtype),
+              block_mapping.array_shape_dtype,
               start_idx,
               block_mapping.block_shape,
           )
-          for shape_dtype, block_mapping, start_idx in zip(
-              in_out_shapes,
+          for block_mapping, start_idx in zip(
               grid_mapping.block_mappings,
               start_indices,
           )

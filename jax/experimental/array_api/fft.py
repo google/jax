@@ -14,6 +14,7 @@
 
 from jax.numpy.fft import (
   fft as fft,
+  fftfreq as fftfreq,
   fftn as fftn,
   fftshift as fftshift,
   hfft as hfft,
@@ -24,10 +25,6 @@ from jax.numpy.fft import (
   irfft as irfft,
   irfftn as irfftn,
   rfft as rfft,
-  rfftn as rfftn,
-)
-
-from jax.experimental.array_api._fft_functions import (
-  fftfreq as fftfreq,
   rfftfreq as rfftfreq,
+  rfftn as rfftn,
 )

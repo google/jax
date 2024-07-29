@@ -2192,12 +2192,12 @@ class PallasCallPrintTest(PallasBaseTest):
   def test_debug_print(self):
     @functools.partial(
         self.pallas_call,
-        out_shape=jax.ShapeDtypeStruct((2,), jnp.float32),
+        out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
     )
     def kernel(x_ref, o_ref):
       pl.debug_print('It works!')
 
-    x = jnp.array([4.2, 2.4]).astype(jnp.float32)
+    x = jnp.arange(8 * 128, dtype=jnp.float32).reshape((8, 128))
     compiled_kernel = (
         jax.jit(kernel)
         .lower(x)
@@ -2211,7 +2211,7 @@ class PallasCallPrintTest(PallasBaseTest):
     @functools.partial(
         self.pallas_call,
         in_specs=(pl.BlockSpec(memory_space=pltpu.SMEM),),
-        out_shape=jax.ShapeDtypeStruct((2,), jnp.float32),
+        out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
     )
     def kernel(x_ref, o_ref):
       pl.debug_print('x[0] == {}', x_ref[0])

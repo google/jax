@@ -50,9 +50,6 @@ def pallas_call_lowering(
     compiler_params: dict[str, Any],
 ):
   del interpret
-  # TODO(necula): cleanup
-  in_shapes = grid_mapping.in_shapes
-  out_shapes = grid_mapping.out_shapes
   if grid_mapping.num_dynamic_grid_bounds:
     raise NotImplementedError(
         "dynamic grid bounds not supported in the Triton backend"
@@ -74,7 +71,7 @@ def pallas_call_lowering(
     print(grid_mapping)
 
   lowering_result = lowering.lower_jaxpr_to_triton_module(
-      jaxpr, (*in_shapes, *out_shapes), grid_mapping, name, lowering_platform
+      jaxpr, grid_mapping, name, lowering_platform
   )
   module_op = lowering_result.module.operation
   if debug:
@@ -82,8 +79,9 @@ def pallas_call_lowering(
 
   grid_x, grid_y, grid_z = normalize_grid(lowering_result.grid)
   out_types = [
-      ir.RankedTensorType.get(shape.shape, mlir.dtype_to_ir_type(shape.dtype))
-      for shape in out_shapes
+      ir.RankedTensorType.get(bm.array_shape_dtype.shape,
+                              mlir.dtype_to_ir_type(bm.array_shape_dtype.dtype))
+      for bm in grid_mapping.block_mappings_output
   ]
   buf = io.BytesIO()
   module_op.write_bytecode(buf)

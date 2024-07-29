@@ -36,6 +36,11 @@ _TPU_ENHANCED_BARRIER_SUPPORTED = [
     '0x005e',
 ]
 
+_NVIDIA_GPU_DEVICES = [
+    '/dev/nvidia0',
+    '/dev/dxg',  # WSL2
+]
+
 def num_available_tpu_chips_and_device_id():
   """Returns the device id and number of TPU chips attached through PCI."""
   num_chips = 0
@@ -57,3 +62,9 @@ def tpu_enhanced_barrier_supported() -> bool:
   """Returns if tpu_enhanced_barrier flag is supported on this TPU version."""
   _, device_id = num_available_tpu_chips_and_device_id()
   return device_id in _TPU_ENHANCED_BARRIER_SUPPORTED
+
+
+def has_visible_nvidia_gpu() -> bool:
+  """True if there's a visible nvidia gpu available on device, False otherwise."""
+
+  return any(os.path.exists(d) for d in _NVIDIA_GPU_DEVICES)

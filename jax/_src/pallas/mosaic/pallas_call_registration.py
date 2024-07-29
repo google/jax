@@ -63,7 +63,8 @@ _DUMP_PROMELA_TO = config.string_flag(
 
 
 def pallas_call_tpu_lowering_rule(
-    ctx: mlir.LoweringRuleContext, *in_nodes,
+    ctx: mlir.LoweringRuleContext,
+    *in_nodes,
     jaxpr: jax_core.Jaxpr,
     name: str,
     grid_mapping: core.GridMapping,
@@ -73,8 +74,6 @@ def pallas_call_tpu_lowering_rule(
     compiler_params: dict[str, Any]):
   """Lowers a pallas_call to a Mosaic TPU custom call."""
   del interpret
-  # TODO(necula): cleanup
-  out_shapes = grid_mapping.out_shapes
   if debug:
     print(jaxpr)
   if "mosaic_params" in compiler_params:
@@ -105,7 +104,7 @@ def pallas_call_tpu_lowering_rule(
     with mlir_ctx, ir.Location.unknown(mlir_ctx):
       dimension_semantics = mosaic_params.get("dimension_semantics", None)
       return lowering.lower_jaxpr_to_module(
-          mlir_ctx, grid_mapping, jaxpr,
+          ctx, mlir_ctx, grid_mapping, jaxpr,
           dimension_semantics=dimension_semantics, mesh=mesh,
           for_verification=for_verification)
   mosaic_module, extra_args = lower_module(for_verification=False)
@@ -117,7 +116,9 @@ def pallas_call_tpu_lowering_rule(
       (a[0] + num_dyn_bounds + num_extra_args, a[1])
       for a in input_output_aliases
   )
-  out_avals = [jax_core.ShapedArray(s.shape, s.dtype) for s in out_shapes]
+  out_avals = [jax_core.ShapedArray(bm.array_shape_dtype.shape,
+                                    bm.array_shape_dtype.dtype)
+               for bm in grid_mapping.block_mappings_output]
 
   if promela_dump_path := _DUMP_PROMELA_TO.value:
     num_devices = 1 if mesh is None else mesh.devices.size

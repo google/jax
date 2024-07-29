@@ -274,6 +274,10 @@ try:
 except ImportError:
   pass
 
+from jax._src.numpy.array_api_metadata import (
+  __array_api_version__ as __array_api_version__
+)
+
 from jax._src.numpy.index_tricks import (
   c_ as c_,
   index_exp as index_exp,

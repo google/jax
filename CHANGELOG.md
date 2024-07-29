@@ -14,10 +14,14 @@ Remember to align the itemized text with the first line of an item within a list
   * xmap has been deleted. Please use {func}`shard_map` as the replacement.
 
 * Changes
+  * The minimum CuDNN version is v9.1. This was true in previous releases also,
+    but we now declare this version constraint formally.
   * The minimum Python version is now 3.10. 3.10 will remain the minimum
     supported version until July 2025.
   * The minimum NumPy version is now 1.24. NumPy 1.24 will remain the minimum
     supported version until December 2024.
+  * The minimum SciPy version is now 1.10. SciPy 1.10 will remain the minimum
+    supported version until January 2025.
   * {func}`jax.numpy.ceil`, {func}`jax.numpy.floor` and {func}`jax.numpy.trunc` now return the output
     of the same dtype as the input, i.e. no longer upcast integer or boolean inputs to floating point.
   * `libdevice.10.bc` is no longer bundled with CUDA wheels. It must be

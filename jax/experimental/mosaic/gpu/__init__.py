@@ -106,8 +106,10 @@ def _mosaic_gpu_lowering_rule(ctx, *args, module, out_types, gmem_scratch_bytes)
           ),
       ],
       operands=args,
-      backend_config=idx_bytes
-      + module.operation.get_asm(binary=True, enable_debug_info=True),
+      operand_layouts=[list(reversed(range(a.ndim))) for a in ctx.avals_in],
+      result_layouts=[list(reversed(range(a.ndim))) for a in ctx.avals_out]
+      + [[0]],
+      backend_config=idx_bytes + module,
   )
   return op.results[:-1]  # Skip the scratch space.
 
@@ -791,11 +793,12 @@ def as_gpu_kernel(
           f" {arg_treedef}, ({args=})"
       )
 
+  module_asm = module.operation.get_asm(binary=True, enable_debug_info=True)
   def bind(*args):
     return mosaic_gpu_p.bind(
         *args,
         out_types=out_shape,
-        module=module,
+        module=module_asm,
         gmem_scratch_bytes=gmem_scratch_bytes,
     )
 

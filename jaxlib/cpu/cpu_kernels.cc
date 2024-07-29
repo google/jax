@@ -18,7 +18,6 @@ limitations under the License.
 
 #include <complex>
 
-#include "jaxlib/cpu/lapack.h"
 #include "jaxlib/cpu/lapack_kernels.h"
 #include "xla/ffi/api/c_api.h"
 #include "xla/ffi/api/ffi.h"

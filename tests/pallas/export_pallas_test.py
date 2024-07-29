@@ -46,7 +46,7 @@ class ExportTest(jtu.JaxTestCase):
                             out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype)
                             )(x, y)
 
-    a = np.arange(8)
+    a = np.arange(8 * 16, dtype=np.int32).reshape((8, 16))
     exp = export.export(
         add_vectors,
         lowering_platforms=["tpu", "cuda"],
