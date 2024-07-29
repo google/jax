@@ -18,6 +18,7 @@ import io
 import logging
 import os
 import sys
+import re
 from typing import cast as type_cast
 
 from jax._src import config
@@ -65,7 +66,8 @@ def get(module: ir.Module,
         devices: np.ndarray,
         compile_options: xla_client.CompileOptions,
         backend: xla_client.Client,
-        compression_algorithm: str = "zstandard") -> str:
+        compression_algorithm: str = "zstandard",
+        remove_custom_partitioning_ptr_for_cache_key: bool = False) -> str:
   """Creates a hashed string to use as a key to the compilation cache.
 
   Creates a cache key that is a hex-encoded string of a unique hash based on
@@ -83,7 +85,8 @@ def get(module: ir.Module,
    'jit__psum-14ac577cdb2ef6d986078b4054cc9893a9a14a16dbb0d8f37b89167c1f1aacdf'
   """
   entries = [
-      ("computation", lambda hash_obj: _hash_computation(hash_obj, module)),
+      ("computation", lambda hash_obj: _hash_computation(hash_obj, module, 
+                                                         remove_custom_partitioning_ptr_for_cache_key)),
       ("jax_lib version",
        lambda hash_obj: hash_obj.update(
            bytes(jaxlib_version_str.encode("utf-8")))),
@@ -129,27 +132,42 @@ def _log_cache_key_hash(hash_obj, last_serialized: str, hashfn):
     )
 
 
-def _serialize_ir(m: ir.Module) -> bytes:
+def _serialize_ir(m: ir.Module, remove_custom_partitioning_ptr_for_cache_key: bool) -> bytes:
   output = io.BytesIO()
   m.operation.write_bytecode(file=output)
-  return output.getvalue()
+  
+  str_m = str(m)
+  m_bytecode = output.getvalue()
+
+  if remove_custom_partitioning_ptr_for_cache_key and "CustomSPMDPartitioning" in str_m:
+    pattern = r'backend_config\s*=\s*"([^"]*)"'
+    matches = re.findall(pattern, str_m)
+    for match in matches:
+      b_backend_config = match.encode('utf-8')
+      b_zeros = ('0' * len(b_backend_config)).encode('utf-8')
+      backend_config_idx = m_bytecode.find(b_backend_config)
+      m_bytecode = (m_bytecode[:backend_config_idx] + 
+                    b_zeros + 
+                    m_bytecode[(backend_config_idx + len(b_backend_config)):])
+  
+  return m_bytecode
 
 
-def _canonicalize_ir(m_original: ir.Module) -> bytes:
+def _canonicalize_ir(m_original: ir.Module, remove_custom_partitioning_ptr_for_cache_key: bool) -> bytes:
   with m_original.context:
     m = type_cast(ir.Module, m_original.operation.clone())
     passes = pm.PassManager.parse(
         "builtin.module(strip-debuginfo)"
     )
     passes.run(m.operation)
-    return _serialize_ir(m)
+    return _serialize_ir(m, remove_custom_partitioning_ptr_for_cache_key)
 
 
-def _hash_computation(hash_obj, module):
+def _hash_computation(hash_obj, module, remove_custom_partitioning_ptr_for_cache_key):
   if config.compilation_cache_include_metadata_in_key.value:
-    canonical_ir = _serialize_ir(module)
+    canonical_ir = _serialize_ir(module, remove_custom_partitioning_ptr_for_cache_key)
   else:
-    canonical_ir = _canonicalize_ir(module)
+    canonical_ir = _canonicalize_ir(module, remove_custom_partitioning_ptr_for_cache_key)
   hash_obj.update(canonical_ir)
 
 

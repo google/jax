@@ -1323,6 +1323,14 @@ compilation_cache_max_size = int_state(
           'size to grow indefinitely.'),
 )
 
+remove_custom_partitioning_ptr_for_cache_key = bool_state(
+    name='jax_remove_custom_partitioning_ptr_for_cache_key',
+    default=False,
+    help=('If set to False, remove the custom partitioning pointer '
+          'present in the precompiled stableHLO before hashing  '
+          'during cache key computation '),
+)
+
 default_dtype_bits = enum_state(
     name='jax_default_dtype_bits',
     enum_values=['32', '64'],

@@ -287,10 +287,11 @@ def compile_or_get_cached(
                            host_callbacks)
 
   monitoring.record_event('/jax/compilation_cache/compile_requests_use_cache')
+  remove_cp_ptr_for_cache_key = config.remove_custom_partitioning_ptr_for_cache_key.value
 
   try:
     cache_key = compilation_cache.get_cache_key(
-        computation, devices, compile_options, backend)
+        computation, devices, compile_options, backend, remove_cp_ptr_for_cache_key)
   except xc._xla.XlaRuntimeError as ex:
     logger.error("compile_or_get_cached: unable to generate cache key, "
                  "skipping the cache: %s", ex)
