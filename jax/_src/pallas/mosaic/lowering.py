@@ -448,6 +448,9 @@ def lower_jaxpr_to_module(
   window_params = []
   grid = mosaic_grid_mapping.grid
   if grid:
+    for bound in grid:
+      if bound <= 0:
+        raise ValueError("Dimensions of grid must be positive")
     invars = jaxpr.invars
     if grid_mapping.num_scratch_operands > 0:
       invars = invars[
