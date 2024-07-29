@@ -132,30 +132,32 @@ def _log_cache_key_hash(hash_obj, last_serialized: str, hashfn):
     )
 
 
-def _serialize_ir(m: ir.Module, remove_custom_partitioning_ptr_for_cache_key: bool) -> bytes:
+def _remove_custom_partitioning_ptr(m: ir.Module):
+  def _update_bc_attribute(op: ir.Operation) -> ir.WalkResult:
+    if (op.name == "stablehlo.custom_call" and 
+        op.attributes["call_target_name"].value == "CustomSPMDPartitioning"):
+      op.attributes["backend_config"] = ir.StringAttr.get("REMOVED")
+    return ir.WalkResult.ADVANCE
+  
+  m.operation.walk(_update_bc_attribute)
+  return m
+  
+
+def _serialize_ir(m: ir.Module, 
+                  remove_custom_partitioning_ptr_for_cache_key: bool) -> bytes:
   output = io.BytesIO()
-  m.operation.write_bytecode(file=output)
-  
-  str_m = str(m)
-  m_bytecode = output.getvalue()
+  if remove_custom_partitioning_ptr_for_cache_key:
+    m_editted = _remove_custom_partitioning_ptr(type_cast(ir.Module,
+                                                           m.operation.clone()))
+    m_editted.operation.write_bytecode(file=output)
+  else:
+    m.operation.write_bytecode(file=output)
 
-  if remove_custom_partitioning_ptr_for_cache_key and "CustomSPMDPartitioning" in str_m:
-    pattern = r'stablehlo\.custom_call @CustomSPMDPartitioning\((.*?)\) \{(.*?backend_config\s*=\s*"([^"]*)".*?)\}'
-    matches = re.findall(pattern, str_m, re.DOTALL)
-    bcs = [match[2] for match in matches]
-    backend_config_idx = 0
-    for bc in bcs:
-      b_backend_config = bc.encode('utf-8')
-      b_zeros = ('0' * len(b_backend_config)).encode('utf-8')
-      backend_config_idx = m_bytecode.find(b_backend_config, backend_config_idx)
-      m_bytecode = (m_bytecode[:backend_config_idx] + 
-                    b_zeros + 
-                    m_bytecode[(backend_config_idx + len(b_backend_config)):])
-  
-  return m_bytecode
+  return output.getvalue()
 
 
-def _canonicalize_ir(m_original: ir.Module, remove_custom_partitioning_ptr_for_cache_key: bool) -> bytes:
+def _canonicalize_ir(m_original: ir.Module, 
+                     remove_custom_partitioning_ptr_for_cache_key: bool) -> bytes:
   with m_original.context:
     m = type_cast(ir.Module, m_original.operation.clone())
     passes = pm.PassManager.parse(
@@ -165,11 +167,15 @@ def _canonicalize_ir(m_original: ir.Module, remove_custom_partitioning_ptr_for_c
     return _serialize_ir(m, remove_custom_partitioning_ptr_for_cache_key)
 
 
-def _hash_computation(hash_obj, module, remove_custom_partitioning_ptr_for_cache_key):
+def _hash_computation(hash_obj, 
+                      module, 
+                      remove_custom_partitioning_ptr_for_cache_key):
   if config.compilation_cache_include_metadata_in_key.value:
-    canonical_ir = _serialize_ir(module, remove_custom_partitioning_ptr_for_cache_key)
+    canonical_ir = _serialize_ir(module, 
+                                 remove_custom_partitioning_ptr_for_cache_key)
   else:
-    canonical_ir = _canonicalize_ir(module, remove_custom_partitioning_ptr_for_cache_key)
+    canonical_ir = _canonicalize_ir(module, 
+                                    remove_custom_partitioning_ptr_for_cache_key)
   hash_obj.update(canonical_ir)
 
 
