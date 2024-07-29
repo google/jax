@@ -144,7 +144,11 @@ class XlaBridgeTest(jtu.JaxTestCase):
     with warnings.catch_warnings(record=True) as w:
       warnings.simplefilter("always")
 
-      def _mock_tpu_client_with_options(library_path=None, options=None):
+      def _mock_tpu_client_with_options(library_path=None,
+                                        options=None,
+                                        distributed_client=None,
+                                        node_id=None,
+                                        num_nodes=None):
         time_to_wait = 5
         start = time.time()
         while not w:
