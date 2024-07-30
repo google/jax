@@ -25,7 +25,11 @@ GPU_DEVICE_TARGETS = "gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 g
 
 
 def build_rocm_path(rocm_version_str):
-    return "/opt/rocm-%s" % rocm_version_str
+    path = "/opt/rocm-%s" % rocm_version_str
+    if os.path.exists(path):
+        return path
+    else:
+        return os.path.realpath("/opt/rocm")
 
 
 def update_rocm_targets(rocm_path, targets):

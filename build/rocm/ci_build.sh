@@ -79,6 +79,14 @@ while [[ $# -gt 0 ]]; do
           ROCM_VERSION="$2"
           shift 2
           ;;
+        --rocm_job)
+          ROCM_BUILD_JOB="$2"
+          shift 2
+          ;;
+        --rocm_build)
+          ROCM_BUILD_NUM="$2"
+          shift 2
+          ;;
         *)
           POSITIONAL_ARGS+=("$1")
           shift
@@ -132,7 +140,9 @@ export XLA_CLONE_DIR="${XLA_CLONE_DIR:-}"
 ./build/rocm/ci_build \
     --rocm-version $ROCM_VERSION \
     --python-versions $PYTHON_VERSION \
-    --xla-source-dir $XLA_CLONE_DIR \
+    --xla-source-dir=$XLA_CLONE_DIR \
+    --rocm-build-job=$ROCM_BUILD_JOB \
+    --rocm-build-num=$ROCM_BUILD_NUM \
     dist_docker \
     --dockerfile $DOCKERFILE_PATH \
     --image-tag $DOCKER_IMG_NAME
