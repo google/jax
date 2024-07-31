@@ -25,3 +25,4 @@ from .slurm_cluster import SlurmCluster
 from .mpi4py_cluster import Mpi4pyCluster
 from .cloud_tpu_cluster import GkeTpuCluster
 from .cloud_tpu_cluster import GceTpuCluster
+from .k8s_cluster import K8sCluster

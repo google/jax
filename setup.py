@@ -103,6 +103,11 @@ setup(
           f"jaxlib=={_current_jaxlib_version}",
           f"jax-cuda12-plugin=={_current_jaxlib_version}",
         ],
+
+        # For automatic bootstrapping distributed jobs in Kubernetes
+        'k8s': [
+          'kubernetes',
+        ],
     },
     url='https://github.com/google/jax',
     license='Apache-2.0',

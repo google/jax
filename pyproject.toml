@@ -42,6 +42,7 @@ module = [
     "jax.experimental.jax2tf.tests.back_compat_testdata",
     "setuptools.*",
     "jax_cuda12_plugin.*",
+    "kubernetes.*"
 ]
 ignore_missing_imports = true
 
