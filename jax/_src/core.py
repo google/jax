@@ -261,25 +261,52 @@ def jaxpr_as_fun(closed_jaxpr: ClosedJaxpr, *args):
 
 class JaxprEqnContext:
 
-  def __init__(self, compute_type: str | None, threefry_partitionable: bool):
-    self.compute_type = compute_type
-    self.threefry_partitionable = threefry_partitionable
-    self._managers = [
-        (compute_on.extend_compute_type, self.compute_type),
-        (config.threefry_partitionable.__call__, self.threefry_partitionable),
-    ]
+  def __init__(self, name_to_value_fn: dict[str, Callable]):
+    self._name_to_value_fn = name_to_value_fn
+    for name, val_fn in self._name_to_value_fn.items():
+      setattr(self, name, val_fn())
+
+  @property
+  def _names(self):
+    return list(self._name_to_value_fn.keys())
 
   @property
   @contextmanager
   def manager(self):
     with ExitStack() as stack:
-      for manager, val in self._managers:
-        stack.enter_context(manager(val))
+      for name, val in _eqn_ctx_registration.items():
+        # Get the value initialized in `__init__`
+        stack.enter_context(val.manager(getattr(self, name)))
       yield
 
   def __repr__(self):
-    return (f"JaxprEqnContext(compute_type={self.compute_type},"
-            f"threefry_partitionable={self.threefry_partitionable})")
+    args = ', '.join(f"{n}={getattr(self, n)}" for n in self._names)
+    return f"JaxprEqnContext({args})"
+
+  def update(self, new_val):
+    self._name_to_value_fn.update(**new_val)
+    return JaxprEqnContext(self._name_to_value_fn)
+
+
+class EqnContextVal(NamedTuple):
+  value_fun: Callable
+  manager: Callable
+
+_eqn_ctx_registration: dict[str, EqnContextVal] = {}
+
+def register_eqn_context(name: str, val: EqnContextVal):
+  _eqn_ctx_registration[name] = val
+
+register_eqn_context("compute_type", EqnContextVal(
+    lambda: compute_on.current_compute_type(), compute_on.extend_compute_type))
+
+register_eqn_context("threefry_partitionable", EqnContextVal(
+    lambda: config.threefry_partitionable.value,
+    config.threefry_partitionable.__call__)
+)
+
+def init_eqn_context():
+  return {name: val.value_fun for name, val in _eqn_ctx_registration.items()}
 
 
 class JaxprEqn:
@@ -333,8 +360,7 @@ class JaxprEqn:
 def new_jaxpr_eqn(invars, outvars, primitive, params, effects, source_info=None,
                   ctx=None):
   source_info = source_info or source_info_util.new_source_info()
-  ctx = ctx or JaxprEqnContext(compute_on.current_compute_type(),
-                               config.threefry_partitionable.value)
+  ctx = ctx or JaxprEqnContext(init_eqn_context())
   if config.enable_checks.value:
     assert all(isinstance(x, (Var, Literal)) for x in  invars)
     assert all(isinstance(v,  Var)           for v in outvars)

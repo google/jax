@@ -1049,6 +1049,14 @@ pytype_library(
     ],
 )
 
+pytype_strict_library(
+    name = "xla_metadata.py",
+    srcs = ["experimental/xla_metadata.py"],
+    deps = [
+        ":jax",
+    ],
+)
+
 pytype_library(
     name = "jet",
     srcs = ["experimental/jet.py"],

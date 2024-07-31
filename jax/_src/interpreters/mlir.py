@@ -761,7 +761,10 @@ def flatten_ir_values(xs: Iterable[IrValues]) -> list[ir.Value]:
 _unflatten_done = object()
 
 def _unwrap_singleton_ir_values(x): return x[0] if len(x) == 1 else x
-
+def wrap_singleton_ir_values(x: ir.Value | Sequence[ir.Value]
+                             ) -> Sequence[ir.Value]:
+  """Adds a consistent tuples to a mixture of tupled and untuple values."""
+  return (x,) if isinstance(x, ir.Value) else tuple(x)
 
 def flatten_ir_types(xs: Iterable[IrTypes]) -> list[ir.Type]:
   """Concatenates/flattens a list of ir.Types or ir.Type sequences."""
@@ -1829,6 +1832,11 @@ def lower_per_platform(ctx: LoweringRuleContext,
         lambda o: wrap_compute_type_in_place(ctx, o.owner),
         filter(_is_not_block_argument, flatten_ir_values(output)),
     )
+    wrapped_out = map(wrap_singleton_ir_values, output)
+    map(
+        lambda o: wrap_xla_metadata_in_place(ctx, o.owner),
+        util.flatten(wrapped_out),
+    )
     return output
 
   assert len(platforms) > 1 and len(kept_rules) >= 2, (platforms, kept_rules)
@@ -1869,6 +1877,10 @@ def lower_per_platform(ctx: LoweringRuleContext,
       map(
           lambda o: wrap_compute_type_in_place(ctx, o.owner),
           filter(_is_not_block_argument, out_nodes),
+      )
+      map(
+          lambda o: wrap_xla_metadata_in_place(ctx, o.owner),
+          util.flatten(out_nodes),
       )
       if inner_ctx.tokens_out is not None:
         assert len(ordered_effects) == len(inner_ctx.tokens_out)
@@ -2029,6 +2041,23 @@ def wrap_compute_type_in_place(ctx, op):
     dict_attr = {"_xla_compute_type": ir.StringAttr.get(
         map_compute_type(ctx.jaxpr_eqn_ctx.compute_type))}
     op.operation.attributes["mhlo.frontend_attributes"] = ir.DictAttr.get(dict_attr)
+
+
+def wrap_xla_metadata_in_place(ctx, op):
+  ctx_attributes = {}
+  existing_attributes = {}
+  if ctx.jaxpr_eqn_ctx is not None and ctx.jaxpr_eqn_ctx.xla_metadata:
+    for k, v in ctx.jaxpr_eqn_ctx.xla_metadata.items():
+      ctx_attributes[k] = ir.StringAttr.get(str(v).lower())
+    if isinstance(op, ir.Operation):
+      # combine with existing mhlo.frontend_attributes
+      op_attributes_dict = {attr.name: attr.attr for attr in op.attributes}
+      for k, attributes in op_attributes_dict.items():
+        if k == "mhlo.frontend_attributes":
+          existing_attributes.update(attributes)
+      op.attributes["mhlo.frontend_attributes"] = ir.DictAttr.get(
+          ctx_attributes | existing_attributes
+      )
 
 
 def broadcast_in_dim(ctx: LoweringRuleContext, op, aval_out: core.AbstractValue, *,

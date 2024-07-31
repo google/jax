@@ -202,27 +202,37 @@ def trace_context():
   tls = jax_jit.thread_local_state()
   axis_env_state = ()
   mesh_context_manager = ()
+  xla_metadata_ctx_manager = ()
   context: Any = tls.extra_jit_context
   if context and context.axis_env_state is not None:
     axis_env_state = context.axis_env_state
   if context and context.mesh_context_manager:
     mesh_context_manager = context.mesh_context_manager
-  return (axis_env_state, mesh_context_manager, enable_x64.value,
-          numpy_rank_promotion.value, default_matmul_precision.value,
-          dynamic_shapes.value, numpy_dtype_promotion.value,
-          default_device.value, random_seed_offset.value,
-          threefry_partitionable.value,
-          threefry_gpu_kernel_lowering.value,
-          softmax_custom_jvp.value,
-          enable_memories.value,
-          disable_jit.value,
-          debug_key_reuse.value,
-          jax_xla_profile_version.value,
-          # Technically this affects jaxpr->stablehlo lowering, not tracing.
-          hlo_source_file_canonicalization_regex.value,
-          pgle_profiling_runs.value,
-          enable_pgle.value,
-          use_shardy_partitioner.value)
+  if context and context.xla_metadata_ctx_manager:
+    xla_metadata_ctx_manager = context.xla_metadata_ctx_manager
+  return (
+      axis_env_state,
+      mesh_context_manager,
+      xla_metadata_ctx_manager,
+      enable_x64.value,
+      numpy_rank_promotion.value,
+      default_matmul_precision.value,
+      dynamic_shapes.value,
+      numpy_dtype_promotion.value,
+      default_device.value,
+      random_seed_offset.value,
+      threefry_partitionable.value,
+      threefry_gpu_kernel_lowering.value,
+      softmax_custom_jvp.value,
+      enable_memories.value,
+      disable_jit.value,
+      debug_key_reuse.value,
+      jax_xla_profile_version.value,
+      # Technically this affects jaxpr->stablehlo lowering, not tracing.
+      hlo_source_file_canonicalization_regex.value,
+      pgle_profiling_runs.value,
+      enable_pgle.value,
+  )
 
 config = Config()
 
@@ -851,6 +861,7 @@ class _ThreadLocalExtraJitContext(NamedTuple):
   dynamic_trace_state: Any | None = None
   axis_env_state: Hashable = ()
   mesh_context_manager: Hashable = ()
+  xla_metadata_ctx_manager: Hashable = ()
 
   # Values set by _StateContextManager context managers.
   # CAUTION: these must be initialized to `None`! The state context manager
