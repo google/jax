@@ -86,8 +86,8 @@ class NNFunctionsTest(jtu.JaxTestCase):
       hlo = mlir.module_to_string(lowered.compiler_ir('stablehlo'))
       self.assertIn('__cudnn$fmha', hlo)
 
-    out_ref = sdpa_ref(Q, K, V, bias=bias, mask=causal_mask)
-    out_ans = sdpa_ans(Q, K, V, bias=bias, mask=causal_mask)
+    out_ref = jax.jit(sdpa_ref)(Q, K, V, bias=bias, mask=causal_mask)
+    out_ans = jax.jit(sdpa_ans)(Q, K, V, bias=bias, mask=causal_mask)
     self.assertAllClose(out_ref, out_ans, atol=.01, rtol=.01)
 
   @parameterized.product(
@@ -120,12 +120,12 @@ class NNFunctionsTest(jtu.JaxTestCase):
     sdpa_ref = partial(sdpa, is_causal=is_causal, implementation=None)
     fn_ref = lambda q, k, v, b, m: sdpa_ref(q, k, v, bias=b, mask=m)
     _, sdpa_vjp_ref = jax.vjp(fn_ref, Q, K, V, bias, causal_mask)
-    dQ_ref, dK_ref, dV_ref, dbias_ref, _ = sdpa_vjp_ref(grad)
+    dQ_ref, dK_ref, dV_ref, dbias_ref, _ = jax.jit(sdpa_vjp_ref)(grad)
 
     sdpa_ans = partial(sdpa, is_causal=is_causal, implementation=impl)
     fn_ans = lambda q, k, v, b, m: sdpa_ans(q, k, v, bias=b, mask=m)
     _, sdpa_vjp_ans = jax.vjp(fn_ans, Q, K, V, bias, causal_mask)
-    dQ_ans, dK_ans, dV_ans, dbias_ans, _ = sdpa_vjp_ans(grad)
+    dQ_ans, dK_ans, dV_ans, dbias_ans, _ = jax.jit(sdpa_vjp_ans)(grad)
 
     if impl == 'cudnn':
       lowered = jax.jit(sdpa_vjp_ans).lower(grad)
