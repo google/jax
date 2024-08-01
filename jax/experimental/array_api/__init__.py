@@ -36,8 +36,8 @@ and implements most of the API listed in the standard.
 
 from __future__ import annotations
 
-from jax.experimental.array_api import fft as fft
-from jax.experimental.array_api import linalg as linalg
+from jax.numpy import fft as fft
+from jax.numpy import linalg as linalg
 
 from jax._src.numpy.array_api_metadata import (
     __array_api_version__ as __array_api_version__,
