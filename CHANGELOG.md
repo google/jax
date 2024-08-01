@@ -6,9 +6,27 @@ see {ref}`pallas-changelog`.
 
 <!--
 Remember to align the itemized text with the first line of an item within a list.
+
+When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.md.
 -->
 
-## jax 0.4.31
+## jax 0.4.32
+
+* Breaking changes
+  * The MHLO MLIR dialect (`jax.extend.mlir.mhlo`) has been removed. Use the
+    `stablehlo` dialect instead.
+
+* Deprecations
+  * Complex inputs to {func}`jax.numpy.clip` and {func}`jax.numpy.hypot` are
+    no longer allowed, after being deprecated since JAX v0.4.27.
+  * Deprecated the following APIs:
+    * `jax.lib.xla_bridge.xla_client`: use {mod}`jax.lib.xla_client` directly.
+    * `jax.lib.xla_bridge.get_backend`: use {func}`jax.extend.backend.get_backend`.
+    * `jax.lib.xla_bridge.default_backend`: use {func}`jax.extend.backend.default_backend`.
+
+## jaxlib 0.4.32
+
+## jax 0.4.31 (July 29, 2024)
 
 * Deletion
   * xmap has been deleted. Please use {func}`shard_map` as the replacement.
@@ -48,7 +66,7 @@ Remember to align the itemized text with the first line of an item within a list
   * The previously-deprecated function `jax.random.shuffle` has been removed;
     instead use `jax.random.permutation` with `independent=True`.
 
-## jaxlib 0.4.31
+## jaxlib 0.4.31 (July 29, 2024)
 
 * Bug fixes
   * Fixed a bug that meant that negative static_argnums to a jit were mishandled

@@ -896,58 +896,36 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     x = rng(shape, dtype)
     self.assertArraysEqual(jnp.clip(x), x)
 
-  # TODO(micky774): Check for ValueError instead of DeprecationWarning when
-  # jnp.clip deprecation is completed (began 2024-4-2) and default behavior is
-  # Array API 2023 compliant
-  @jtu.sample_product(shape=all_shapes)
-  @jax.numpy_rank_promotion('allow')  # This test explicitly exercises implicit rank promotion.
-  @jax.numpy_dtype_promotion('standard')  # This test explicitly exercises mixed type promotion
-  def testClipComplexInputDeprecation(self, shape):
+  def testClipComplexInputError(self):
     rng = jtu.rand_default(self.rng())
-    x = rng(shape, dtype=jnp.complex64)
+    x = rng((5,), dtype=jnp.complex64)
     msg = ".*Complex values have no ordering and cannot be clipped.*"
-    def assert_warns_or_errors(msg=msg):
-      if deprecations.is_accelerated("jax-numpy-clip-complex"):
-        return self.assertRaisesRegex(ValueError, msg)
-      else:
-        return self.assertWarnsRegex(DeprecationWarning, msg)
     # jit is disabled so we don't miss warnings due to caching.
     with jax.disable_jit():
-      with assert_warns_or_errors():
+      with self.assertRaisesRegex(ValueError, msg):
         jnp.clip(x)
 
-      with assert_warns_or_errors():
+      with self.assertRaisesRegex(ValueError, msg):
         jnp.clip(x, max=x)
 
-      x = rng(shape, dtype=jnp.int32)
-      with assert_warns_or_errors():
+      x = rng((5,), dtype=jnp.int32)
+      with self.assertRaisesRegex(ValueError, msg):
         jnp.clip(x, min=-1+5j)
 
-      with assert_warns_or_errors():
+      with self.assertRaisesRegex(ValueError, msg):
         jnp.clip(x, max=jnp.array([-1+5j]))
 
-  # TODO(micky774): Check for ValueError instead of DeprecationWarning when
-  # jnp.hypot deprecation is completed (began 2024-4-2) and default behavior is
-  # Array API 2023 compliant
-  @jtu.sample_product(shape=all_shapes)
-  @jax.numpy_rank_promotion('allow')  # This test explicitly exercises implicit rank promotion.
-  @jax.numpy_dtype_promotion('standard')  # This test explicitly exercises mixed type promotion
-  def testHypotComplexInputDeprecation(self, shape):
+  def testHypotComplexInputError(self):
     rng = jtu.rand_default(self.rng())
-    x = rng(shape, dtype=jnp.complex64)
-    msg = "Passing complex-valued inputs to hypot.*"
-    def assert_warns_or_errors(msg=msg):
-      if deprecations.is_accelerated("jax-numpy-hypot-complex"):
-        return self.assertRaisesRegex(ValueError, msg)
-      else:
-        return self.assertWarnsRegex(DeprecationWarning, msg)
+    x = rng((5,), dtype=jnp.complex64)
+    msg = "jnp.hypot is not well defined for complex-valued inputs.*"
     # jit is disabled so we don't miss warnings due to caching.
     with jax.disable_jit():
-      with assert_warns_or_errors():
+      with self.assertRaisesRegex(ValueError, msg):
         jnp.hypot(x, x)
 
       y = jnp.ones_like(x)
-      with assert_warns_or_errors():
+      with self.assertRaisesRegex(ValueError, msg):
         jnp.hypot(x, y)
 
   @jtu.sample_product(
@@ -2294,6 +2272,10 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     args_maker = lambda: []
     self._CheckAgainstNumpy(np_fun, jnp_fun, args_maker)
     self._CompileAndCheck(jnp_fun, args_maker)
+
+  def test_tri_bug_22751(self):
+    with self.assertRaisesRegex(core.ConcretizationTypeError, "jax.numpy.tri"):
+      jax.jit(jnp.tri)(3, M=3, k=0)
 
   @jtu.sample_product(
     dtype=default_dtypes,

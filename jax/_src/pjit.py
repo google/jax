@@ -63,7 +63,6 @@ from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import func as func_dialect
 from jax._src.lib import jax_jit
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 from jax._src import sharding
 from jax._src.sharding_impls import (
     NamedSharding, GSPMDSharding,
@@ -714,7 +713,7 @@ def _infer_params(
     resource_env = None
     pjit_mesh = None
 
-  skip_cache = xla_extension_version < 273 or config.dynamic_shapes.value
+  skip_cache = config.dynamic_shapes.value
   if not skip_cache:
     signature, dynargs = jax_jit.parse_arguments(
         args, tuple(kwargs.values()), tuple(kwargs.keys()), ji.static_argnums,

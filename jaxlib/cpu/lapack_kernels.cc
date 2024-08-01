@@ -21,14 +21,11 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <tuple>
 #include <type_traits>
 
-#include "absl/algorithm/container.h"
 #include "absl/base/dynamic_annotations.h"
 #include "jaxlib/ffi_helpers.h"
 #include "xla/ffi/api/c_api.h"
@@ -39,45 +36,6 @@ static_assert(sizeof(jax::lapack_int) == sizeof(int32_t),
               "Expected LAPACK integers to be 32-bit");
 
 namespace ffi = xla::ffi;
-
-namespace {
-
-template <typename T>
-inline T CastNoOverflow(int64_t value, const std::string& source = __FILE__) {
-  auto result = jax::MaybeCastNoOverflow<T>(value, source);
-  if (!result.ok()) {
-    throw std::overflow_error{std::string(result.status().message())};
-  }
-  return result.value();
-}
-
-template <typename T>
-ffi::Error CheckMatrixDimensions(ffi::Span<T> dims) {
-  if (dims.size() < 2) {
-    return ffi::Error(ffi::ErrorCode::kInvalidArgument,
-                      "Matrix must have at least 2 dimensions");
-  }
-  return ffi::Error::Success();
-}
-
-template <typename T>
-std::tuple<int64_t, int64_t, int64_t> SplitBatch2D(ffi::Span<T> dims) {
-  auto matrix_dims = dims.last(2);
-  return std::make_tuple(absl::c_accumulate(dims.first(dims.size() - 2), 1,
-                                            std::multiplies<int64_t>()),
-                         matrix_dims.front(), matrix_dims.back());
-}
-
-template <ffi::DataType dtype>
-void CopyIfDiffBuffer(ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out) {
-  auto [batch_count, x_rows, x_cols] = SplitBatch2D(x.dimensions());
-  if (x.typed_data() != x_out->typed_data()) {
-    const auto x_size = batch_count * x_rows * x_cols;
-    std::copy_n(x.typed_data(), x_size, x_out->typed_data());
-  }
-}
-
-}  // namespace
 
 #define REGISTER_CHAR_ENUM_ATTR_DECODING(type)                                \
   std::optional<type> xla::ffi::AttrDecoding<type>::Decode(                   \
@@ -105,6 +63,24 @@ REGISTER_CHAR_ENUM_ATTR_DECODING(jax::svd::ComputationMode);
 #undef REGISTER_CHAR_ENUM_ATTR_DECODING
 
 namespace jax {
+
+template <typename T>
+inline T CastNoOverflow(int64_t value, const std::string& source = __FILE__) {
+  auto result = MaybeCastNoOverflow<T>(value, source);
+  if (!result.ok()) {
+    throw std::overflow_error{std::string(result.status().message())};
+  }
+  return result.value();
+}
+
+template <ffi::DataType dtype>
+void CopyIfDiffBuffer(ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out) {
+  auto [batch_count, x_rows, x_cols] = SplitBatch2D(x.dimensions());
+  if (x.typed_data() != x_out->typed_data()) {
+    const auto x_size = batch_count * x_rows * x_cols;
+    std::copy_n(x.typed_data(), x_size, x_out->typed_data());
+  }
+}
 
 //== Triangular System Solver ==//
 

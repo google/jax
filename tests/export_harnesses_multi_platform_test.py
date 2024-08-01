@@ -36,7 +36,6 @@ from jax import lax
 from jax._src import config
 from jax._src import test_util as jtu
 from jax._src.internal_test_util import test_harnesses
-from jax._src.lib import version as jaxlib_version
 from jax import random
 
 
@@ -206,20 +205,14 @@ class PrimitiveTest(jtu.JaxTestCase):
     self.export_and_compare_to_native(f, x)
 
   def test_random_with_threefry_gpu_kernel_lowering(self):
-    # TODO(b/350111820): fix the FFI registration mechanism
-    self.skipTest("b/350111820: fix the FFI registration mechanism")
-    if jaxlib_version < (0, 4, 31):
-      self.skipTest("jaxlib.version < 0.4.31")
     # On GPU we use a custom call for threefry2x32
     with config.threefry_gpu_kernel_lowering(True):
-      # TODO(b/338022728): clean up forward compatibility mode.
-      with config.export_ignore_forward_compatibility(True):
-        def f(x):
-          return random.gamma(random.key(42), x)
+      def f(x):
+        return random.gamma(random.key(42), x)
 
-        shape = (4, 5)
-        x = np.arange(math.prod(shape), dtype=np.float32).reshape(shape)
-        self.export_and_compare_to_native(f, x)
+      shape = (4, 5)
+      x = np.arange(math.prod(shape), dtype=np.float32).reshape(shape)
+      self.export_and_compare_to_native(f, x)
 
 
 if __name__ == "__main__":

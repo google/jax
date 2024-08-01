@@ -470,7 +470,7 @@ class _IndexUpdateRef:
     self.array = array
     self.index = index
 
-  def __repr__(self):
+  def __repr__(self) -> str:
     return f"_IndexUpdateRef({self.array!r}, {self.index!r})"
 
   def get(self, *, indices_are_sorted=False, unique_indices=False,
@@ -666,7 +666,6 @@ _array_operators = {
 }
 
 _array_methods = {
-  "__array_namespace__": array_api_metadata.__array_namespace__,
   "all": reductions.all,
   "any": reductions.any,
   "argmax": lax_numpy.argmax,
@@ -720,6 +719,7 @@ _impl_only_array_methods = {
 }
 
 _array_properties = {
+  "__array_namespace__": array_api_metadata._array_namespace_property,
   "flat": _notimplemented_flat,
   "T": lax_numpy.transpose,
   "mT": lax_numpy.matrix_transpose,

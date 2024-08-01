@@ -1511,6 +1511,12 @@ eager_pmap = bool_state(
     upgrade=True,
     help='Enable eager-mode pmap when jax_disable_jit is activated.')
 
+disable_vmap_shmap_error = bool_state(
+    name='jax_disable_vmap_shmap_error',
+    default=False,
+    upgrade=False,
+    help='Temporary workaround to disable an error check in vmap-of-shmap.')
+
 # TODO(mattjj): remove once we land mutable array plumbing, or face great shame
 custom_vjp_disable_shape_check = bool_state(
     name='jax_custom_vjp_disable_shape_check',

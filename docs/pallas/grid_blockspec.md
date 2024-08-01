@@ -105,11 +105,12 @@ to get the actual element index on the corresponding array axis.
 
 ```{note}
 Not all block shapes are supported.
-  * On TPU, only blocks with rank at least 2 are supported.
-    Furthermore, if the last two dimensions of your input are larger than
-    8 and 128 respectively, the block shape in those dimensions must be a
-    multiple of the respective factor. If the input dimension is smaller,
-    the block should span the full dimension.
+  * On TPU, only blocks with rank at least 1 are supported.
+    Furthermore, the last two dimensions of your block shape must be equal to
+    the respective dimension of the overall array, or be divisible
+    by 8 and 128 respectively. For blocks of rank 1, the block dimension
+    must be equal to the array dimension, or be divisible by
+    `128 * (32 / bitwidth(dtype))`.
 
   * On GPU, only blocks with a size that is power of 2 are supported.
 ```

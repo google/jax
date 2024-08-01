@@ -3448,6 +3448,17 @@ def _custom_lin(*args: TfVal, **_) -> Sequence[TfVal]:
 tf_impl[ad.custom_lin_p] = _custom_lin
 
 
+def _remat_opt(*args: TfVal, num_consts: int, num_res: int,
+                    fwd_jaxpr: core.ClosedJaxpr,
+                    fun_jaxpr_thunk: Callable) -> Sequence[TfVal]:
+  del num_consts, num_res, fun_jaxpr_thunk
+  return _interpret_jaxpr(fwd_jaxpr, *args, extra_name_stack="remat_opt",
+                          fresh_constant_cache=False)
+
+
+tf_impl[custom_derivatives.remat_opt_p] = _remat_opt
+
+
 PartitionsOrReplicated = Union[tuple[int, ...], None]
 
 def split_to_logical_devices(tensor: TfVal,

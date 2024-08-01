@@ -38,6 +38,7 @@ _TPU_ENHANCED_BARRIER_SUPPORTED = [
 
 _NVIDIA_GPU_DEVICES = [
     '/dev/nvidia0',
+    '/dev/nvidiactl',  # Docker/Kubernetes
     '/dev/dxg',  # WSL2
 ]
 

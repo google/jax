@@ -567,6 +567,27 @@ class DimExprTest(jtu.JaxTestCase):
     self.sampled_assertion(core.min_dim(a, 5), core.min_dim, a, 5)
     self.sampled_assertion(core.min_dim(5, a), core.min_dim, 5, a)
 
+  def test_min_max_type_check(self):
+    a, = shape_poly.symbolic_shape("a")
+    for i, f in enumerate([lambda x: core.max_dim(x, a),
+                           lambda x: core.max_dim(a, x),
+                           lambda x: core.min_dim(x, a),
+                           lambda x: core.min_dim(a, x)]):
+      with self.subTest(f"jit_{i}"):
+        with self.assertRaisesRegex(core.ConcretizationTypeError, ""):
+          jax.jit(f)(1)
+
+    arr = jnp.array([1], dtype=np.int32)
+    for i, f in enumerate([lambda: core.max_dim(arr, a),
+                           lambda: core.max_dim(a, arr),
+                           lambda: core.min_dim(arr, a),
+                           lambda: core.min_dim(a, arr)]):
+      with self.subTest(f"array_{i}"):
+        with self.assertRaisesRegex(
+            TypeError,
+            "Only integer scalar arrays can be converted to a scalar index"):
+          f()
+
   def test_clamp_dim(self):
     a, b = shape_poly.symbolic_shape("a, b")
     # Clamping b <= a <= b + 10

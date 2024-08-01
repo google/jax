@@ -15,7 +15,6 @@
 import os
 
 import numpy as np
-import unittest
 from absl.testing import absltest, parameterized
 
 import jax
@@ -29,8 +28,8 @@ from jax._src import core
 from jax._src import linear_util
 from jax._src import prng
 from jax._src import test_util as jtu
+from jax._src import xla_bridge
 from jax._src.interpreters import mlir
-from jax._src.lib import xla_extension_version
 from jax._src.lib.mlir import ir
 from jax._src.extend import ffi
 
@@ -49,7 +48,12 @@ class ExtendTest(jtu.JaxTestCase):
     self.assertIs(jex.random.unsafe_rbg_prng_impl, prng.unsafe_rbg_prng_impl)
 
     # Assume these are tested elsewhere, only check equivalence
+    self.assertIs(jex.backend.backends, xla_bridge.backends)
+    self.assertIs(jex.backend.backend_xla_version, xla_bridge.backend_xla_version)
+    self.assertIs(jex.backend.default_backend, xla_bridge.default_backend)
     self.assertIs(jex.backend.clear_backends, api.clear_backends)
+    self.assertIs(jex.backend.get_backend, xla_bridge.get_backend)
+    self.assertIs(jex.backend.register_backend_factory, xla_bridge.register_backend_factory)
     self.assertIs(jex.core.array_types, abstract_arrays.array_types)
     self.assertIs(jex.linear_util.StoreException, linear_util.StoreException)
     self.assertIs(jex.linear_util.WrappedFun, linear_util.WrappedFun)
@@ -124,7 +128,6 @@ class FfiTest(jtu.JaxTestCase):
     dtype=(np.int32,),
   )
   @jtu.run_on_devices("gpu")
-  @unittest.skipIf(xla_extension_version < 272, "requires jaxlib 0.4.31")
   def testFfiCall(self, shape, dtype):
     pivots_size = shape[-1]
     permutation_size = 2 * pivots_size
@@ -140,7 +143,6 @@ class FfiTest(jtu.JaxTestCase):
       vectorized=(False, True),
   )
   @jtu.run_on_devices("gpu")
-  @unittest.skipIf(xla_extension_version < 272, "requires jaxlib 0.4.31")
   def testFfiCallBatching(self, shape, dtype, vectorized):
     shape = (10,) + shape
     pivots_size = shape[-1]

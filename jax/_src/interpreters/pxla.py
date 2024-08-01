@@ -60,7 +60,6 @@ from jax._src.interpreters import mlir
 from jax._src.interpreters import xla
 from jax._src.layout import DeviceLocalLayout, AutoLayout, Layout
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
 from jax._src.partition_spec import PartitionSpec
@@ -2492,11 +2491,8 @@ def maybe_recover_user_shardings(
 
 def is_user_xla_layout_equal(ul: DeviceLocalLayout | AutoLayout,
                              xl: DeviceLocalLayout) -> bool:
-  if xla_extension_version >= 274:
-    if isinstance(ul, DeviceLocalLayout) and ul._tiling is None:
-      return ul.major_to_minor == xl.major_to_minor
-    else:
-      return ul == xl
+  if isinstance(ul, DeviceLocalLayout) and ul._tiling is None:
+    return ul.major_to_minor == xl.major_to_minor
   else:
     return ul == xl
 

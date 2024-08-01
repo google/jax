@@ -556,6 +556,7 @@ class BarrierRef:
     parity = arith.extui(i32, parity)
     if expect_wait:
       nvvm.mbarrier_try_wait_parity_shared(address, parity, ticks)
+      return
     barrier_ready = llvm.inline_asm(
         i1,
         [address, parity],

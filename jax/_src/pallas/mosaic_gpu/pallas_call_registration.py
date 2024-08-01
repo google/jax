@@ -50,10 +50,7 @@ def pallas_call_lowering(
   if debug:
     print(jaxpr)
     print(grid_mapping)
-  if grid_mapping.num_constant_operands:
-    raise NotImplementedError(
-        "captured consts not supported in the Mosaic GPU backend"
-    )
+
   lowering_result = lowering.lower_jaxpr_to_module(
       grid_mapping,
       jaxpr,

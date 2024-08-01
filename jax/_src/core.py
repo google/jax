@@ -2191,20 +2191,24 @@ def min_dim(d1: DimSize, d2: DimSize) -> DimSize:
   d1_is_constant = is_constant_dim(d1)
   if d1_is_constant and is_constant_dim(d2):
     return min(d1, d2)
+  d1 = concrete_dim_or_error(d1, "argument `d1` of `core.min_dim`")
+  d2 = concrete_dim_or_error(d2, "argument `d2` of `core.min_dim`")
   if d1_is_constant:
-    return d2.rmin(d1)  # type: ignore[union-attr]
+    return d2.rmin(d1)
   else:
-    return d1.min(d2)  # type: ignore[union-attr]
+    return d1.min(d2)
 
 def max_dim(d1: DimSize, d2: DimSize) -> DimSize:
   """Like max(d1, d2) but for both constant and symbolic dimensions."""
   d1_is_constant = is_constant_dim(d1)
   if d1_is_constant and is_constant_dim(d2):
       return max(d1, d2)
+  d1 = concrete_dim_or_error(d1, "argument `d1` of `core.max_dim`")
+  d2 = concrete_dim_or_error(d2, "argument `d2` of `core.max_dim`")
   if d1_is_constant:
-    return d2.rmax(d1)  # type: ignore[union-attr]
+    return d2.rmax(d1)
   else:
-    return d1.max(d2)  # type: ignore[union-attr]
+    return d1.max(d2)
 
 def dimension_as_value(d: DimSize):
   """Turns a dimension size into a JAX array.

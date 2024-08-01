@@ -300,7 +300,7 @@ class MosaicGridMapping:
     # TODO(necula): clean this using new grid_mapping helpers
     num_scalar_prefetch = grid_mapping.num_index_operands
     num_scratch = grid_mapping.num_scratch_operands
-    # jaxpr has signature [*scalar_prefetch, *consts, *in_ops, *out_ops, *scratch]
+    # jaxpr has signature [*scalar_prefetch, *in_ops, *out_ops, *scratch]
     num_operands = (
         len(self.jaxpr.invars)
         - num_scalar_prefetch
@@ -435,24 +435,33 @@ def lower_jaxpr_to_module(
     for_verification: bool = False,
 ) -> tuple[Module, tuple[Any, ...]]:
   for bm in grid_mapping.block_mappings:
+    rank = len(bm.block_shape)
+    # TODO(necula): add tests for SMEM blocks with trivial windowing
+    # We support scalars too
+    if (bm.block_aval.memory_space == tpu_core.TPUMemorySpace.SMEM and
+        bm.has_trivial_window()):
+      continue
     def err_details():
       return (f"Block spec for {bm.origin} has block shape "
               f"{bm.block_shape}, array shape {bm.array_shape_dtype.shape}, "
               # TODO(necula): add index_map source location info
               f"and index_map returning {bm.index_map_jaxpr.jaxpr.outvars}, in "
-              f"memory space {bm.block_aval.memory_space}.")
+              f"memory space {bm.block_aval.memory_space}."
+              "\nSee details at https://jax.readthedocs.io/en/latest/pallas/grid_blockspec.html#pallas-blockspec")
+    if lowering_context.is_forward_compat() or jaxlib_version < (0, 4, 32):
+      # TODO(b/356116061): Remove the old rank condition
+      if rank < 2:
+        raise ValueError(
+            "The Pallas TPU lowering currently supports only blocks of "
+            "rank >= 2 for blocks, except those in the SMEM memory space "
+            "having the same block shape as the array shape and a "
+            "trivial index_map (returning all 0s). " + err_details())
+    else:
+      if rank < 1:
+        raise ValueError(
+            "The Pallas TPU lowering currently supports only blocks of "
+            "rank >= 1. " + err_details())
 
-    if len(bm.block_shape) < 2:
-      if not (bm.block_aval.memory_space == tpu_core.TPUMemorySpace.SMEM and
-              bm.has_trivial_window()):
-        # TODO(necula): enable this check, seems to regress
-        if False:
-          raise ValueError(
-              "The Pallas TPU lowering currently supports only blocks of "
-              "rank >= 2 for blocks, except those in the SMEM memory space "
-              "having the same block shape as the array shape and a "
-              "trivial index_map (returning all 0s)." + err_details())
-      continue
 
     if (bm.block_aval.memory_space == tpu_core.TPUMemorySpace.ANY and
         not bm.has_trivial_window()):
@@ -461,18 +470,20 @@ def lower_jaxpr_to_module(
           "only blocks having the same block shape as the array shape "
           "and a trivial index_map (returning all 0s)." + err_details())
 
-    bs0, bs1 = (1 if bs is pl_core.mapped else bs
-                for bs in bm.block_shape[-2:])
-    as0, as1 = bm.array_shape_dtype.shape[-2:]
-    if lowering_context.is_forward_compat() or jaxlib_version < (0, 4, 31):
-      # The window divisibility condition in older versions of jaxlib
-
+    unmapped_bs = [1 if bs is pl_core.mapped else bs for bs in bm.block_shape]
+    bs0, as0 = unmapped_bs[-1], bm.array_shape_dtype.shape[-1]
+    if rank >= 2:
+      bs1, as1 = unmapped_bs[-2], bm.array_shape_dtype.shape[-2]
+    else:
+      bs1, as1 = 1, 1
+    if lowering_context.is_forward_compat():
+      # TODO(b/356116061): Remove the old divisibility condition
       # With shape polymorphism block_shape is static, but the array shape may
       # be symbolic. Write the divisibility comparisons to defer inequality
       # comparisons on dimensions as much as possible.
       evenly_divisible = (
-          (bs1 % 128 == 0 or (bs1 == as1 and as1 < 128)) and
-          (bs0 % 8 == 0 or (bs0 == as0 and as0 < 8))
+          (bs0 % 128 == 0 or (bs0 == as0 and as0 < 128)) and
+          (bs1 % 8 == 0 or (bs1 == as1 and as1 < 8))
       )
       if not evenly_divisible:
         raise ValueError(
@@ -483,17 +494,24 @@ def lower_jaxpr_to_module(
             "smaller, the block should span the full array dimension. "
             + err_details())
     else:
-      evenly_divisible = (
-          (bs1 == as1 or bs1 % 128 == 0) and
-          (bs0 == as0 or bs0 % 8 == 0)
-      )
-      if not evenly_divisible:
-        raise ValueError(
-              "The Pallas TPU lowering currently requires that the last two "
-              "dimensions of your block shape are divisible by 8 and 128 "
-              "respectively, or be equal to the respective dimensions of the "
-              "overall array. "
-              + err_details())
+      if rank >= 2:
+        evenly_divisible = (
+            (bs0 == as0 or bs0 % 128 == 0) and
+            (bs1 == as1 or bs1 % 8 == 0)
+        )
+      else:
+        assert rank == 1
+        # TODO(necula): test this for bool. What should it do?
+        tiling_size = 128 * (32 // lax_internal._bit_width(bm.array_shape_dtype.dtype))
+        evenly_divisible = (bs0 == as0 or bs0 % tiling_size == 0)
+
+    if not evenly_divisible:
+      raise ValueError(
+            "The Pallas TPU lowering currently requires that the last two "
+            "dimensions of your block shape are divisible by 8 and 128 "
+            "respectively, or be equal to the respective dimensions of the "
+            "overall array. "
+            + err_details())
 
   mosaic_grid_mapping = MosaicGridMapping(
       jaxpr, grid_mapping, dimension_semantics, mesh)

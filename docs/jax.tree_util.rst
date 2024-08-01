@@ -26,6 +26,8 @@ List of Functions
    treedef_children
    treedef_is_leaf
    treedef_tuple
+   KeyEntry
+   KeyPath
    keystr
 
 Legacy APIs

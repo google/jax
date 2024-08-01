@@ -157,6 +157,8 @@ def get_compile_options(
   build_options = compile_options.executable_build_options
   build_options.use_spmd_partitioning = use_spmd_partitioning
   build_options.use_auto_spmd_partitioning = use_auto_spmd_partitioning
+  if xla_extension_version >= 280:
+    build_options.use_shardy_partitioner = use_shardy_partitioner
   if fdo_profile is not None:
     build_options.fdo_profile = fdo_profile
   if use_auto_spmd_partitioning:
@@ -199,11 +201,6 @@ def get_compile_options(
     debug_options.xla_backend_optimization_level = 0
     debug_options.xla_llvm_disable_expensive_passes = True
     debug_options.xla_test_all_input_layouts = False
-
-  # TODO(b/352486192): Set this on compile_options after the field is moved to
-  # the `ExecutableBuildOptions` proto.
-  if xla_extension_version >= 278:
-    debug_options.xla_use_shardy = use_shardy_partitioner
 
   # XLA-AutoFDO profile version: precedence order is:
   # 1. Whatever --jax_xla_profile_version is set to.

@@ -3794,8 +3794,15 @@ class FunctionAccuracyTest(jtu.JaxTestCase):
     size_im = 11
     atol = None
 
-    mnp = jtu.numpy_with_mpmath(mpmath, extra_prec=1)
-    mnp2 = jtu.numpy_with_mpmath(mpmath, extra_prec_multiplier=1)
+    if name in {"arccos", "arcsin", "arcsinh", "arccosh"}:
+      # TODO(pearu): eliminate this if-block when a fix to mpmath#787
+      # becomes available
+      extra_prec_multiplier = 20
+    else:
+      extra_prec_multiplier = 1
+
+    mnp = jtu.numpy_with_mpmath(mpmath, extra_prec=1, extra_prec_multiplier=extra_prec_multiplier)
+    mnp2 = jtu.numpy_with_mpmath(mpmath, extra_prec_multiplier=extra_prec_multiplier)
 
     ref_op = getattr(mnp, name)
     ref2_op = getattr(mnp2, name)

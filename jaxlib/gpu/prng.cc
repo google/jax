@@ -30,18 +30,13 @@ nb::dict Registrations() {
   nb::dict dict;
   dict[JAX_GPU_PREFIX "_threefry2x32_ffi"] =
       EncapsulateFfiHandler(ThreeFry2x32Ffi);
-  // TODO(b/338022728): remove after 3 weeks
+  // TODO(b/338022728): remove after 6 months
   dict[JAX_GPU_PREFIX "_threefry2x32"] = EncapsulateFunction(ThreeFry2x32);
   return dict;
 }
 
 NB_MODULE(_prng, m) {
   m.def("registrations", &Registrations);
-  // TODO(b/338022728): remove after 3 weeks
-  m.def("threefry2x32_descriptor", [](std::int64_t n) {
-    std::string result = BuildThreeFry2x32Descriptor(n);
-    return nb::bytes(result.data(), result.size());
-  });
 }
 
 }  // namespace

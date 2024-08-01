@@ -21,7 +21,6 @@ from jax._src.dtypes import iinfo, issubdtype
 from jax._src.sharding import Sharding
 from jax._src.sharding_impls import AUTO as AutoSharding, is_auto
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 
 Shape = tuple[int, ...]
 
@@ -31,96 +30,64 @@ class AutoLayout:
     return "AUTO"
 
 
-if xla_extension_version >= 274:
-  class DeviceLocalLayout:
-    major_to_minor: tuple[int, ...]
-    _tiling: tuple[tuple[int, ...], ...] | None
-    _sub_byte_element_size_in_bits: int
+class DeviceLocalLayout:
+  major_to_minor: tuple[int, ...]
+  _tiling: tuple[tuple[int, ...], ...] | None
+  _sub_byte_element_size_in_bits: int
 
-    AUTO = AutoLayout()
+  AUTO = AutoLayout()
 
-    def __init__(self, major_to_minor: tuple[int, ...],
-                 _tiling: tuple[tuple[int, ...], ...] | None = None,
-                 _sub_byte_element_size_in_bits: int = 0):
-      self.major_to_minor = tuple(major_to_minor)
-      self._tiling = None if _tiling is None else tuple(map(tuple, _tiling))
-      self._sub_byte_element_size_in_bits = _sub_byte_element_size_in_bits
+  def __init__(self, major_to_minor: tuple[int, ...],
+                _tiling: tuple[tuple[int, ...], ...] | None = None,
+                _sub_byte_element_size_in_bits: int = 0):
+    self.major_to_minor = tuple(major_to_minor)
+    self._tiling = None if _tiling is None else tuple(map(tuple, _tiling))
+    self._sub_byte_element_size_in_bits = _sub_byte_element_size_in_bits
 
-    @staticmethod
-    def from_pjrt_layout(pjrt_layout: xc.PjRtLayout):
-      xla_layout = pjrt_layout._xla_layout()
-      return DeviceLocalLayout(xla_layout.minor_to_major()[::-1],  # pytype: disable=wrong-arg-types
-                               xla_layout.tiling(),
-                               xla_layout.element_size_in_bits())
+  @staticmethod
+  def from_pjrt_layout(pjrt_layout: xc.PjRtLayout):
+    xla_layout = pjrt_layout._xla_layout()
+    return DeviceLocalLayout(xla_layout.minor_to_major()[::-1],  # pytype: disable=wrong-arg-types
+                              xla_layout.tiling(),
+                              xla_layout.element_size_in_bits())
 
-    def __repr__(self):
-      return (
-          f'DeviceLocalLayout(major_to_minor={self.major_to_minor},'
-          f' _tiling={self._tiling},'
-          f' _sub_byte_element_size_in_bits={self._sub_byte_element_size_in_bits})'
-      )
+  def __repr__(self):
+    return (
+        f'DeviceLocalLayout(major_to_minor={self.major_to_minor},'
+        f' _tiling={self._tiling},'
+        f' _sub_byte_element_size_in_bits={self._sub_byte_element_size_in_bits})'
+    )
 
-    def __hash__(self):
-      return hash((self.major_to_minor, self._tiling,
-                   self._sub_byte_element_size_in_bits))
+  def __hash__(self):
+    return hash((self.major_to_minor, self._tiling,
+                  self._sub_byte_element_size_in_bits))
 
-    def __eq__(self, other):
-      if not isinstance(other, DeviceLocalLayout):
-        return False
-      return (self.major_to_minor == other.major_to_minor and
-              self._tiling == other._tiling and
-              self._sub_byte_element_size_in_bits == other._sub_byte_element_size_in_bits)
+  def __eq__(self, other):
+    if not isinstance(other, DeviceLocalLayout):
+      return False
+    return (self.major_to_minor == other.major_to_minor and
+            self._tiling == other._tiling and
+            self._sub_byte_element_size_in_bits == other._sub_byte_element_size_in_bits)
 
-    def _to_xla_layout(self, dtype) -> str:
-      if self._tiling is None:
-        xla_layout = xc.Layout(self.major_to_minor[::-1])
+  def _to_xla_layout(self, dtype) -> str:
+    if self._tiling is None:
+      xla_layout = xc.Layout(self.major_to_minor[::-1])
+    else:
+      if self._sub_byte_element_size_in_bits != 0:
+        sub_byte_size = self._sub_byte_element_size_in_bits
+      elif issubdtype(dtype, np.integer):
+        sub_byte_size = iinfo(dtype).bits if iinfo(dtype).bits < 8 else 0
       else:
-        if self._sub_byte_element_size_in_bits != 0:
-          sub_byte_size = self._sub_byte_element_size_in_bits
-        elif issubdtype(dtype, np.integer):
-          sub_byte_size = iinfo(dtype).bits if iinfo(dtype).bits < 8 else 0
-        else:
-          sub_byte_size = 0
-        xla_layout = xc.Layout(self.major_to_minor[::-1], self._tiling,  # type: ignore
-                               sub_byte_size)
-      return str(xla_layout)
+        sub_byte_size = 0
+      xla_layout = xc.Layout(self.major_to_minor[::-1], self._tiling,  # type: ignore
+                              sub_byte_size)
+    return str(xla_layout)
 
-    def check_compatible_aval(self, aval_shape: Shape):
-      if len(self.major_to_minor) != len(aval_shape):
-        raise ValueError(
-            f'Length of major_to_minor and the rank of the value should match.'
-            f' Got major_to_minor={self.major_to_minor} and shape={aval_shape}')
-
-else:
-  class DeviceLocalLayout:  # type: ignore
-    layout: xc.PjRtLayout
-
-    AUTO = AutoLayout()
-
-    def __init__(self, layout: xc.PjRtLayout):
-      self._layout = layout
-      self._layout_str = str(self._layout)
-
-    @staticmethod
-    def from_pjrt_layout(pjrt_layout: xc.PjRtLayout):
-      return DeviceLocalLayout(pjrt_layout)  # type: ignore
-
-    def __repr__(self):
-      return f'DeviceLocalLayout({self._layout_str})'
-
-    def __hash__(self):
-      return hash(self._layout)
-
-    def __eq__(self, other):
-      if not isinstance(other, DeviceLocalLayout):
-        return False
-      return self._layout == other._layout
-
-    def _to_xla_layout(self, dtype) -> str:
-      return self._layout_str
-
-    def check_compatible_aval(self, aval_shape: Shape):
-      pass
+  def check_compatible_aval(self, aval_shape: Shape):
+    if len(self.major_to_minor) != len(aval_shape):
+      raise ValueError(
+          f'Length of major_to_minor and the rank of the value should match.'
+          f' Got major_to_minor={self.major_to_minor} and shape={aval_shape}')
 
 
 LayoutOptions = Union[DeviceLocalLayout, None, AutoLayout]  # pytype: disable=invalid-annotation

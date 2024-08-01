@@ -15,7 +15,6 @@
 from absl.testing import absltest
 import jax
 from jax._src import test_util as jtu
-from jax._src.lib import xla_extension_version
 
 jax.config.parse_flags_with_absl()
 
@@ -27,9 +26,6 @@ class DeviceTest(jtu.JaxTestCase):
 
     # TODO(pobudzey): Add a test for rocm devices when available.
     if jtu.is_device_cuda():
-      if xla_extension_version < 276:
-        self.skipTest('requires jaxlib 0.4.31')
-
       self.assertEqual(device.platform, 'gpu')
       self.assertEqual(repr(device), 'CudaDevice(id=0)')
     elif jtu.test_device_matches(['tpu']):

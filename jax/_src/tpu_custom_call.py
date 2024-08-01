@@ -323,7 +323,7 @@ def _lower_tpu_kernel(
         )
 
     pipeline = [
-        "func.func(tpu-canonicalize-mosaic{})",
+        f"func.func(tpu-canonicalize-mosaic{{hardware-generation={hardware_generation}}})",
     ]
     pipeline = PassManager.parse(f"builtin.module({','.join(pipeline)})")
     pipeline.run(module.operation)

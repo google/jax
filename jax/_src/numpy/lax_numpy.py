@@ -1289,7 +1289,8 @@ def isrealobj(x: Any) -> bool:
 
 def reshape(
     a: ArrayLike, shape: DimSize | Shape | None = None, order: str = "C", *,
-    newshape: DimSize | Shape | DeprecatedArg = DeprecatedArg()) -> Array:
+    newshape: DimSize | Shape | DeprecatedArg = DeprecatedArg(),
+    copy: bool | None = None) -> Array:
   """Return a reshaped copy of an array.
 
   JAX implementation of :func:`numpy.reshape`, implemented in terms of
@@ -1303,6 +1304,8 @@ def reshape(
     order: ``'F'`` or ``'C'``, specifies whether the reshape should apply column-major
       (fortran-style, ``"F"``) or row-major (C-style, ``"C"``) order; default is ``"C"``.
       JAX does not support ``order="A"``.
+    copy: unused by JAX; JAX always returns a copy, though under JIT the compiler
+      may optimize such copies away.
 
   Returns:
     reshaped copy of input array with the specified shape.
@@ -1355,6 +1358,8 @@ def reshape(
            [3, 4],
            [5, 6]], dtype=int32)
   """
+  del copy  # unused
+
   __tracebackhide__ = True
   util.check_arraylike("reshape", a)
 
@@ -2221,7 +2226,7 @@ def bincount(x: ArrayLike, weights: ArrayLike | None = None,
     weights = np.array(1, dtype=int_)
   elif shape(x) != shape(weights):
     raise ValueError("shape of weights must match shape of x.")
-  return zeros(length, _dtype(weights)).at[clip(x, 0)].add(weights)
+  return zeros(length, _dtype(weights)).at[clip(x, 0)].add(weights, mode='drop')
 
 @overload
 def broadcast_shapes(*shapes: Sequence[int]) -> tuple[int, ...]: ...
@@ -2316,7 +2321,6 @@ def array_split(ary: ArrayLike, indices_or_sections: int | Sequence[int] | Array
                 axis: int = 0) -> list[Array]:
   return _split("array_split", ary, indices_or_sections, axis=axis)
 
-deprecations.register("jax-numpy-clip-complex")
 
 @jit
 def clip(
@@ -2377,15 +2381,11 @@ def clip(
 
   util.check_arraylike("clip", arr)
   if any(jax.numpy.iscomplexobj(t) for t in (arr, min, max)):
-    # TODO(micky774): Deprecated 2024-4-2, remove after deprecation expires.
-    deprecations.warn(
-      "jax-numpy-clip-complex",
+    raise ValueError(
       "Clip received a complex value either through the input or the min/max "
       "keywords. Complex values have no ordering and cannot be clipped. "
-      "Attempting to clip using complex numbers is deprecated and will soon "
-      "raise a ValueError. Please convert to a real value or array by taking "
-      "the real or imaginary components via jax.numpy.real/imag respectively.",
-      stacklevel=2)
+      "Please convert to a real value or array by taking the real or "
+      "imaginary components via jax.numpy.real/imag respectively.")
   if min is not None:
     arr = ufuncs.maximum(min, arr)
   if max is not None:
@@ -4141,13 +4141,14 @@ def _eye(N: DimSize, M: DimSize | None = None,
         dtype: DTypeLike | None = None) -> Array:
   dtypes.check_user_dtype_supported(dtype, "eye")
   if isinstance(k, int):
-    k = lax_internal._clip_int_to_valid_range(k, np.int32)
+    k = lax_internal._clip_int_to_valid_range(k, np.int32,
+                                              "`argument `k` of jax.numpy.eye")
   util.check_arraylike("eye", k)
   offset = asarray(k)
   if not (offset.shape == () and dtypes.issubdtype(offset.dtype, np.integer)):
     raise ValueError(f"k must be a scalar integer; got {k}")
-  N_int = core.canonicalize_dim(N, "'N' argument of jnp.eye()")
-  M_int = N_int if M is None else core.canonicalize_dim(M, "'M' argument of jnp.eye()")
+  N_int = core.canonicalize_dim(N, "argument of 'N' jnp.eye()")
+  M_int = N_int if M is None else core.canonicalize_dim(M, "argument 'M' of jnp.eye()")
   if N_int < 0 or M_int < 0:
     raise ValueError(f"negative dimensions are not allowed, got {N} and {M}")
   i = lax.broadcasted_iota(offset.dtype, (N_int, M_int), 0)
@@ -5303,8 +5304,31 @@ def fill_diagonal(a: ArrayLike, val: ArrayLike, wrap: bool = False, *,
   return a.at[idx].set(val if val.ndim == 0 else _tile_to_size(val.ravel(), n))
 
 
-@util.implements(np.diag_indices)
 def diag_indices(n: int, ndim: int = 2) -> tuple[Array, ...]:
+  """Return indices for accessing the main diagonal of a multidimensional array.
+
+  JAX implementation of :func:`numpy.diag_indices`.
+
+  Args:
+    n: int. The size of each dimension of the square array.
+    ndim: optional, int, default=2. The number of dimensions of the array.
+
+  Returns:
+    A tuple of arrays, each of length `n`, containing the indices to access
+    the main diagonal.
+
+  See also:
+    - :func:`jax.numpy.diag_indices_from`
+    - :func:`jax.numpy.diagonal`
+
+  Examples:
+    >>> jnp.diag_indices(3)
+    (Array([0, 1, 2], dtype=int32), Array([0, 1, 2], dtype=int32))
+    >>> jnp.diag_indices(4, ndim=3)
+    (Array([0, 1, 2, 3], dtype=int32),
+    Array([0, 1, 2, 3], dtype=int32),
+    Array([0, 1, 2, 3], dtype=int32))
+  """
   n = core.concrete_or_error(operator.index, n, "'n' argument of jnp.diag_indices()")
   ndim = core.concrete_or_error(operator.index, ndim, "'ndim' argument of jnp.diag_indices()")
   if n < 0:
@@ -5315,8 +5339,36 @@ def diag_indices(n: int, ndim: int = 2) -> tuple[Array, ...]:
                      .format(ndim))
   return (lax.iota(int_, n),) * ndim
 
-@util.implements(np.diag_indices_from)
 def diag_indices_from(arr: ArrayLike) -> tuple[Array, ...]:
+  """Return indices for accessing the main diagonal of a given array.
+
+  JAX implementation of :func:`numpy.diag_indices_from`.
+
+  Args:
+    arr: Input array. Must be at least 2-dimensional and have equal length along
+      all dimensions.
+
+  Returns:
+    A tuple of arrays containing the indices to access the main diagonal of
+    the input array.
+
+  See also:
+    - :func:`jax.numpy.diag_indices`
+    - :func:`jax.numpy.diagonal`
+
+  Examples:
+    >>> arr = jnp.array([[1, 2, 3],
+    ...                  [4, 5, 6],
+    ...                  [7, 8, 9]])
+    >>> jnp.diag_indices_from(arr)
+    (Array([0, 1, 2], dtype=int32), Array([0, 1, 2], dtype=int32))
+    >>> arr = jnp.array([[[1, 2], [3, 4]],
+    ...                  [[5, 6], [7, 8]]])
+    >>> jnp.diag_indices_from(arr)
+    (Array([0, 1], dtype=int32),
+    Array([0, 1], dtype=int32),
+    Array([0, 1], dtype=int32))
+  """
   util.check_arraylike("diag_indices_from", arr)
   nd = ndim(arr)
   if not ndim(arr) >= 2:
@@ -8286,13 +8338,14 @@ def _is_scalar(x):
   return  np.isscalar(x) or (isinstance(x, (np.ndarray, Array))
                              and np.ndim(x) == 0)
 
-def _canonicalize_tuple_index(arr_ndim, idx, array_name='array'):
+def _canonicalize_tuple_index(arr_ndim, idx):
   """Helper to remove Ellipsis and add in the implicit trailing slice(None)."""
   num_dimensions_consumed = sum(not (e is None or e is Ellipsis or isinstance(e, bool)) for e in idx)
   if num_dimensions_consumed > arr_ndim:
+    index_or_indices = "index" if num_dimensions_consumed == 1 else "indices"
     raise IndexError(
-        f"Too many indices for {array_name}: {num_dimensions_consumed} "
-        f"non-None/Ellipsis indices for dim {arr_ndim}.")
+        f"Too many indices: {arr_ndim}-dimensional array indexed "
+        f"with {num_dimensions_consumed} regular {index_or_indices}.")
   ellipses = (i for i, elt in enumerate(idx) if elt is Ellipsis)
   ellipsis_index = next(ellipses, None)
   if ellipsis_index is not None:

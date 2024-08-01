@@ -16,7 +16,6 @@
 
 from functools import partial
 import itertools
-import unittest
 
 import numpy as np
 import scipy
@@ -34,7 +33,6 @@ from jax._src import config
 from jax._src.lax import linalg as lax_linalg
 from jax._src import test_util as jtu
 from jax._src import xla_bridge
-from jax._src.lib import xla_extension_version
 from jax._src.numpy.util import promote_dtypes_inexact
 
 config.parse_flags_with_absl()
@@ -270,8 +268,10 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     if compute_right_eigenvectors:
       check_right_eigenvectors(a, w, results[1 + compute_left_eigenvectors])
 
-    self._CompileAndCheck(partial(jnp.linalg.eig), args_maker,
-                          rtol=1e-3)
+    # TODO(phawkins): we are seeing nondeterminism in LAPACK routines with
+    # avx enabled, because for Eigen BLAS nrm2 has an alignment dependence.
+    # self._CompileAndCheck(partial(jnp.linalg.eig), args_maker,
+    #                       rtol=1e-3)
 
   @jtu.sample_product(
     shape=[(4, 4), (5, 5), (50, 50), (2, 6, 6)],
@@ -1625,7 +1625,6 @@ class ScipyLinalgTest(jtu.JaxTestCase):
         (a, b),
         (a, b))
 
-  @unittest.skipIf(xla_extension_version < 277, "Requires jaxlib > 0.4.30")
   def testTriangularSolveSingularBatched(self):
     x = jnp.array([[1, 1], [0, 0]], dtype=np.float32)
     y = jnp.array([[1], [1.]], dtype=np.float32)
@@ -1863,17 +1862,6 @@ class ScipyLinalgTest(jtu.JaxTestCase):
         return jsp.linalg.expm(x, upper_triangular=False, max_squarings=16)
       jtu.check_grads(expm, (a,), modes=["fwd", "rev"], order=1, atol=tol,
                       rtol=tol)
-  @jtu.sample_product(
-    shape=[(4, 4), (15, 15), (50, 50), (100, 100)],
-    dtype=float_types + complex_types,
-  )
-  @jtu.run_on_devices("cpu")
-  def testSchur(self, shape, dtype):
-      rng = jtu.rand_default(self.rng())
-      args_maker = lambda: [rng(shape, dtype)]
-
-      self._CheckAgainstNumpy(osp.linalg.schur, jsp.linalg.schur, args_maker)
-      self._CompileAndCheck(jsp.linalg.schur, args_maker)
 
   @jtu.sample_product(
     shape=[(1, 1), (4, 4), (15, 15), (50, 50), (100, 100)],
@@ -1903,9 +1891,11 @@ class ScipyLinalgTest(jtu.JaxTestCase):
       args_maker = lambda: [rng(shape, dtype)]
       jnp_fun = lambda arr: jsp.linalg.funm(arr, func, disp=disp)
       scp_fun = lambda arr: osp.linalg.funm(arr, func, disp=disp)
-      self._CheckAgainstNumpy(jnp_fun, scp_fun, args_maker, check_dtypes=False,
-                              tol={np.complex64: 1e-5, np.complex128: 1e-6})
-      self._CompileAndCheck(jnp_fun, args_maker, atol=2e-5)
+      self._CheckAgainstNumpy(
+          jnp_fun, scp_fun, args_maker, check_dtypes=False,
+          tol={np.float32: 2e-3,np.complex64: 2e-3, np.complex128: 1e-6})
+      # TODO(phawkins): nondeterminism due to alignment.
+      # self._CompileAndCheck(jnp_fun, args_maker, atol=2e-5)
 
   @jtu.sample_product(
     shape=[(4, 4), (15, 15), (50, 50), (100, 100)],
@@ -2128,10 +2118,11 @@ class LaxLinalgTest(jtu.JaxTestCase):
   @jtu.run_on_devices("cpu")
   def testSchur(self, shape, dtype):
     rng = jtu.rand_default(self.rng())
-    args_maker = lambda: [rng(shape, dtype)]
-
-    self._CheckAgainstNumpy(osp.linalg.schur, lax.linalg.schur, args_maker)
-    self._CompileAndCheck(lax.linalg.schur, args_maker)
+    args = rng(shape, dtype)
+    Ts, Ss = lax.linalg.schur(args)
+    eps = np.finfo(dtype).eps
+    self.assertAllClose(args, Ss @ Ts @ jnp.conj(Ss.T), atol=eps * 600)
+    self.assertAllClose(np.eye(*shape, dtype=dtype), Ss @ jnp.conj(Ss.T), atol=eps * 100)
 
   @jtu.sample_product(
     shape=[(2, 2), (4, 4), (15, 15), (50, 50), (100, 100)],

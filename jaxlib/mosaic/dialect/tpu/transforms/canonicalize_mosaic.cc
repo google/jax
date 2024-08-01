@@ -334,14 +334,13 @@ class MosaicCanonicalizer {
 
 struct CanonicalizeMosaicPass
     : public impl::CanonicalizeMosaicPassBase<CanonicalizeMosaicPass> {
-  CanonicalizeMosaicPass(int hardware_generation)
-      : hardware_generation_(hardware_generation) {}
-
-  int hardware_generation_;
+  CanonicalizeMosaicPass(int hardware_generation) {
+    this->hardware_generation = hardware_generation;
+  }
 
   void runOnOperation() override {
     func::FuncOp func = getOperation();
-    MosaicCanonicalizer vlc(hardware_generation_);
+    MosaicCanonicalizer vlc(hardware_generation);
     if (vlc.canonicalize(func).failed()) {
       signalPassFailure();
     }

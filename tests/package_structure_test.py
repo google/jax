@@ -28,11 +28,15 @@ def _mod(module_name: str, *, include: Sequence[str] = (), exclude: Sequence[str
 
 
 class PackageStructureTest(jtu.JaxTestCase):
+
   @parameterized.parameters([
-    # TODO(jakevdp): expand test to other public modules.
-    _mod("jax.errors"),
-    _mod("jax.nn.initializers"),
-    _mod("jax.tree_util", exclude=['PyTreeDef', 'default_registry']),
+      # TODO(jakevdp): expand test to other public modules.
+      _mod("jax.errors"),
+      _mod("jax.nn.initializers"),
+      _mod(
+          "jax.tree_util",
+          exclude=["PyTreeDef", "default_registry", "KeyEntry", "KeyPath"],
+      ),
   ])
   def test_exported_names_match_module(self, module_name, include, exclude):
     """Test that all public exports have __module__ set correctly."""

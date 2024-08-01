@@ -21,9 +21,9 @@ import itertools
 from typing import Any
 
 import jax
-from jax import api_util
 from jax import lax
 from jax._src import ad_util
+from jax._src import api_util
 from jax._src import checkify
 from jax._src import config
 from jax._src import core as jax_core
@@ -37,7 +37,6 @@ from jax._src.interpreters import partial_eval as pe
 from jax._src.pallas import core as pallas_core
 from jax._src.pallas.primitives import uninitialized_value
 from jax._src.state import discharge as state_discharge
-from jax._src.state import utils as state_utils
 from jax._src.util import (
     safe_map,
     safe_zip,
@@ -797,15 +796,15 @@ def pallas_call_checkify_rule(error: checkify.Error,
   # for the new error inputs and outputs.
   error_block_specs = [pallas_core.BlockSpec(None, None)] * len(shaped_err_avals)
   error_paths, _ = unzip2(tree_util.tree_flatten_with_path(error_block_specs)[0])
+  error_origins = tuple(f"errrors[{tree_util.keystr(p)}" for p in error_paths)
   error_block_mappings = map(
         partial(
             pallas_core._convert_block_spec_to_block_mapping,
             index_map_avals=grid_mapping.index_map_avals,
             index_map_tree=grid_mapping.index_map_tree,
             grid=grid_mapping.grid,
-            mapped_dims=grid_mapping.vmapped_dims,
-            what="error"),
-        error_block_specs, error_paths, shaped_err_avals)
+            mapped_dims=grid_mapping.vmapped_dims),
+        error_block_specs, error_origins, shaped_err_avals)
   input_block_mappings, output_block_mappings = split_list(
       grid_mapping.block_mappings, [num_kernel_inputs,])
   grid_mapping_with_error = grid_mapping.replace(
@@ -837,10 +836,12 @@ checkify.error_checks[pallas_call_p] = pallas_call_checkify_rule
 
 @weakref_lru_cache
 def _trace_kernel_to_jaxpr(fun: Callable,
+                           fun_src_info: pallas_core.SrcInfoStr,
                            grid_mapping: GridMapping,
                            kernel_avals: tuple[pallas_core.AbstractMemRef, ...],
                            kernel_in_tree: tree_util.PyTreeDef,
-                           interpret: bool):
+                           interpret: bool
+                           ) -> jax_core.ClosedJaxpr:
   if interpret:
     kernel_avals = tuple(map(_logical_aval_to_interpret_mode_aval,
                              kernel_avals))
@@ -851,38 +852,20 @@ def _trace_kernel_to_jaxpr(fun: Callable,
     jaxpr, _, consts, () = pe.trace_to_jaxpr_dynamic(wrapped_kernel_fun,
                                                      kernel_avals, debug)
     if consts:
-      # Pad ``block_mappings`` to account for the hoisted constants.
-      # The constants will be right after the index operands and just before
-      # the real inputs and outputs.
-      jaxpr = state_utils.hoist_consts_to_refs(
-          jaxpr,
-          index=grid_mapping.num_index_operands,
-          make_abstract_ref=lambda aval: pallas_core.AbstractMemoryRef(aval, None))
-      num_constant_operands = len(consts)
-      const_block_mappings = []
-      for c_idx, c in enumerate(consts):
-        const_block_mapping = pallas_core._convert_block_spec_to_block_mapping(
-            pallas_core.BlockSpec(None, None),
-            path=(tree_util.SequenceKey(c_idx),),
-            array_aval=jax_core.ShapedArray(c.shape, c.dtype),
-            index_map_avals=grid_mapping.index_map_avals,
-            index_map_tree=grid_mapping.index_map_tree,
-            grid=grid_mapping.grid,
-            mapped_dims=(),
-            what="consts",
-        )
-        const_block_mappings.append(const_block_mapping)
+      consts_avals = [jax_core.raise_to_shaped(jax_core.get_aval(c))
+                      for c in consts]
+      raise ValueError(
+          f"The kernel function {fun_src_info} in a "
+          "pallas_call should not capture constants. You should pass them "
+          f"as inputs. It captures constants of shapes: {consts_avals}")
 
-      grid_mapping = grid_mapping.replace(
-          block_mappings=(*const_block_mappings, *grid_mapping.block_mappings),
-          num_constant_operands=num_constant_operands,
-      )
   kernel_out_tree = out_tree_thunk()
   if kernel_out_tree != tree_util.tree_structure(None):
     raise ValueError(
-        "The kernel function in a pallas_call should return None. "
-        f"Found a PyTree: {kernel_out_tree}")
-  return grid_mapping, jaxpr, consts
+        f"The kernel function {fun_src_info} in a "
+        f"pallas_call should return None. "
+        f"It returns a PyTree: {kernel_out_tree}")
+  return jaxpr
 
 def _extract_function_name(f: Callable, name: str | None) -> str:
   if name is None:
@@ -979,7 +962,7 @@ jax_core.custom_typechecks[pallas_call_p] = _pallas_call_typecheck_rule
 
 
 def pallas_call(
-    f: Callable[..., None],
+    kernel: Callable[..., None],
     out_shape: Any,
     *,
     grid_spec: GridSpec | None = None,
@@ -997,7 +980,7 @@ def pallas_call(
   See `Pallas Quickstart <https://jax.readthedocs.io/en/latest/pallas/quickstart.html>`_.
 
   Args:
-    f: the kernel function, that receives a Ref for each input and output.
+    kernel: the kernel function, that receives a Ref for each input and output.
       The shape of the Refs are given by the ``block_shape`` in the
       corresponding ``in_specs`` and ``out_specs``.
     out_shape: a PyTree of :class:`jax.ShapeDtypeStruct` describing the shape
@@ -1034,7 +1017,7 @@ def pallas_call(
     invoke the Pallas kernel.
 
   """
-  name = _extract_function_name(f, name)
+  name = _extract_function_name(kernel, name)
   if compiler_params is None:
     compiler_params = {}
 
@@ -1072,14 +1055,31 @@ def pallas_call(
                           for a in flat_args)
     flat_out_avals = tuple(jax_core.ShapedArray(v.shape, v.dtype)
                            for v in flat_out_shapes)
+
+    kernel_fun_sig = api_util.fun_signature(kernel)
+    arg_names = None
+    kernel_src_info: pallas_core.SrcInfoStr = "<unknown>"
+    if kernel_fun_sig:
+      kernel_debug_info = api_util.debug_info(
+          "pallas_call kernel",
+           api_util.fun_sourceinfo(kernel),
+           kernel_fun_sig,
+           [1] * len(kernel_fun_sig.parameters), {}, (), ())
+      if kernel_debug_info:
+        arg_names = kernel_debug_info.arg_names
+        kernel_src_info = kernel_debug_info.func_src_info
+    in_origins = tuple(in_path_to_input_origin(p, arg_names)
+                       for p in in_paths)
+    out_origins = tuple(f"outputs{tree_util.keystr(p)}" for p in out_paths)
     # TODO(necula): check that input_output_aliases is well-formed: no duplicates, etc.
     kernel_avals, grid_mapping = pallas_core.get_grid_mapping(
         grid_spec,
-        flat_in_avals, in_tree, in_paths,
-        flat_out_avals, out_tree, out_paths)
+        flat_in_avals, in_tree, in_origins,
+        flat_out_avals, out_tree, out_origins)
     flat_kernel_avals, kernel_in_tree = tree_util.tree_flatten(kernel_avals)
-    grid_mapping, jaxpr, consts = _trace_kernel_to_jaxpr(
-        f, grid_mapping, tuple(flat_kernel_avals), kernel_in_tree,
+    jaxpr = _trace_kernel_to_jaxpr(
+        kernel, kernel_src_info,
+        grid_mapping, tuple(flat_kernel_avals), kernel_in_tree,
         interpret=interpret)
     for i_idx, o_idx in input_output_aliases.items():
       if i_idx not in range(len(flat_in_avals)):
@@ -1104,7 +1104,7 @@ def pallas_call(
 
     index_args, rest_args = split_list(flat_args, [grid_mapping.num_index_operands])
     out_flat = pallas_call_p.bind(
-        *dynamic_grid_bounds, *index_args, *consts, *rest_args,
+        *dynamic_grid_bounds, *index_args, *rest_args,
         jaxpr=jaxpr, name=name,
         debug=debug,
         interpret=interpret,
@@ -1114,6 +1114,20 @@ def pallas_call(
     out = tree_util.tree_unflatten(out_tree, out_flat)
     return out
   return wrapped
+
+
+def in_path_to_input_origin(in_path: tree_util.KeyPath,
+                            arg_names: tuple[str, ...] | None) -> pallas_core.OriginStr:
+  """Converts `args[k]<rest>` into `arg_k_name<rest>`."""
+  if arg_names is None:
+    return f"args{tree_util.keystr(in_path)}"
+  if len(in_path) == 0:
+    return "args"
+  arg_idx, *rest_path = in_path
+  if isinstance(arg_idx, tree_util.SequenceKey) and arg_idx.idx < len(arg_names):
+    return arg_names[arg_idx.idx] + tree_util.keystr(tuple(rest_path))
+  else:
+    return f"args{tree_util.keystr(tuple(in_path))}"
 
 
 # We import the TPU backend at the top level because it defines flags. Note that

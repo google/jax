@@ -46,6 +46,7 @@ from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
 from jax._src.sharding import Sharding
 from jax._src.sharding_impls import NamedSharding, parse_flatten_op_sharding
+from jax._src.state import discharge as state_discharge
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,14 @@ def _debug_callback_partial_eval_custom(saveable, unks_in, inst_in, eqn):
   return eqn, eqn, [], [], []
 pe.partial_eval_jaxpr_custom_rules[debug_callback_p] = (
     _debug_callback_partial_eval_custom)
+
+@state_discharge.register_discharge_rule(debug_callback_p)
+def _debug_callback_state_discharge_rule(
+    in_avals, out_avals, *args, effect, callback, **params
+):
+  del in_avals, out_avals  # Unused.
+  out = debug_callback_p.bind(*args, effect=effect, callback=callback, **params)
+  return args, out
 
 def debug_callback(callback: Callable[..., None], *args: Any,
                    ordered: bool = False, **kwargs: Any) -> None:

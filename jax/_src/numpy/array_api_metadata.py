@@ -19,6 +19,8 @@ This module contains metadata related to the `Python array API`_.
 """
 from __future__ import annotations
 
+import importlib
+
 import jax
 from jax._src.sharding import Sharding
 from jax._src.lib import xla_client as xc
@@ -34,7 +36,17 @@ def __array_namespace_info__() -> ArrayNamespaceInfo:
   return ArrayNamespaceInfo()
 
 
-def __array_namespace__(self, /, *, api_version: None | str = None):
+def _array_namespace_property(self):
+  # TODO(jakevdp): clean this up once numpy fully supports the array API.
+  # In some environments, jax.experimental.array_api is not available.
+  # We return an AttributeError in this case, because some callers use
+  # hasattr checks to check for array API compatibility.
+  if not importlib.util.find_spec('jax.experimental.array_api'):
+    raise AttributeError("__array_namespace__ requires jax.experimental.array_api")
+  return __array_namespace__
+
+
+def __array_namespace__(*, api_version: None | str = None):
   """Return the `Python array API`_ namespace for JAX.
 
   .. _Python array API: https://data-apis.org/array-api/

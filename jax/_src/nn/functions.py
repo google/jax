@@ -784,16 +784,10 @@ def _get_large_negative(dtype):
 def _get_causal_mask(T, S, dtype):
   pred = jnp.tril(jnp.ones((T, S), dtype=jnp.bool_))
   mask = jnp.where(pred, jnp.asarray(0.0, dtype), _get_large_negative(dtype))
-  return mask[jnp.newaxis, jnp.newaxis, :, :]
+  return mask
 
-def _dot_product_attention_xla(
-    query: Array,
-    key: Array,
-    value: Array,
-    bias: Array | None,
-    mask: Array | None,
-    is_causal: bool,
-    scale: float):
+def _dot_product_attention_core(query, key, value, bias, mask, is_causal,
+                                scale):
   logits_dtype = jnp.promote_types(query.dtype, jnp.float32)
   logits = jnp.einsum('BTNH,BSNH->BNTS', query, key,
                       preferred_element_type=logits_dtype)
@@ -811,8 +805,9 @@ def _dot_product_attention_xla(
     padded_logits = logits
 
   if is_causal:
-    T, S = query.shape[-3], key.shape[-3]
-    mask = _get_causal_mask(T, S, logits.dtype)
+    T, S = query.shape[1], key.shape[1]
+    mask = jnp.broadcast_to(_get_causal_mask(T, S, logits.dtype),
+                            padded_logits.shape)
     padded_logits = padded_logits + mask
 
   # Softmax and it is always carried out in fp32.
@@ -820,6 +815,38 @@ def _dot_product_attention_xla(
   probs = jax.nn.softmax(padded_logits, axis=-1).astype(key.dtype)
 
   encoded = jnp.einsum('BNTS,BSNH->BTNH', probs, value)
+  return encoded
+
+def _dot_product_attention_xla(
+    query: Array,
+    key: Array,
+    value: Array,
+    bias: Array | None,
+    mask: Array | None,
+    is_causal: bool,
+    scale: float):
+
+  B, T, N, H = query.shape
+  _, S, K, _ = key.shape
+  G = N // K
+
+  query = jnp.reshape(query, (B, T, K, G, H))
+  def _reshape_to_grouped(t):
+    if t is not None:
+      tB, tN, tT, tS = t.shape
+      if tN == 1:
+        t = jnp.broadcast_to(t[:, :, None, :, :], (tB, tN, G, tT, tS))
+      else:
+        assert tN == N
+        t = jnp.reshape(t, (tB, K, G, tT, tS))
+    return t
+  bias = _reshape_to_grouped(bias)
+  mask = _reshape_to_grouped(mask)
+  vmapped_fn = jax.vmap(_dot_product_attention_core,
+                        in_axes=(3, None, None, 2, 2, None, None),
+                        out_axes=3)
+  encoded = vmapped_fn(query, key, value, bias, mask, is_causal, scale)
+  encoded = jnp.reshape(encoded, (B, T, N, H))
   return encoded
 
 def dot_product_attention(
@@ -844,24 +871,31 @@ def dot_product_attention(
   :code:`probs` as the output of :math:`softmax`.
 
   Throughout this function, we utilize the following uppercase letters to
-  represent the shape of array:
+  represent the shape of array::
 
     B = batch size
     S = length of the key/value (source)
     T = length of the query (target)
     N = number of attention heads
     H = dimensions of each attention head
+    K = number of key/value heads
+    G = number of groups, which equals to N // K
 
   Args:
     query: query array; shape :code:`(BTNH)`
-    key: key array; shape :code:`(BSNH)`
-    value: value array; shape :code:`(BSNH)`
-    bias: optional, bias array to be added to logits; shape broadcastable to
-      :code:`(BNTS)`.
+    key: key array: shape :code:`(BSKH)`. When `K` equals `N`, multi-headed
+    attention (MHA: https://arxiv.org/abs/1706.03762) is performed. Otherwise,
+    grouped query attention (GQA: https://arxiv.org/abs/2305.13245) is performed
+    if `N` is a multiple of `K`, and multi-query attention (MQA:
+    https://arxiv.org/abs/1911.02150) is performed if `K == 1` (a special case
+    of GQA).
+    value: value array, should have the same shape as the `key` array.
+    bias: optional, bias array to be added to logits; The shape must be 4D and
+      be broadcastable to :code:`(BNTS)`.
     mask: optional, mask array used to filter out logits. It is a boolean mask
       where `True` indicates the element should take part in attention. For an
-      additive mask, users should pass it to `bias`. The shape is broadcastable
-      to :code:`(BNTS)`.
+      additive mask, users should pass it to `bias`. The shape must be 4D and be
+      broadcastable to :code:`(BNTS)`.
     scale: scale for the logits. If None, the scale will be set to 1 divided by
       the square root of query's head dimension (i.e. H).
     is_causal: If true, causal attention will be applied. Note, some
@@ -891,15 +925,22 @@ def dot_product_attention(
   bias = bias if bias is None else jnp.asarray(bias)
   mask = mask if mask is None else jnp.asarray(mask)
 
-  B, S, N, H = key.shape
-  _check_has_shape(value, [B, S, N, H], 'value')
-  _check_has_shape(query, [B, -1, N, H], 'query')
-  scale_val = (1.0 / np.sqrt(H)) if scale is None else scale
+  B, S, K, H = key.shape
+  _check_has_shape(value, [B, S, K, H], 'value')
+  _check_has_shape(query, [B, -1, -1, H], 'query')
+  if query.shape[-2] % K != 0:
+    raise ValueError(f"The number of query heads must to a multiple of "
+                     f"key/value heads, but got {query.shape[-2]} vs {K}")
   if not (query.dtype == key.dtype == value.dtype):
-    raise ValueError(f"query/key/value should have the same dtype, but got "
-                     f"{query.dtype} vs {key.dtype} vs {value.dtype}.")
-  if mask is not None and mask.dtype != jnp.bool_:
-    raise ValueError(f"Mask must be boolean dtype, but got {mask.dtype}.")
+    raise ValueError(f"query/key/value should have the same shape, but got "
+                     f"{query.shape} vs {key.shape} vs {value.shape}.")
+  if mask is not None and mask.dtype != jnp.bool_ and mask.ndim != 4:
+    raise ValueError(f"Mask must be a 4D boolean tensor, but got "
+                     f"rank={mask.ndim}, dtype={mask.dtype}.")
+  if bias is not None and bias.ndim != 4:
+    raise ValueError(f"Bias must be a 4D tensor, but got rank={bias.ndim}.")
+
+  scale_val = (1.0 / np.sqrt(H)) if scale is None else scale
 
   match implementation:
     case 'xla':

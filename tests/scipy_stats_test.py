@@ -1173,8 +1173,6 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
       k, n, a, b, loc = map(rng, shapes, dtypes)
       k = np.floor(k)
       n = np.ceil(n)
-      a = np.clip(a, a_min = 0.1, a_max=None).astype(a.dtype)
-      b = np.clip(a, a_min = 0.1, a_max=None).astype(b.dtype)
       loc = np.floor(loc)
       return [k, n, a, b, loc]
 
@@ -1184,6 +1182,10 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
                               tol=5e-4)
       self._CompileAndCheck(lax_fun, args_maker, rtol=1e-5, atol=1e-5)
 
+  def testBetaBinomLogPmfZerokZeron(self):
+    self.assertEqual(lsp_stats.betabinom.logpmf(0, 0, 10, 5, 0),
+                     osp_stats.betabinom.logpmf(0, 0, 10, 5, 0))
+
   @genNamedParametersNArgs(4)
   def testBinomLogPmf(self, shapes, dtypes):
     rng = jtu.rand_positive(self.rng())
@@ -1192,8 +1194,8 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
 
     def args_maker():
       k, n, logit, loc = map(rng, shapes, dtypes)
-      k = np.floor(np.abs(k))
-      n = np.ceil(np.abs(n))
+      k = np.floor(k)
+      n = np.ceil(n)
       p = expit(logit)
       loc = np.floor(loc)
       return [k, n, p, loc]
@@ -1208,6 +1210,10 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
   def testBinomPmfOutOfRange(self):
     # Regression test for https://github.com/google/jax/issues/19150
     self.assertEqual(lsp_stats.binom.pmf(k=6.5, n=5, p=0.8), 0.0)
+
+  def testBinomLogPmfZerokZeron(self):
+    self.assertEqual(lsp_stats.binom.logpmf(0, 0, 0.8, 0),
+                     osp_stats.binom.logpmf(0, 0, 0.8, 0))
 
   def testIssue972(self):
     self.assertAllClose(

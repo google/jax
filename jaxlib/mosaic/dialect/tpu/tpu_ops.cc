@@ -392,7 +392,7 @@ class CanonicalizeAddOfMatmul : public OpRewritePattern<AddOp> {
   LogicalResult matchAndRewrite(AddOp op, PatternRewriter &rewriter) const {
     auto try_canonicalize = [&](Value maybe_matmul, Value maybe_acc) {
       auto matmul = dyn_cast_if_present<MatmulOp>(maybe_matmul.getDefiningOp());
-      if (!matmul) {
+      if (!matmul || !matmul->hasOneUse()) {
         return failure();
       }
       if (auto const_acc = matmul.getAcc().getDefiningOp<arith::ConstantOp>();

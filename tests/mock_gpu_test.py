@@ -27,7 +27,7 @@ jax.config.parse_flags_with_absl()
 NUM_SHARDS = 4
 
 
-@jtu.with_config(mock_num_processes=NUM_SHARDS)
+@jtu.with_config(mock_num_gpu_processes=NUM_SHARDS)
 class MockGPUTest(jtu.JaxTestCase):
 
   def setUp(self):

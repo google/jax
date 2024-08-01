@@ -276,7 +276,7 @@ class BufferedRef:
 
   @property
   def compute_index(self):
-    return lambda *args: pallas_core.compute_index(self.spec, *args)
+    return self.spec.index_map
 
   @property
   def memory_space(self):

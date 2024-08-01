@@ -25,7 +25,6 @@ from jax._src import config
 from jax._src.layout import Layout, DeviceLocalLayout as DLL
 from jax._src import test_util as jtu
 from jax._src.util import safe_zip
-from jax._src.lib import xla_extension_version
 
 config.parse_flags_with_absl()
 
@@ -41,11 +40,13 @@ def tearDownModule():
 class LayoutTest(jtu.JaxTestCase):
 
   def setUp(self):
-    if not jtu.test_device_matches(['tpu']):
-      self.skipTest("Layouts do not work on CPU and GPU backends yet.")
+    if not jtu.test_device_matches(['tpu', 'gpu']):
+      self.skipTest("Layouts do not work on CPU backend yet.")
     super().setUp()
 
   def test_auto_layout(self):
+    if jtu.test_device_matches(["gpu"]):
+      self.skipTest("This test does not work on GPU backend.")
     mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
     shape1 = (128, 128)
     shape2 = (128, 128)
@@ -111,6 +112,8 @@ class LayoutTest(jtu.JaxTestCase):
     self.assertArraysEqual(apply_out[1], (np_inp2 * 2).T)
 
   def test_default_layout(self):
+    if jtu.test_device_matches(["gpu"]):
+      self.skipTest("This test does not work on GPU backend.")
     mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
     shape = (4, 4, 2)
     np_inp = np.arange(math.prod(shape)).reshape(shape)
@@ -150,6 +153,8 @@ class LayoutTest(jtu.JaxTestCase):
               out_shardings=DLL.AUTO).lower(sds).compile()
 
   def test_in_layouts_out_layouts(self):
+    if jtu.test_device_matches(["gpu"]):
+      self.skipTest("This test does not work on GPU backend.")
     mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
     shape = (8, 8)
     np_inp = np.arange(math.prod(shape)).reshape(shape)
@@ -174,6 +179,8 @@ class LayoutTest(jtu.JaxTestCase):
     self.assertEqual(out.sharding, NamedSharding(mesh, P('y', 'x')))
 
   def test_sharding_and_layouts(self):
+    if jtu.test_device_matches(["gpu"]):
+      self.skipTest("This test does not work on GPU backend.")
     mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
     shape = (4, 8)
     np_inp = np.arange(math.prod(shape)).reshape(shape)
@@ -236,6 +243,8 @@ class LayoutTest(jtu.JaxTestCase):
     compiled(*arrs)
 
   def test_aot_layout_mismatch(self):
+    if jtu.test_device_matches(["gpu"]):
+      self.skipTest("This test does not work on GPU backend.")
     mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
     shape = (256, 4, 2)
     np_inp = np.arange(math.prod(shape)).reshape(shape)
@@ -405,8 +414,8 @@ class LayoutTest(jtu.JaxTestCase):
     self.assertArraysEqual(out, inp.T)
 
   def test_device_put_user_concrete_layout(self):
-    if xla_extension_version < 274:
-      self.skipTest('Requires xla_extension_version >= 274')
+    if jtu.test_device_matches(["gpu"]):
+      self.skipTest("This test does not work on GPU backend.")
 
     shape = (8, 128)
     np_inp = np.arange(math.prod(shape)).reshape(shape)
@@ -437,9 +446,6 @@ class LayoutTest(jtu.JaxTestCase):
                      custom_dll.major_to_minor)
 
   def test_compatible_aval_error(self):
-    if xla_extension_version < 274:
-      self.skipTest('Requires xla_extension_version >= 274')
-
     custom_dll = DLL(major_to_minor=(0, 1, 2))
     l = Layout(custom_dll, SingleDeviceSharding(jax.devices()[0]))
     inp = np.arange(8)
@@ -454,9 +460,6 @@ class LayoutTest(jtu.JaxTestCase):
       f(inp)
 
   def test_incompatible_aval_error_device_put(self):
-    if xla_extension_version < 274:
-      self.skipTest('Requires xla_extension_version >= 274')
-
     custom_dll = DLL(major_to_minor=(0, 1, 2))
     l = Layout(custom_dll, SingleDeviceSharding(jax.devices()[0]))
     inp = np.arange(8)
@@ -467,6 +470,8 @@ class LayoutTest(jtu.JaxTestCase):
       jax.device_put(inp, l)
 
   def test_concrete_layout_in_shardings(self):
+    if jtu.test_device_matches(["gpu"]):
+      self.skipTest("This test does not work on GPU backend.")
     mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
     s = NamedSharding(mesh, P('x', 'y'))
     shape = (16, 128)

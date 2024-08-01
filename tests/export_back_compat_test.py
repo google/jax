@@ -19,7 +19,6 @@ update these tests.
 import dataclasses
 from functools import partial
 import itertools
-import logging
 import math
 
 from absl.testing import absltest, parameterized
@@ -64,14 +63,15 @@ from jax._src import config
 from jax._src import test_util as jtu
 from jax._src.lib import cuda_versions
 from jax._src.lib import version as jaxlib_version
-from jax._src.lib import xla_extension_version
 
 config.parse_flags_with_absl()
+
 
 def _is_required_cusolver_version_satisfied(required_version):
   if cuda_versions is None:
     return False
   return cuda_versions.cusolver_get_version() >= required_version
+
 
 @jtu.with_config(jax_legacy_prng_key="allow",
                  jax_debug_key_reuse=False,
@@ -118,7 +118,8 @@ class CompatTest(bctu.CompatTestBase):
         cpu_cholesky_lapack_potrf.data_2023_06_19,
         cpu_eig_lapack_geev.data_2023_06_19,
         cpu_eigh_lapack_syev.data_2023_03_17,
-        cpu_qr_lapack_geqrf.data_2023_03_17, cuda_threefry2x32.data_2023_03_15,
+        cpu_qr_lapack_geqrf.data_2023_03_17,
+        cuda_threefry2x32.data_2023_03_15, cuda_threefry2x32.data_2024_07_30,
         cpu_lu_lapack_getrf.data_2023_06_14,
         cuda_qr_cusolver_geqrf.data_2023_03_18, cuda_eigh_cusolver_syev.data_2023_03_17,
         cpu_schur_lapack_gees.data_2023_07_16,
@@ -146,7 +147,6 @@ class CompatTest(bctu.CompatTestBase):
       "tf.call_tf_function",  # tested in jax2tf/tests/back_compat_tf_test.py
       "tpu_custom_call",  # tested separately
       "__gpu$xla.gpu.triton",  # tested in pallas/export_back_compat_pallas_test.py
-      "cu_threefry2x32_ffi",  # TODO(b/338022728) add the actual backwards compatibility test
     })
     not_covered = targets_to_cover.difference(covered_targets)
     self.assertEmpty(not_covered,
@@ -591,12 +591,15 @@ class CompatTest(bctu.CompatTestBase):
     self.run_one_test(func, data)
 
   def test_cuda_threefry2x32(self):
-    logging.info("test_cuda_threefry2x32: xla_extension_version: %s",
-                 xla_extension_version)
     def func(x):
       return jax.random.uniform(x, (2, 4), dtype=np.float32)
 
+    # TODO(b/338022728): remove after 6 months
     data = self.load_testdata(cuda_threefry2x32.data_2023_03_15)
+    self.run_one_test(func, data,
+                      expect_current_custom_calls=["cu_threefry2x32_ffi"])
+
+    data = self.load_testdata(cuda_threefry2x32.data_2024_07_30)
     self.run_one_test(func, data)
 
   def test_sharding(self):

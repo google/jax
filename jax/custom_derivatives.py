@@ -30,6 +30,7 @@ from jax._src.custom_derivatives import (
   custom_vjp_primal_tree_values as custom_vjp_primal_tree_values,
   CustomVJPPrimal as CustomVJPPrimal,
   linear_call as linear_call,
+  remat_opt_p as remat_opt_p,
 )
 
 from jax._src.ad_util import (

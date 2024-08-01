@@ -322,6 +322,12 @@ class PallasCallTest(PallasBaseTest):
       kwargs=[
           dict(shape=(), block_shape=()),
           dict(shape=(2,), block_shape=(2,)),
+          dict(shape=(128,), block_shape=(128,)),
+          dict(shape=(128,), block_shape=(64,), dtype=np.int16),
+          dict(shape=(128,), block_shape=(128,), dtype=np.int16),
+          dict(shape=(1024,), block_shape=(128,), dtype=np.int16),
+          dict(shape=(1024,), block_shape=(256,), dtype=np.int16),
+          dict(shape=(128,), block_shape=(64,)),
           dict(shape=(2, 2), block_shape=(2, 2)),
           dict(shape=(3, 3), block_shape=(3, 3)),
           dict(shape=(4, 2), block_shape=(2, 2)),
@@ -348,34 +354,43 @@ class PallasCallTest(PallasBaseTest):
           dict(shape=(5, 128), block_shape=(8, 128)),
       ]
   )
-  def test_block_spec_valid_block_shapes(self, *, shape, block_shape):
+  def test_block_spec_valid_block_shapes(self, *,
+                                         shape, block_shape,
+                                         dtype=np.int32):
+    if np.iinfo(dtype).bits == 16:
+      self.skipTest("TODO(necula): test fails with Mosaic unimplemented for np.int16")
+    rank = len(shape)
+    assert rank == len(block_shape)
     def copy_kernel(x_ref, o_ref):
       o_ref[...] = x_ref[...]
 
-    assert len(shape) == len(block_shape)
     grid = [(sd + bd - 1) // bd for sd, bd in zip(shape, block_shape)]
-    x = np.arange(math.prod(shape), dtype=np.int32).reshape(shape)
+    x = np.arange(math.prod(shape), dtype=dtype).reshape(shape)
 
     test_context = contextlib.nullcontext()
     if jtu.test_device_matches(["tpu"]) and not self.INTERPRET:
-      if len(block_shape) < 2:
-        self.skipTest("TODO(necula): enable this check")
-      if len(block_shape) < 2:
-        test_context = self.assertRaisesRegex(
-            ValueError,
-            "TPU lowering currently supports only blocks of rank >= 2")
+      if jaxlib_version < (0, 4, 32):
+        # TODO(b/356116061): Remove the old rank condition
+        if rank < 2:
+          test_context = self.assertRaisesRegex(
+              ValueError,
+              "TPU lowering currently supports only blocks of rank >= 2")
       else:
-        if jaxlib_version < (0, 4, 31):
-          evenly_divisible = (
-              (block_shape[-1] % 128 == 0
-              if shape[-1] >= 128 else block_shape[-1] == shape[-1]) and
-              (block_shape[-2] % 8 == 0
-              if shape[-2] >= 8 else block_shape[-2] == shape[-2]))
-        else:
-          evenly_divisible = (
-              (block_shape[-1] == shape[-1] or block_shape[-1] % 128 == 0) and
-              (block_shape[-2] == shape[-2] or block_shape[-2] % 8 == 0))
+        if rank < 1:
+          test_context = self.assertRaisesRegex(
+              ValueError,
+              "TPU lowering currently supports only blocks of rank >= 1")
 
+      if rank >= 1:
+        bs0, as0 = block_shape[-1], shape[-1]
+        if rank >= 2:
+          bs1, as1 = block_shape[-2], shape[-2]
+        else:
+          bs1, as1 = 1, 1
+
+        evenly_divisible = (
+            (bs0 == as0 or bs0 % 128 == 0) and
+            (bs1 == as1 or bs1 % 8 == 0))
         if not evenly_divisible:
           test_context = self.assertRaisesRegex(
               ValueError,
@@ -488,8 +503,10 @@ class PallasCallTest(PallasBaseTest):
     def kernel(src, dst):
       dst[0:1] = to_store
 
-    res = kernel(x)
-    self.assertAllClose(res[0:1], to_store)
+    with self.assertRaisesRegex(
+        ValueError,
+        "The kernel function .* should not capture constants"):
+      kernel(x)
 
   def test_vector_slicing(self):
     if jtu.test_device_matches(["tpu"]) and not self.INTERPRET:
@@ -671,7 +688,7 @@ class PallasCallInterpreterTest(PallasCallTest):
 
 
 class ApiErrorTest(PallasBaseTest):
-  def test_pallas_kernel_args_mismatch(self):
+  def test_pallas_call_kernel_args_mismatch(self):
     a = np.arange(256, dtype=np.int32)
     f = self.pallas_call(lambda x_ref: None,  # Missing o_ref
                          out_shape=a)
@@ -687,11 +704,22 @@ class ApiErrorTest(PallasBaseTest):
   def test_pallas_call_error_kernel_returns_something(self, returns):
     a = np.arange(256, dtype=np.int32)
     # The kernel should not return anything
-    f = self.pallas_call(lambda x_ref, o1_ref, o2_ref: returns,
+    def my_kernel(x_ref, o1_ref, o2_ref):
+      return returns
+    f = self.pallas_call(my_kernel,
                          out_shape=(a, a))
     with self.assertRaisesRegex(
         ValueError,
-        "The kernel function in a pallas_call should return None"):
+        "The kernel function my_kernel at .*pallas_test.py:.* in a pallas_call should return None"):
+      f(a)
+
+  def test_pallas_call_kernel_with_no_signature_returns_something(self):
+    a = np.arange(256, dtype=np.int32)
+    f = self.pallas_call(lambda *args: 0,  # Returns 0
+                         out_shape=a)
+    with self.assertRaisesRegex(
+        ValueError,
+        "The kernel function .* at .*pallas_test.py:.* in a pallas_call should return None"):
       f(a)
 
   def test_pallas_call_in_specs_not_a_sequence(self):
@@ -729,12 +757,46 @@ class ApiErrorTest(PallasBaseTest):
 
   def test_pallas_call_index_map_wrong_number_of_results(self):
     a = np.arange(256, dtype=np.int32)
-    f = self.pallas_call(lambda x_ref, o1_ref: None,
+    def my_index_map():
+      return 0, 0
+    f = self.pallas_call(lambda x_ref, o_ref: None,
                          out_shape=a,
-                         in_specs=[pl.BlockSpec((4,), lambda: (0, 0))])
+                         in_specs=[pl.BlockSpec((4,), my_index_map)])
     with self.assertRaisesRegex(
         ValueError,
-        "Index map for inputs\\[0\\] must return 1 values to match .*Currently returning 2 values."):
+        "Index map function my_index_map at .*/pallas_test.py:.* for "
+        "x_ref must return 1 values to match .*"
+        "Currently returning 2 values."):
+      f(a)
+
+  def test_pallas_call_index_map_wrong_return_type(self):
+    a = np.arange(256, dtype=np.int32)
+    def my_index_map(i):
+      return 5.
+    f = self.pallas_call(lambda x_ref, o_ref: None,
+                         out_shape=a,
+                         grid=(1,),
+                         in_specs=[pl.BlockSpec((4,), my_index_map)])
+    with self.assertRaisesRegex(
+        ValueError,
+        "Index map function my_index_map at .*/pallas_test.py:.* for "
+        "x_ref must return integer scalars. Output\\[0\\] has "
+        "type .*float"):
+      f(a)
+
+  def test_pallas_call_index_map_wrong_return_shape(self):
+    a = np.arange(256, dtype=np.int32)
+    def my_index_map(i):
+      return jnp.arange(4, dtype=np.int32)
+    f = self.pallas_call(lambda x_ref, o_ref: None,
+                         out_shape=a,
+                         grid=(1,),
+                         in_specs=[pl.BlockSpec((4,), my_index_map)])
+    with self.assertRaisesRegex(
+        ValueError,
+        "Index map function my_index_map at .*/pallas_test.py:.* for "
+        "x_ref must return integer scalars. Output\\[0\\] has "
+        "type .*int32\\[4\\]"):
       f(a)
 
   def test_pallas_call_index_map_captures_consts(self):
@@ -742,10 +804,12 @@ class ApiErrorTest(PallasBaseTest):
     index_map_result = np.array([0], dtype=np.int32)
     f = self.pallas_call(lambda x_ref, o1_ref: None,
                          out_shape=a,
-                         in_specs=[pl.BlockSpec((4,), lambda: index_map_result)])
+                         grid=(1,),
+                         in_specs=[pl.BlockSpec((4,),
+                                                lambda i: jnp.array(index_map_result)[i])])
     with self.assertRaisesRegex(
-        NotImplementedError,
-        "Index map for inputs\\[0\\] captures constants"):
+        ValueError,
+        "Index map function .* for x_ref must not capture constants:"):
       f(a)
 
   def test_pallas_call_out_specs_mismatch_shape(self):
@@ -767,7 +831,7 @@ class ApiErrorTest(PallasBaseTest):
                          in_specs=[pl.BlockSpec((1, 1), lambda: (0, 0))])
     with self.assertRaisesRegex(
         ValueError,
-        "Block shape for inputs\\[0\\] .* must have the same number of dimensions as the "
+        "Block shape for x_ref .* must have the same number of dimensions as the "
         "array shape"):
 
       f(a)

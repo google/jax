@@ -84,8 +84,9 @@ T = TypeVar("T")
 map, unsafe_map = safe_map, map
 zip, unsafe_zip = safe_zip, zip
 
-def _clip_int_to_valid_range(val: DimSize, dtype) -> int:
+def _clip_int_to_valid_range(val: DimSize, dtype, where: str) -> int:
   info = np.iinfo(dtype)
+  val = core.concrete_dim_or_error(val, where)
   return core.max_dim(info.min, core.min_dim(val, info.max))
 
 def _validate_shapes(shapes: Sequence[Shape]):
@@ -1350,7 +1351,8 @@ def broadcasted_iota(dtype: DTypeLike, shape: Shape, dimension: int) -> Array:
 
 def _eye(dtype: DTypeLike, shape: Shape, offset: DimSize) -> Array:
   """Like numpy.eye, create a 2D array with ones on a diagonal."""
-  offset = _clip_int_to_valid_range(offset, np.int32)
+  offset = _clip_int_to_valid_range(offset, np.int32,
+                                    "argument `offset` of jax.numpy.eye")
   dtype = dtypes.canonicalize_dtype(dtype)
   bool_eye = eq(add(broadcasted_iota(np.int32, shape, 0), np.int32(offset)),
                 broadcasted_iota(np.int32, shape, 1))
@@ -1372,7 +1374,8 @@ def _delta(dtype: DTypeLike, shape: Shape, axes: Sequence[int]) -> Array:
 
 def _tri(dtype: DTypeLike, shape: Shape, offset: DimSize) -> Array:
   """Like numpy.tri, create a 2D array with ones below a diagonal."""
-  offset = _clip_int_to_valid_range(offset, np.int32)
+  offset = _clip_int_to_valid_range(offset, np.int32,
+                                    "argument `offset` of jax.numpy.tri")
   dtype = dtypes.canonicalize_dtype(dtype)
   bool_tri = ge(add(broadcasted_iota(np.int32, shape, 0),
                     asarray(core.dimension_as_value(offset)).astype(np.int32)),

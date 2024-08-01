@@ -4991,6 +4991,23 @@ class SdyIntegrationTest(jtu.JaxTestCase):
     self.assertIn('sdy.sharding_constraint', lowered_str)
     self.assertIn('<@mesh, [{"x"}, {?}, {"y"}]>', lowered_str)
 
+  # TODO(bartchr): run on CPU once Shardy is added to the XLA CPU pipeline.
+  @jtu.skip_on_devices('cpu')
+  def test_compile_with_inferred_out_sharding(self):
+    mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
+    x = jax.device_put(np.arange(8 * 4).reshape(8, 4),
+                         jax.sharding.NamedSharding(mesh, P('x', 'y')))
+    y = jax.device_put(np.arange(4 * 16).reshape(4, 16),
+                         jax.sharding.NamedSharding(mesh, P('y')))
+
+    @jax.jit
+    def f(x, y):
+      return x @ y
+
+    out = f(x, y)
+    self.assertArraysEqual(out, x @ y)
+    self.assertEqual(out.sharding, jax.sharding.NamedSharding(mesh, P('x')))
+
 
 if __name__ == '__main__':
   absltest.main(testLoader=jtu.JaxTestLoader())

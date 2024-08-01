@@ -34,7 +34,6 @@ import functools
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, NamedTuple, Protocol, Union, runtime_checkable
-import warnings
 
 import jax
 
@@ -322,18 +321,6 @@ class XlaLowering(Lowering):
     return xla_extension.mlir.mlir_module_to_xla_computation(
         m, use_tuple_args=self.compile_args["tuple_args"])
 
-  def mhlo(self) -> ir.Module:
-    """Return an MHLO representation of this computation."""
-    warnings.warn(
-        "mhlo support is deprecated and will be removed "
-        "from a future release of JAX. Use stablehlo instead.",
-        DeprecationWarning,
-    )
-    module_str = xla_extension.mlir.stablehlo_to_mhlo(
-        mlir.module_to_bytecode(self.stablehlo()))
-    with self.stablehlo().context:
-      return ir.Module.parse(module_str)
-
   def stablehlo(self) -> ir.Module:
     """Return a StableHLO representation of this computation."""
     raise NotImplementedError("must override")
@@ -345,9 +332,7 @@ class XlaLowering(Lowering):
   def as_text(self, dialect: str | None = None) -> str:
     if dialect is None:
       dialect = "stablehlo"
-    if dialect == "mhlo":
-      return str(self.mhlo())
-    elif dialect == "stablehlo":
+    if dialect == "stablehlo":
       return str(self.stablehlo())
     elif dialect == "hlo":
       return self.hlo().as_hlo_text()
@@ -357,9 +342,7 @@ class XlaLowering(Lowering):
   def compiler_ir(self, dialect: str | None = None) -> Any:
     if dialect is None:
       dialect = "stablehlo"
-    if dialect == "mhlo":
-      return self.mhlo()
-    elif dialect == "stablehlo":
+    if dialect == "stablehlo":
       return self.stablehlo()
     elif dialect == "hlo":
       return self.hlo()

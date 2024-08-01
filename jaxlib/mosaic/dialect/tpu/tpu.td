@@ -711,7 +711,9 @@ def CanonicalizeMosaicPass : Pass<"tpu-canonicalize-mosaic", "::mlir::func::Func
     "::mlir::tpu::TPUDialect",
   ];
   let constructor = "::mlir::tpu::createCanonicalizeMosaicPass()";
-  let options = [];
+  let options = [
+    Option<"hardware_generation", "hardware-generation", "int", /*default=*/"-1", "">,
+  ];
 }
 
 def InferVectorLayoutPass : Pass<"tpu-infer-vector-layout", "::mlir::func::FuncOp"> {

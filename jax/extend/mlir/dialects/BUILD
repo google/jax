@@ -60,12 +60,6 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
-    name = "mhlo_dialect",
-    srcs = ["mhlo.py"],
-    deps = if_building_jaxlib(["//jaxlib/mlir:mhlo_dialect"]),
-)
-
-pytype_strict_library(
     name = "scf_dialect",
     srcs = ["scf.py"],
     deps = if_building_jaxlib(["//jaxlib/mlir:scf_dialect"]),

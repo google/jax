@@ -1749,6 +1749,24 @@ class ShardMapTest(jtu.JaxTestCase):
     v = jax.device_put(v, jax.sharding.NamedSharding(mesh, P('i', 'j')))
     self.assertAllClose(v*v, f(v), check_dtypes=False)
 
+  def test_axis_size_1_partial_auto(self):
+    mesh = jtu.create_global_mesh((1, 2, 2), ('i', 'j', 'k'))
+
+    def h(x):
+      return x * x
+
+    @jax.jit
+    def f(x):
+      return shard_map(h, mesh,
+                    in_specs=P('i', None),
+                    out_specs=P('i', None),
+                    check_rep=False,
+                    auto=frozenset({'j', 'k'}))(x)
+
+    v = jnp.arange(32.).reshape(4, 8)
+    v = jax.device_put(v, jax.sharding.NamedSharding(mesh, P('i', 'j')))
+    self.assertAllClose(v*v, f(v), check_dtypes=False)
+
   def test_partial_auto_of_pjit(self):
     mesh = jtu.create_global_mesh((2, 2), ('i', 'j'))
 
@@ -1977,6 +1995,24 @@ class ShardMapTest(jtu.JaxTestCase):
       return c
 
     _ = f(a, b)  # don't crash
+
+  def test_temporary_error_suppression_flag(self):
+    mesh = jtu.create_global_mesh((2,), ('i',))
+
+    def f(x, y):
+      z = shard_map(lambda x, y: x + jax.lax.all_gather(y, 'i', tiled=True),
+                    mesh=mesh, in_specs=(P(None), P('i')), out_specs=P(None),
+                    check_rep=False,
+                    )(x, y)
+      return z
+
+    y = jnp.arange(8)
+    xs = jnp.arange(32).reshape(4, 8)
+    with self.assertRaisesRegex(ValueError, 'vmap spmd_axis_name cannot appear in'):
+      _ = jax.vmap(f, in_axes=(0, None), spmd_axis_name='i')(xs, y)
+
+    with config.disable_vmap_shmap_error():
+      _ = jax.vmap(f, in_axes=(0, None), spmd_axis_name='i')(xs, y)
 
 
 class FunSpec(NamedTuple):

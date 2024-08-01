@@ -96,13 +96,13 @@ class OpsTest(PallasBaseTest):
     @functools.partial(
         self.pallas_call, out_shape=jax.ShapeDtypeStruct((8, 128), dtype),
     )
-    def kernel(x_ref, o_ref):
-      o_ref[...] = fn(x_ref[...], y)
+    def kernel(x_ref, y_ref, o_ref):
+      o_ref[...] = fn(x_ref[...], y_ref[...])
 
     x = jnp.full((8, 128), 4, dtype=dtype)
     y = jnp.full((8, 128), 2 if jnp.issubdtype(dtype, jnp.integer) else 2.0,
                  dtype=dtype)
-    np.testing.assert_allclose(kernel(x), fn(x, y))
+    np.testing.assert_allclose(kernel(x, y), fn(x, y))
 
   @parameterized.named_parameters(
       ('integer_1_1', (1, 1)),
@@ -295,6 +295,22 @@ class OpsTest(PallasBaseTest):
 
 class OpsInterpreterTest(OpsTest):
   INTERPRET = True
+
+  def test_debug_print(self):
+    @functools.partial(
+        self.pallas_call,
+        out_shape=jax.ShapeDtypeStruct((2,), jnp.float32),
+        grid=1,
+    )
+    def kernel(x_ref, o_ref):
+      jax.debug.print("x = {}", x_ref)
+
+    x = jnp.array([4.2, 2.4]).astype(jnp.float32)
+    with jtu.capture_stdout() as output:
+      jax.block_until_ready(kernel(x))
+      jax.effects_barrier()
+
+    self.assertIn("x = [4.2 2.4]", output())
 
 
 class OpsExtraTest(PallasBaseTest):

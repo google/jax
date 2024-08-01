@@ -25,7 +25,7 @@ import jaxlib.mlir.ir as ir
 from jaxlib import xla_client
 
 from .hlo_helpers import custom_call
-from .gpu_common_utils import GpuLibNotLinkedError
+
 
 for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
   try:
@@ -63,18 +63,17 @@ if _hip_prng:
 
 _prod = lambda xs: functools.reduce(operator.mul, xs, 1)
 
-# TODO(b/338022728): forward_compatibility_mode=False after 3 weeks.
+
 def _threefry2x32_lowering(prng, platform: str, keys, data,
                            length: int | ir.Value | None = None,
                            output_shape: ir.Value | None = None,
-                           forward_compatibility_mode: bool = True):
+                           forward_compatibility_mode: bool = False):
   """ThreeFry2x32 kernel for GPU.
 
   In presence of dynamic shapes, `length` is an `ir.Value` and `output_shape`
   is a 1D tensor describing the shape of the two outputs.
   """
-  if forward_compatibility_mode and not prng:
-    raise GpuLibNotLinkedError()
+  del forward_compatibility_mode
   assert len(keys) == 2, keys
   assert len(data) == 2, data
   assert (ir.RankedTensorType(keys[0].type).element_type ==
@@ -90,37 +89,18 @@ def _threefry2x32_lowering(prng, platform: str, keys, data,
   operand_layouts = [layout] * 4
   operands = [keys[0], keys[1], data[0], data[1]]
 
-  if forward_compatibility_mode and length is None:
-    length = _prod(dims)
-
   opaque = {}  # Use if not forward_compatibility_mode to trigger the FFI (v4).
   if isinstance(length, int):
-    if forward_compatibility_mode:
-      opaque = prng.threefry2x32_descriptor(length)
     result_shapes = None
   else:
     assert output_shape is not None
-    if forward_compatibility_mode:
-      opaque = prng.threefry2x32_descriptor(-1)
-      assert (ir.RankedTensorType(length.type).element_type ==  # type: ignore[attribute-error]
-              ir.IntegerType.get_signless(64)), length
-      assert (ir.RankedTensorType(length.type).shape ==  # type: ignore[attribute-error]
-              [1]), (length, ir.RankedTensorType(length.type).shape)  # type: ignore[attribute-error]
-      # Pass the length, which will be used by the custom call target since the
-      # static length in the descriptor is -1.
-      operands.append(length)
-      operand_layouts.append((0,))
     # We also need to pass separately the shapes of the outputs.
     result_shapes = [output_shape, output_shape]
 
-  custom_call_target = (
-      f"{platform}_threefry2x32"
-      if forward_compatibility_mode
-      else f"{platform}_threefry2x32_ffi"
-  )
+  custom_call_target = f"{platform}_threefry2x32_ffi"
   return custom_call(
       custom_call_target,
-      api_version=(2 if forward_compatibility_mode else 4),
+      api_version=4,
       result_types=[typ, typ],
       operands=operands,
       backend_config=opaque,

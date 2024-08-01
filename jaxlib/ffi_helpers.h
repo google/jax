@@ -2,9 +2,12 @@
 #define JAXLIB_FFI_HELPERS_H_
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <string>
+#include <tuple>
 
+#include "absl/algorithm/container.h"
 #include "absl/base/optimization.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -36,15 +39,6 @@ namespace jax {
     }                                       \
   } while (0)
 
-inline xla::ffi::Error AsFfiError(const absl::Status& status) {
-  if (ABSL_PREDICT_FALSE(!status.ok())) {
-    return xla::ffi::Error(static_cast<XLA_FFI_Error_Code>(status.code()),
-                           std::string(status.message()));
-  } else {
-    return xla::ffi::Error::Success();
-  }
-}
-
 template <typename T>
 inline absl::StatusOr<T> MaybeCastNoOverflow(
     std::int64_t value, const std::string& source = __FILE__) {
@@ -59,6 +53,32 @@ inline absl::StatusOr<T> MaybeCastNoOverflow(
     }
     return static_cast<T>(value);
   }
+}
+
+inline xla::ffi::Error AsFfiError(const absl::Status& status) {
+  if (ABSL_PREDICT_FALSE(!status.ok())) {
+    return xla::ffi::Error(static_cast<XLA_FFI_Error_Code>(status.code()),
+                           std::string(status.message()));
+  } else {
+    return xla::ffi::Error::Success();
+  }
+}
+
+template <typename T>
+xla::ffi::Error CheckMatrixDimensions(xla::ffi::Span<T> dims) {
+  if (dims.size() < 2) {
+    return xla::ffi::Error(xla::ffi::ErrorCode::kInvalidArgument,
+                           "Matrix must have at least 2 dimensions");
+  }
+  return xla::ffi::Error::Success();
+}
+
+template <typename T>
+std::tuple<int64_t, int64_t, int64_t> SplitBatch2D(xla::ffi::Span<T> dims) {
+  auto matrix_dims = dims.last(2);
+  return std::make_tuple(absl::c_accumulate(dims.first(dims.size() - 2), 1,
+                                            std::multiplies<int64_t>()),
+                         matrix_dims.front(), matrix_dims.back());
 }
 
 }  // namespace jax

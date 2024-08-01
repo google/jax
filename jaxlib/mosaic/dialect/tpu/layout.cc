@@ -713,7 +713,8 @@ llvm::hash_code hash_value(const VectorLayout& layout) {
   return llvm::hash_value(layout.as_tuple());
 }
 
-std::ostream &operator<<(std::ostream &os, VectorLayout::ImplicitDim dim) {
+template <typename Stream>
+Stream& printImplicitDim(Stream& os, VectorLayout::ImplicitDim dim) {
   switch (dim) {
     case VectorLayout::ImplicitDim::kNone:
       os << "none";
@@ -726,6 +727,15 @@ std::ostream &operator<<(std::ostream &os, VectorLayout::ImplicitDim dim) {
       break;
   }
   return os;
+}
+
+std::ostream& operator<<(std::ostream& os, VectorLayout::ImplicitDim dim) {
+  return printImplicitDim(os, dim);
+}
+
+mlir::Diagnostic& operator<<(mlir::Diagnostic& diag,
+                             VectorLayout::ImplicitDim dim) {
+  return printImplicitDim(diag, dim);
 }
 
 std::optional<Layout> parseLayout(mlir::AsmParser& parser) {

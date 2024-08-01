@@ -810,7 +810,7 @@ def run_scoped(f: Callable[..., Any], *types, **kw_types) -> Any:
   """Call the function with allocated references.
 
   Args:
-    f: The function that generatest the jaxpr.
+    f: The function that generates the jaxpr.
     *types: The types of the function's positional arguments.
     **kw_types: The types of the function's keyword arguments.
   """

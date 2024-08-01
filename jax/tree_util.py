@@ -42,6 +42,8 @@ from jax._src.tree_util import (
     DictKey as DictKey,
     FlattenedIndexKey as FlattenedIndexKey,
     GetAttrKey as GetAttrKey,
+    KeyEntry as KeyEntry,
+    KeyPath as KeyPath,
     Partial as Partial,
     PyTreeDef as PyTreeDef,
     SequenceKey as SequenceKey,
