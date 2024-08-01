@@ -1323,8 +1323,8 @@ compilation_cache_max_size = int_state(
           'size to grow indefinitely.'),
 )
 
-remove_custom_partitioning_ptr_for_cache_key = bool_state(
-    name='jax_remove_custom_partitioning_ptr_for_cache_key',
+remove_custom_partitioning_ptr_from_cache_key = bool_state(
+    name='jax_remove_custom_partitioning_ptr_from_cache_key',
     default=False,
     help=('If set to True, remove the custom partitioning pointer '
           'present in the precompiled stableHLO before hashing  '

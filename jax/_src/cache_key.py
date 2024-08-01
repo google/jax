@@ -18,7 +18,6 @@ import io
 import logging
 import os
 import sys
-import re
 from typing import cast as type_cast
 
 from jax._src import config
@@ -67,7 +66,7 @@ def get(module: ir.Module,
         compile_options: xla_client.CompileOptions,
         backend: xla_client.Client,
         compression_algorithm: str = "zstandard",
-        remove_custom_partitioning_ptr_for_cache_key: bool = False) -> str:
+        remove_custom_partitioning_ptr_from_cache_key: bool = False) -> str:
   """Creates a hashed string to use as a key to the compilation cache.
 
   Creates a cache key that is a hex-encoded string of a unique hash based on
@@ -85,8 +84,9 @@ def get(module: ir.Module,
    'jit__psum-14ac577cdb2ef6d986078b4054cc9893a9a14a16dbb0d8f37b89167c1f1aacdf'
   """
   entries = [
-      ("computation", lambda hash_obj: _hash_computation(hash_obj, module, 
-                                                         remove_custom_partitioning_ptr_for_cache_key)),
+      ("computation", 
+       lambda hash_obj: _hash_computation(
+         hash_obj, module, remove_custom_partitioning_ptr_from_cache_key)),
       ("jax_lib version",
        lambda hash_obj: hash_obj.update(
            bytes(jaxlib_version_str.encode("utf-8")))),
@@ -144,9 +144,9 @@ def _remove_custom_partitioning_ptr(m: ir.Module):
   
 
 def _serialize_ir(m: ir.Module, 
-                  remove_custom_partitioning_ptr_for_cache_key: bool) -> bytes:
+                  remove_custom_partitioning_ptr_from_cache_key: bool) -> bytes:
   output = io.BytesIO()
-  if remove_custom_partitioning_ptr_for_cache_key:
+  if remove_custom_partitioning_ptr_from_cache_key:
     m_editted = _remove_custom_partitioning_ptr(type_cast(ir.Module,
                                                            m.operation.clone()))
     m_editted.operation.write_bytecode(file=output)
@@ -157,25 +157,25 @@ def _serialize_ir(m: ir.Module,
 
 
 def _canonicalize_ir(m_original: ir.Module, 
-                     remove_custom_partitioning_ptr_for_cache_key: bool) -> bytes:
+                     remove_custom_partitioning_ptr_from_cache_key: bool) -> bytes:
   with m_original.context:
     m = type_cast(ir.Module, m_original.operation.clone())
     passes = pm.PassManager.parse(
         "builtin.module(strip-debuginfo)"
     )
     passes.run(m.operation)
-    return _serialize_ir(m, remove_custom_partitioning_ptr_for_cache_key)
+    return _serialize_ir(m, remove_custom_partitioning_ptr_from_cache_key)
 
 
 def _hash_computation(hash_obj, 
                       module, 
-                      remove_custom_partitioning_ptr_for_cache_key):
+                      remove_custom_partitioning_ptr_from_cache_key):
   if config.compilation_cache_include_metadata_in_key.value:
     canonical_ir = _serialize_ir(module, 
-                                 remove_custom_partitioning_ptr_for_cache_key)
+                                 remove_custom_partitioning_ptr_from_cache_key)
   else:
     canonical_ir = _canonicalize_ir(module, 
-                                    remove_custom_partitioning_ptr_for_cache_key)
+                                    remove_custom_partitioning_ptr_from_cache_key)
   hash_obj.update(canonical_ir)
 
 
