@@ -31,6 +31,7 @@ from jax._src.scipy.special import (
   expit as expit,
   expn as expn,
   factorial as factorial,
+  fresnel as fresnel,
   gamma as gamma,
   gammainc as gammainc,
   gammaincc as gammaincc,

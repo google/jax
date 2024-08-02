@@ -96,6 +96,9 @@ JAX_SPECIAL_FUNCTION_RECORDS = [
         "factorial", 1, float_dtypes, jtu.rand_default, True
     ),
     op_record(
+        "fresnel", 1, float_dtypes, jtu.rand_default, True
+    ),
+    op_record(
         "i0", 1, float_dtypes, jtu.rand_default, True
     ),
     op_record(
