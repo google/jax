@@ -1,0 +1,9 @@
+FROM quay.io/pypa/manylinux_2_28_x86_64
+
+ARG ROCM_VERSION=6.1.1
+ARG ROCM_BUILD_JOB
+ARG ROCM_BUILD_NUM
+
+RUN --mount=type=cache,target=/var/cache/dnf \
+    --mount=type=bind,source=build/rocm/tools/get_rocm.py,target=get_rocm.py \
+    python3 get_rocm.py --rocm-version=$ROCM_VERSION --job-name=$ROCM_BUILD_JOB --build-num=$ROCM_BUILD_NUM

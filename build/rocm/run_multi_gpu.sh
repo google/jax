@@ -20,8 +20,8 @@ run_tests() {
     local base_dir=./logs
     local gpu_devices="$1"
     export HIP_VISIBLE_DEVICES=$gpu_devices
-    python3 -m pytest --html=$base_dir/multi_gpu_pmap_test_log.html --reruns 3 -x tests/pmap_test.py
-    python3 -m pytest --html=$base_dir/multi_gpu_multi_device_test_log.html --reruns 3 -x tests/multi_device_test.py
+    python3 -m pytest --html=$base_dir/multi_gpu_pmap_test_log.html --reruns 3  tests/pmap_test.py
+    python3 -m pytest --html=$base_dir/multi_gpu_multi_device_test_log.html --reruns 3 tests/multi_device_test.py
     python3 -m pytest_html_merger -i $base_dir/ -o  $base_dir/final_compiled_report.html
 }
 
