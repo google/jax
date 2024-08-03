@@ -14,6 +14,7 @@ Image manipulation functions
 
     resize
     scale_and_translate
+    unfold
 
 Argument classes
 ----------------
