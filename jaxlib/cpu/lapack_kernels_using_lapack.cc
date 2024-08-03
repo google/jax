@@ -66,10 +66,10 @@ jax::RealGeev<double>::FnType dgeev_;
 jax::ComplexGeev<std::complex<float>>::FnType cgeev_;
 jax::ComplexGeev<std::complex<double>>::FnType zgeev_;
 
-jax::RealGees<float>::FnType sgees_;
-jax::RealGees<double>::FnType dgees_;
-jax::ComplexGees<std::complex<float>>::FnType cgees_;
-jax::ComplexGees<std::complex<double>>::FnType zgees_;
+jax::SchurDecomposition<ffi::DataType::F32>::FnType sgees_;
+jax::SchurDecomposition<ffi::DataType::F64>::FnType dgees_;
+jax::SchurDecompositionComplex<ffi::DataType::C64>::FnType cgees_;
+jax::SchurDecompositionComplex<ffi::DataType::C128>::FnType zgees_;
 
 jax::Gehrd<float>::FnType sgehrd_;
 jax::Gehrd<double>::FnType dgehrd_;
@@ -173,6 +173,22 @@ static_assert(
         jax::SingularValueDecompositionComplex<ffi::DataType::C128>::FnType,
         jax::ComplexGesdd<std::complex<double>>::FnType>,
     JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SchurDecomposition<ffi::DataType::F32>::FnType,
+                   jax::RealGees<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SchurDecomposition<ffi::DataType::F64>::FnType,
+                   jax::RealGees<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SchurDecompositionComplex<ffi::DataType::C64>::FnType,
+                   jax::ComplexGees<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::SchurDecompositionComplex<ffi::DataType::C128>::FnType,
+                   jax::ComplexGees<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
 
 #undef JAX_KERNEL_FNTYPE_MISMATCH_MSG
 
@@ -265,6 +281,11 @@ static auto init = []() -> int {
       cgesdd_);
   AssignKernelFn<SingularValueDecompositionComplex<ffi::DataType::C128>>(
       zgesdd_);
+
+  AssignKernelFn<SchurDecomposition<ffi::DataType::F32>>(sgees_);
+  AssignKernelFn<SchurDecomposition<ffi::DataType::F64>>(dgees_);
+  AssignKernelFn<SchurDecompositionComplex<ffi::DataType::C64>>(cgees_);
+  AssignKernelFn<SchurDecompositionComplex<ffi::DataType::C128>>(zgees_);
 
   return 0;
 }();

@@ -59,6 +59,26 @@ inline bool ComputesUV(ComputationMode mode) {
 
 }  // namespace svd
 
+namespace eig {
+
+enum class ComputationMode : char {
+  kNoEigenvectors = 'N',
+  kComputeEigenvectors = 'V',
+};
+
+}
+
+namespace schur {
+
+enum class ComputationMode : char {
+  kNoComputeSchurVectors = 'N',
+  kComputeSchurVectors = 'V',
+};
+
+enum class Sort : char { kNoSortEigenvalues = 'N', kSortEigenvalues = 'S' };
+
+}  // namespace schur
+
 template <typename KernelType>
 void AssignKernelFn(void* func) {
   KernelType::fn = reinterpret_cast<typename KernelType::FnType*>(func);
@@ -85,6 +105,9 @@ DEFINE_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::UpLo);
 DEFINE_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::Transpose);
 DEFINE_CHAR_ENUM_ATTR_DECODING(jax::MatrixParams::Diag);
 DEFINE_CHAR_ENUM_ATTR_DECODING(jax::svd::ComputationMode);
+DEFINE_CHAR_ENUM_ATTR_DECODING(jax::eig::ComputationMode);
+DEFINE_CHAR_ENUM_ATTR_DECODING(jax::schur::ComputationMode);
+DEFINE_CHAR_ENUM_ATTR_DECODING(jax::schur::Sort);
 
 #undef DEFINE_CHAR_ENUM_ATTR_DECODING
 
@@ -430,6 +453,60 @@ struct ComplexGees {
   static void Kernel(void* out, void** data, XlaCustomCallStatus*);
 };
 
+// FFI Kernel
+
+template <::xla::ffi::DataType dtype>
+struct SchurDecomposition {
+  using ValueType = ::xla::ffi::NativeType<dtype>;
+  using FnType = void(char* jobvs, char* sort,
+                      bool (*select)(ValueType, ValueType), lapack_int* n,
+                      ValueType* a, lapack_int* lda, lapack_int* sdim,
+                      ValueType* wr, ValueType* wi, ValueType* vs,
+                      lapack_int* ldvs, ValueType* work, lapack_int* lwork,
+                      bool* bwork, lapack_int* info);
+
+  inline static FnType* fn = nullptr;
+
+  static ::xla::ffi::Error Kernel(
+      ::xla::ffi::Buffer<dtype> x, schur::ComputationMode mode,
+      schur::Sort sort, ::xla::ffi::ResultBuffer<dtype> x_out,
+      ::xla::ffi::ResultBuffer<dtype> eigvals_real,
+      ::xla::ffi::ResultBuffer<dtype> eigvals_imag,
+      ::xla::ffi::ResultBuffer<dtype> schur_vectors,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> selected_eigvals,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info);
+
+  static int64_t GetWorkspaceSize(lapack_int x_cols,
+                                  schur::ComputationMode mode,
+                                  schur::Sort sort);
+};
+
+template <::xla::ffi::DataType dtype>
+struct SchurDecompositionComplex {
+  using ValueType = ::xla::ffi::NativeType<dtype>;
+  using RealType = ::xla::ffi::NativeType<::xla::ffi::ToReal(dtype)>;
+  using FnType = void(char* jobvs, char* sort, bool (*select)(ValueType),
+                      lapack_int* n, ValueType* a, lapack_int* lda,
+                      lapack_int* sdim, ValueType* w, ValueType* vs,
+                      lapack_int* ldvs, ValueType* work, lapack_int* lwork,
+                      RealType* rwork, bool* bwork, lapack_int* info);
+
+  inline static FnType* fn = nullptr;
+
+  static ::xla::ffi::Error Kernel(
+      ::xla::ffi::Buffer<dtype> x, schur::ComputationMode mode,
+      schur::Sort sort, ::xla::ffi::ResultBuffer<dtype> x_out,
+      ::xla::ffi::ResultBuffer<dtype> eigvals,
+      ::xla::ffi::ResultBuffer<dtype> schur_vectors,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> selected_eigvals,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info,
+      ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> rwork);
+
+  static int64_t GetWorkspaceSize(lapack_int x_cols,
+                                  schur::ComputationMode mode,
+                                  schur::Sort sort);
+};
+
 //== Hessenberg Decomposition                                       ==//
 //== Reduces a non-symmetric square matrix to upper Hessenberg form ==//
 
@@ -500,6 +577,10 @@ XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_sgesdd_ffi);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_dgesdd_ffi);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_cgesdd_ffi);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_zgesdd_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_sgees_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_dgees_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_cgees_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_zgees_ffi);
 
 }  // namespace jax
 

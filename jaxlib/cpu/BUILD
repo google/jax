@@ -63,6 +63,7 @@ pybind_extension(
     module_name = "_lapack",
     pytype_srcs = [
         "_lapack/__init__.pyi",
+        "_lapack/schur.pyi",
         "_lapack/svd.pyi",
     ],
     deps = [
