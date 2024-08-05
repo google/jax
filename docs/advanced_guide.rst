@@ -10,7 +10,6 @@ This section contains examples and tutorials on more advanced topics, such as Mu
 
    notebooks/neural_network_with_tfds_data
    notebooks/Neural_Network_and_Data_Loading
-   notebooks/vmapped_log_probs
 
 .. toctree::
    :caption: Parallel Computation
@@ -36,9 +35,3 @@ This section contains examples and tutorials on more advanced topics, such as Mu
    notebooks/How_JAX_primitives_work
    notebooks/Writing_custom_interpreters_in_Jax
    Custom_Operation_for_GPUs
-
-.. toctree::
-   :caption: Deep Dives
-   :maxdepth: 1
-
-   notebooks/convolutions
