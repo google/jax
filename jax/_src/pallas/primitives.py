@@ -51,6 +51,7 @@ map, unsafe_map = util.safe_map, map
 zip, unsafe_zip = util.safe_zip, zip
 
 program_id_p = jax_core.Primitive("program_id")
+batching.ragged_prop_rules[program_id_p] = batching.ragged_mask_no_op_rule
 
 def program_id(axis: int) -> jax.Array:
   """Returns the kernel execution position along the given axis of the grid.

@@ -817,6 +817,7 @@ core.custom_typechecks[cond_p] = partial(_cond_typecheck, False)
 core.axis_substitution_rules[cond_p] = _cond_axis_substitution
 pe.partial_eval_jaxpr_custom_rules[cond_p] = _cond_partial_eval_custom
 pe.dce_rules[cond_p] = _cond_dce_rule
+batching.ragged_prop_rules[cond_p] = batching.ragged_mask_assert_no_op_rule
 
 def _cond_lowering(ctx, index, *args, branches):
   joined_effects = core.join_effects(*(branch.effects for branch in branches))

@@ -2012,6 +2012,8 @@ def _sin_lowering(ctx, x):
 sin_p = standard_unop(_float | _complex, 'sin')
 ad.defjvp(sin_p, lambda g, x: mul(g, cos(x)))
 mlir.register_lowering(sin_p, _sin_lowering)
+batching.ragged_prop_rules[sin_p] = batching.ragged_mask_elementwise_rule
+
 
 def _cos_complex(x):
   # cos(x) = complex(cos(real(x)) * cosh(imag(x)), -sin(real(x)) * sinh(imag(x)))
@@ -2359,6 +2361,7 @@ add_p: Primitive = standard_naryop([_num, _num], 'add')
 ad.primitive_jvps[add_p] = _add_jvp
 ad.primitive_transposes[add_p] = _add_transpose
 mlir.register_lowering(add_p, partial(_nary_lower_hlo, hlo.add))
+batching.ragged_prop_rules[add_p] = batching.ragged_mask_elementwise_rule
 
 def _sub_jvp(primals, tangents):
   x, y = primals
@@ -2516,6 +2519,7 @@ def _compare_lower_hlo(direction: str, total_order: bool, ctx, x, y):
 eq_p = naryop(_fixed_dtype(np.bool_), [_any, _any], 'eq', allow_extended_dtype=True)
 ad.defjvp_zero(eq_p)
 mlir.register_lowering(eq_p, partial(_compare_lower_hlo, "EQ", False))
+batching.ragged_prop_rules[eq_p] = batching.ragged_mask_elementwise_rule
 
 ne_p = naryop(_fixed_dtype(np.bool_), [_any, _any], 'ne', allow_extended_dtype=True)
 ad.defjvp_zero(ne_p)
@@ -2660,6 +2664,9 @@ pe.const_fold_rules[convert_element_type_p] = _convert_elt_type_folding_rule
 pe.forwarding_rules[convert_element_type_p] = _convert_elt_type_fwd_rule
 pe.def_trivial_padding(convert_element_type_p)
 core.pp_eqn_rules[convert_element_type_p] = _convert_elt_type_pp_rule
+batching.ragged_prop_rules[convert_element_type_p] = (
+    batching.ragged_mask_elementwise_rule
+)
 
 def _real_dtype(dtype): return np.finfo(dtype).dtype
 
@@ -3006,6 +3013,36 @@ def _dot_general_pp_rule(eqn, context, settings) -> pp.Doc:
       (list(lhs_cont), list(rhs_cont)), (list(lhs_batch), list(rhs_batch)))
   return core._pp_eqn(eqn.replace(params=printed_params), context, settings)
 
+
+def _dot_general_ragged_prop_rule(invar_raggedness, outvars):
+  assert len(invar_raggedness) == 2
+  assert len(outvars) == 1
+  invar_raggedness_lhs = invar_raggedness[0]
+  invar_raggedness_rhs = invar_raggedness[1]
+
+  stacked_axis_lhs, ragged_axis_dim_lhs, _, _ = invar_raggedness_lhs
+  stacked_axis_rhs, ragged_axis_dim_rhs, _, _ = invar_raggedness_rhs
+
+  if stacked_axis_rhs != 0 or stacked_axis_lhs != 0:
+    raise NotImplementedError(
+        'Dot general ragged prop for non 0 stacked axis, NYI'
+    )
+
+  # We only support ragged k atm, that is, lhs is (m, ragged_k) and rhs is
+  # (ragged_k, n), meaning the output is dense.
+  if ragged_axis_dim_lhs != 2 or ragged_axis_dim_rhs != 1:
+    raise NotImplementedError(
+        'Dot general ragged prop for non contraction raggedness, NYI'
+    )
+
+  assert len(outvars) == 1
+
+  # TODO(mvoz): A constant on batching.* ?
+  dense_jumble_raggedness = None
+  # Dense (m, n) - no jumble only atm
+  return invar_raggedness, [dense_jumble_raggedness]
+
+
 dot_general_p = standard_primitive(_dot_general_shape_rule,
                                    _dot_general_dtype_rule, 'dot_general')
 ad.defbilinear(dot_general_p,
@@ -3013,6 +3050,7 @@ ad.defbilinear(dot_general_p,
 batching.primitive_batchers[dot_general_p] = _dot_general_batch_rule
 pe.padding_rules[dot_general_p] = _dot_general_padding_rule
 core.pp_eqn_rules[dot_general_p] = _dot_general_pp_rule
+batching.ragged_prop_rules[dot_general_p] = _dot_general_ragged_prop_rule
 
 def precision_attr(precision: Precision) -> ir.ArrayAttr:
   if precision is None:
@@ -3436,6 +3474,13 @@ def _broadcast_in_dim_abstract_eval(x, *dyn_shape, shape, broadcast_dimensions):
   # TODO(mattjj): unify DShapedArray with ShapedArray, and remove this code
   return core.DShapedArray(_merge_dyn_shape(shape, dyn_shape), x.dtype, x.weak_type)
 
+
+def _broadcast_in_dim_ragged_prop_rule(invar_raggedness, outvars):
+  assert len(invar_raggedness) == 1
+  assert not isinstance(invar_raggedness[0], core.Var)
+  return invar_raggedness, [None] * len(outvars)
+
+
 broadcast_in_dim_p = standard_primitive(
     _broadcast_in_dim_shape_rule, _input_dtype, 'broadcast_in_dim')
 broadcast_in_dim_p.def_abstract_eval(_broadcast_in_dim_abstract_eval)
@@ -3448,6 +3493,9 @@ pe.custom_staging_rules[broadcast_in_dim_p] = _broadcast_in_dim_staging_rule
 pe.padding_rules[broadcast_in_dim_p] = _broadcast_in_dim_padding_rule
 core.custom_typechecks[broadcast_in_dim_p] = _broadcast_in_dim_typecheck_rule
 mlir.register_lowering(broadcast_in_dim_p, _broadcast_in_dim_lower)
+batching.ragged_prop_rules[broadcast_in_dim_p] = (
+    _broadcast_in_dim_ragged_prop_rule
+)
 
 
 def _clamp_shape_rule(min, operand, max):
@@ -3718,6 +3766,7 @@ squeeze_p = standard_primitive(_squeeze_shape_rule, _squeeze_dtype_rule,
 ad.deflinear2(squeeze_p, _squeeze_transpose_rule)
 batching.primitive_batchers[squeeze_p] = _squeeze_batch_rule
 pe.def_trivial_padding(squeeze_p)
+batching.ragged_prop_rules[squeeze_p] = batching.ragged_mask_no_op_rule
 
 def _squeeze_lower(ctx, operand, *, dimensions):
   del dimensions  # Implied by the output aval.
@@ -4333,6 +4382,7 @@ reduce_and_p = standard_primitive(
     _reduce_logical_shape_rule, _input_dtype, 'reduce_and',
     weak_type_rule=_strip_weak_type)
 batching.defreducer(reduce_and_p, _get_bitwise_and_identity)
+batching.ragged_prop_rules[reduce_and_p] = batching.ragged_mask_elementwise_rule
 
 
 reduce_xor_p = standard_primitive(
