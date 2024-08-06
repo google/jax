@@ -45,6 +45,7 @@ Follow these steps to contribute code:
    git clone https://github.com/YOUR_USERNAME/jax
    cd jax
    pip install -r build/test-requirements.txt  # Installs all testing requirements.
+   pip install -r docs/requirements.txt  # Installs documentation requirements.
    pip install -e ".[cpu]"  # Installs JAX from the current directory in editable mode.
    ```
 

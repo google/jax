@@ -1,6 +1,6 @@
 absl-py
 ipython>=8.8.0  # 8.7.0 has ipython3 lexer error
-sphinx>=7.3.2  # 7.3.0 breaks sphinx-book-theme
+sphinx~=7.4.0  # 7.3.0 breaks sphinx-book-theme
 sphinx-book-theme>=1.0.1  # Older versions fail to pin pydata-sphinx-theme
 sphinx-copybutton>=0.5.0
 sphinx-remove-toctrees

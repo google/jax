@@ -100,10 +100,12 @@ Automatic differentiation
     linear_transpose
     vjp
     custom_jvp
-    custom_vjp
     custom_gradient
     closure_convert
     checkpoint
+
+.. autoclass:: custom_vjp
+  :members: __init__, defvjp
 
 jax.Array (:code:`jax.Array`)
 -----------------------------
