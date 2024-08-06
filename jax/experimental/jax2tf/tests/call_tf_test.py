@@ -752,6 +752,62 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
     ):
       _ = fun_jax_3(x)
 
+  @parameterized.parameters(
+      {
+          "input_arg_kwarg_shapes": [
+              [
+                  jax.ShapeDtypeStruct(
+                      export.symbolic_shape("(a, b, 7)"), dtype=jnp.float32
+                  )
+              ],
+              {},
+          ],
+          "output_shapes": jax.ShapeDtypeStruct(
+              export.symbolic_shape("(b, 13, a)"), dtype=jnp.float32
+          ),
+          "args": [jax.ShapeDtypeStruct((1, 3, 7), dtype=jnp.float32)],
+          "kwargs": {},
+          "expected_output_shapes": jax.ShapeDtypeStruct(
+              (3, 13, 1), dtype=jnp.float32
+          ),
+      },
+      {
+          "input_arg_kwarg_shapes": [
+              [],
+              {
+                  "foo": jax.ShapeDtypeStruct(
+                      export.symbolic_shape("(a, b)"), dtype=jnp.float32
+                  )
+              },
+          ],
+          "output_shapes": jax.ShapeDtypeStruct(
+              export.symbolic_shape("(b, a)"), dtype=jnp.int32
+          ),
+          "args": [],
+          "kwargs": {"foo": jax.ShapeDtypeStruct((1, 3), dtype=jnp.float32)},
+          "expected_output_shapes": jax.ShapeDtypeStruct(
+              (3, 1), dtype=jnp.int32
+          ),
+      },
+  )
+  def test_calculate_polymorphic_output_shapes(
+      self,
+      input_arg_kwarg_shapes,
+      output_shapes,
+      args,
+      kwargs,
+      expected_output_shapes,
+  ):
+    output_shapes = jax2tf.calculate_polymorphic_output_shapes(
+        input_arg_kwarg_shapes, output_shapes, *args, **kwargs
+    )
+    jax.tree.map(self.assertDtypesMatch, output_shapes, expected_output_shapes)
+    jax.tree.map(
+        lambda x, y: self.assertEqual(x.shape, y.shape),
+        output_shapes,
+        expected_output_shapes,
+    )
+
   def test_multi_platform(self):
     def tf_fun(x):
       return tf.math.sin(x)
