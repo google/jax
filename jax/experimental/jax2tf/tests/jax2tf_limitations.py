@@ -865,15 +865,15 @@ class Jax2TfLimitation(test_harnesses.Limitation):
     def custom_assert(tst, result_jax, result_tf, *, args, tol,
                       err_msg):  # noqa: F811
       arg1, arg2 = args
-      # lax.igammac returns 1. when arg1 <= 0; tf.math.igammac returns NaN
+      # lax.igammac returns nan. when arg1 <= 0; tf.math.igammac returns 1
       special_cases = (arg1 <= 0.) | (arg2 <= 0)
       nr_special_cases = np.count_nonzero(special_cases)
       tst.assertAllClose(
-          np.full((nr_special_cases,), 1., dtype=dtype),
+          np.full((nr_special_cases,), np.nan, dtype=dtype),
           result_jax[special_cases],
           err_msg=err_msg)
       tst.assertAllClose(
-          np.full((nr_special_cases,), np.nan, dtype=dtype),
+          np.full((nr_special_cases,), 1, dtype=dtype),
           result_tf[special_cases],
           err_msg=err_msg)
       # non-special cases are equal
@@ -892,12 +892,12 @@ class Jax2TfLimitation(test_harnesses.Limitation):
         custom_numeric(dtypes=[np.float64], tol=1e-9),
         custom_numeric(devices="gpu", tol=1e-3),
         custom_numeric(
+            modes=("compiled",),
             custom_assert=custom_assert,
-            devices=("cpu", "gpu"),
+            devices=("cpu", "gpu", "tpu"),
             description=(
                 "May return different results at undefined points "
-                "(both arguments less or equal 0). JAX returns `NaN` and TF returns 0 or "
-                "JAX returns 1 and TF returns `NaN`")),
+                "(both arguments less or equal 0). JAX returns `NaN` and TF returns 1")),
     ]
 
   @classmethod

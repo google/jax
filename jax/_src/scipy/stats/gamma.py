@@ -197,7 +197,8 @@ def sf(x: ArrayLike, a: ArrayLike, loc: ArrayLike = 0, scale: ArrayLike = 1) -> 
     - :func:`jax.scipy.stats.gamma.logsf`
   """
   x, a, loc, scale = promote_args_inexact("gamma.sf", x, a, loc, scale)
-  return gammaincc(a, lax.div(lax.sub(x, loc), scale))
+  y = lax.div(lax.sub(x, loc), scale)
+  return jnp.where(lax.lt(y, _lax_const(y, 0)), 1, gammaincc(a, y))
 
 
 def logsf(x: ArrayLike, a: ArrayLike, loc: ArrayLike = 0, scale: ArrayLike = 1) -> Array:
