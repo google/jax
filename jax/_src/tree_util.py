@@ -383,9 +383,14 @@ def tree_transpose(outer_treedef: PyTreeDef, inner_treedef: PyTreeDef | None,
     inner_treedef = tree_structure(outer_treedef.flatten_up_to(pytree_to_transpose)[0])
   inner_size = inner_treedef.num_leaves
   outer_size = outer_treedef.num_leaves
+  expected_treedef = outer_treedef.compose(inner_treedef)
   if treedef.num_leaves != (inner_size * outer_size):
-    expected_treedef = outer_treedef.compose(inner_treedef)
     raise TypeError(f"Mismatch\n{treedef}\n != \n{expected_treedef}")
+  if expected_treedef != treedef:
+    # Try to unflatten -> flatten to update expected_treedef
+    _, expected_treedef = tree_flatten(tree_unflatten(expected_treedef, flat))
+    if expected_treedef != treedef:
+      raise TypeError(f"Mismatch\n{treedef}\n != \n{expected_treedef}")
   iter_flat = iter(flat)
   lol = [
       [next(iter_flat) for _ in range(inner_size)] for __ in range(outer_size)
