@@ -261,12 +261,15 @@ def jaxpr_as_fun(closed_jaxpr: ClosedJaxpr, *args):
 
 class JaxprEqnContext:
 
-  def __init__(self, compute_type: str | None, threefry_partitionable: bool):
+  def __init__(self, compute_type: str | None, threefry_partitionable: bool,
+               x64: bool):
     self.compute_type = compute_type
     self.threefry_partitionable = threefry_partitionable
+    self.x64 = x64
     self._managers = [
         (compute_on.extend_compute_type, self.compute_type),
         (config.threefry_partitionable.__call__, self.threefry_partitionable),
+        (config.enable_x64.__call__, self.x64),
     ]
 
   @property
@@ -279,7 +282,8 @@ class JaxprEqnContext:
 
   def __repr__(self):
     return (f"JaxprEqnContext(compute_type={self.compute_type},"
-            f"threefry_partitionable={self.threefry_partitionable})")
+            f" threefry_partitionable={self.threefry_partitionable},"
+            f" x64={self.x64})")
 
 
 class JaxprEqn:
@@ -333,8 +337,9 @@ class JaxprEqn:
 def new_jaxpr_eqn(invars, outvars, primitive, params, effects, source_info=None,
                   ctx=None):
   source_info = source_info or source_info_util.new_source_info()
-  ctx = ctx or JaxprEqnContext(compute_on.current_compute_type(),
-                               config.threefry_partitionable.value)
+  ctx = ctx or JaxprEqnContext(
+      compute_on.current_compute_type(), config.threefry_partitionable.value,
+      config.enable_x64.value)
   if config.enable_checks.value:
     assert all(isinstance(x, (Var, Literal)) for x in  invars)
     assert all(isinstance(v,  Var)           for v in outvars)
@@ -483,7 +488,7 @@ def eval_jaxpr(jaxpr: Jaxpr, consts, *args, propagate_source_info=True) -> list[
 
   def write(v: Var, val: Any) -> None:
     if config.enable_checks.value and not config.dynamic_shapes.value:
-      assert typecheck(v.aval, val), (v.aval, val)
+      assert typecheck(v.aval, val), (v.aval, val, get_aval(val))
     env[v] = val
 
   env: dict[Var, Any] = {}
@@ -1509,11 +1514,15 @@ def concrete_aval(x):
                    "type")
 
 
-def get_aval(x):
+def get_aval(x, canonicalize_dtype=True):
   if isinstance(x, Tracer):
     return x.aval
   else:
-    return concrete_aval(x)
+    if canonicalize_dtype:
+      return concrete_aval(x)
+    else:
+      with config.enable_x64(True):
+        return concrete_aval(x)
 
 
 def concretization_function_error(fun, suggest_astype=False):
@@ -2871,53 +2880,54 @@ def _check_jaxpr(
   for eqn_idx, eqn in enumerate(jaxpr.eqns):
     prim = eqn.primitive
     try:
-      in_atoms = map(read, eqn.invars)
-      in_avals = [x.aval for x in in_atoms]  # use in_atoms for dyn shapes
+      with eqn.ctx.manager:
+        in_atoms = map(read, eqn.invars)
+        in_avals = [x.aval for x in in_atoms]  # use in_atoms for dyn shapes
 
-      # Compute the type of the primitive application.
-      if prim in custom_typechecks:
-        out_type, eqn_effects = custom_typechecks[prim](
-          ctx_factory, *in_atoms, **eqn.params)
-      elif prim.call_primitive:
-        out_type, eqn_effects = _check_call(ctx_factory, prim, in_atoms,
-                                            eqn.params)
-      elif prim.map_primitive:
-        out_type, eqn_effects = _check_map(ctx_factory, prim, in_avals,
-                                           eqn.params)
-      else:
-        out_type, eqn_effects = check_eqn(prim, in_avals, eqn.params)
+        # Compute the type of the primitive application.
+        if prim in custom_typechecks:
+          out_type, eqn_effects = custom_typechecks[prim](
+            ctx_factory, *in_atoms, **eqn.params)
+        elif prim.call_primitive:
+          out_type, eqn_effects = _check_call(ctx_factory, prim, in_atoms,
+                                              eqn.params)
+        elif prim.map_primitive:
+          out_type, eqn_effects = _check_map(ctx_factory, prim, in_avals,
+                                             eqn.params)
+        else:
+          out_type, eqn_effects = check_eqn(prim, in_avals, eqn.params)
 
-      # Check the computed effect type matches the eqn's annotation, and is
-      # included in the jaxpr's annotation.
-      if prim is mutable_array_p:
-        outvar, = eqn.outvars
-        in_idx[outvar] = None  # type: ignore
-      if eqn.effects != eqn_effects:
-        raise JaxprTypeError("Inferred effects do not match equation effects. "
-                             f"Equation effects: {eqn.effects}. "
-                             f"Inferred effects: {eqn_effects}")
-      for eff in eqn.effects:
-        if isinstance(eff, effects.JaxprInputEffect):
-          eqn_invar = eqn.invars[eff.input_index]
-          if (jaxpr_index := in_idx.get(eqn_invar, sentinel)) is sentinel:
-            raise JaxprTypeError(
-                "Invalid `JaxprInputEffect`: must correspond to a jaxpr invar")
-          jaxpr_effect = eff.replace(input_index=jaxpr_index)
-          if jaxpr_effect not in jaxpr.effects:
-            raise JaxprTypeError(
-                "Invalid `JaxprInputEffect`: must be present in jaxpr. "
-                f"{jaxpr_effect} is not in {jaxpr.effects}.")
-        elif isinstance(eff, NamedAxisEffect):
-          # It is valid for a primitive to discharge the named axis effect.
-          continue
-        elif eff not in jaxpr.effects:
-          raise JaxprTypeError("Equation effect not present in jaxpr effects. "
-                               f"Equation effect: {eff}. "
-                               f"Jaxpr effects: {jaxpr.effects}")
+        # Check the computed effect type matches the eqn's annotation, and is
+        # included in the jaxpr's annotation.
+        if prim is mutable_array_p:
+          outvar, = eqn.outvars
+          in_idx[outvar] = None  # type: ignore
+        if eqn.effects != eqn_effects:
+          raise JaxprTypeError("Inferred effects do not match equation effects. "
+                              f"Equation effects: {eqn.effects}. "
+                              f"Inferred effects: {eqn_effects}")
+        for eff in eqn.effects:
+          if isinstance(eff, effects.JaxprInputEffect):
+            eqn_invar = eqn.invars[eff.input_index]
+            if (jaxpr_index := in_idx.get(eqn_invar, sentinel)) is sentinel:
+              raise JaxprTypeError(
+                  "Invalid `JaxprInputEffect`: must correspond to a jaxpr invar")
+            jaxpr_effect = eff.replace(input_index=jaxpr_index)
+            if jaxpr_effect not in jaxpr.effects:
+              raise JaxprTypeError(
+                  "Invalid `JaxprInputEffect`: must be present in jaxpr. "
+                  f"{jaxpr_effect} is not in {jaxpr.effects}.")
+          elif isinstance(eff, NamedAxisEffect):
+            # It is valid for a primitive to discharge the named axis effect.
+            continue
+          elif eff not in jaxpr.effects:
+            raise JaxprTypeError("Equation effect not present in jaxpr effects. "
+                                f"Equation effect: {eff}. "
+                                f"Jaxpr effects: {jaxpr.effects}")
 
-      # Check out_type matches the let-binders' annotation (after substitution).
-      out_type = substitute_vars_in_output_ty(out_type, eqn.invars, eqn.outvars)
-      map(write, eqn.outvars, out_type)
+        # Check out_type matches the let-binders' annotation (after substitution).
+        out_type = substitute_vars_in_output_ty(out_type, eqn.invars, eqn.outvars)
+        map(write, eqn.outvars, out_type)
 
     except JaxprTypeError as e:
       ctx, settings = ctx_factory()

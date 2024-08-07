@@ -898,8 +898,9 @@ def new_eqn_recipe(in_tracers: Sequence[JaxprTracer],
     assert ("donated_invars" in params and
             len(params["donated_invars"]) == len(params["call_jaxpr"].invars))
   out_avals = [core.raise_to_shaped(t.aval) for t in out_tracers]
-  ctx = ctx or JaxprEqnContext(compute_on.current_compute_type(),
-                               config.threefry_partitionable.value)
+  ctx = ctx or JaxprEqnContext(
+      compute_on.current_compute_type(), config.threefry_partitionable.value,
+      config.enable_x64.value)
   return JaxprEqnRecipe(object(), tuple(in_tracers), map(ref, out_tracers),
                         out_avals, primitive, params, effects, source_info,
                         ctx)
@@ -1262,7 +1263,7 @@ def _partial_eval_jaxpr_custom_cached(
             outvars_copy, resvars, device_put_p,
             dict(devices=[TransferToMemoryKind(policy.dst)], srcs=[None]),
             set(), source_info_util.new_source_info(),
-            JaxprEqnContext(None, False))
+            JaxprEqnContext(None, False, eqn.ctx.x64))
         known_eqns.append(offload_eqn)
         # resvars are known and available in the backward jaxpr.
         map(partial(write, False, True), resvars)
@@ -1271,7 +1272,7 @@ def _partial_eval_jaxpr_custom_cached(
             resvars, eqn.outvars, device_put_p,
             dict(devices=[TransferToMemoryKind(policy.src)], srcs=[None]),
             set(), source_info_util.new_source_info(),
-            JaxprEqnContext(None, False))
+            JaxprEqnContext(None, False, eqn.ctx.x64))
         staged_eqns.append(reload_eqn)
         # outvars are known and available in the backward jaxpr.
         map(partial(write, False, True), eqn.outvars)
@@ -1777,7 +1778,7 @@ def make_jaxpr_effects(constvars, invars, outvars, eqns) -> effects.Effects:
 class JaxprStackFrame:
   gensym: Callable[[AbstractValue], Var]
   tracer_to_var: dict[TracerId, Var]
-  constid_to_tracer: dict[ConstId, Tracer]
+  constid_to_tracer: dict[tuple[ConstId, bool], Tracer]
   constvar_to_val: dict[Var, Any]
   tracers: list[DynamicJaxprTracer]  # hold onto strong refs for all tracers
   eqns: list[JaxprEqn]
@@ -1982,7 +1983,7 @@ class DynamicJaxprTrace(core.Trace):
 
   def new_const(self, c):
     # TODO(mattjj): for ints, or hashable consts, don't rely on id
-    tracer = self.frame.constid_to_tracer.get(id(c))
+    tracer = self.frame.constid_to_tracer.get((id(c), config.enable_x64.value))
     if tracer is None:
       aval = raise_to_shaped(get_aval(c), weak_type=dtypes.is_weakly_typed(c))
       aval = self._lift_tracers_in_aval(aval)
@@ -1995,7 +1996,7 @@ class DynamicJaxprTrace(core.Trace):
     tracer = DynamicJaxprTracer(self, aval, source_info_util.current())
     self.frame.tracers.append(tracer)
     self.frame.tracer_to_var[id(tracer)] = var = self.frame.newvar(aval)
-    self.frame.constid_to_tracer[id(c)] = tracer
+    self.frame.constid_to_tracer[(id(c), config.enable_x64.value)] = tracer
     self.frame.constvar_to_val[var] = c
     return tracer
 
@@ -2003,7 +2004,7 @@ class DynamicJaxprTrace(core.Trace):
     # When lifting closed-over tracers corresponding to this same trace, the
     # variable to lift could have tracers (representing axis size variables) in
     # its shape. We must lift those too!
-    tracer = self.frame.constid_to_tracer.get(id(t))
+    tracer = self.frame.constid_to_tracer.get((id(t), config.enable_x64.value))
     if tracer is None:
       aval = raise_to_shaped(get_aval(t), weak_type=dtypes.is_weakly_typed(t))
       aval = self._lift_tracers_in_aval(aval)

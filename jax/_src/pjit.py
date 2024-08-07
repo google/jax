@@ -2265,8 +2265,9 @@ def _pjit_transpose(cts_in, *primals_in,
     *prune_type(ad.UndefinedPrimal, in_layouts, primals_in),
     *prune_type(ad.Zero, out_layouts, cts_in)
   )
-  global_cts_in_avals = tuple(core.raise_to_shaped(core.get_aval(ct))
-                              for ct in primals_and_nz_cts_in)
+  global_cts_in_avals = tuple(
+      core.raise_to_shaped(core.get_aval(ct, canonicalize_dtype=False))
+      for ct in primals_and_nz_cts_in)
 
   transpose_jaxpr, attrs_tracked = _pjit_transpose_trace(
       body, global_cts_in_avals)

@@ -1612,16 +1612,23 @@ def jaxpr_subcomp(ctx: ModuleContext, jaxpr: core.Jaxpr,
     IR function, in the order of ctx.shape_poly_state.dim_vars.
   """
   assert "gpu" not in ctx.platforms
-  def read(v: core.Atom) -> IrValues:
+  def read(x64_val: bool, v: core.Atom) -> IrValues:
     if type(v) is core.Literal:
-      return ir_constant(xla.canonicalize_dtype(v.val))
+      if x64_val:
+        return ir_constant(v.val)
+      else:
+        return ir_constant(xla.canonicalize_dtype(v.val))
     else:
       assert isinstance(v, core.Var)
       return env[v]
 
-  def aval(v: core.Atom) -> core.AbstractValue:
+  def get_aval(x64_val: bool, v: core.Atom) -> core.AbstractValue:
     if type(v) is core.Literal:
-      return xla.abstractify(v.val)
+      if x64_val:
+        with config.enable_x64(True):
+          return xla.abstractify(v.val)
+      else:
+        return xla.abstractify(v.val)
     else:
       return v.aval
 
@@ -1662,7 +1669,7 @@ def jaxpr_subcomp(ctx: ModuleContext, jaxpr: core.Jaxpr,
   map(write, jaxpr.invars, args)
   last_used = core.last_used(jaxpr)
   for eqn in jaxpr.eqns:
-    in_nodes = map(read, eqn.invars)
+    in_nodes = map(partial(read, eqn.ctx.x64), eqn.invars)
     source_info = eqn.source_info.replace(
         name_stack=name_stack + eqn.source_info.name_stack)
     loc = _source_info_to_location(ctx, eqn.primitive, eqn.params, source_info)
@@ -1688,15 +1695,16 @@ def jaxpr_subcomp(ctx: ModuleContext, jaxpr: core.Jaxpr,
 
       effects = list(effects_lib.ordered_effects.filter_in(eqn.effects))
       tokens_in = tokens.subset(effects)
-      avals_in = map(aval, eqn.invars)
+      avals_in = map(partial(get_aval, eqn.ctx.x64), eqn.invars)
       rule_ctx = LoweringRuleContext(
           module_context=ctx, primitive=eqn.primitive,
           name_stack=source_info.name_stack,
           avals_in=avals_in,
-          avals_out=map(aval, eqn.outvars), tokens_in=tokens_in,
-          tokens_out=None, jaxpr_eqn_ctx=eqn.ctx, dim_var_values=dim_var_values)
+          avals_out=map(partial(get_aval, eqn.ctx.x64), eqn.outvars),
+          tokens_in=tokens_in, tokens_out=None, jaxpr_eqn_ctx=eqn.ctx,
+          dim_var_values=dim_var_values)
       if config.dynamic_shapes.value:
-        axis_size_env = {d: read(d)
+        axis_size_env = {d: read(eqn.ctx.x64, d)
                          for a in avals_in if type(a) is core.DShapedArray
                          for d in a.shape if type(d) is core.Var}
         rule_ctx = rule_ctx.replace(axis_size_env=axis_size_env)
@@ -1731,7 +1739,7 @@ def jaxpr_subcomp(ctx: ModuleContext, jaxpr: core.Jaxpr,
     assert len(ans) == len(eqn.outvars), (ans, eqn)
     map(write, eqn.outvars, out_nodes)
     core.clean_up_dead_vars(eqn, env, last_used)
-  return tuple(read(v) for v in jaxpr.outvars), tokens
+  return tuple(read(False, v) for v in jaxpr.outvars), tokens
 
 
 def _platforms_for_eqn_ctx(eqn_ctx: core.JaxprEqnContext | None

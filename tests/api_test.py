@@ -4850,6 +4850,131 @@ class APITest(jtu.JaxTestCase):
     with self.assertRaisesRegex(TracerBoolConversionError, "Attempted boolean"):
       f()
 
+  def test_x64_scan(self):
+    def f(a):
+      def body(carry, _):
+        with config.enable_x64(True):
+          y = (carry + a).astype(jnp.int64)
+          assert y.dtype == jnp.int64
+          z = y.astype(jnp.int32)
+        return carry, (z, y)
+      return lax.scan(body, jnp.int32(2), jnp.arange(4))
+
+    carry_out, ys_out = f(3)  # doesn't crash
+    self.assertEqual(carry_out.dtype, np.int32)
+    self.assertEqual(ys_out[0].dtype, np.int32)
+    self.assertEqual(ys_out[1].dtype, np.int64)
+
+  @jax.numpy_dtype_promotion('standard')
+  def test_x64_jvp(self):
+    def f(x):
+      with config.enable_x64(True):
+        return x * jnp.float64(2.0)
+
+    out = jax.jvp(f, (jnp.float32(3.0),), (jnp.float32(1.0),))
+    self.assertEqual(out[0].dtype, np.float64)
+    self.assertEqual(out[1].dtype, np.float64)
+
+  # Disable x64 so that the checks in the test work on all configs
+  # (even those that turn x64 on by default).
+  @config.enable_x64(False)
+  def test_x64_literal(self):
+    @jax.jit
+    def f(a):
+      with config.enable_x64(True):
+        b = a * 1.
+      assert b.dtype == np.float64
+      c = b * 1.
+      assert c.dtype == np.float32
+      with config.enable_x64(True):
+        d = c * 1.
+      return d
+
+    jaxpr = jax.make_jaxpr(f)(1.)
+    self.assertIn('convert_element_type[new_dtype=float64', str(jaxpr))
+    self.assertIn('convert_element_type[new_dtype=float32', str(jaxpr))
+
+    out = f(1.)
+    self.assertEqual(out.dtype, np.float64)
+
+    gout = jax.jit(jax.grad(f))(1.)
+    self.assertEqual(gout.dtype, np.float32)
+
+  @config.enable_x64(False)
+  def test_x64_eval_jaxpr_strong_type(self):
+    @jax.jit
+    def f(a):
+      with config.enable_x64(True):
+        b = a * 1.
+      c = b * 1.
+      # This enable_x64 will have no effect since `c` is a strong float32 type
+      # and `1.` is a weak float64 type.
+      # So according to type promotion rules, `d` will also be `float32`.
+      with config.enable_x64(True):
+        d = c * 1.
+      return jnp.sum(d)
+
+    with config.enable_x64(True):
+      inp = jnp.arange(2.)
+
+    out = f(inp)
+    self.assertEqual(out.dtype, np.float32)
+
+    jaxpr = jax.make_jaxpr(f)(inp)
+    self.assertEqual(str(jaxpr).count('convert_element_type'), 1)
+
+    with config.enable_checks(False):
+      out2 = jax.core.jaxpr_as_fun(jaxpr)(inp)
+    self.assertEqual(out2[0].dtype, np.float32)
+
+    gout = jax.jit(jax.grad(f))(inp)
+    self.assertEqual(gout.dtype, np.float64)
+
+  @config.enable_x64(False)
+  def test_x64_literal_eager(self):
+    @jax.jit
+    def f(a):
+      with config.enable_x64(True):
+        b = a * 1.
+        assert b.dtype == np.float64
+        c = b * 1.
+      return c
+
+    d = f(2.)
+    self.assertEqual(d.dtype, np.float64)
+    self.assertArraysEqual(d, 2.)
+
+    e = d + 1.
+    self.assertEqual(e.dtype, np.float32)
+    self.assertArraysEqual(e, 3.)
+
+    with config.enable_x64(True):
+      f1 = e + 1.
+    self.assertEqual(f1.dtype, np.float64)
+    self.assertArraysEqual(f1, 4.)
+
+    with config.enable_x64(True):
+      ones = jnp.ones(())
+      self.assertEqual(ones.dtype, np.float64)
+      out2 = jax.grad(f)(ones)
+    self.assertEqual(out2.dtype, np.float64)
+    self.assertArraysEqual(out2, 1.)
+
+  @unittest.skip('TODO(yashkatariya): Enable this.')
+  @config.enable_x64(False)
+  def test_yash(self):
+    def f(x):
+      with config.enable_x64(True):
+        B = jnp.linalg.det(x.astype(jnp.float64))
+      return B
+
+    x = jax.random.uniform(key=jax.random.key(1), shape=(4,4))
+
+    print(jax.jacfwd(f)(x))
+    print(jax.make_jaxpr(jax.jacfwd(f))(x))
+    print(jax.make_jaxpr(jax.jacrev(f))(x))
+    print(jax.jacrev(f)(x))
+
 
 class RematTest(jtu.JaxTestCase):
 

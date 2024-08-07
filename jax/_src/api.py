@@ -705,7 +705,10 @@ def value_and_grad(fun: Callable, argnums: int | Sequence[int] = 0,
           f_partial, *dyn_args, has_aux=True)
     _check_scalar(ans)
     tree_map(partial(_check_output_dtype_grad, holomorphic), ans)
-    g = vjp_py(lax_internal._one(ans))
+    # Don't canonicalize the `ones` created here.
+    with config.enable_x64(True):
+      ones = lax_internal._one(ans)
+    g = vjp_py(ones)
     g = g[0] if isinstance(argnums, int) else g
     if not has_aux:
       return ans, g
