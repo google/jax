@@ -658,7 +658,7 @@ using [jupytext](https://jupytext.readthedocs.io/) by running `jupytext --sync` 
 notebooks; for example:
 
 ```
-pip install jupytext==1.16.0
+pip install jupytext==1.16.1
 jupytext --sync docs/notebooks/thinking_in_jax.ipynb
 ```
 
