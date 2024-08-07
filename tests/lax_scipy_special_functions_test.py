@@ -268,6 +268,18 @@ class LaxScipySpcialFunctionsTest(jtu.JaxTestCase):
       with self.assertRaises(TypeError), self.assertWarns(DeprecationWarning):
         lsp_special.beta(b=1, y=1)
 
+  def testFresnelSingleAndDoublePrecision(self):
+    # Testing that the series expansions developed for double precision
+    # work for single precision too.
+    for dtype, tol in ((jax.numpy.float32, 1e-6),
+                       (jax.numpy.float64, 1e-15)):
+      with jax.experimental.enable_x64(dtype == jax.numpy.float64):
+        x = jax.numpy.linspace(-10, 10, 1000, dtype=dtype)
+        got = lsp_special.fresnel(x)
+        expected = osp_special.fresnel(np.asarray(x))
+        self.assertAllClose(got, expected, atol=tol, rtol=tol,
+                            check_dtypes=False)
+
 
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())
