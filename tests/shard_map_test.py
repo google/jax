@@ -216,6 +216,36 @@ class ShardMapTest(jtu.JaxTestCase):
     for i, sums in enumerate(np.split(sum_of_odd_columns, 4, 0)):
       self.assertAllClose(np.squeeze(c.addressable_data(2 * i + 1), -1), sums)
 
+  def test_collective_broadcast(self):
+    devices = np.array(jax.devices()[:8]) # Take up to 8 devices
+    mesh = Mesh(devices, axis_names=('x'))
+    a = jax.device_put(
+        jnp.arange(8 * 8).reshape((8, 8)),
+        jax.sharding.NamedSharding(mesh, P('x', None)))
+    
+    # TODO: pbroadcast needs a replication rule. If that surprises you it's
+    # actually worse than that. There's two completely unrelated primitives
+    # called pbroadcast:
+    #  - one in jax.lax.parallel (this lowers the actual StableHLO
+    #    CollectiveBroadcast op),
+    #  - one in jax.experimental.shard_map (this is an implementation detail
+    #    of grad-of-shard_map and lowers to a no-op)
+    # The former is the one we're testing here. One of these should seriously
+    # be renamed.
+    
+    # For now we just use check_rep=False.
+
+    @jax.jit
+    @partial(
+        shard_map, mesh=mesh, in_specs=(P('x', None),), out_specs=P('x', None), check_rep=False
+    )
+    def fwd(a):
+      return lax.pbroadcast(a, axis_name='x', source=0)
+
+    c = fwd(a)
+    self.assertEqual(c.shape, a.shape)
+    self.assertAllClose(c, jnp.broadcast_to(a[0], c.shape))
+
   def test_collective_permute(self):
     devices = np.array(jax.devices()[:8]) # Take up to 8 devices
     mesh = Mesh(devices, axis_names=('x'))
