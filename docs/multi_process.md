@@ -123,6 +123,30 @@ computation on its local devices. You can see all available global devices via
 {func}`jax.devices()`. A process’s local devices are always a subset of the
 global devices.
 
+```{note}
+
+Even if XLA can do multi-process communication via devices specific
+libraries (i.e. NCCL on NVIDIA GPUS, ...). JAX isn't able to do it by
+itself. So some functions that work with
+single-process+multiple-devices doesn't work with multiple
+processes. For example, {func}`jax.device_put` don't work with
+multi-processes.
+
+JAX could try to hide this and it would be useful at medium scale.
+But at big scale, that won't work as you can't initialize the full
+weights in each process and have them drop the part it don't use.
+So we document how to think and work at *big* scale!
+
+To work at *big* scale require a different mindset. That mindset also
+works for single-process+multiple-GPUs cases, So it is safe to always
+use it.
+
+| Single process function | Multi processes function |
+| ----------------------- | -------------------------|
+| {func}`jax.device_put`  | {func}`jax.make_array_from_process_local_data` |
+
+```
+
 ### Running multi-process computations
 
 So how do you actually run a computation involving cross-process communication?
@@ -174,3 +198,22 @@ differently-ordered computations despite running the same program:
     `set` on current Python versions or `dict` [before Python 3.7](https://mail.python.org/pipermail/python-dev/2017-December/151283.html)
     may result in a different ordering on different processes, even with the
     same insertion order.
+
+## Dataset
+
+JAX don't have functions to load or do special dataset pre-processing.
+Try to make sure your libraries handle it in a performant way. For
+example, you want each process to only load and preprocess its own
+chunk of the data and not load all data and drop the part it doesn't
+use.
+
+The {doc}`/distributed_data_loading` page could help you.
+
+## Model State Saving
+
+If your job save its state, it is useful to spend sometimes to make
+sure it works as you want in multi-process.  Do you want all the nodes
+to writes all their states, even the replicated one? Each decision
+have different pros and cons here.
+{func}`jax.experimental.array_serialization.serialization` and
+[Orbax](https://github.com/google/orbax) could help you here.
