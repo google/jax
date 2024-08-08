@@ -1472,9 +1472,10 @@ LogicalResult yield_rule(RewriteContext &ctx, Operation &op,
   return success();
 }
 
-LogicalResult tpu_load_rule(RewriteContext &ctx, Operation &op,
-                            const ArrayRef<Layout> layouts_in,
-                            const ArrayRef<Layout> layouts_out) {
+template <typename OpTy>
+LogicalResult tpu_load_rule_impl(RewriteContext &ctx, OpTy op,
+                                 const ArrayRef<Layout> layouts_in,
+                                 const ArrayRef<Layout> layouts_out) {
   TPU_ASSERT_EQ_OP(layouts_out.size(), 1);
   TPU_ASSERT_OP(llvm::none_of(layouts_in,
                               [&](const Layout &l) { return l.has_value(); }));
@@ -1485,14 +1486,12 @@ LogicalResult tpu_load_rule(RewriteContext &ctx, Operation &op,
   if (layout_out.bitwidth() != 32) {
     return op.emitOpError("Not implemented: Only 32-bit loads supported");
   }
-  tpu::LoadOp load_op = cast<tpu::LoadOp>(op);
   if (layout_out != VectorLayout(32, {0, 0}, ctx.target_shape,
                                  VectorLayout::ImplicitDim::kNone)) {
-    return op.emitOpError("Invalid output layout for ") << load_op->getName();
+    return op.emitOpError("Invalid output layout for ") << op->getName();
   }
-  FAILUREOR_ASSIGN_OR_RETURN(
-      const SmallVector<int64_t> indices,
-      getIntConstsFromOperandRange(load_op.getIndices()));
+  FAILUREOR_ASSIGN_OR_RETURN(const SmallVector<int64_t> indices,
+                             getIntConstsFromOperandRange(op.getIndices()));
   TPU_ASSERT_EQ_OP(indices.size(), 2);
   if (indices[1] % ctx.target_shape[1] != 0) {
     return op.emitOpError("Not implemented: Lane index is not a multiple of ")
@@ -1500,14 +1499,75 @@ LogicalResult tpu_load_rule(RewriteContext &ctx, Operation &op,
   }
 
   OpBuilder builder(op.getContext());
-  builder.setInsertionPointAfter(&op);
+  builder.setInsertionPointAfter(op);
   const RollVectorsOp roll_vectors_op =
-      assemble(builder, load_op.getResult().getType(), layout_out,
-               {{load_op.getResult()}}, ctx.target_shape);
-  load_op->replaceUsesWithIf(roll_vectors_op, [&](OpOperand &operand) {
+      assemble(builder, op.getResult().getType(), layout_out,
+               {{op.getResult()}}, ctx.target_shape);
+  op->replaceUsesWithIf(roll_vectors_op, [&](OpOperand &operand) {
     return operand.getOwner() != roll_vectors_op;
   });
   return success();
+}
+
+LogicalResult tpu_load_rule(RewriteContext &ctx, Operation &op,
+                            const ArrayRef<Layout> layouts_in,
+                            const ArrayRef<Layout> layouts_out) {
+  auto load_op = cast<tpu::LoadOp>(op);
+  return tpu_load_rule_impl(ctx, load_op, layouts_in, layouts_out);
+}
+
+LogicalResult tpu_shuffled_load_rule(RewriteContext &ctx, Operation &op,
+                                     const ArrayRef<Layout> layouts_in,
+                                     const ArrayRef<Layout> layouts_out) {
+  auto load_op = cast<tpu::ShuffledLoadOp>(op);
+  return tpu_load_rule_impl(ctx, load_op, layouts_in, layouts_out);
+}
+
+template <typename OpTy>
+LogicalResult tpu_store_rule_impl(RewriteContext &ctx, OpTy op,
+                                  const ArrayRef<Layout> layouts_in,
+                                  const ArrayRef<Layout> layouts_out) {
+  TPU_ASSERT_EQ_OP(layouts_out.size(), 0);
+  TPU_ASSERT_OP(layouts_in.front().has_value());  // value to store layout
+  TPU_ASSERT_OP(llvm::none_of(layouts_in.drop_front(),
+                              [&](const Layout &l) { return l.has_value(); }));
+  OpBuilder builder(op);
+  const VectorLayout &to_store_layout = *layouts_in.front();
+  // We expect the value to store is already a native-sized vreg.
+  if (to_store_layout.bitwidth() != 32) {
+    return op.emitOpError("Not implemented: Only 32-bit loads supported");
+  }
+  TPU_ASSERT_OP(to_store_layout ==
+                VectorLayout(32, {0, 0}, ctx.target_shape,
+                             VectorLayout::ImplicitDim::kNone));
+  FAILUREOR_ASSIGN_OR_RETURN(const SmallVector<int64_t> indices,
+                             getIntConstsFromOperandRange(op.getIndices()));
+  TPU_ASSERT_EQ_OP(indices.size(), 2);
+  if (indices[1] % ctx.target_shape[1] != 0) {
+    return op.emitOpError("Not implemented: Lane index is not a multiple of ")
+           << ctx.target_shape[1];
+  }
+  FAILUREOR_ASSIGN_OR_RETURN(
+      xla::Array<Value> tiles,
+      disassemble(builder, to_store_layout, op.getValueToStore(),
+                  ctx.target_shape));
+  TPU_ASSERT_OP((tiles.dimensions() == xla::DimensionVector{1, 1}));
+  op.getValueToStoreMutable().assign(tiles({0, 0}));
+  return success();
+}
+
+LogicalResult tpu_store_rule(RewriteContext &ctx, Operation &op,
+                             const ArrayRef<Layout> layouts_in,
+                             const ArrayRef<Layout> layouts_out) {
+  auto store_op = cast<tpu::StoreOp>(op);
+  return tpu_store_rule_impl(ctx, store_op, layouts_in, layouts_out);
+}
+
+LogicalResult tpu_shuffled_store_rule(RewriteContext &ctx, Operation &op,
+                                      const ArrayRef<Layout> layouts_in,
+                                      const ArrayRef<Layout> layouts_out) {
+  auto store_op = cast<tpu::ShuffledStoreOp>(op);
+  return tpu_store_rule_impl(ctx, store_op, layouts_in, layouts_out);
 }
 
 LogicalResult strided_op_rule_impl(RewriteContext &ctx, Operation &op,
@@ -1928,40 +1988,6 @@ LogicalResult tpu_matmul_rule(RewriteContext &ctx, Operation &op,
           ctx.target_shape)
           .getOperation());
   op.erase();
-  return success();
-}
-
-LogicalResult tpu_store_rule(RewriteContext &ctx, Operation &op,
-                             const ArrayRef<Layout> layouts_in,
-                             const ArrayRef<Layout> layouts_out) {
-  TPU_ASSERT_EQ_OP(layouts_out.size(), 0);
-  TPU_ASSERT_OP(layouts_in.front().has_value());  // value to store layout
-  TPU_ASSERT_OP(llvm::none_of(layouts_in.drop_front(),
-                              [&](const Layout &l) { return l.has_value(); }));
-  OpBuilder builder(&op);
-  const VectorLayout &to_store_layout = *layouts_in.front();
-  // We expect the value to store is already a native-sized vreg.
-  if (to_store_layout.bitwidth() != 32) {
-    return op.emitOpError("Not implemented: Only 32-bit loads supported");
-  }
-  TPU_ASSERT_OP(to_store_layout ==
-                VectorLayout(32, {0, 0}, ctx.target_shape,
-                             VectorLayout::ImplicitDim::kNone));
-  tpu::StoreOp store_op = cast<tpu::StoreOp>(op);
-  FAILUREOR_ASSIGN_OR_RETURN(
-      const SmallVector<int64_t> indices,
-      getIntConstsFromOperandRange(store_op.getIndices()));
-  TPU_ASSERT_EQ_OP(indices.size(), 2);
-  if (indices[1] % ctx.target_shape[1] != 0) {
-    return op.emitOpError("Not implemented: Lane index is not a multiple of ")
-           << ctx.target_shape[1];
-  }
-  FAILUREOR_ASSIGN_OR_RETURN(
-      xla::Array<Value> tiles,
-      disassemble(builder, to_store_layout, store_op.getValueToStore(),
-                  ctx.target_shape));
-  TPU_ASSERT_OP((tiles.dimensions() == xla::DimensionVector{1, 1}));
-  store_op.getValueToStoreMutable().assign(tiles({0, 0}));
   return success();
 }
 
@@ -4382,6 +4408,8 @@ const llvm::StringMap<rule_type> &rules() {
       {tpu::GatherOp::getOperationName(), tpu_gather_rule},
       {tpu::LoadOp::getOperationName(), tpu_load_rule},
       {tpu::StoreOp::getOperationName(), tpu_store_rule},
+      {tpu::ShuffledLoadOp::getOperationName(), tpu_shuffled_load_rule},
+      {tpu::ShuffledStoreOp::getOperationName(), tpu_shuffled_store_rule},
       {tpu::StridedLoadOp::getOperationName(), tpu_strided_load_rule},
       {tpu::StridedStoreOp::getOperationName(), tpu_strided_store_rule},
       {tpu::MatmulOp::getOperationName(), tpu_matmul_rule},
@@ -5009,9 +5037,10 @@ FailureOr<xla::Array<Value>> tpu_rotate_with_overflow(
 }
 
 FailureOr<std::pair<VectorLayout, xla::Array<Value>>> changeOffsets(
-    OpBuilder &builder, const std::array<int64_t, 2> target_shape,
-    const Location loc, const VectorType vty, const VectorLayout src,
-    xla::Array<Value> vregs, const LayoutOffsets dst_offsets) {
+    RewriteContext &ctx, OpBuilder &builder, const Location loc,
+    const VectorType vty, const VectorLayout src, xla::Array<Value> vregs,
+    const LayoutOffsets dst_offsets) {
+  const auto &target_shape = ctx.target_shape;
   const VectorLayout dst(src.bitwidth(), dst_offsets, src.tiling(),
                          src.implicit_dim());
   const auto &tiling = src.tiling();
@@ -5176,10 +5205,10 @@ FailureOr<std::pair<VectorLayout, xla::Array<Value>>> changeOffsets(
 
 // TODO(b/265133506): Generalize retiling.
 FailureOr<std::pair<VectorLayout, xla::Array<Value>>> changeTiling(
-    OpBuilder &builder, const std::array<int64_t, 2> target_shape,
-    const Location loc, VectorType vty, const VectorLayout src,
-    xla::Array<Value> vregs, const std::array<int64_t, 2> dst_tiling,
-    bool try_replicate_rows) {
+    RewriteContext &ctx, OpBuilder &builder, const Location loc, VectorType vty,
+    const VectorLayout src, xla::Array<Value> vregs,
+    const std::array<int64_t, 2> dst_tiling, bool try_replicate_rows) {
+  const auto &target_shape = ctx.target_shape;
   if (src.tiling() == dst_tiling) {
     return std::pair(src, std::move(vregs));
   }
@@ -5381,10 +5410,11 @@ FailureOr<std::pair<VectorLayout, xla::Array<Value>>> changeTiling(
 }
 
 FailureOr<std::pair<VectorLayout, xla::Array<Value>>> changeImplicitDim(
-    OpBuilder &builder, const std::array<int64_t, 2> target_shape,
-    const Location loc, VectorType vty, const VectorLayout src,
-    xla::Array<Value> vregs, const VectorLayout::ImplicitDim dst_implicit_dim,
+    RewriteContext &ctx, OpBuilder &builder, const Location loc, VectorType vty,
+    const VectorLayout src, xla::Array<Value> vregs,
+    const VectorLayout::ImplicitDim dst_implicit_dim,
     const LayoutOffsets dst_offset_hints) {
+  const auto &target_shape = ctx.target_shape;
   if (src.implicit_dim() == dst_implicit_dim) {
     return std::make_pair(src, std::move(vregs));
   }
@@ -5412,8 +5442,7 @@ FailureOr<std::pair<VectorLayout, xla::Array<Value>>> changeImplicitDim(
                      src.tiling(), dst_implicit_dim);
     xla::Array<Value> new_vregs(
         dst.tileArrayImplicitShape(vty.getShape(), target_shape));
-    new_vregs.Each([&](const absl::Span<const int64_t> idx,
-                               Value *tile) {
+    new_vregs.Each([&](const absl::Span<const int64_t> idx, Value *tile) {
       const int64_t dst_2nd_minor_idx = idx.size() - 2;
       SmallVector<int64_t> src_idx(idx.begin(), idx.end());
       src.insertImplicit<int64_t>(src_idx, 0);
@@ -5538,21 +5567,21 @@ FailureOr<TypedValue<VectorType>> relayout(RewriteContext &ctx,
 
   FAILUREOR_ASSIGN_OR_RETURN(
       std::tie(src, src_tiles),
-      changeTiling(builder, ctx.target_shape, v.getLoc(), vty, src,
-                   std::move(src_tiles), dst.tiling(),
+      changeTiling(ctx, builder, v.getLoc(), vty, src, std::move(src_tiles),
+                   dst.tiling(),
                    dst.offsets()[0] == std::nullopt &&
                        src.offsets()[0] != std::nullopt));
 
   FAILUREOR_ASSIGN_OR_RETURN(
       std::tie(src, src_tiles),
-      changeImplicitDim(builder, ctx.target_shape, v.getLoc(), vty, src,
+      changeImplicitDim(ctx, builder, v.getLoc(), vty, src,
                         std::move(src_tiles), dst.implicit_dim(),
                         dst.offsets()));
 
   FAILUREOR_ASSIGN_OR_RETURN(
       std::tie(src, src_tiles),
-      changeOffsets(builder, ctx.target_shape, v.getLoc(), vty, src,
-                    std::move(src_tiles), dst.offsets()));
+      changeOffsets(ctx, builder, v.getLoc(), vty, src, std::move(src_tiles),
+                    dst.offsets()));
 
   CHECK_EQ(src, dst);  // At this point we've should be done.
   return assemble(builder, vty, dst, std::move(src_tiles), target_shape,
