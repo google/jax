@@ -268,7 +268,8 @@ def scan(f: Callable[[Carry, X], tuple[Carry, Y]],
     if len(out_tree_children) != 2:
       msg = "scan body output must be a pair, got {}."
       raise TypeError(msg.format(tree_unflatten(out_tree, jaxpr.out_avals)))
-    carry_avals_out = jaxpr.out_avals[:out_tree_children[0].num_leaves]
+    _, carry_avals_out, _ = split_list(
+        jaxpr.out_avals, [len(attrs_tracked), out_tree_children[0].num_leaves])
     return (init_flat, carry_avals, carry_avals_out, init_tree, in_flat, jaxpr,
             consts, out_tree, out_tree_children, attrs_tracked)
 
