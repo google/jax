@@ -66,7 +66,7 @@ parser.add_argument("--python_tracer_level", default=1,
                     help="Profiler Python tracer level", type=int)
 
 def collect_profile(port: int, duration_in_ms: int, host: str,
-                    log_dir: str | None, host_tracer_level: int,
+                    log_dir: os.PathLike | str | None, host_tracer_level: int,
                     device_tracer_level: int, python_tracer_level: int,
                     no_perfetto_link: bool):
   options = profiler.ProfilerOptions(
@@ -97,7 +97,7 @@ def collect_profile(port: int, duration_in_ms: int, host: str,
     fp.write(result.encode("utf-8"))
 
   if not no_perfetto_link:
-    path = jax_profiler._write_perfetto_trace_file(str(log_dir_))
+    path = jax_profiler._write_perfetto_trace_file(log_dir_)
     jax_profiler._host_perfetto_trace_file(path)
 
 def main(args):
