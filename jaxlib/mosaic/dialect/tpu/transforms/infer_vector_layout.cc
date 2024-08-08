@@ -1704,14 +1704,28 @@ class VectorLayoutInferer {
             out_layout = *new_out;
             in_layouts.push_back(some_layout);
           } else {
-            // When we detect a layout conflict we cannot reconcile, we remove
-            // any replication bits that might have been present in out_layout,
-            // since there is no guarantee that the conflicting inputs could
-            // even become replicated.
+            // When we detect a layout conflict we cannot reconcile, we stick to
+            // the current output layout candidate, except that we might lose
+            // replicated offsets. This is because:
+            // - There is no guarantee it might even be possible to have
+            //   replicated offsets for this input, because replicated offsets
+            //   may restrict the possible logical values of the input (must
+            //   have identical elements along a dimension).
+            // - Even when it is possible to make non-replicated offsets
+            //   replicated via broadcasting (when the corresponding, possibly
+            //   implicit, tiled dimension is 1), we prefer to give up the
+            //   replication and set a specific offset (like we do when there is
+            //   no conflict).
+            LayoutOffsets new_offsets{out_layout->offsets()[0].value_or(0), out_layout->offsets()[1].value_or(0)}; 
+            if (layout.getImplicitTiledDims(vty.getShape(), 1) == out_layout->getImplicitTiledDims(vty.getShape(), 1)) {
+              // No transposing dimensions, just retiling. Keep replicated dims
+              // if they are also replicated in the input.
+              new_offsets[0] = !layout.offsets()[0].has_value() ? out_layout->offsets()[0] : new_offsets[0];
+              new_offsets[1] = !layout.offsets()[1].has_value() ? out_layout->offsets()[1] : new_offsets[1];
+            }
             out_layout =
                 VectorLayout(out_layout->bitwidth(),
-                             {out_layout->offsets()[0].value_or(0),
-                              out_layout->offsets()[1].value_or(0)},
+                             new_offsets,
                              out_layout->tiling(), out_layout->implicit_dim());
             in_layouts.push_back(std::nullopt);
           }
