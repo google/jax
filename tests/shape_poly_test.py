@@ -2732,6 +2732,37 @@ _POLY_SHAPE_TEST_HARNESSES = [
       ]
     ],
     [
+        PolyHarness(
+            "lu_pivots_to_permutation",
+            f"shape={jtu.format_shape_dtype_string(shape, np.int32)}_poly={poly}_{permutation_size=}",
+            lax.linalg.lu_pivots_to_permutation,
+            arg_descriptors=[RandArg(shape, np.int32), StaticArg(permutation_size)],
+            polymorphic_shapes=[poly],
+        )
+        for shape, poly, permutation_size in [
+            ((4,), None, 8),
+            ((2, 3, 4), "b1, b2, ...", 8),
+            ((4,), "b", 8),
+            ((2, 3, 4), "b1, b2, b3", 8),
+        ]
+    ],
+    [
+        # Tracing errors are only thrown when the trailing dimension of pivots
+        # is static. Otherwise, the error is thrown at runtime.
+        PolyHarness(
+            "lu_pivots_to_permutation_error",
+            f"shape={jtu.format_shape_dtype_string(shape, np.int32)}_poly={poly}_{permutation_size=}",
+            lax.linalg.lu_pivots_to_permutation,
+            arg_descriptors=[RandArg(shape, np.int32), StaticArg(permutation_size)],
+            polymorphic_shapes=[poly],
+            expect_error=(ValueError, "Output permutation size"),
+        )
+        for shape, poly, permutation_size in [
+            ((4,), None, 3),
+            ((2, 3, 4), "b1, b2, ...", 3),
+        ]
+    ],
+    [
       # The random primitive tests, with threefry (both partitionable and
       # non-partitionable), and unsafe_rbg.
       [

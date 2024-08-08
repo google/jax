@@ -960,7 +960,8 @@ _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
     "lapack_sgetrf",  "lapack_dgetrf", "lapack_cgetrf", "lapack_zgetrf",
     # schur on CPU
     "lapack_sgees", "lapack_dgees", "lapack_cgees", "lapack_zgees",
-    # # lu on GPU
+    # lu on GPU
+    "cu_lu_pivots_to_permutation",
     # "cublas_getrf_batched", "cusolver_getrf",
     # "hipblas_getrf_batched", "hipsolver_getrf",
     # TODO(b/357034884): This can be added once the mimimum version of jaxlib

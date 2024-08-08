@@ -15,7 +15,8 @@
 import os
 
 import numpy as np
-from absl.testing import absltest, parameterized
+from absl.testing import absltest
+from absl.testing import parameterized
 
 import jax
 from jax import lax
@@ -166,7 +167,6 @@ def ffi_call_lu_pivots_to_permutation(pivots, permutation_size, vectorized=True)
           dtype=pivots.dtype,
       ),
       pivots,
-      permutation_size=np.int32(permutation_size),
       vectorized=vectorized,
   )
 

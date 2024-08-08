@@ -18,9 +18,9 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "absl/algorithm/container.h"
 #include "absl/status/status.h"
@@ -60,22 +60,42 @@ void CholeskyUpdate(gpuStream_t stream, void** buffers, const char* opaque,
 }
 
 namespace {
-ffi::Error LuPivotsToPermutationImpl(
-    gpuStream_t stream, std::int32_t permutation_size,
-    ffi::Buffer<ffi::DataType::S32> pivots,
-    ffi::Result<ffi::Buffer<ffi::DataType::S32>> permutation) {
-  auto dims = pivots.dimensions();
-
+absl::StatusOr<std::pair<std::int64_t, std::int32_t>> GetDimensions(
+    ffi::Span<const std::int64_t> dims, const std::string& arg_name) {
   if (dims.size() < 1) {
-    return ffi::Error(ffi::ErrorCode::kInvalidArgument,
-                      "pivots must have at least one dimension");
+    return absl::InvalidArgumentError(
+        absl::StrFormat("%s must have at least one dimension", arg_name));
   }
-  FFI_ASSIGN_OR_RETURN(std::int32_t pivot_size,
-                       MaybeCastNoOverflow<std::int32_t>(dims.back()));
   std::int64_t batch_size = 1;
   if (dims.size() >= 2) {
     batch_size =
         absl::c_accumulate(dims.first(dims.size() - 1), 1, std::multiplies<>());
+  }
+  JAX_ASSIGN_OR_RETURN(auto size,
+                       MaybeCastNoOverflow<std::int32_t>(dims.back()));
+  return std::make_pair(batch_size, size);
+}
+
+ffi::Error LuPivotsToPermutationImpl(
+    gpuStream_t stream, ffi::Dictionary /* unused */,
+    ffi::Buffer<ffi::DataType::S32> pivots,
+    ffi::Result<ffi::Buffer<ffi::DataType::S32>> permutation) {
+  FFI_ASSIGN_OR_RETURN(auto pivots_dims,
+                       GetDimensions(pivots.dimensions(), "pivots"));
+  FFI_ASSIGN_OR_RETURN(auto permutation_dims,
+                       GetDimensions(permutation->dimensions(), "permutation"));
+  auto [batch_size, pivot_size] = pivots_dims;
+  auto [permutation_batch, permutation_size] = permutation_dims;
+  if (permutation_batch != batch_size) {
+    return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                      "pivots and permutation must have the same batch size.");
+  }
+  if (permutation_size < pivot_size) {
+    return ffi::Error(
+        ffi::ErrorCode::kInvalidArgument,
+        absl::StrFormat("Output permutation size %d must match or exceed the "
+                        "trailing dimension of the input pivots %d.",
+                        permutation_size, pivot_size));
   }
   LaunchLuPivotsToPermutationKernel(stream, batch_size, pivot_size,
                                     permutation_size, pivots.typed_data(),
@@ -88,7 +108,10 @@ ffi::Error LuPivotsToPermutationImpl(
 XLA_FFI_DEFINE_HANDLER_SYMBOL(LuPivotsToPermutation, LuPivotsToPermutationImpl,
                               ffi::Ffi::Bind()
                                   .Ctx<ffi::PlatformStream<gpuStream_t>>()
-                                  .Attr<std::int32_t>("permutation_size")
+                                  // TODO(b/358275922): remove Attrs (and the
+                                  // unused Dictionary above) 12 weeks after
+                                  // release of jaxlib v0.4.32.
+                                  .Attrs()
                                   .Arg<ffi::Buffer<ffi::DataType::S32>>()
                                   .Ret<ffi::Buffer<ffi::DataType::S32>>());
 

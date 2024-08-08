@@ -1159,30 +1159,24 @@ def _generic_lu_pivots_to_permutation(swaps, permutation_size):
                                      len(batch_dims))
   if m == 0:
     return permutation
-  result, _ = lax.fori_loop(np.array(0, np.int32), np.array(k, np.int32),
-                            _lu_pivots_body_fn, (permutation, swaps))
+  upper = np.array(k, np.int32) if is_constant_dim(k) else k
+  result, _ = lax.fori_loop(np.array(0, np.int32), upper, _lu_pivots_body_fn,
+                            (permutation, swaps))
   return result
 
 
 def _lu_pivots_to_permutation_abstract_eval(pivots, *, permutation_size):
   pivots = raise_to_shaped(pivots)
-  if isinstance(pivots, ShapedArray):
-    if pivots.ndim < 1 or pivots.dtype != np.dtype(np.int32):
-      raise ValueError(
-          'Argument to lu_pivots_to_permutation must have rank >= 1 and dtype '
-          'int32. Got shape={} and dtype={}'.format(pivots.shape, pivots.dtype))
-
-    if permutation_size < pivots.shape[-1]:
-      raise ValueError(
-          'Output permutation size {} has to exceed the trailing dimension of '
-          'the pivots. Got shape {}'.format(permutation_size, pivots.shape))
-
-    batch_dims = pivots.shape[:-1]
-    permutations = pivots.update(shape=batch_dims + (permutation_size,))
-  else:
-    permutations = pivots
-
-  return permutations
+  if pivots.ndim < 1 or pivots.dtype != np.dtype(np.int32):
+    raise ValueError(
+        'Argument to lu_pivots_to_permutation must have rank >= 1 and dtype '
+        'int32. Got shape={} and dtype={}'.format(pivots.shape, pivots.dtype))
+  pivots_size = pivots.shape[-1]
+  if is_constant_dim(pivots_size) and permutation_size < pivots_size:
+    raise ValueError(
+        'Output permutation size {} has to exceed the trailing dimension of '
+        'the pivots. Got pivots size {}'.format(permutation_size, pivots_size))
+  return pivots.update(shape=(*pivots.shape[:-1], permutation_size))
 
 
 def _lu_pivots_to_permutation_batching_rule(batched_args, batch_dims, *,
@@ -1195,7 +1189,10 @@ def _lu_pivots_to_permutation_batching_rule(batched_args, batch_dims, *,
 
 def _lu_pivots_to_permutation_gpu_lowering(lowering, ctx, pivots, *,
                                            permutation_size):
-  return lowering(pivots, permutation_size=permutation_size)
+  pivots_aval, = ctx.avals_in
+  pivots_shape_vals = mlir.eval_dynamic_shape_as_ivals(ctx, pivots_aval.shape)
+  return lowering(pivots, permutation_size=permutation_size,
+                  pivots_shape_vals=pivots_shape_vals)
 
 
 lu_pivots_to_permutation_p = Primitive('lu_pivots_to_permutation')

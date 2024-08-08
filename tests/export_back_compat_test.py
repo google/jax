@@ -44,6 +44,7 @@ from jax._src.internal_test_util.export_back_compat_test_data import cpu_schur_l
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_svd_lapack_gesdd
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_triangular_solve_blas_trsm
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_threefry2x32
+from jax._src.internal_test_util.export_back_compat_test_data import cuda_lu_pivots_to_permutation
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_Eigh
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_Lu
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_ApproxTopK
@@ -124,6 +125,7 @@ class CompatTest(bctu.CompatTestBase):
         cpu_qr_lapack_geqrf.data_2023_03_17,
         cuda_threefry2x32.data_2023_03_15, cuda_threefry2x32.data_2024_07_30,
         cpu_lu_lapack_getrf.data_2023_06_14,
+        cuda_lu_pivots_to_permutation.data_2024_08_08,
         cuda_qr_cusolver_geqrf.data_2023_03_18, cuda_eigh_cusolver_syev.data_2023_03_17,
         rocm_qr_hipsolver_geqrf.data_2024_08_05,
         rocm_eigh_hipsolver_syev.data_2024_08_05,
@@ -341,6 +343,17 @@ class CompatTest(bctu.CompatTestBase):
     data = self.load_testdata(tpu_Eigh.data)
     self.run_one_test(func, data, rtol=1e-3,
                       check_results=partial(self.check_eigh_results, operand))
+
+  @staticmethod
+  def lu_pivots_to_permutation_harness(shape):
+    operand = jnp.reshape(jnp.arange(math.prod(shape), dtype=np.int32), shape)
+    return lax.linalg.lu_pivots_to_permutation(operand, permutation_size=8)
+
+  def test_cuda_lu_pivots_to_permutation(self):
+    shape = (2, 3, 4)
+    func = lambda: CompatTest.lu_pivots_to_permutation_harness(shape)
+    data = self.load_testdata(cuda_lu_pivots_to_permutation.data_2024_08_08)
+    self.run_one_test(func, data)
 
   @staticmethod
   def qr_harness(shape, dtype):
