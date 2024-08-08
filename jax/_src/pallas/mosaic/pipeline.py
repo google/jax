@@ -157,6 +157,8 @@ def _grid_size(grid):
 
 def _get_indices(step, grid, offsets):
   """Get indices for a given step and grid."""
+  # TODO(enriqueps): Implement using bitwise ops, avoid div/rem since they are
+  # expensive.
   extended_grid = grid + (1,)
   strides = tuple(
       itertools.accumulate(extended_grid[::-1], func=operator.mul))[::-1]
