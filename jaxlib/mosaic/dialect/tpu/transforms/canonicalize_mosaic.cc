@@ -116,8 +116,8 @@ LogicalResult tpu_matmul_rule(tpu::MatmulOp op) {
   return success();
 };
 
-LogicalResult canonicalize_elementwise(int hardware_generation_,
-                                       Operation &op) {
+LogicalResult emulate_elemwise_vector_bf16(int hardware_generation_,
+                                           Operation &op) {
   OpBuilder builder(&op);
   auto operands = op.getOperands();
   auto res_ty = dyn_cast<VectorType>(op.getResult(0).getType());
@@ -184,6 +184,42 @@ LogicalResult canonicalize_elementwise(int hardware_generation_,
                                              new_op->getResult(0));
     op.replaceAllUsesWith(new_op);
     op.erase();
+  }
+  return success();
+}
+
+const llvm::StringSet<> &ops_with_bf16_emulation() {
+  static auto ops = new llvm::StringSet<>{arith::MulFOp::getOperationName(),
+                                          arith::DivFOp::getOperationName(),
+                                          arith::AddFOp::getOperationName(),
+                                          arith::SubFOp::getOperationName(),
+                                          arith::MaximumFOp::getOperationName(),
+                                          arith::MinimumFOp::getOperationName(),
+                                          math::PowFOp::getOperationName()};
+  return *ops;
+}
+
+
+LogicalResult canonicalize_elementwise(int hardware_generation, Operation &op) {
+  bool no_vectors = true;
+  bool only_32_bit = true;
+  for (Value operand : op.getOperands()) {
+    no_vectors &= !isa<VectorType>(operand.getType());
+    only_32_bit &= operand.getType().isSignlessIntOrFloat() &&
+                   operand.getType().getIntOrFloatBitWidth() == 32;
+  }
+  for (Value result : op.getResults()) {
+    no_vectors &= !isa<VectorType>(result.getType());
+    only_32_bit &= result.getType().isSignlessIntOrFloat() &&
+                   result.getType().getIntOrFloatBitWidth() == 32;
+  }
+  if (no_vectors && !only_32_bit) {
+    return op.emitOpError(
+        "Only 32-bit scalar elementwise ops supported. Cast your inputs to a "
+        "32-bit type first.");
+  }
+  if (ops_with_bf16_emulation().contains(op.getName().getStringRef())) {
+    return canonicalize_elementwise(hardware_generation, op);
   }
   return success();
 }
@@ -345,17 +381,6 @@ const llvm::StringMap<canonicalize_rule_type> &rules() {
   return *rules;
 }
 
-const llvm::StringSet<> &elementwise_convertible_ops() {
-  static auto ops = new llvm::StringSet<>{arith::MulFOp::getOperationName(),
-                                          arith::DivFOp::getOperationName(),
-                                          arith::AddFOp::getOperationName(),
-                                          arith::SubFOp::getOperationName(),
-                                          arith::MaximumFOp::getOperationName(),
-                                          arith::MinimumFOp::getOperationName(),
-                                          math::PowFOp::getOperationName()};
-  return *ops;
-}
-
 class MosaicCanonicalizer {
  public:
   MosaicCanonicalizer(int hardware_generation)
@@ -392,8 +417,7 @@ class MosaicCanonicalizer {
         }
       }
     }
-    if (elementwise_convertible_ops().contains(
-            any_op.getName().getStringRef())) {
+    if (OpTrait::hasElementwiseMappableTraits(&any_op)) {
       return canonicalize_elementwise(hardware_generation_, any_op);
     }
     if (auto rule_it = rules().find(any_op.getName().getStringRef());
