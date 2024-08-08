@@ -20,8 +20,8 @@ limitations under the License.
 #include <optional>
 #include <type_traits>
 
-#include "xla/ffi/api/ffi.h"
 #include "xla/ffi/api/c_api.h"
+#include "xla/ffi/api/ffi.h"
 #include "xla/service/custom_call_status.h"
 
 // Underlying function pointers (i.e., KERNEL_CLASS::Fn) are initialized either
@@ -303,6 +303,7 @@ struct SingularValueDecomposition {
   static_assert(!::xla::ffi::IsComplexType<dtype>(),
                 "There exists a separate implementation for Complex types");
   using ValueType = ::xla::ffi::NativeType<dtype>;
+  using RealType = ValueType;
   using FnType = void(char* jobz, lapack_int* m, lapack_int* n, ValueType* a,
                       lapack_int* lda, ValueType* s, ValueType* u,
                       lapack_int* ldu, ValueType* vt, lapack_int* ldvt,
@@ -315,9 +316,7 @@ struct SingularValueDecomposition {
       ::xla::ffi::Buffer<dtype> x, ::xla::ffi::ResultBuffer<dtype> x_out,
       ::xla::ffi::ResultBuffer<dtype> singular_values,
       ::xla::ffi::ResultBuffer<dtype> u, ::xla::ffi::ResultBuffer<dtype> vt,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> info,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> iwork,
-      ::xla::ffi::ResultBuffer<dtype> work, svd::ComputationMode mode);
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info, svd::ComputationMode mode);
 
   static int64_t GetWorkspaceSize(lapack_int x_rows, lapack_int x_cols,
                                   svd::ComputationMode mode);
@@ -341,10 +340,7 @@ struct SingularValueDecompositionComplex {
       ::xla::ffi::Buffer<dtype> x, ::xla::ffi::ResultBuffer<dtype> x_out,
       ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> singular_values,
       ::xla::ffi::ResultBuffer<dtype> u, ::xla::ffi::ResultBuffer<dtype> vt,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> info,
-      ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> rwork,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> iwork,
-      ::xla::ffi::ResultBuffer<dtype> work, svd::ComputationMode mode);
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info, svd::ComputationMode mode);
 
   static int64_t GetWorkspaceSize(lapack_int x_rows, lapack_int x_cols,
                                   svd::ComputationMode mode);

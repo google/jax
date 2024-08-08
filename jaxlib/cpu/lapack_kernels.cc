@@ -687,18 +687,11 @@ template struct ComplexGesdd<std::complex<double>>;
 namespace internal {
 
 template <ffi::DataType dtype>
-using RealBufferForComplexOrNull =
-    std::conditional_t<ffi::IsComplexType<dtype>(),
-                       ffi::ResultBuffer<ffi::ToReal(dtype)>, std::nullptr_t>;
-
-template <ffi::DataType dtype>
 static ffi::Error SvdKernel(
     ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out,
     ffi::ResultBuffer<ffi::ToReal(dtype)> singular_values,
     ffi::ResultBuffer<dtype> u, ffi::ResultBuffer<dtype> vt,
-    ffi::ResultBuffer<LapackIntDtype> info,
-    ffi::ResultBuffer<LapackIntDtype> iwork, ffi::ResultBuffer<dtype> work,
-    svd::ComputationMode mode, RealBufferForComplexOrNull<dtype> rwork) {
+    ffi::ResultBuffer<LapackIntDtype> info, svd::ComputationMode mode) {
   if (mode == svd::ComputationMode::kComputeVtOverwriteXPartialU) [[unlikely]] {
     return ffi::Error(
         XLA_FFI_Error_Code_UNIMPLEMENTED,
@@ -710,16 +703,28 @@ static ffi::Error SvdKernel(
   auto* u_data = u->typed_data();
   auto* vt_data = vt->typed_data();
   auto* info_data = info->typed_data();
-  auto* iwork_data = iwork->typed_data();
-  auto* work_data = work->typed_data();
+
+  // Prepare LAPACK workspaces.
+  const auto work_size =
+      svd::SVDType<dtype>::GetWorkspaceSize(x_rows, x_cols, mode);
+  const auto iwork_size = svd::GetIntWorkspaceSize(x_rows, x_cols);
+  auto work_data =
+      AllocateScratchMemory<dtype>(work_size);
+  auto iwork_data = AllocateScratchMemory<LapackIntDtype>(iwork_size);
+  using RealType = typename svd::SVDType<dtype>::RealType;
+  std::unique_ptr<RealType[]> rwork;
+  if constexpr (ffi::IsComplexType<dtype>()) {
+    const auto rwork_size = svd::GetRealWorkspaceSize(x_rows, x_cols, mode);
+    rwork = AllocateScratchMemory<ffi::ToReal(dtype)>(rwork_size);
+  }
 
   CopyIfDiffBuffer(x, x_out);
 
   FFI_ASSIGN_OR_RETURN(auto x_rows_v, MaybeCastNoOverflow<lapack_int>(x_rows));
   FFI_ASSIGN_OR_RETURN(auto x_cols_v, MaybeCastNoOverflow<lapack_int>(x_cols));
   auto mode_v = static_cast<char>(mode);
-  FFI_ASSIGN_OR_RETURN(auto workspace_dim_v, MaybeCastNoOverflow<lapack_int>(
-                                                 work->dimensions().back()));
+  FFI_ASSIGN_OR_RETURN(auto workspace_dim_v,
+                       MaybeCastNoOverflow<lapack_int>(work_size));
   auto x_leading_dim_v = x_rows_v;
   auto u_leading_dim_v = x_rows_v;
 
@@ -738,14 +743,14 @@ static ffi::Error SvdKernel(
       svd::SVDType<dtype>::fn(&mode_v, &x_rows_v, &x_cols_v, x_out_data,
                               &x_leading_dim_v, singular_values_data, u_data,
                               &u_leading_dim_v, vt_data, &vt_leading_dim_v,
-                              work_data, &workspace_dim_v, rwork->typed_data(),
-                              iwork_data, info_data);
+                              work_data.get(), &workspace_dim_v, rwork.get(),
+                              iwork_data.get(), info_data);
     } else {
       svd::SVDType<dtype>::fn(&mode_v, &x_rows_v, &x_cols_v, x_out_data,
                               &x_leading_dim_v, singular_values_data, u_data,
                               &u_leading_dim_v, vt_data, &vt_leading_dim_v,
-                              work_data, &workspace_dim_v, iwork_data,
-                              info_data);
+                              work_data.get(), &workspace_dim_v,
+                              iwork_data.get(), info_data);
     }
     x_out_data += x_out_step;
     singular_values_data += singular_values_step;
@@ -767,7 +772,6 @@ static int64_t SvdGetWorkspaceSize(lapack_int x_rows, lapack_int x_cols,
   auto x_leading_dim_v = x_rows;
   auto u_leading_dim_v = x_rows;
   auto vt_leading_dim_v = mode == svd::ComputationMode::kComputeFullUVt
-
                               ? x_cols
                               : std::min(x_rows, x_cols);
   if constexpr (ffi::IsComplexType<dtype>()) {
@@ -791,10 +795,9 @@ ffi::Error SingularValueDecomposition<dtype>::Kernel(
     ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out,
     ffi::ResultBuffer<dtype> singular_values, ffi::ResultBuffer<dtype> u,
     ffi::ResultBuffer<dtype> vt, ffi::ResultBuffer<LapackIntDtype> info,
-    ffi::ResultBuffer<LapackIntDtype> iwork, ffi::ResultBuffer<dtype> work,
     svd::ComputationMode mode) {
   return internal::SvdKernel<dtype>(x, x_out, singular_values, u, vt, info,
-                                    iwork, work, mode, nullptr);
+                                    mode);
 }
 
 template <ffi::DataType dtype>
@@ -802,12 +805,9 @@ ffi::Error SingularValueDecompositionComplex<dtype>::Kernel(
     ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out,
     ffi::ResultBuffer<ffi::ToReal(dtype)> singular_values,
     ffi::ResultBuffer<dtype> u, ffi::ResultBuffer<dtype> vt,
-    ffi::ResultBuffer<LapackIntDtype> info,
-    ffi::ResultBuffer<ffi::ToReal(dtype)> rwork,
-    ffi::ResultBuffer<LapackIntDtype> iwork, ffi::ResultBuffer<dtype> work,
-    svd::ComputationMode mode) {
+    ffi::ResultBuffer<LapackIntDtype> info, svd::ComputationMode mode) {
   return internal::SvdKernel<dtype>(x, x_out, singular_values, u, vt, info,
-                                    iwork, work, mode, rwork);
+                                    mode);
 }
 
 template <ffi::DataType dtype>
@@ -1725,33 +1725,28 @@ template struct Sytrd<std::complex<double>>;
           .Ret<::xla::ffi::Buffer<data_type>>(/*x_out*/) \
           .Ret<::xla::ffi::Buffer<LapackIntDtype>>(/*info*/))
 
-#define JAX_CPU_DEFINE_GESDD(name, data_type)                 \
-  XLA_FFI_DEFINE_HANDLER_SYMBOL(                              \
-      name, SingularValueDecomposition<data_type>::Kernel,    \
-      ::xla::ffi::Ffi::Bind()                                 \
-          .Arg<::xla::ffi::Buffer<data_type>>(/*x*/)          \
-          .Ret<::xla::ffi::Buffer<data_type>>(/*x_out*/)      \
-          .Ret<::xla::ffi::Buffer<data_type>>(/*s*/)          \
-          .Ret<::xla::ffi::Buffer<data_type>>(/*u*/)          \
-          .Ret<::xla::ffi::Buffer<data_type>>(/*vt*/)         \
-          .Ret<::xla::ffi::Buffer<LapackIntDtype>>(/*info*/)  \
-          .Ret<::xla::ffi::Buffer<LapackIntDtype>>(/*iwork*/) \
-          .Ret<::xla::ffi::Buffer<data_type>>(/*work*/)       \
+#define JAX_CPU_DEFINE_GESDD(name, data_type)                \
+  XLA_FFI_DEFINE_HANDLER_SYMBOL(                             \
+      name, SingularValueDecomposition<data_type>::Kernel,   \
+      ::xla::ffi::Ffi::Bind()                                \
+          .Arg<::xla::ffi::Buffer<data_type>>(/*x*/)         \
+          .Ret<::xla::ffi::Buffer<data_type>>(/*x_out*/)     \
+          .Ret<::xla::ffi::Buffer<data_type>>(/*s*/)         \
+          .Ret<::xla::ffi::Buffer<data_type>>(/*u*/)         \
+          .Ret<::xla::ffi::Buffer<data_type>>(/*vt*/)        \
+          .Ret<::xla::ffi::Buffer<LapackIntDtype>>(/*info*/) \
           .Attr<svd::ComputationMode>("mode"))
 
-#define JAX_CPU_DEFINE_GESDD_COMPLEX(name, data_type)                        \
-  XLA_FFI_DEFINE_HANDLER_SYMBOL(                                             \
-      name, SingularValueDecompositionComplex<data_type>::Kernel,            \
-      ::xla::ffi::Ffi::Bind()                                                \
-          .Arg<::xla::ffi::Buffer<data_type>>(/*x*/)                         \
-          .Ret<::xla::ffi::Buffer<data_type>>(/*x_out*/)                     \
-          .Ret<::xla::ffi::Buffer<::xla::ffi::ToReal(data_type)>>(/*s*/)     \
-          .Ret<::xla::ffi::Buffer<data_type>>(/*u*/)                         \
-          .Ret<::xla::ffi::Buffer<data_type>>(/*vt*/)                        \
-          .Ret<::xla::ffi::Buffer<LapackIntDtype>>(/*info*/)                 \
-          .Ret<::xla::ffi::Buffer<::xla::ffi::ToReal(data_type)>>(/*rwork*/) \
-          .Ret<::xla::ffi::Buffer<LapackIntDtype>>(/*iwork*/)                \
-          .Ret<::xla::ffi::Buffer<data_type>>(/*work*/)                      \
+#define JAX_CPU_DEFINE_GESDD_COMPLEX(name, data_type)                    \
+  XLA_FFI_DEFINE_HANDLER_SYMBOL(                                         \
+      name, SingularValueDecompositionComplex<data_type>::Kernel,        \
+      ::xla::ffi::Ffi::Bind()                                            \
+          .Arg<::xla::ffi::Buffer<data_type>>(/*x*/)                     \
+          .Ret<::xla::ffi::Buffer<data_type>>(/*x_out*/)                 \
+          .Ret<::xla::ffi::Buffer<::xla::ffi::ToReal(data_type)>>(/*s*/) \
+          .Ret<::xla::ffi::Buffer<data_type>>(/*u*/)                     \
+          .Ret<::xla::ffi::Buffer<data_type>>(/*vt*/)                    \
+          .Ret<::xla::ffi::Buffer<LapackIntDtype>>(/*info*/)             \
           .Attr<svd::ComputationMode>("mode"))
 
 #define JAX_CPU_DEFINE_SYEVD(name, data_type)                    \
