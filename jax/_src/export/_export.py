@@ -609,6 +609,10 @@ def _export_lowered(
               f"disabled_checks={disabled_checks}")
     logging.info("Exported JAX function: %s\n", logmsg)
     logging.info(mlir.dump_module_message(mlir_module, "export"))
+    logging.info(
+        "Size of mlir_module_serialized: %d byte",
+        len(mlir_module_serialized),
+    )
 
   _check_module(mlir_module,
                 disabled_checks=disabled_checks)
