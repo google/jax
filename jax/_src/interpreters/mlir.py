@@ -1743,7 +1743,7 @@ def _platforms_for_eqn_ctx(eqn_ctx: core.JaxprEqnContext | None
   """Returns platforms to override based on compute type of jaxpr equation."""
   if eqn_ctx is None:
     return ()
-  if eqn_ctx.compute_type == 'device_host':
+  if eqn_ctx.compute_type == 'device_host':  # type: ignore
     return ('cpu',)
   return ()
 
@@ -2023,9 +2023,9 @@ def map_compute_type(c_type):
                    'are `device_host` and `device`')
 
 def wrap_compute_type_in_place(ctx, op):
-  if ctx.jaxpr_eqn_ctx is not None and ctx.jaxpr_eqn_ctx.compute_type is not None:
+  if ctx.jaxpr_eqn_ctx is not None and ctx.jaxpr_eqn_ctx.compute_type is not None:  # pytype: disable=attribute-error
     dict_attr = {"_xla_compute_type": ir.StringAttr.get(
-        map_compute_type(ctx.jaxpr_eqn_ctx.compute_type))}
+        map_compute_type(ctx.jaxpr_eqn_ctx.compute_type))}  # pytype: disable=attribute-error
     op.operation.attributes["mhlo.frontend_attributes"] = ir.DictAttr.get(dict_attr)
 
 
