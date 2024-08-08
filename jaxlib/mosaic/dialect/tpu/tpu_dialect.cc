@@ -19,6 +19,7 @@ limitations under the License.
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -32,6 +33,7 @@ limitations under the License.
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "absl/hash/hash.h"
+#include "third_party/llvm/llvm-project/llvm/include/llvm/Support/MathExtras.h"
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"
 #include "jaxlib/mosaic/dialect/tpu/tpu_dialect.cc.inc"
 #include "jaxlib/mosaic/dialect/tpu/tpu_enums.cc.inc"
@@ -185,29 +187,52 @@ MemRefType getMemRefType(Value value) {
   return cast<MemRefType>(value.getType());
 }
 
-bool isGuaranteedDivisible(Value value, int64_t divisor, int64_t fuel) {
+std::optional<int64_t> getKnownModulo(Value value, int64_t divisor,
+                                      int64_t fuel) {
   if (fuel <= 0) {
-    return false;
+    return std::nullopt;
   }
   if (divisor == 1) {
-    return true;
+    return 0;
   }
   if (auto assume_op = value.getDefiningOp<tpu::AssumeMultipleOp>()) {
-    return assume_op.getMultiple() % divisor == 0;
-  }
-  if (auto mul_op = value.getDefiningOp<arith::MulIOp>()) {
+    if (assume_op.getMultiple() % divisor == 0) {
+      return 0;
+    };
+  } else if (auto add_op = value.getDefiningOp<arith::AddIOp>()) {
+    if (const std::optional<int64_t> rhs =
+            getKnownModulo(add_op.getRhs(), divisor, fuel / 2)) {
+      if (const std::optional<int64_t> lhs =
+              getKnownModulo(add_op.getLhs(), divisor, (fuel + 1) / 2)) {
+        return llvm::mod(*lhs + *rhs, divisor);
+      }
+    }
+  } else if (auto mul_op = value.getDefiningOp<arith::MulIOp>()) {
     // We check RHS first, because MLIR canonicalizes constants to the right.
-    return isGuaranteedDivisible(mul_op.getRhs(), divisor, fuel / 2) ||
-           isGuaranteedDivisible(mul_op.getLhs(), divisor, (fuel + 1) / 2);
+    // TODO(tlongeri): We could be smarter about zeros. For example, if divisor
+    // is 8, if we know that lhs % 2 == 0 and rhs % 4 == 0, we should also
+    // return 0.
+    const std::optional<int64_t> rhs =
+        getKnownModulo(mul_op.getRhs(), divisor, fuel / 2);
+    if (rhs == 0) {
+      return 0;
+    }
+    const std::optional<int64_t> lhs =
+        getKnownModulo(mul_op.getLhs(), divisor, (fuel + 1) / 2);
+    if (lhs == 0) {
+      return 0;
+    }
+    if (lhs && rhs) {
+      return llvm::mod(*lhs * *rhs, divisor);
+    }
+  } else if (auto cst_op = value.getDefiningOp<arith::ConstantOp>()) {
+    if (auto int_attr = dyn_cast<IntegerAttr>(cst_op.getValue())) {
+      return llvm::mod(int_attr.getInt(), divisor);
+    }
+  } else if (auto cast_op = value.getDefiningOp<arith::IndexCastOp>()) {
+    return getKnownModulo(cast_op.getOperand(), divisor, fuel - 1);
   }
-  if (auto cst_op = value.getDefiningOp<arith::ConstantOp>()) {
-    auto int_attr = dyn_cast<IntegerAttr>(cst_op.getValue());
-    return int_attr && int_attr.getInt() % divisor == 0;
-  }
-  if (auto cast_op = value.getDefiningOp<arith::IndexCastOp>()) {
-    return isGuaranteedDivisible(cast_op.getOperand(), divisor, fuel - 1);
-  }
-  return false;
+  return std::nullopt;
 }
 
 }  // namespace mlir::tpu
