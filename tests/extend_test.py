@@ -50,7 +50,6 @@ class ExtendTest(jtu.JaxTestCase):
     # Assume these are tested elsewhere, only check equivalence
     self.assertIs(jex.backend.backends, xla_bridge.backends)
     self.assertIs(jex.backend.backend_xla_version, xla_bridge.backend_xla_version)
-    self.assertIs(jex.backend.default_backend, xla_bridge.default_backend)
     self.assertIs(jex.backend.clear_backends, api.clear_backends)
     self.assertIs(jex.backend.get_backend, xla_bridge.get_backend)
     self.assertIs(jex.backend.register_backend_factory, xla_bridge.register_backend_factory)

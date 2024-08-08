@@ -244,7 +244,7 @@ def write_bazelrc(*, remote_build,
                   rocm_amdgpu_targets, target_cpu_features,
                   wheel_cpu, enable_mkl_dnn, use_clang, clang_path,
                   clang_major_version, enable_cuda, enable_nccl, enable_rocm,
-                  build_gpu_plugin, python_version):
+                  python_version):
   tf_cuda_paths = []
 
   with open("../.jax_configure.bazelrc", "w") as f:
@@ -317,11 +317,6 @@ def write_bazelrc(*, remote_build,
       f.write("build --config=rocm\n")
       if not enable_nccl:
         f.write("build --config=nonccl\n")
-    if build_gpu_plugin:
-      if enable_cuda:
-        f.write("build --config=cuda_plugin\n")
-      elif enable_rocm:
-        f.write("build --config=rocm_plugin\n")
     if python_version:
       f.write(
         "build --repo_env HERMETIC_PYTHON_VERSION=\"{python_version}\"".format(
@@ -653,7 +648,6 @@ def main():
       enable_cuda=args.enable_cuda,
       enable_nccl=args.enable_nccl,
       enable_rocm=args.enable_rocm,
-      build_gpu_plugin=args.build_gpu_plugin,
       python_version=python_version,
   )
 

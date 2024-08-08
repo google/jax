@@ -365,12 +365,14 @@ def cache(call: Callable, *, explain: Callable | None = None):
   return memoized_fun
 
 
-@partial(partial, tree_map)
-def _copy_main_traces(x):
+def _copy_main_trace(x):
   if isinstance(x, core.MainTrace):
     return core.MainTrace(x.level, x.trace_type, **x.payload)
   else:
     return x
+
+_copy_main_traces = partial(tree_map, _copy_main_trace)
+
 
 
 @transformation

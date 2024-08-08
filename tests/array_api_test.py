@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Smoketest for jax.experimental.array_api
+"""Smoketest for JAX's array API.
 
 The full test suite for the array API is run via the array-api-tests CI;
 this is just a minimal smoke test to catch issues early.
@@ -26,7 +26,8 @@ import jax
 import jax.numpy as jnp
 from jax._src import config, test_util as jtu
 from jax._src.dtypes import _default_types, canonicalize_dtype
-from jax.experimental import array_api
+
+ARRAY_API_NAMESPACE = jnp
 
 config.parse_flags_with_absl()
 
@@ -36,7 +37,6 @@ MAIN_NAMESPACE = {
   'acosh',
   'add',
   'all',
-  'annotations',
   'any',
   'arange',
   'argmax',
@@ -233,22 +233,29 @@ class ArrayAPISmokeTest(absltest.TestCase):
   """Smoke test for the array API."""
 
   def test_main_namespace(self):
-    self.assertContainsSubset(MAIN_NAMESPACE, names(array_api))
+    self.assertContainsSubset(MAIN_NAMESPACE, names(ARRAY_API_NAMESPACE))
 
   def test_linalg_namespace(self):
-    self.assertContainsSubset(LINALG_NAMESPACE, names(array_api.linalg))
+    self.assertContainsSubset(LINALG_NAMESPACE, names(ARRAY_API_NAMESPACE.linalg))
 
   def test_fft_namespace(self):
-    self.assertContainsSubset(FFT_NAMESPACE, names(array_api.fft))
+    self.assertContainsSubset(FFT_NAMESPACE, names(ARRAY_API_NAMESPACE.fft))
 
   def test_array_namespace_method(self):
-    x = array_api.arange(20)
+    x = ARRAY_API_NAMESPACE.arange(20)
     self.assertIsInstance(x, jax.Array)
-    self.assertIs(x.__array_namespace__(), array_api)
+    self.assertIs(x.__array_namespace__(), ARRAY_API_NAMESPACE)
+
+  def test_deprecated_import(self):
+    msg = "jax.experimental.array_api import is no longer required"
+    with self.assertWarnsRegex(DeprecationWarning, msg):
+      import jax.experimental.array_api as nx
+    self.assertIs(nx, ARRAY_API_NAMESPACE)
+
 
 class ArrayAPIInspectionUtilsTest(jtu.JaxTestCase):
 
-  info = array_api.__array_namespace_info__()
+  info = ARRAY_API_NAMESPACE.__array_namespace_info__()
 
   def setUp(self):
     super().setUp()
@@ -333,20 +340,20 @@ class ArrayAPIErrors(absltest.TestCase):
   # TODO(micky774): Remove when jnp.clip deprecation is completed
   # (began 2024-4-2) and default behavior is Array API 2023 compliant
   def test_clip_complex(self):
-    x = array_api.arange(5, dtype=array_api.complex64)
+    x = ARRAY_API_NAMESPACE.arange(5, dtype=ARRAY_API_NAMESPACE.complex64)
     complex_msg = "Complex values have no ordering and cannot be clipped"
     with self.assertRaisesRegex(ValueError, complex_msg):
-      array_api.clip(x)
+      ARRAY_API_NAMESPACE.clip(x)
 
     with self.assertRaisesRegex(ValueError, complex_msg):
-      array_api.clip(x, max=x)
+      ARRAY_API_NAMESPACE.clip(x, max=x)
 
-    x = array_api.arange(5, dtype=array_api.int32)
+    x = ARRAY_API_NAMESPACE.arange(5, dtype=ARRAY_API_NAMESPACE.int32)
     with self.assertRaisesRegex(ValueError, complex_msg):
-      array_api.clip(x, min=-1+5j)
+      ARRAY_API_NAMESPACE.clip(x, min=-1+5j)
 
     with self.assertRaisesRegex(ValueError, complex_msg):
-      array_api.clip(x, max=-1+5j)
+      ARRAY_API_NAMESPACE.clip(x, max=-1+5j)
 
 
 if __name__ == '__main__':

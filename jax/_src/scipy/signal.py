@@ -18,6 +18,7 @@ from collections.abc import Callable, Sequence
 from functools import partial
 import math
 import operator
+from typing import Any
 import warnings
 
 import numpy as np
@@ -753,19 +754,23 @@ def _spectral_helper(x: Array, y: ArrayLike | None, fs: ArrayLike = 1.0,
       y_arr = jnp.concatenate((y_arr, jnp.zeros_like(x, shape=(*y_arr.shape[:-1], nadd))), axis=-1)
 
   # Handle detrending and window functions
-  if not detrend_type:
-    detrend_func = lambda d: d
-  elif not callable(detrend_type):
+  detrend_func: Any
+  if isinstance(detrend_type, str):
     detrend_func = partial(detrend, type=detrend_type, axis=-1)
-  elif axis != -1:
-    # Wrap this function so that it receives a shape that it could
-    # reasonably expect to receive.
-    def detrend_func(d):
-      d = jnp.moveaxis(d, axis, -1)
-      d = detrend_type(d)
-      return jnp.moveaxis(d, -1, axis)
+  elif callable(detrend_type):
+    if axis != -1:
+      # Wrap this function so that it receives a shape that it could
+      # reasonably expect to receive.
+      def detrend_func(d):
+        d = jnp.moveaxis(d, axis, -1)
+        d = detrend_type(d)
+        return jnp.moveaxis(d, -1, axis)
+    else:
+      detrend_func = detrend_type
+  elif not detrend_type:
+    detrend_func = lambda d: d
   else:
-    detrend_func = detrend_type
+    raise ValueError(f'Unsupported detrend type: {detrend_type}')
 
   # Determine scale
   if scaling == 'density':

@@ -1766,9 +1766,7 @@ def _pjit_lower_cached(
   return pxla.lower_sharding_computation(
       jaxpr, api_name, name, in_shardings, out_shardings,
       in_layouts, out_layouts, tuple(donated_invars),
-      keep_unused=keep_unused,
-      devices_from_context=(
-          None if mesh is None or mesh.empty else list(mesh.devices.flat)),
+      keep_unused=keep_unused, context_mesh=mesh,
       lowering_platforms=lowering_platforms,
       lowering_parameters=lowering_parameters,
       pgle_profiler=pgle_profiler)

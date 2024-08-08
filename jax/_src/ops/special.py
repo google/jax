@@ -14,12 +14,12 @@
 
 from __future__ import annotations
 
-from typing import overload, Literal
+from typing import Literal, overload
 
 import jax
 from jax import lax
 from jax import numpy as jnp
-from jax._src.numpy.reductions import _reduction_dims, Axis
+from jax._src.numpy.reductions import Axis, _reduction_dims
 from jax._src.numpy.util import promote_args_inexact
 from jax._src.typing import Array, ArrayLike
 import numpy as np
@@ -39,6 +39,7 @@ def logsumexp(a: ArrayLike, axis: Axis = None, b: ArrayLike | None = None,
 @overload
 def logsumexp(a: ArrayLike, axis: Axis = None, b: ArrayLike | None = None,
               keepdims: bool = False, return_sign: bool = False, where: ArrayLike | None = None) -> Array | tuple[Array, Array]: ...
+
 
 def logsumexp(a: ArrayLike, axis: Axis = None, b: ArrayLike | None = None,
               keepdims: bool = False, return_sign: bool = False, where: ArrayLike | None = None) -> Array | tuple[Array, Array]:
@@ -71,18 +72,22 @@ def logsumexp(a: ArrayLike, axis: Axis = None, b: ArrayLike | None = None,
   """
   if b is not None:
     a_arr, b_arr = promote_args_inexact("logsumexp", a, b)
-    a_arr = jnp.where(b_arr != 0, a_arr, -jnp.inf)
+    a_masked = jnp.where(b_arr != 0, a_arr, -jnp.inf)
   else:
     a_arr, = promote_args_inexact("logsumexp", a)
     b_arr = a_arr  # for type checking
+    a_masked = a_arr
   pos_dims, dims = _reduction_dims(a_arr, axis)
-  amax = jnp.max(a_arr.real, axis=dims, keepdims=keepdims, where=where, initial=-jnp.inf)
+  amax = jnp.max(
+      a_masked.real, axis=dims, keepdims=keepdims, where=where, initial=-jnp.inf
+  )
   amax = lax.stop_gradient(lax.select(jnp.isfinite(amax), amax, lax.full_like(amax, 0)))
   amax_with_dims = amax if keepdims else lax.expand_dims(amax, pos_dims)
 
-  exp_a = lax.exp(lax.sub(a_arr, amax_with_dims.astype(a_arr.dtype)))
-  if b is not None:
-    exp_a = lax.mul(exp_a, b_arr)
+  if b is None:
+    exp_a = lax.exp(lax.sub(a_arr, amax_with_dims.astype(a_arr.dtype)))
+  else:
+    exp_a = _stable_mulexp(a_arr - amax_with_dims.astype(a_arr.dtype), b_arr)
   sumexp = exp_a.sum(axis=dims, keepdims=keepdims, where=where)
   sign = lax.sign(sumexp)
   if return_sign or not np.issubdtype(a_arr.dtype, np.complexfloating):
@@ -95,3 +100,20 @@ def logsumexp(a: ArrayLike, axis: Axis = None, b: ArrayLike | None = None,
     with jax.debug_nans(False):
       out = jnp.where(sign < 0, jnp.array(np.nan, dtype=out.dtype), out)
   return out
+
+
+@jax.custom_jvp
+def _stable_mulexp(a_scaled: Array, b: Array) -> Array:
+  # This helper ensures that the output of logsumexp depends on b for b == 0.
+  # See https://github.com/google/jax/issues/22398.
+  a_scaled = jnp.where(b != 0, a_scaled, -jnp.inf)
+  return lax.mul(lax.exp(a_scaled), b)
+
+
+@_stable_mulexp.defjvp
+def _stable_mulexp_jvp(primals, tangents):
+  a_scaled, b = primals
+  da, db = tangents
+  out = _stable_mulexp(a_scaled, b)
+  dout = _stable_mulexp(a_scaled, db) + da * out
+  return out, dout

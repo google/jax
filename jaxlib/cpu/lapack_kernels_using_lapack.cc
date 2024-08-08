@@ -56,15 +56,15 @@ jax::SingularValueDecomposition<ffi::DataType::F64>::FnType dgesdd_;
 jax::SingularValueDecompositionComplex<ffi::DataType::C64>::FnType cgesdd_;
 jax::SingularValueDecompositionComplex<ffi::DataType::C128>::FnType zgesdd_;
 
-jax::RealSyevd<float>::FnType ssyevd_;
-jax::RealSyevd<double>::FnType dsyevd_;
-jax::ComplexHeevd<std::complex<float>>::FnType cheevd_;
-jax::ComplexHeevd<std::complex<double>>::FnType zheevd_;
+jax::EigenvalueDecompositionSymmetric<ffi::DataType::F32>::FnType ssyevd_;
+jax::EigenvalueDecompositionSymmetric<ffi::DataType::F64>::FnType dsyevd_;
+jax::EigenvalueDecompositionHermitian<ffi::DataType::C64>::FnType cheevd_;
+jax::EigenvalueDecompositionHermitian<ffi::DataType::C128>::FnType zheevd_;
 
-jax::RealGeev<float>::FnType sgeev_;
-jax::RealGeev<double>::FnType dgeev_;
-jax::ComplexGeev<std::complex<float>>::FnType cgeev_;
-jax::ComplexGeev<std::complex<double>>::FnType zgeev_;
+jax::EigenvalueDecomposition<ffi::DataType::F32>::FnType sgeev_;
+jax::EigenvalueDecomposition<ffi::DataType::F64>::FnType dgeev_;
+jax::EigenvalueDecompositionComplex<ffi::DataType::C64>::FnType cgeev_;
+jax::EigenvalueDecompositionComplex<ffi::DataType::C128>::FnType zgeev_;
 
 jax::RealGees<float>::FnType sgees_;
 jax::RealGees<double>::FnType dgees_;
@@ -173,6 +173,44 @@ static_assert(
         jax::SingularValueDecompositionComplex<ffi::DataType::C128>::FnType,
         jax::ComplexGesdd<std::complex<double>>::FnType>,
     JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionSymmetric<ffi::DataType::F32>::FnType,
+        jax::RealSyevd<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionSymmetric<ffi::DataType::F64>::FnType,
+        jax::RealSyevd<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionHermitian<ffi::DataType::C64>::FnType,
+        jax::ComplexHeevd<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionHermitian<ffi::DataType::C128>::FnType,
+        jax::ComplexHeevd<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::EigenvalueDecomposition<ffi::DataType::F32>::FnType,
+                   jax::RealGeev<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::EigenvalueDecomposition<ffi::DataType::F64>::FnType,
+                   jax::RealGeev<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionComplex<ffi::DataType::C64>::FnType,
+        jax::ComplexGeev<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<
+        jax::EigenvalueDecompositionComplex<ffi::DataType::C128>::FnType,
+        jax::ComplexGeev<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
 
 #undef JAX_KERNEL_FNTYPE_MISMATCH_MSG
 
@@ -265,6 +303,17 @@ static auto init = []() -> int {
       cgesdd_);
   AssignKernelFn<SingularValueDecompositionComplex<ffi::DataType::C128>>(
       zgesdd_);
+
+  AssignKernelFn<EigenvalueDecompositionSymmetric<ffi::DataType::F32>>(ssyevd_);
+  AssignKernelFn<EigenvalueDecompositionSymmetric<ffi::DataType::F64>>(dsyevd_);
+  AssignKernelFn<EigenvalueDecompositionHermitian<ffi::DataType::C64>>(cheevd_);
+  AssignKernelFn<EigenvalueDecompositionHermitian<ffi::DataType::C128>>(
+      zheevd_);
+
+  AssignKernelFn<EigenvalueDecomposition<ffi::DataType::F32>>(sgeev_);
+  AssignKernelFn<EigenvalueDecomposition<ffi::DataType::F64>>(dgeev_);
+  AssignKernelFn<EigenvalueDecompositionComplex<ffi::DataType::C64>>(cgeev_);
+  AssignKernelFn<EigenvalueDecompositionComplex<ffi::DataType::C128>>(zgeev_);
 
   return 0;
 }();

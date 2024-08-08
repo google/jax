@@ -43,7 +43,10 @@ except ImportError:
 
 if _cublas:
   for _name, _value in _cublas.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="CUDA")
+    # TODO(danfm): Clean up after all legacy custom calls are ported.
+    api_version = 1 if _name.endswith("_ffi") else 0
+    xla_client.register_custom_call_target(_name, _value, platform="CUDA",
+                                           api_version=api_version)
 
 for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
   try:
@@ -57,7 +60,10 @@ for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
 
 if _cusolver:
   for _name, _value in _cusolver.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="CUDA")
+    # TODO(danfm): Clean up after all legacy custom calls are ported.
+    api_version = 1 if _name.endswith("_ffi") else 0
+    xla_client.register_custom_call_target(_name, _value, platform="CUDA",
+                                           api_version=api_version)
 
 try:
   from .rocm import _blas as _hipblas  # pytype: disable=import-error
@@ -72,7 +78,10 @@ except ImportError:
 
 if _hipblas:
   for _name, _value in _hipblas.registrations().items():
-      xla_client.register_custom_call_target(_name, _value, platform="ROCM")
+    # TODO(danfm): Clean up after all legacy custom calls are ported.
+    api_version = 1 if _name.endswith("_ffi") else 0
+    xla_client.register_custom_call_target(_name, _value, platform="ROCM",
+                                           api_version=api_version)
 
 for rocm_module_name in [".rocm", "jax_rocm60_plugin"]:
   try:
@@ -86,14 +95,17 @@ for rocm_module_name in [".rocm", "jax_rocm60_plugin"]:
 
 if _hipsolver:
   for _name, _value in _hipsolver.registrations().items():
-      xla_client.register_custom_call_target(_name, _value, platform="ROCM")
+    # TODO(danfm): Clean up after all legacy custom calls are ported.
+    api_version = 1 if _name.endswith("_ffi") else 0
+    xla_client.register_custom_call_target(_name, _value, platform="ROCM",
+                                           api_version=api_version)
 
 def _real_type(dtype):
   """Returns the real equivalent of 'dtype'."""
   return np.finfo(dtype).dtype
 
 
-def _getrf_hlo(platform, gpu_blas, gpu_solver, dtype, a):
+def _getrf_hlo(platform, gpu_blas, gpu_solver, ctx, dtype, a):
   """LU decomposition."""
   a_type = ir.RankedTensorType(a.type)
   dims = a_type.shape
@@ -101,43 +113,66 @@ def _getrf_hlo(platform, gpu_blas, gpu_solver, dtype, a):
   m, n = dims[-2:]
   batch_dims = tuple(dims[:-2])
   num_bd = len(batch_dims)
-  batch = math.prod(batch_dims)
-
-  if not gpu_blas:
-    raise GpuLibNotLinkedError()
-
-  if batch > 1 and m == n and m // batch <= 128:
-    lwork, opaque = gpu_blas.build_getrf_batched_descriptor(
-      np.dtype(dtype), batch, m)
-    workspace = ir.RankedTensorType.get([lwork], ir.IntegerType.get_signless(8))
-    kernel = f"{platform}blas_getrf_batched"
-  else:
-    lwork, opaque = gpu_solver.build_getrf_descriptor(
-        np.dtype(dtype), batch, m, n)
-    workspace = ir.RankedTensorType.get([lwork], a_type.element_type)
-    kernel = f"{platform}solver_getrf"
-
-  layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
   i32_type = ir.IntegerType.get_signless(32)
-  out = custom_call(
-      kernel,
+  layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
+  batch = math.prod(batch_dims)
+  use_batched = batch > 1 and m == n and m // batch <= 128
+
+  # TODO(b/357034884): Remove after 3 week forward compatibility window.
+  if ctx.is_forward_compat():
+    if not gpu_blas:
+      raise GpuLibNotLinkedError()
+
+    if use_batched:
+      lwork, opaque = gpu_blas.build_getrf_batched_descriptor(
+        np.dtype(dtype), batch, m)
+      workspace = ir.RankedTensorType.get([lwork], ir.IntegerType.get_signless(8))
+      kernel = f"{platform}blas_getrf_batched"
+    else:
+      lwork, opaque = gpu_solver.build_getrf_descriptor(
+          np.dtype(dtype), batch, m, n)
+      workspace = ir.RankedTensorType.get([lwork], a_type.element_type)
+      kernel = f"{platform}solver_getrf"
+
+    out = custom_call(
+        kernel,
+        result_types=[
+          a.type,
+          ir.RankedTensorType.get(batch_dims + (min(m, n),), i32_type),
+          ir.RankedTensorType.get(batch_dims, i32_type),
+          workspace,
+        ],
+        operands=[a],
+        backend_config=opaque,
+        operand_layouts=[layout],
+        result_layouts=[
+          layout,
+          tuple(range(num_bd, -1, -1)),
+          tuple(range(num_bd - 1, -1, -1)),
+          [0],
+        ],
+        operand_output_aliases={0: 0}).results
+    return out[:3]
+
+  target = "blas_getrf_batched_ffi" if use_batched else "solver_getrf_ffi"
+  return custom_call(
+      f"{platform}{target}",
       result_types=[
         a.type,
         ir.RankedTensorType.get(batch_dims + (min(m, n),), i32_type),
         ir.RankedTensorType.get(batch_dims, i32_type),
-        workspace,
       ],
       operands=[a],
-      backend_config=opaque,
       operand_layouts=[layout],
       result_layouts=[
         layout,
         tuple(range(num_bd, -1, -1)),
         tuple(range(num_bd - 1, -1, -1)),
-        [0],
       ],
-      operand_output_aliases={0: 0}).results
-  return out[:3]
+      operand_output_aliases={0: 0},
+      backend_config={},
+      api_version=4).results
+
 
 cuda_getrf = partial(_getrf_hlo, "cu", _cublas, _cusolver)
 rocm_getrf = partial(_getrf_hlo, "hip", _hipblas, _hipsolver)
@@ -320,7 +355,10 @@ def _syevd_hlo(platform, gpu_solver, have_jacobi_solver, dtype, a, *,
     kernel = f"{platform}solver_syevd"
     lwork, opaque = gpu_solver.build_syevd_descriptor(
         np.dtype(dtype), lower, batch_int, n)
-    assert lwork > 0
+    # TODO(Ruturaj4): Currently, hipsolverSsyevd sets lwork to 0 if n==0.
+    # Remove if this behavior changes in then new ROCm release.
+    if n > 0 or platform != "hip":
+      assert lwork > 0
 
   if ir.ComplexType.isinstance(a_type.element_type):
     eigvals_type = ir.ComplexType(a_type.element_type).element_type

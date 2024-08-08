@@ -35,7 +35,7 @@ _deprecations = {
     _deprecated_get_backend
   ),
   "default_backend": (
-    "jax.lib.xla_bridge.default_backend is deprecated; use jax.extend.backend.default_backend.",
+    "jax.lib.xla_bridge.default_backend is deprecated; use jax.default_backend.",
     _deprecated_default_backend
   ),
 }

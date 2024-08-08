@@ -30,6 +30,7 @@ limitations under the License.
 #include "third_party/gpus/cuda/include/cuda_runtime_api.h"  // IWYU pragma: export
 #include "third_party/gpus/cuda/include/cufft.h"       // IWYU pragma: export
 #include "third_party/gpus/cuda/include/cusolverDn.h"  // IWYU pragma: export
+#include "third_party/gpus/cuda/include/cusolver_common.h"  // IWYU pragma: export
 #include "third_party/gpus/cuda/include/cusparse.h"    // IWYU pragma: export
 #include "third_party/gpus/cudnn/cudnn.h"              // IWYU pragma: export
 

@@ -41,3 +41,4 @@ or deployed codebases.
    :caption: Custom Operations
 
    pallas/index
+   ffi

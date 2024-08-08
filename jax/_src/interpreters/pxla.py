@@ -1881,7 +1881,7 @@ def _cached_lowering_to_hlo(closed_jaxpr, api_name, fun_name, backend,
                             propagated_out_mem_kinds: tuple[None | str, ...],
                             platforms: tuple[str, ...],
                             lowering_parameters: mlir.LoweringParameters,
-                            mesh_shape_tuple: tuple[tuple[str, int], ...]):
+                            mesh_shape_tuple: tuple[tuple[str, int], ...] | None):
   jaxpr = closed_jaxpr.jaxpr
   in_shardings = semantic_in_shardings.shardings
   out_shardings = semantic_out_shardings.shardings
@@ -1911,7 +1911,8 @@ def _cached_lowering_to_hlo(closed_jaxpr, api_name, fun_name, backend,
     in_mlir_shardings = map(_to_logical_sharding, global_in_avals, in_shardings)
     out_mlir_shardings = map(_to_logical_sharding, global_out_avals, out_shardings)
     replicated_args = [False] * len(global_in_avals)
-    axis_ctx = sharding_impls.ShardingContext(num_devices, device_assignment)
+    axis_ctx = sharding_impls.ShardingContext(num_devices, device_assignment,
+                                              mesh_shape=mesh_shape_tuple)
     num_partitions = num_devices
   else:
     # This path is triggered for `jit(pmap)` cases.
@@ -1957,8 +1958,7 @@ def _cached_lowering_to_hlo(closed_jaxpr, api_name, fun_name, backend,
         all_default_mem_kind=all_default_mem_kind,
         input_output_aliases=inout_aliases,
         propagated_out_mem_kinds=propagated_out_mem_kinds,
-        lowering_parameters=lowering_parameters,
-        mesh_shape_tuple=mesh_shape_tuple)
+        lowering_parameters=lowering_parameters)
   tuple_args = dispatch.should_tuple_args(len(global_in_avals), backend.platform)
   unordered_effects = list(
       effects.ordered_effects.filter_not_in(closed_jaxpr.effects))
@@ -2114,7 +2114,7 @@ def lower_sharding_computation(
     donated_invars: Sequence[bool],
     *,
     keep_unused: bool,
-    devices_from_context: Sequence[xc.Device] | None,
+    context_mesh: mesh_lib.Mesh | None,
     lowering_platforms: tuple[str, ...] | None,
     lowering_parameters: mlir.LoweringParameters,
     pgle_profiler: profiler.PGLEProfiler | None,
@@ -2157,6 +2157,8 @@ def lower_sharding_computation(
   assert len(out_shardings) == len(out_layouts) == len(global_out_avals), (
       len(out_shardings), len(out_layouts), len(global_out_avals))
 
+  devices_from_context = (None if context_mesh is None or context_mesh.empty
+                          else context_mesh._flat_devices_tuple)
   # Device assignment across all inputs, outputs and shardings inside jaxpr
   # should be the same.
   unique_intermediate_shardings = list(util.stable_unique(
@@ -2201,14 +2203,15 @@ def lower_sharding_computation(
   semantic_out_shardings = SemanticallyEqualShardings(
       out_shardings, global_out_avals)  # type: ignore
   prim_requires_devices = dispatch.jaxpr_has_prim_requiring_devices(jaxpr)
+
+  # TODO(yashkatariya): Initialize with context_mesh here?
   mesh_shape_tuple = None
-  if config.use_shardy_partitioner.value:
-    for sharding in it.chain(
-        in_shardings, out_shardings,
-        [js for js, _ in unique_intermediate_shardings]):
-      if isinstance(sharding, sharding_impls.NamedSharding):
-        mesh_shape_tuple = sharding.mesh.shape_tuple
-        break
+  for sharding in it.chain(
+      in_shardings, out_shardings,
+      [js for js, _ in unique_intermediate_shardings]):
+    if isinstance(sharding, sharding_impls.NamedSharding):
+      mesh_shape_tuple = sharding.mesh.shape_tuple
+      break
 
   (module, keepalive, host_callbacks, unordered_effects, ordered_effects,
    nreps, tuple_args, shape_poly_state) = _cached_lowering_to_hlo(
@@ -2253,7 +2256,8 @@ def lower_sharding_computation(
       all_default_mem_kind=all_default_mem_kind,
       all_args_info=all_args_info,
       pgle_profiler=pgle_profiler,
-      intermediate_shardings=[s for s, _ in unique_intermediate_shardings])
+      intermediate_shardings=[s for s, _ in unique_intermediate_shardings],
+      context_mesh=context_mesh)
 
 
 def _to_logical_sharding(
@@ -2472,7 +2476,7 @@ def _get_out_sharding_from_orig_sharding(
 
 def maybe_recover_user_shardings(
     old_shardings, new_shardings, old_avals, new_avals,
-    intermediate_shardings=None):
+    intermediate_shardings=None, context_mesh: mesh_lib.Mesh | None = None):
   if all(not isinstance(o, sharding_impls.GSPMDSharding) for o in new_shardings):
     return new_shardings
 
@@ -2486,6 +2490,11 @@ def maybe_recover_user_shardings(
       if i is not None and type(i) in _orig_out_sharding_handlers:
         return _get_out_sharding_from_orig_sharding(
             new_shardings, new_avals, i, None)
+
+  if context_mesh is not None and not context_mesh.empty:
+    return [sharding_impls._gspmd_to_named_sharding_via_mesh(n, context_mesh)
+            if isinstance(n, GSPMDSharding) else n
+            for n in new_shardings]
 
   return new_shardings
 
@@ -2775,6 +2784,7 @@ class UnloadedMeshExecutable:
                compiler_options=None,
                pgle_profiler: profiler.PGLEProfiler | None = None,
                intermediate_shardings: Sequence[JSharding] | None = None,
+               context_mesh: mesh_lib.Mesh | None = None
   ) -> MeshExecutable:
     if shape_poly_state is not None and shape_poly_state.uses_dim_vars:
       hlo = mlir.refine_polymorphic_shapes(hlo)
@@ -2832,7 +2842,7 @@ class UnloadedMeshExecutable:
 
     out_shardings = maybe_recover_user_shardings(
         in_shardings, out_shardings, global_in_avals, global_out_avals,
-        intermediate_shardings)
+        intermediate_shardings, context_mesh)
 
     out_shardings = finalize_out_shardings(out_shardings, da)
 
@@ -3071,18 +3081,8 @@ def check_array_xla_sharding_layout_match(
 
     db_xs = check_device_backend_on_shardings([xs])
 
-    # Raise memory kind mismatch error even if the arg is uncommitted.
-    if arg.sharding.memory_kind != xs.memory_kind:
-      errors.append(
-          ("Got input sharding(s) that compiled object was called with: "
-          f"{arg.sharding} and sharding(s) the computation was compiled "
-          f"with: {xs} for arg {name} with shape: {arg.aval.str_short()}",
-          'sharding'))
-
     if (not db_xs and arg._committed and
-        not op_shardings.are_op_shardings_equal(
-            arg.sharding._to_xla_hlo_sharding(arg.ndim),
-            xs._to_xla_hlo_sharding(arg.ndim))):
+        not arg.sharding.is_equivalent_to(xs, arg.ndim)):
       errors.append(
           ("Got input sharding(s) that compiled object was called with: "
           f"{arg.sharding} and sharding(s) the computation was compiled "

@@ -16,32 +16,12 @@ limitations under the License.
 #ifndef JAXLIB_CUSOLVER_KERNELS_H_
 #define JAXLIB_CUSOLVER_KERNELS_H_
 
-#include "absl/status/statusor.h"
+#include <cstddef>
+
 #include "jaxlib/gpu/vendor.h"
-#include "jaxlib/handle_pool.h"
 #include "xla/service/custom_call_status.h"
 
-#ifdef JAX_GPU_CUDA
-#include "third_party/gpus/cuda/include/cusolverSp.h"
-#endif  // JAX_GPU_CUDA
-
 namespace jax {
-
-using SolverHandlePool = HandlePool<gpusolverDnHandle_t, gpuStream_t>;
-
-template <>
-absl::StatusOr<SolverHandlePool::Handle> SolverHandlePool::Borrow(
-    gpuStream_t stream);
-
-#ifdef JAX_GPU_CUDA
-
-using SpSolverHandlePool = HandlePool<cusolverSpHandle_t, gpuStream_t>;
-
-template <>
-absl::StatusOr<SpSolverHandlePool::Handle> SpSolverHandlePool::Borrow(
-    gpuStream_t stream);
-
-#endif  // JAX_GPU_CUDA
 
 namespace JAX_GPU_NAMESPACE {
 

@@ -24,6 +24,7 @@ import inspect
 from typing import Any
 import weakref
 
+import numpy as np
 import jax
 from jax import tree_util
 from jax._src import api_util
@@ -481,17 +482,20 @@ def _custom_partitioning_lowering_rule(ctx: mlir.LoweringRuleContext, *values,
                                        infer_sharding_from_operands,
                                        decode_shardings,
                                        static_args):
-  mesh = mesh_lib.thread_resources.env.physical_mesh
   axis_context = ctx.module_context.axis_context
   if (isinstance(axis_context, sharding_impls.SPMDAxisContext) and
       set(axis_context.manual_axes) == set(axis_context.mesh.axis_names)):
     return mlir.lower_fun(core.jaxpr_as_fun(call), multiple_results=True)(ctx, *values)
 
+  mesh = mesh_lib.thread_resources.env.physical_mesh
   if isinstance(axis_context, sharding_impls.ShardingContext):
     devices = axis_context.device_assignment
     if devices is None:
       raise AssertionError(
           'Please file a bug at https://github.com/google/jax/issues')
+    if axis_context.mesh_shape is not None:
+      ma, ms = list(zip(*axis_context.mesh_shape))
+      mesh = mesh_lib.Mesh(np.array(devices).reshape(ms), ma)
   elif isinstance(axis_context, sharding_impls.SPMDAxisContext):
     devices = axis_context.mesh._flat_devices_tuple
   else:

@@ -42,12 +42,13 @@ def pallas_call_lowering(
     ctx: mlir.LoweringRuleContext,
     *in_nodes,
     jaxpr: jax_core.Jaxpr,
-    name: str,
+    name_and_src_info: pallas_core.NameAndSrcInfo,
     interpret: bool,
     debug: bool,
     input_output_aliases: tuple[tuple[int, int], ...],
     grid_mapping: pallas_core.GridMapping,
     compiler_params: dict[str, Any],
+    cost_estimate: pallas_core.CostEstimate | None,
 ):
   del interpret
   if grid_mapping.num_dynamic_grid_bounds:
@@ -67,14 +68,17 @@ def pallas_call_lowering(
     num_stages = triton_params.pop("num_stages", 3)
 
   if debug:
+    print(f"\nThe kernel jaxpr for pallas_call {name_and_src_info}:")
     print(jaxpr)
+    print("The grid mapping for pallas_call {name_and_src_info}:")
     print(grid_mapping)
 
   lowering_result = lowering.lower_jaxpr_to_triton_module(
-      jaxpr, grid_mapping, name, lowering_platform
+      jaxpr, grid_mapping, name_and_src_info, lowering_platform
   )
   module_op = lowering_result.module.operation
   if debug:
+    print(f"\nThe Triton module for pallas_call {name_and_src_info}:")
     print(module_op.get_asm(enable_debug_info=True, pretty_debug_info=True))
 
   grid_x, grid_y, grid_z = normalize_grid(lowering_result.grid)
@@ -86,7 +90,7 @@ def pallas_call_lowering(
   buf = io.BytesIO()
   module_op.write_bytecode(buf)
   backend_config = dict(
-      name=ir.StringAttr.get(name),
+      name=ir.StringAttr.get(name_and_src_info.name),
       ir=ir.StringAttr.get(buf.getvalue()),
       num_stages=mlir.i32_attr(num_stages),
       num_warps=mlir.i32_attr(num_warps),

@@ -961,6 +961,24 @@ class TMATest(TestCase):
     y = mosaic_gpu.as_gpu_kernel(kernel, (1, 1, 1), (128, 1, 1), x, x, x)(x)
     np.testing.assert_array_equal(y, x)
 
+  def test_tma_invalid(self):
+    def kernel(ctx, src, dst, tmp):
+      copy(src, tmp)
+      ctx.async_copy(src_ref=tmp, dst_ref=dst)
+      ctx.await_async_copy(0)
+
+    def run_kernel(shape):
+      x = np.arange(np.prod(shape)).reshape(shape)
+      _ = mosaic_gpu.as_gpu_kernel(kernel, (1, 1, 1), (128, 1, 1), x, x, x)(x)
+
+    with self.assertRaisesRegex(ValueError, "only support striding up to 5"):
+      run_kernel([1] * 6)
+
+    with self.assertRaisesRegex(
+        ValueError, "last dimension to be divisible by 16"
+    ):
+      run_kernel([23])
+
 
 class FragmentedArrayTest(TestCase):
 

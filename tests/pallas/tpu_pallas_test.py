@@ -1487,18 +1487,34 @@ class PallasCallTest(PallasBaseTest):
     f = self.pallas_call(
         kernel,
         out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
-        compiler_params=dict(
-            mosaic=dict(
-                cost_estimate=pltpu.CostEstimate(
-                    flops=1234, transcendentals=21, bytes_accessed=12345
-                )
-            )
+        cost_estimate=pl.CostEstimate(
+            flops=1234, transcendentals=21, bytes_accessed=12345
         ),
     )
     (analysis_result,) = jax.jit(f).lower(x).compile().cost_analysis()
     self.assertEqual(analysis_result['flops'], 1234)
     self.assertEqual(analysis_result['transcendentals'], 21)
     self.assertEqual(analysis_result['bytes accessed'], 12345)
+
+
+  def test_cost_analysis_vmap(self):
+    def kernel(x, y):
+      y[:] = x[:]
+    batch_size = 3
+    x = jnp.arange(batch_size * 1024.).reshape(batch_size, 8, 128)
+    f = pl.pallas_call(
+        kernel,
+        out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
+        cost_estimate=pl.CostEstimate(
+            flops=1234, transcendentals=21, bytes_accessed=12345
+        ),
+    )
+    f = jax.vmap(f)
+    (analysis_result,) = jax.jit(f).lower(x).compile().cost_analysis()
+    self.assertEqual(analysis_result['flops'], batch_size * 1234)
+    self.assertEqual(analysis_result['transcendentals'], batch_size * 21)
+    self.assertEqual(analysis_result['bytes accessed'], batch_size * 12345)
+
 
   def test_vmem_limit(self):
     shape = (128, 128)
@@ -1884,10 +1900,6 @@ class PallasCallPrintTest(PallasBaseTest):
 
 class PallasCallTraceTest(PallasBaseTest):
 
-  def parse_debug_string(self, debug_string):
-    jaxpr, mlir = debug_string.split('module')
-    return {'jaxpr': jaxpr, 'mlir': mlir}
-
   def test_trace_start_stop_match(self):
     def kernel(o_ref):
       with jax.named_scope('scope1'):
@@ -1900,10 +1912,10 @@ class PallasCallTraceTest(PallasBaseTest):
         debug=True,
       )()
       # TODO(justinfu): Add an official lowering API to get the MLIR.
-      mlir = self.parse_debug_string(msg.getvalue())['mlir']
+      debug_string = msg.getvalue()
 
-    num_start = mlir.count('tpu.trace_start')
-    num_stop = mlir.count('tpu.trace_stop')
+    num_start = debug_string.count('tpu.trace_start')
+    num_stop = debug_string.count('tpu.trace_stop')
     self.assertEqual(num_start, 1)
     self.assertEqual(num_stop, 1)
 
@@ -1926,10 +1938,10 @@ class PallasCallTraceTest(PallasBaseTest):
         debug=True,
       )()
       # TODO(justinfu): Add an official lowering API to get the MLIR.
-      mlir = self.parse_debug_string(msg.getvalue())['mlir']
+      debug_string = msg.getvalue()
 
-    num_start = mlir.count('tpu.trace_start')
-    num_stop = mlir.count('tpu.trace_stop')
+    num_start = debug_string.count('tpu.trace_start')
+    num_stop = debug_string.count('tpu.trace_stop')
     self.assertEqual(num_start, 2)
     self.assertEqual(num_stop, 2)
 
@@ -2158,11 +2170,25 @@ class PallasCallTPUCheckifyInterpretTest(PallasCallTPUCheckifyTest):
   INTERPRET: bool = True
 
 
-class MiscellaneousInterpreterTest(PallasBaseTest):
-  """Tests for recently reported bugs; only pass in interpret mode."""
+def only_passes_in_interpret(unless_generation: int | None = None):
+  def decorator(f):
+    def wrapper(self):
+      if self.INTERPRET or (
+          unless_generation is not None
+          and jtu.is_device_tpu_at_least(unless_generation)
+      ):
+        f(self)
+      else:
+        with self.assertRaises(Exception):
+          f(self)
+    return wrapper
+  return decorator
 
-  INTERPRET: bool = True
 
+class MiscellaneousTest(PallasBaseTest):
+  """Tests for reported bugs. Only pass in interpret mode unless fixed."""
+
+  @only_passes_in_interpret()
   def test_float32_stack(self):
     """b/347761105"""
     x = np.arange(128, dtype=jnp.float32).reshape(1, 128)
@@ -2176,6 +2202,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
     )(x, y)
     np.testing.assert_array_equal(out, np.stack([x, y], axis=1))
 
+  @only_passes_in_interpret()
   def test_lane_to_chunk_reshape_bf16(self):
     """b/348038320"""
     x = np.arange(256 * 1024, dtype=jnp.bfloat16).reshape(1, 256, 1024)
@@ -2188,6 +2215,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
     )(x)
     np.testing.assert_array_equal(out, np.reshape(x, (1, 256, 8, 128)))
 
+  @only_passes_in_interpret()
   def test_lane_to_chunk_broadcast_fp32(self):
     """b/348033362"""
     x = np.arange(256 * 128, dtype=jnp.float32).reshape(1, 256, 128)
@@ -2204,6 +2232,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
         out, np.broadcast_to(np.expand_dims(x, 2), (1, 256, 8, 128))
     )
 
+  @only_passes_in_interpret()
   def test_lane_dynamic_slice(self):
     """b/346849973"""
     x = np.arange(128, dtype=jnp.float32)
@@ -2217,7 +2246,6 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
     np.testing.assert_array_equal(out, x[64:65])
 
   def test_lane_broadcast_bf16(self):
-    """b/346654106"""
     x = np.arange(256, dtype=jnp.bfloat16).reshape(256, 1)
 
     def kernel(x_ref, out_ref):
@@ -2228,6 +2256,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
     )(x)
     np.testing.assert_array_equal(out, np.broadcast_to(x, (256, 512)))
 
+  @only_passes_in_interpret(unless_generation=4)
   def test_bfloat16_to_uint32_bitcast(self):
     """b/347771903"""
     x = np.arange(16 * 2 * 256, dtype=jnp.bfloat16).reshape(16, 2, 256)
@@ -2240,6 +2269,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
     )(x)
     # FIXME: Add correctness test for result.
 
+  @only_passes_in_interpret()
   def test_roll_partial(self):
     """b/337384645"""
     x = np.arange(8192, dtype=jnp.float32).reshape(128, 64)
@@ -2252,6 +2282,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
     )(x)
     np.testing.assert_array_equal(out, np.roll(x, 3, 1))
 
+  @only_passes_in_interpret()
   def test_retiling1(self):
     """b/352626602"""
     x = np.arange(1024, dtype=jnp.bfloat16).reshape(1024)
@@ -2266,6 +2297,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
 
     np.testing.assert_array_equal(out, np.reshape(x, (8, 128)))
 
+  @only_passes_in_interpret()
   def test_retiling2(self):
     """b/348040767"""
     x = np.arange(1 * 8 * 1024, dtype=jnp.bfloat16).reshape(1, 8, 1024)
@@ -2282,6 +2314,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
 
     np.testing.assert_array_equal(out, np.reshape(x[:, 7, :], (1, 8, 128)))
 
+  @only_passes_in_interpret()
   def test_sublane_adding_shape_cast_f32(self):
     """b/352833257"""
     x = np.arange(8 * 128, dtype=jnp.float32).reshape(8, 128)
@@ -2295,6 +2328,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
 
     np.testing.assert_array_equal(out, np.reshape(x, (8, 1, 128)))
 
+  @only_passes_in_interpret()
   def test_sublane_adding_shape_cast_bf16(self):
     """b/352833257"""
     x = np.arange(8 * 128, dtype=jnp.bfloat16).reshape(8, 128)
@@ -2308,6 +2342,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
 
     np.testing.assert_array_equal(out, np.reshape(x, (8, 1, 128)))
 
+  @only_passes_in_interpret()
   def test_mixed_strides(self):
     """b/352841329"""
     x = np.zeros((8, 128), dtype=jnp.float32)
@@ -2323,6 +2358,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
 
     np.testing.assert_array_equal(out, np.zeros((8, 128), dtype=jnp.float32))
 
+  @only_passes_in_interpret()
   def test_sum(self):
     """b/356467588"""
     x = np.zeros((8, 2, 8, 128), dtype=jnp.float32)
@@ -2336,6 +2372,7 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
 
     np.testing.assert_array_equal(out, np.zeros((8, 2, 128), dtype=jnp.float32))
 
+  @only_passes_in_interpret()
   def test_transpose(self):
     """b/356475128"""
     x = np.zeros((8, 2, 8, 128), dtype=jnp.float32)
@@ -2350,6 +2387,10 @@ class MiscellaneousInterpreterTest(PallasBaseTest):
     np.testing.assert_array_equal(
         out, np.zeros((8, 8, 2, 128), dtype=jnp.float32)
     )
+
+
+class MiscellaneousInterpreterTest(MiscellaneousTest):
+  INTERPRET: bool = True
 
 
 if __name__ == '__main__':

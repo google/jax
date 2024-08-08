@@ -275,7 +275,8 @@ except ImportError:
   pass
 
 from jax._src.numpy.array_api_metadata import (
-  __array_api_version__ as __array_api_version__
+  __array_api_version__ as __array_api_version__,
+  __array_namespace_info__ as __array_namespace_info__,
 )
 
 from jax._src.numpy.index_tricks import (

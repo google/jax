@@ -1163,6 +1163,7 @@ class ShardingContext:
   """
   num_devices: int
   device_assignment: tuple[xc.Device, ...] | None = None
+  mesh_shape: tuple[tuple[str, int], ...] | None = None
 
   def __post_init__(self):
     if self.device_assignment is not None:

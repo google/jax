@@ -13,16 +13,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <algorithm>
+#include <cstddef>
 #include <stdexcept>
 #include <utility>
-#include <vector>
 
 #include "nanobind/nanobind.h"
 #include "nanobind/stl/pair.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_format.h"
 #include "jaxlib/gpu/blas_kernels.h"
+#include "jaxlib/gpu/blas_kernels_ffi.h"
 #include "jaxlib/gpu/vendor.h"
 #include "jaxlib/kernel_nanobind_helpers.h"
 #include "xla/tsl/python/lib/core/numpy.h"
@@ -70,6 +70,9 @@ nb::dict Registrations() {
   nb::dict dict;
   dict[JAX_GPU_PREFIX "blas_getrf_batched"] = EncapsulateFunction(GetrfBatched);
   dict[JAX_GPU_PREFIX "blas_geqrf_batched"] = EncapsulateFunction(GeqrfBatched);
+
+  dict[JAX_GPU_PREFIX "blas_getrf_batched_ffi"] =
+      EncapsulateFfiHandler(GetrfBatchedFfi);
   return dict;
 }
 

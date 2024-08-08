@@ -15,7 +15,9 @@
 # ruff: noqa: F401
 from jax._src.lib import (
   version_str as __version__,
+)
+from jax.lib import (
+  xla_bridge as xla_bridge,
   xla_client as xla_client,
   xla_extension as xla_extension,
 )
-from jax.lib import xla_bridge as xla_bridge

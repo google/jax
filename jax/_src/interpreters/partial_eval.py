@@ -2697,7 +2697,7 @@ class BoundedAxisSize(NamedTuple):
   bound: int
 
 def _eval_jaxpr_padded(
-    jaxpr: Jaxpr, consts: list[Const], *args: DynamicJaxprTracer
+    jaxpr: Jaxpr, consts: Sequence[Const], *args: DynamicJaxprTracer
   ) -> list[Const | DynamicJaxprTracer]:
   env: dict[Var, Val] = {}
 

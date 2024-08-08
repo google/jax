@@ -22,12 +22,12 @@ from jax._src.pallas.mosaic.core import semaphore
 from jax._src.pallas.mosaic.core import SemaphoreType
 from jax._src.pallas.mosaic.core import TPUMemorySpace
 from jax._src.pallas.mosaic.lowering import LoweringException
+from jax._src.pallas.mosaic.pipeline import ARBITRARY
 from jax._src.pallas.mosaic.pipeline import BufferedRef
 from jax._src.pallas.mosaic.pipeline import emit_pipeline
 from jax._src.pallas.mosaic.pipeline import emit_pipeline_with_allocations
 from jax._src.pallas.mosaic.pipeline import get_pipeline_schedule
 from jax._src.pallas.mosaic.pipeline import make_pipeline_allocations
-from jax._src.pallas.mosaic.pipeline import ARBITRARY
 from jax._src.pallas.mosaic.pipeline import PARALLEL
 from jax._src.pallas.mosaic.primitives import async_copy
 from jax._src.pallas.mosaic.primitives import async_remote_copy
@@ -38,14 +38,15 @@ from jax._src.pallas.mosaic.primitives import DeviceIdType
 from jax._src.pallas.mosaic.primitives import get_barrier_semaphore
 from jax._src.pallas.mosaic.primitives import make_async_copy
 from jax._src.pallas.mosaic.primitives import make_async_remote_copy
+from jax._src.pallas.mosaic.primitives import prng_random_bits
+from jax._src.pallas.mosaic.primitives import prng_seed
 from jax._src.pallas.mosaic.primitives import repeat
 from jax._src.pallas.mosaic.primitives import roll
 from jax._src.pallas.mosaic.primitives import semaphore_read
 from jax._src.pallas.mosaic.primitives import semaphore_signal
 from jax._src.pallas.mosaic.primitives import semaphore_wait
-from jax._src.pallas.mosaic.primitives import prng_seed
-from jax._src.pallas.mosaic.primitives import prng_random_bits
 from jax._src.pallas.mosaic.random import to_pallas_key
+# Remove this import after October 22th 2024.
 from jax._src.tpu_custom_call import CostEstimate
 
 # TODO(cperivol): Temporary alias to the global run_scoped. Remove

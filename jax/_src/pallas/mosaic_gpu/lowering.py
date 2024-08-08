@@ -31,7 +31,7 @@ from jax._src.lax import lax
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import arith as arith_dialect
 from jax._src.lib.mlir.dialects import memref as memref_dialect
-from jax._src.pallas import core as pl_core
+from jax._src.pallas import core as pallas_core
 from jax._src.pallas import primitives
 from jax._src.state import primitives as sp
 from jax.experimental.mosaic import gpu as mosaic_gpu
@@ -53,7 +53,7 @@ partial = functools.partial
 @dataclasses.dataclass
 class ModuleContext:
   name: str
-  grid_mapping: pl_core.GridMapping
+  grid_mapping: pallas_core.GridMapping
   runtime_smem: ir.Value  # ir.MemRefType
   smem_used_bytes: int
 
@@ -117,7 +117,7 @@ class LoweringRuleContext:
   module_context: ModuleContext
   avals_in: Sequence[jax_core.ShapedArray]
   avals_out: Sequence[jax_core.ShapedArray]
-  block_shapes: list[tuple[int | pl_core.Mapped, ...]] | None
+  block_shapes: list[tuple[int | pallas_core.Mapped, ...]] | None
 
   replace = dataclasses.replace
 
@@ -137,16 +137,18 @@ class BlockInfo:
   block_shape: tuple[int, ...]
 
 
-class LoweringError(Exception):
+class LoweringError(Exception):  # pylint: disable=g-bad-exception-name
   pass
 
 
 def lower_jaxpr_to_module(
-    grid_mapping: pl_core.GridMapping,
+    grid_mapping: pallas_core.GridMapping,
     jaxpr: jax_core.Jaxpr,
-    name: str,
+    name_and_src_info: pallas_core.NameAndSrcInfo,
     compiler_params: dict[str, Any],
+    cost_estimate: pallas_core.CostEstimate | None,
 ) -> LoweringResult:
+  del cost_estimate  # Unused.
   in_structs = tuple(grid_mapping.in_shapes)
   out_structs = grid_mapping.out_shapes
   assert len(jaxpr.outvars) == 0
@@ -180,7 +182,8 @@ def lower_jaxpr_to_module(
 
     barrier.wait()
 
-    module_ctx = ModuleContext(name, grid_mapping, runtime_smem, smem_used_bytes=0)
+    module_ctx = ModuleContext(name_and_src_info.name,
+                               grid_mapping, runtime_smem, smem_used_bytes=0)
     _ = lower_jaxpr_to_mosaic_gpu(module_ctx, jaxpr, None, buffers_smem)
 
     for b_gmem, b_smem in zip(out_buffers_gmem, out_buffers_smem):
@@ -210,6 +213,7 @@ def lower_jaxpr_to_module(
           *extra_smem_scratch,
           mgpu.TMABarrier(),
       ),
+      module_name=name_and_src_info.name,
   )
 
   return LoweringResult(module, grid, gmem_scratch_bytes, out_structs)
@@ -287,7 +291,7 @@ def lower_jaxpr_to_mosaic_gpu(
 
 @register_lowering_rule(sp.get_p)
 def _get_lowering_rule(ctx: LoweringRuleContext, x_smem, *indexers, tree):
-  del tree  # Unused.
+  del tree, ctx  # Unused.
   if indexers:
     raise NotImplementedError("No support for indexers yet")
 
@@ -298,7 +302,7 @@ def _get_lowering_rule(ctx: LoweringRuleContext, x_smem, *indexers, tree):
 def _swap_lowering_rule(
     ctx: LoweringRuleContext, x_smem, value, *indexers, tree
 ):
-  del tree  # Unused.
+  del tree, ctx  # Unused.
   if indexers:
     raise NotImplementedError("No support for indexers yet")
   old_value = mgpu.FragmentedArray.load_strided(x_smem)
@@ -330,6 +334,7 @@ def _broadcast_in_dim_lowering_rule(
 def _convert_element_type_lowering_rule(
     ctx: LoweringRuleContext, x, *, new_dtype, weak_type, sharding
 ):
+  del weak_type, sharding
   return _ensure_fa(x, *ctx.avals_in).astype(mlir.dtype_to_ir_type(new_dtype))
 
 
@@ -377,6 +382,7 @@ def _debug_print_lowering_rule(
     fmt,
     has_placeholders: bool,
 ):
+  del ctx
   del has_placeholders
   primitives.check_debug_print_format(fmt, *args)
   mgpu.debug_print(fmt, *args)

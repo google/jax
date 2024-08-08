@@ -2054,10 +2054,9 @@ def expi_jvp(primals, tangents):
   return expi(x), jnp.exp(x) / x * x_dot
 
 
-def _expn1(n: int, x_in: ArrayLike) -> Array:
+def _expn1(n: Array, x: Array) -> Array:
   # exponential integral En
   _c = _lax_const
-  x = jnp.asarray(x_in)
   MACHEP = jnp.finfo(x.dtype).eps
 
   zero = _c(x, 0.0)
@@ -2092,7 +2091,7 @@ def _expn1(n: int, x_in: ArrayLike) -> Array:
   return d["z"] ** r * psi / jnp.exp(gammaln(t)) - d["ans"]
 
 
-def _expn2(n: int, x: Array) -> Array:
+def _expn2(n: Array, x: Array) -> Array:
   # x > 1.
   _c = _lax_const
   BIG = _c(x, 1.44115188075855872e17)
@@ -2143,7 +2142,7 @@ def _expn2(n: int, x: Array) -> Array:
   return d["ans"] * jnp.exp(-x)
 
 
-def _expn3(n: int, x: Array) -> Array:
+def _expn3(n: Array, x: Array) -> Array:
   # n >= 5000
   _c = _lax_const
   one = _c(x, 1.0)

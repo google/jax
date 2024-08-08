@@ -1067,7 +1067,8 @@ class VectorLayoutInferer {
       auto dst_tiled_ishape = layout.getImplicitTiledDims(res_ty.getShape(), 1);
       // Since we can only do sublane broadcasts in the (8, 128) tiling, we
       // should always use that when sublane broadcasting is required.
-      if (src_tiled_ishape[0] != dst_tiled_ishape[0]) {
+      if (src_tiled_ishape[0] != dst_tiled_ishape[0] &&
+          layout.offsets()[0] != std::nullopt) {
         if (layout.bitwidth() != kNativeBitwidth) {
           NYI("Only 32-bit broadcasts supported");
         }
@@ -1285,8 +1286,10 @@ class VectorLayoutInferer {
     auto acc_layout = getLayout(op.getAcc());
     TPU_CHECK_OP(is_fully_replicated(acc_layout),
                  "only constant accumulators supported");
-    TPU_CHECK_OP(src_ty.getElementTypeBitWidth() == kNativeBitwidth,
-                 "only 32-bit reductions supported");
+    TPU_CHECK_OP(
+        src_ty.getElementTypeBitWidth() == 32 ||
+            src_ty.getElementTypeBitWidth() == 16,
+        "only 32-bit (and 16-bit only on some targets) reductions supported");
     auto some_src_layout = getLayout(op.getSource());
     TPU_CHECK_OP(some_src_layout, "missing vector layout");
     auto &src_layout = *some_src_layout;
@@ -1309,8 +1312,9 @@ class VectorLayoutInferer {
     }
     if ((reduces[0] || reduces[1]) &&
         !src_layout.hasNativeTiling(target_shape_)) {
-      src_layout = VectorLayout(kNativeBitwidth, src_layout.offsets(),
-                                default_tiling_, src_layout.implicit_dim());
+      src_layout = VectorLayout(src_layout.bitwidth(), src_layout.offsets(),
+                                nativeTiling(src_layout.bitwidth()),
+                                src_layout.implicit_dim());
     }
     LayoutOffsets out_offsets = src_layout.offsets();
     for (int i = 0; i < out_offsets.size(); ++i) {
@@ -1762,6 +1766,20 @@ class VectorLayoutInferer {
     for (OpOperand &operand : x.getUses()) {
       if (isa<tpu::MatmulOp>(operand.getOwner())) {
         continue;
+      }
+      if (auto reduce =
+              dyn_cast<vector::MultiDimReductionOp>(operand.getOwner())) {
+        bool reduces_tiled_dims = false;
+        for (Attribute dim : reduce.getReductionDims()) {
+          if (cast<IntegerAttr>(dim).getInt() >=
+              reduce.getSourceVectorType().getRank() - 2) {
+            reduces_tiled_dims = true;
+            break;
+          }
+        }
+        if (reduces_tiled_dims) {
+          continue;
+        }
       }
       if (auto transpose = dyn_cast<vector::TransposeOp>(operand.getOwner())) {
         auto perm = transpose.getPermutation();

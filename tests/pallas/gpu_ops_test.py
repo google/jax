@@ -252,8 +252,8 @@ class FusedAttentionTest(PallasBaseTest):
               (1, 384, 1, 32, False, False),
               (2, 384, 2, 32, False, True),
               (2, 384, 2, 32, False, False),
-              # TODO(b/283035396): (1, 384, 1, 32, True, True),
-              # TODO(b/283035396): (2, 384, 2, 32, True, True),
+              (1, 384, 1, 32, True, True),
+              (2, 384, 2, 32, True, True),
           ]
       ]
   )

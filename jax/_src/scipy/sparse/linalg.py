@@ -71,10 +71,6 @@ def _mul(scalar, tree):
   return tree_map(partial(operator.mul, scalar), tree)
 
 
-def _div(tree, scalar):
-  return tree_map(partial(lambda v: v / scalar), tree)
-
-
 _add = partial(tree_map, operator.add)
 _sub = partial(tree_map, operator.sub)
 _dot_tree = partial(tree_map, _dot)

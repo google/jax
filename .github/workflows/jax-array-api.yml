@@ -38,8 +38,8 @@ jobs:
         python -m pip install -r array-api-tests/requirements.txt
     - name: Run the test suite
       env:
-        ARRAY_API_TESTS_MODULE: jax.experimental.array_api
+        ARRAY_API_TESTS_MODULE: jax.numpy
         JAX_ENABLE_X64: 'true'
       run: |
         cd ${GITHUB_WORKSPACE}/array-api-tests
-        pytest array_api_tests --max-examples=5 --derandomize --disable-deadline --skips-file ${GITHUB_WORKSPACE}/jax/experimental/array_api/skips.txt
+        pytest array_api_tests --max-examples=5 --derandomize --disable-deadline --skips-file ${GITHUB_WORKSPACE}/tests/array_api_skips.txt

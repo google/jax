@@ -688,6 +688,11 @@ jax_test(
 jax_test(
     name = "nn_test",
     srcs = ["nn_test.py"],
+    backend_tags = {
+        "gpu": [
+            "noasan",  # Times out under asan.
+        ],
+    },
     shard_count = {
         "cpu": 10,
         "tpu": 10,

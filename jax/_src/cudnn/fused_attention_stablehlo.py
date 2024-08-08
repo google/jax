@@ -618,11 +618,12 @@ def _dot_product_attention_fwd_batcher(
     *_, S, _, _ = key.shape
   B = math.prod(Bs)
   has_bias, _ = variadic_args
+  original_shape = query.shape
   # reshape to 4D shape
   query = jnp.reshape(query, (B,) + query.shape[-3:])
   key = jnp.reshape(key, (B,) + key.shape[-3:])
   value = jnp.reshape(value, (B,) + key.shape[-3:])
-  if has_bias:
+  if has_bias and batch_dims[3] is not None:
     bias = jnp.reshape(bias, (B, N, T, S))
   if has_padding(mask_type):
     q_seqlen = jnp.reshape(q_seqlen, (B, ))
@@ -635,7 +636,7 @@ def _dot_product_attention_fwd_batcher(
 
   # reshape to original shape
   output = outputs[0]
-  output = jnp.reshape(output, query.shape)
+  output = jnp.reshape(output, original_shape)
   if is_training:
     activation = outputs[1]
     activation = jnp.reshape(activation, (*Bs, N, T))
@@ -660,11 +661,15 @@ def _dot_product_attention_bwd_batcher(
     *_, S, _, _ = key.shape
   B = math.prod(Bs)
   has_bias, has_dbias = variadic_args
+  original_query_shape = query.shape
+  original_key_shape = key.shape
+  original_value_shape = value.shape
+  original_bias_shape = bias.shape if has_bias else None
   # reshape to 4D shape
   query = jnp.reshape(query, (B,) + query.shape[-3:])
   key = jnp.reshape(key, (B,) + key.shape[-3:])
   value = jnp.reshape(value, (B,) + key.shape[-3:])
-  if has_bias:
+  if has_bias and batch_dims[3] is not None:
     bias = jnp.reshape(bias, (B, N, T, S))
   if has_padding(mask_type):
     q_seqlen = jnp.reshape(q_seqlen, (B, ))
@@ -681,15 +686,14 @@ def _dot_product_attention_bwd_batcher(
       mask_type=mask_type, layout=layout,
   )
 
-  grad_query, grad_key, grad_value = grads[:3]
   # reshape to original shape
-  grad_query = jnp.reshape(grad_query, query.shape)
-  grad_key = jnp.reshape(grad_key, key.shape)
-  grad_value = jnp.reshape(grad_value, value.shape)
+  grads[0] = jnp.reshape(grads[0], original_query_shape)
+  grads[1] = jnp.reshape(grads[1], original_key_shape)
+  grads[2] = jnp.reshape(grads[2], original_value_shape)
   if has_dbias:
-    grad_bias = grads[3]
-    grad_bias = jnp.reshape(grad_bias, bias.shape)
-    return grads + (grad_bias,), out_bdims + (query_bdim,)
+    assert has_bias
+    grads[3] = jnp.reshape(grads[3], original_bias_shape)
+    out_bdims += (batch_dims[3],)
   return grads, out_bdims
 
 # custom partitioning

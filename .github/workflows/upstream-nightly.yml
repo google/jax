@@ -85,7 +85,7 @@ jobs:
           && steps.status.outcome == 'failure'
           && github.event_name == 'schedule'
           && github.repository == 'google/jax'
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # ratchet: actions/upload-artifact@v4
+        uses: actions/upload-artifact@89ef406dd8d7e03cfd12d9e0a4a378f454709029 # ratchet: actions/upload-artifact@v4
         with:
           name: output-${{ matrix.python-version }}-log.jsonl
           path: output-${{ matrix.python-version }}-log.jsonl

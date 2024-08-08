@@ -20,9 +20,9 @@ import unittest
 from absl.testing import absltest
 
 import numpy as np
+import scipy.cluster as osp_cluster
 import scipy.integrate
 import scipy.special as osp_special
-import scipy.cluster as osp_cluster
 
 import jax
 import jax.dtypes
@@ -201,6 +201,14 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
     y_expected = osp_special.logsumexp(x[mask]) if mask.any() else -jnp.inf
     y_actual = lsp_special.logsumexp(x, where=mask)
     self.assertAllClose(y_expected, y_actual, check_dtypes=False)
+
+  def testLogSumExpZerosJac(self):
+    # Regression test for https://github.com/google/jax/issues/22398
+    fun = lambda b: lsp_special.logsumexp(jnp.zeros(2), axis=0, b=b)
+    np.testing.assert_array_equal(
+        jax.jacfwd(fun)(jnp.array([1.0, 0.0])),
+        jnp.ones(2),
+    )
 
   @jtu.sample_product(
     shape=all_shapes,

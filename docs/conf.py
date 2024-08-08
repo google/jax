@@ -136,6 +136,7 @@ exclude_patterns = [
     'jep/9407-type-promotion.md',
     'autodidax.md',
     'sharded-computation.md',
+    'ffi.ipynb',
 ]
 
 # The name of the Pygments (syntax highlighting) style to use.
@@ -200,6 +201,7 @@ myst_enable_extensions = ['dollarmath']
 nb_execution_mode = "force"
 nb_execution_allow_errors = False
 nb_merge_streams = True
+nb_execution_show_tb = True
 
 # Notebook cell execution timeout; defaults to 30.
 nb_execution_timeout = 100

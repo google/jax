@@ -2078,7 +2078,7 @@ def where(condition, x=None, y=None, /, *, size=None, fill_value=None):
 
   Returns:
     An array of dtype ``jnp.result_type(x, y)`` with values drawn from ``x`` where ``condition``
-    is True, and from ``y`` where condition is ``False. If ``x`` and ``y`` are ``None``, the
+    is True, and from ``y`` where condition is ``False``. If ``x`` and ``y`` are ``None``, the
     function behaves differently; see `:func:`jax.numpy.nonzero` for a description of the return
     type.
 
@@ -4048,17 +4048,63 @@ def fromiter(*args, **kwargs):
     "because of its potential side-effect of consuming the iterable object; for more information see "
     "https://jax.readthedocs.io/en/latest/notebooks/Common_Gotchas_in_JAX.html#pure-functions")
 
-@util.implements(getattr(np, "from_dlpack", None), lax_description="""
-.. note::
 
-   While JAX arrays are always immutable, dlpack buffers cannot be marked as
-   immutable, and it is possible for processes external to JAX to mutate them
-   in-place. If a jax Array is constructed from a dlpack buffer and the buffer
-   is later modified in-place, it may lead to undefined behavior when using
-   the associated JAX array.
-""")
 def from_dlpack(x: Any, /, *, device: xc.Device | Sharding | None = None,
                 copy: bool | None = None) -> Array:
+  """Construct a JAX array via DLPack.
+
+  JAX implementation of :func:`numpy.from_dlpack`.
+
+  Args:
+    x: An object that implements the DLPack_ protocol via the ``__dlpack__``
+      and ``__dlpack_device__`` methods, or a legacy DLPack tensor on either
+      CPU or GPU.
+    device: An optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`,
+      representing the single device onto which the returned array should be placed.
+      If given, then the result is committed to the device. If unspecified,
+      the resulting array will be unpacked onto the same device it originated from.
+      Setting ``device`` to a device different from the source of ``external_array``
+      will require a copy, meaning ``copy`` must be set to either ``True`` or ``None``.
+    copy: An optional boolean, controlling whether or not a copy is performed.
+      If ``copy=True`` then a copy is always performed, even if unpacked onto the
+      same device. If ``copy=False`` then the copy is never performed and will raise
+      an error if necessary. When ``copy=None`` (default) then a copy may be performed
+      if needed for a device transfer.
+
+  Returns:
+    A JAX array of the imput buffer.
+
+  Note:
+    While JAX arrays are always immutable, dlpack buffers cannot be marked as
+    immutable, and it is possible for processes external to JAX to mutate them
+    in-place. If a JAX Array is constructed from a dlpack buffer without copying
+    and the source buffer is later modified in-place, it may lead to undefined
+    behavior when using the associated JAX array.
+
+  Examples:
+    Passing data between NumPy and JAX via DLPack_:
+
+    >>> import numpy as np
+    >>> rng = np.random.default_rng(42)
+    >>> x_numpy = rng.random(4, dtype='float32')
+    >>> print(x_numpy)
+    [0.08925092 0.773956   0.6545715  0.43887842]
+    >>> hasattr(x_numpy, "__dlpack__")  # NumPy supports the DLPack interface
+    True
+
+    >>> import jax.numpy as jnp
+    >>> x_jax = jnp.from_dlpack(x_numpy)
+    >>> print(x_jax)
+    [0.08925092 0.773956   0.6545715  0.43887842]
+    >>> hasattr(x_jax, "__dlpack__")  # JAX supports the DLPack interface
+    True
+
+    >>> x_numpy_round_trip = np.from_dlpack(x_jax)
+    >>> print(x_numpy_round_trip)
+    [0.08925092 0.773956   0.6545715  0.43887842]
+
+  .. _DLPack: https://dmlc.github.io/dlpack
+  """
   from jax.dlpack import from_dlpack  # pylint: disable=g-import-not-at-top
   return from_dlpack(x, device=device, copy=copy)
 
@@ -8294,7 +8340,10 @@ def _expand_bool_indices(idx, shape):
         i_shape = _shape(i)
         start = len(out) + ellipsis_offset - newaxis_offset
         expected_shape = shape[start: start + _ndim(i)]
-        if i_shape != expected_shape:
+        if len(i_shape) != len(expected_shape):
+          raise IndexError(f"too many boolean indices at index {dim_number}: got mask of shape "
+                           f"{i_shape}, but only {len(expected_shape)} dimensions remain.")
+        if not all(s1 in (0, s2) for s1, s2 in zip(i_shape, expected_shape)):
           raise IndexError("boolean index did not match shape of indexed array in index "
                            f"{dim_number}: got {i_shape}, expected {expected_shape}")
         out.extend(np.where(i))

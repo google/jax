@@ -19,6 +19,7 @@
 #include "mlir/include/mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/include/mlir/Dialect/Vector/Transforms/VectorTransforms.h"
 #include "mlir/include/mlir/IR/AffineExpr.h"
+#include "mlir/include/mlir/IR/Attributes.h"
 #include "mlir/include/mlir/IR/Block.h"
 #include "mlir/include/mlir/IR/Builders.h"
 #include "mlir/include/mlir/IR/ImplicitLocOpBuilder.h"
@@ -187,7 +188,60 @@ LogicalResult canonicalize_elementwise(int hardware_generation_,
   return success();
 }
 
-LogicalResult canonicalize_matmul(Operation &op) {
+LogicalResult canonicalize_multi_dim_reduction(int hardware_generation,
+                                               Operation &operation) {
+  ImplicitLocOpBuilder builder(operation.getLoc(), &operation);
+  auto op = cast<vector::MultiDimReductionOp>(operation);
+  auto source_ty = op.getSourceVectorType();
+  auto result_ty = dyn_cast<VectorType>(op.getDestType());
+  if (!result_ty) {
+    return op->emitOpError() << "Only vector reductions supported";
+  }
+
+  auto element_type = source_ty.getElementType();
+  if (element_type.isF32()) {
+    return success();
+  } else if (element_type.isBF16()) {
+    bool reduces_sublanes = false;
+    for (Attribute dim : op.getReductionDims()) {
+      if (cast<IntegerAttr>(dim).getInt() == source_ty.getRank() - 2) {
+        reduces_sublanes = true;
+      }
+    }
+    if (hardware_generation <= 5 || reduces_sublanes) {
+      auto new_source = builder.create<arith::ExtFOp>(
+          VectorType::get(source_ty.getShape(), builder.getF32Type()),
+          op.getSource());
+
+      auto result_ty_f32 =
+          VectorType::get(result_ty.getShape(), builder.getF32Type());
+      auto acc_ext = builder.create<arith::ExtFOp>(result_ty_f32, op.getAcc());
+      Value new_acc = acc_ext.getResult();
+      // Try to constant fold.
+      if (auto const_acc = op.getAcc().getDefiningOp<arith::ConstantOp>()) {
+        auto result =
+            acc_ext.fold(arith::ExtFOp::FoldAdaptor(const_acc.getValue()));
+        if (!result.isNull() && result.is<Attribute>()) {
+          acc_ext->erase();
+          new_acc = builder.create<arith::ConstantOp>(
+              op.getLoc(), result_ty_f32,
+              cast<TypedAttr>(result.get<Attribute>()));
+        }
+      }
+      auto new_op = builder.create<vector::MultiDimReductionOp>(
+          op.getLoc(), new_acc.getType(), op.getKindAttr(), new_source, new_acc,
+          op.getReductionDims());
+      auto new_result = builder.create<arith::TruncFOp>(op.getLoc(), result_ty,
+                                                        new_op.getResult());
+      op.replaceAllUsesWith(new_result.getResult());
+      op.erase();
+    }
+    return success();
+  }
+  return failure();
+}
+
+LogicalResult canonicalize_matmul(int hardware_generation, Operation &op) {
   auto matmul_op = dyn_cast<tpu::MatmulOp>(op);
   if (!matmul_op) {
     op.emitOpError("Invariant violated: Not a matmul");
@@ -196,7 +250,7 @@ LogicalResult canonicalize_matmul(Operation &op) {
   return tpu_matmul_rule(matmul_op);
 };
 
-LogicalResult canonicalize_contraction(Operation &op) {
+LogicalResult canonicalize_contraction(int hardware_generation, Operation &op) {
   auto contraction_op = dyn_cast<vector::ContractionOp>(op);
   if (!contraction_op) {
     op.emitOpError("Invariant violated: Not a contraction");
@@ -263,12 +317,15 @@ LogicalResult canonicalize_contraction(Operation &op) {
   return result;
 }
 
-using canonicalize_rule_type = std::function<LogicalResult(Operation &op)>;
+using canonicalize_rule_type =
+    std::function<LogicalResult(int hardware_generation, Operation &op)>;
 
 const llvm::StringMap<canonicalize_rule_type> &rules() {
   static auto rules = new llvm::StringMap<canonicalize_rule_type>{
       {tpu::MatmulOp::getOperationName(), canonicalize_matmul},
-      {vector::ContractionOp::getOperationName(), canonicalize_contraction}};
+      {vector::ContractionOp::getOperationName(), canonicalize_contraction},
+      {vector::MultiDimReductionOp::getOperationName(),
+       canonicalize_multi_dim_reduction}};
   return *rules;
 }
 
@@ -326,7 +383,7 @@ class MosaicCanonicalizer {
     if (auto rule_it = rules().find(any_op.getName().getStringRef());
         rule_it != rules().end()) {
       const canonicalize_rule_type &rule = rule_it->getValue();
-      return rule(any_op);
+      return rule(hardware_generation_, any_op);
     }
     return success();
   }

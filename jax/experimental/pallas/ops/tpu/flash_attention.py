@@ -1085,8 +1085,8 @@ def _flash_attention_bwd_dkv(
 
   kernel = functools.partial(
       _flash_attention_dkv_kernel,
-      block_q=block_q,
-      block_k=block_k,
+      block_q=block_q,  # type: ignore
+      block_k=block_k,  # type: ignore
       sm_scale=sm_scale,
       causal=causal,
       mask_value=mask_value,
@@ -1434,7 +1434,7 @@ def _flash_attention_bwd_dq(
       sm_scale=sm_scale,
       causal=causal,
       mask_value=mask_value,
-      block_k=block_k,
+      block_k=block_k,  # type: ignore
       kv_seq_len=kv_seq_len,
   )
   name_scope = f"flash_mha_bwd_dq_{block_q_major=}_{block_k_major=}_{block_k=}"

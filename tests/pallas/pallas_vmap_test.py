@@ -147,7 +147,7 @@ class PallasCallVmapTest(PallasBaseTest):
 
     with self.assertRaisesRegex(
         ValueError,
-        "The kernel function .* should not capture constants"):
+        "The kernel function .* captures constants"):
       kernel(x)
 
   def test_vmap_of_kernel_with_input_output_aliases(self):

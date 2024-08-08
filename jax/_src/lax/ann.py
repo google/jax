@@ -81,7 +81,6 @@ from jax._src import dtypes
 from jax._src.interpreters import ad
 from jax._src.interpreters import batching
 from jax._src.interpreters import mlir
-from jax._src.interpreters import xla
 from jax._src.lax import lax
 from jax._src.lib import xla_client as xc
 from jax._src.lib.mlir import ir
@@ -243,21 +242,6 @@ def _approx_top_k_abstract_eval(operand, *, k, reduction_dimension,
   return (operand.update(shape=dims, dtype=operand.dtype,
                          weak_type=operand.weak_type),
           operand.update(shape=dims, dtype=np.dtype(np.int32)))
-
-
-def _comparator_builder(op_type, is_max_k):
-  c = xc.XlaBuilder(
-      'top_k_{}_comparator'.format('gt' if is_max_k else 'lt'))
-  p0 = xla.parameter(c, 0, xc.Shape.scalar_shape(op_type))
-  p1 = xla.parameter(c, 1, xc.Shape.scalar_shape(op_type))
-  xla.parameter(c, 2, xc.Shape.scalar_shape(np.dtype(np.int32)))
-  xla.parameter(c, 3, xc.Shape.scalar_shape(np.dtype(np.int32)))
-  if is_max_k:
-    cmp_result = xc.ops.Gt(p0, p1)
-  else:
-    cmp_result = xc.ops.Lt(p0, p1)
-  return c.build(cmp_result)
-
 
 def _get_init_val_literal(op_type, is_max_k):
   return np.array(-np.inf if is_max_k else np.inf, dtype=op_type)

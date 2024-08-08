@@ -131,8 +131,8 @@ def paged_flash_attention_kernel(
     pages_per_compute_block: int,
     pages_per_sequence: int,
     mask_value: float,
-    attn_logits_soft_cap: float,
-    megacore_mode: str,
+    attn_logits_soft_cap: float | None,
+    megacore_mode: str | None,
     program_ids=(),
 ):
   """Pallas kernel for paged attention."""
@@ -308,8 +308,8 @@ def paged_flash_attention_kernel_inline_seq_dim(
     pages_per_compute_block: int,
     pages_per_sequence: int,
     mask_value: float,
-    attn_logits_soft_cap: float,
-    megacore_mode: str,
+    attn_logits_soft_cap: float | None,
+    megacore_mode: str | None,
 ):
   core_index, b, h = pl.program_id(0), pl.program_id(1), pl.program_id(2)
 

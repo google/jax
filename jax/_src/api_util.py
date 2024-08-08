@@ -556,6 +556,17 @@ def _assert_no_intersection(static_argnames, donate_argnames):
         f"{out} appear in both static_argnames and donate_argnames")
 
 
+def resolve_kwargs(fun: Callable, args, kwargs):
+  if isinstance(fun, partial):
+    fun = lambda *args, **kwargs: None
+  ba = inspect.signature(fun).bind(*args, **kwargs)
+  ba.apply_defaults()
+  if ba.kwargs:
+    raise TypeError("keyword arguments could not be resolved to positions")
+  else:
+    return ba.args
+
+
 def _dtype(x):
   try:
     return dtypes.result_type(x)

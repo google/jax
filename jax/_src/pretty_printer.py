@@ -173,9 +173,9 @@ class _SourceMapDoc(Doc):
   def __repr__(self): return f"source({self.child}, {self.source})"
 
 
-Color = enum.Enum("_Color", ["BLACK", "RED", "GREEN", "YELLOW", "BLUE",
-                             "MAGENTA", "CYAN", "WHITE", "RESET"])
-Intensity = enum.Enum("_Intensity", ["DIM", "NORMAL", "BRIGHT"])
+Color = enum.Enum("Color", ["BLACK", "RED", "GREEN", "YELLOW", "BLUE",
+                            "MAGENTA", "CYAN", "WHITE", "RESET"])
+Intensity = enum.Enum("Intensity", ["DIM", "NORMAL", "BRIGHT"])
 
 class _ColorDoc(Doc):
   __slots__ = ("foreground", "background", "intensity", "child")

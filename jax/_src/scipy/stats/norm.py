@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import cast
-
 import numpy as np
 
 from jax import lax
@@ -157,8 +155,7 @@ def logcdf(x: ArrayLike, loc: ArrayLike = 0, scale: ArrayLike = 1) -> Array:
     - :func:`jax.scipy.stats.norm.ppf`
   """
   x, loc, scale = promote_args_inexact("norm.logcdf", x, loc, scale)
-  # Cast required because custom_jvp return type is broken.
-  return cast(Array, special.log_ndtr(lax.div(lax.sub(x, loc), scale)))
+  return special.log_ndtr(lax.div(lax.sub(x, loc), scale))
 
 
 def ppf(q: ArrayLike, loc: ArrayLike = 0, scale: ArrayLike = 1) -> Array:

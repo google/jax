@@ -120,6 +120,7 @@ Operators
     neg
     nextafter
     pad
+    platform_dependent
     polygamma
     population_count
     pow

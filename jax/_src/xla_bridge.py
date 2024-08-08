@@ -108,11 +108,9 @@ CPU_COLLECTIVES_IMPLEMENTATION = config.enum_flag(
     ),
 )
 
-# TODO(yueshengys): turn default back to True after resolving memory increase
-# issue.
 _CPU_ENABLE_ASYNC_DISPATCH = config.bool_flag(
     name="jax_cpu_enable_async_dispatch",
-    default=False,
+    default=True,
     help="Only applies to non-parallel computations. If False, run computations"
     "inline without async dispatch.",
 )
@@ -950,7 +948,7 @@ def _clear_backends() -> None:
   global _backend_errors
   global _default_backend
 
-  logger.info("Clearing JAX backend caches.")
+  logger.debug("Clearing JAX backend caches.")
   with _backend_lock:
     _backends = {}
     _backend_errors = {}

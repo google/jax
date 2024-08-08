@@ -16,16 +16,16 @@ limitations under the License.
 #include "jaxlib/gpu/solver_kernels.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
-#include <stdexcept>
-#include <utility>
-#include <vector>
+#include <memory>
+#include <string>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/synchronization/mutex.h"
+#include "jaxlib/gpu/solver_handle_pool.h"
 #include "jaxlib/gpu/gpu_kernel_helpers.h"
-#include "jaxlib/handle_pool.h"
+#include "jaxlib/gpu/vendor.h"
 #include "jaxlib/kernel_helpers.h"
 #include "xla/service/custom_call_status.h"
 
@@ -34,46 +34,6 @@ limitations under the License.
 #endif  // JAX_GPU_CUDA
 
 namespace jax {
-
-template <>
-/*static*/ absl::StatusOr<SolverHandlePool::Handle> SolverHandlePool::Borrow(
-    gpuStream_t stream) {
-  SolverHandlePool* pool = Instance();
-  absl::MutexLock lock(&pool->mu_);
-  gpusolverDnHandle_t handle;
-  if (pool->handles_[stream].empty()) {
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpusolverDnCreate(&handle)));
-  } else {
-    handle = pool->handles_[stream].back();
-    pool->handles_[stream].pop_back();
-  }
-  if (stream) {
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpusolverDnSetStream(handle, stream)));
-  }
-  return Handle(pool, handle, stream);
-}
-
-#ifdef JAX_GPU_CUDA
-
-template <>
-/*static*/ absl::StatusOr<SpSolverHandlePool::Handle>
-SpSolverHandlePool::Borrow(gpuStream_t stream) {
-  SpSolverHandlePool* pool = Instance();
-  absl::MutexLock lock(&pool->mu_);
-  cusolverSpHandle_t handle;
-  if (pool->handles_[stream].empty()) {
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverSpCreate(&handle)));
-  } else {
-    handle = pool->handles_[stream].back();
-    pool->handles_[stream].pop_back();
-  }
-  if (stream) {
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverSpSetStream(handle, stream)));
-  }
-  return Handle(pool, handle, stream);
-}
-
-#endif  // JAX_GPU_CUDA
 
 namespace JAX_GPU_NAMESPACE {
 

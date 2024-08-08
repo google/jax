@@ -1380,6 +1380,9 @@ def _lu_cpu_gpu_lowering(getrf_impl, ctx, operand, *,
       "Shape polymorphism for native lowering for lu on CPU and GPU is "
       f"implemented only for the batch dimensions: {operand_aval.shape}")
 
+  # TODO(b/357034884): Remove once jaxlib 0.4.32 is the minimum version.
+  ctx_arg = (ctx,) if jaxlib_version >= (0, 4, 32) else ()
+
   out_aval, pivot_aval, perm_aval = ctx.avals_out
   batch_dims = operand_aval.shape[:-2]
   m = operand_aval.shape[-2]
@@ -1389,11 +1392,12 @@ def _lu_cpu_gpu_lowering(getrf_impl, ctx, operand, *,
       raise NotImplementedError(
           "Shape polymorphism for native serialization for lu on GPU is not "
           f"implemented; b/261671778; {operand_aval.shape}")
-    lu, pivot, info = getrf_impl(operand_aval.dtype, operand)
+    lu, pivot, info = getrf_impl(*ctx_arg, operand_aval.dtype, operand)
   else:
     op_shape_vals = mlir.eval_dynamic_shape_as_ivals(ctx, operand_aval.shape)
+    # TODO(b/344892332): Remove the conditional after the compatibility period.
     lu, pivot, info = getrf_impl(
-        operand_aval.dtype, operand, a_shape_vals=op_shape_vals)
+        *ctx_arg, operand_aval.dtype, operand, a_shape_vals=op_shape_vals)
   # Subtract 1 from the pivot to get 0-based indices.
   pivot = hlo.subtract(pivot, mlir.full_like_aval(ctx, 1, pivot_aval))
   ok = mlir.compare_hlo(

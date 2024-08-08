@@ -21,7 +21,6 @@ from jax._src.api import (
 from jax._src.xla_bridge import (
   backends as backends,
   backend_xla_version as backend_xla_version,
-  default_backend as default_backend,
   get_backend as get_backend,
   register_backend_factory as register_backend_factory,
 )

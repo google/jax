@@ -422,18 +422,21 @@ class OpsExtraTest(PallasBaseTest):
   @parameterized.named_parameters(
       (f"{fn.__name__}_{dtype}", fn, dtype)
       for fn, dtype in itertools.product(
-          COMPARISON_OPS, ["int32", "uint32", "float16", "float32"]
+          COMPARISON_OPS, ["int32", "uint32", "float16", "float32", "bool"]
       )
   )
   def test_comparison(self, fn, dtype):
+    if jtu.test_device_matches(["gpu"]) and dtype == "bool":
+      self.skipTest("Not implemented on GPU.")
+
     @functools.partial(
         self.pallas_call, out_shape=jax.ShapeDtypeStruct((8,), jnp.bool_),
         grid=1)
     def kernel(x_ref, y_ref, o_ref):
       o_ref[:] = fn(x_ref[...], y_ref[...])
 
-    x = jnp.array([1, 3, -4, -6, 2, 5, 4, -7]).astype(dtype)
-    y = jnp.array([3, 1, -4, -5, 2, -2, 2, 4]).astype(dtype)
+    x = jnp.array([0, 3, -4, -6, 0, 5, 4, -7]).astype(dtype)
+    y = jnp.array([3, 1, -4, -5, 0, -2, 2, 4]).astype(dtype)
     np.testing.assert_allclose(kernel(x, y), fn(x, y))
 
   def test_isnan(self):
@@ -821,7 +824,7 @@ class OpsExtraTest(PallasBaseTest):
   @parameterized.parameters(
       ((16, 32), (16,)),
       ((16, 32), (32,)),
-      ((16, 32), (16, 31)),
+      ((16, 32), (16, 16)),
   )
   def test_invalid_broadcasted_load(self, x_shape, mask_shape):
     if self.INTERPRET:

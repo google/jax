@@ -48,8 +48,8 @@ class DeviceLocalLayout:
   def from_pjrt_layout(pjrt_layout: xc.PjRtLayout):
     xla_layout = pjrt_layout._xla_layout()
     return DeviceLocalLayout(xla_layout.minor_to_major()[::-1],  # pytype: disable=wrong-arg-types
-                              xla_layout.tiling(),
-                              xla_layout.element_size_in_bits())
+                             xla_layout.tiling(),  # type: ignore[arg-type]
+                             xla_layout.element_size_in_bits())
 
   def __repr__(self):
     return (
@@ -79,7 +79,7 @@ class DeviceLocalLayout:
         sub_byte_size = iinfo(dtype).bits if iinfo(dtype).bits < 8 else 0
       else:
         sub_byte_size = 0
-      xla_layout = xc.Layout(self.major_to_minor[::-1], self._tiling,  # type: ignore
+      xla_layout = xc.Layout(self.major_to_minor[::-1], self._tiling,
                               sub_byte_size)
     return str(xla_layout)
 

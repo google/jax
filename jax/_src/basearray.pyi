@@ -13,6 +13,7 @@
 # limitations under the License.
 import abc
 from collections.abc import Callable, Sequence
+from types import ModuleType
 from typing import Any, Union
 import numpy as np
 
@@ -47,6 +48,8 @@ class Array(abc.ABC):
                order=None):
     raise TypeError("jax.numpy.ndarray() should not be instantiated explicitly."
                     " Use jax.numpy.array, or jax.numpy.zeros instead.")
+
+  def __array_namespace__(self, *, api_version: None | str = ...) -> ModuleType: ...
 
   def __getitem__(self, key) -> Array: ...
   def __setitem__(self, key, value) -> None: ...

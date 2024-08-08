@@ -399,7 +399,7 @@ def tree_transpose(outer_treedef: PyTreeDef, inner_treedef: PyTreeDef | None,
 # sufficiently queryable that we can express _replace_nones. That may mean once
 # we have a flatten_one function.
 _RegistryEntry = collections.namedtuple("_RegistryEntry", ["to_iter", "from_iter"])
-_registry = {
+_registry: dict[type[Any], _RegistryEntry] = {
     tuple: _RegistryEntry(lambda xs: (xs, None), lambda _, xs: tuple(xs)),
     list: _RegistryEntry(lambda xs: (xs, None), lambda _, xs: list(xs)),
     dict: _RegistryEntry(lambda xs: unzip2(sorted(xs.items()))[::-1],
@@ -760,7 +760,7 @@ def keystr(keys: KeyPath):
     >>> jax.tree_util.keystr(keys)
     '01ab'
   """
-  return ''.join([str(k) for k in keys])
+  return ''.join(map(str, keys))
 
 
 class _RegistryWithKeypathsEntry(NamedTuple):
@@ -780,7 +780,7 @@ def _register_keypaths(
     )
 
 
-_registry_with_keypaths = {}
+_registry_with_keypaths: dict[type[Any], _RegistryWithKeypathsEntry] = {}
 
 _register_keypaths(
     tuple, lambda xs: tuple(SequenceKey(i) for i in range(len(xs)))

@@ -16,41 +16,21 @@ limitations under the License.
 #include "jaxlib/gpu/blas_kernels.h"
 
 #include <algorithm>
-#include <stdexcept>
-#include <utility>
+#include <cstddef>
+#include <iterator>
+#include <string>
 #include <vector>
 
-#include "absl/base/casts.h"
-#include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
-#include "absl/synchronization/mutex.h"
+#include "jaxlib/gpu/blas_handle_pool.h"
 #include "jaxlib/gpu/gpu_kernel_helpers.h"
-#include "jaxlib/handle_pool.h"
+#include "jaxlib/gpu/vendor.h"
 #include "jaxlib/kernel_helpers.h"
 #include "xla/service/custom_call_status.h"
 
 namespace jax {
-
-using BlasHandlePool = HandlePool<gpublasHandle_t, gpuStream_t>;
-
-template <>
-/*static*/ absl::StatusOr<BlasHandlePool::Handle> BlasHandlePool::Borrow(
-    gpuStream_t stream) {
-  BlasHandlePool* pool = Instance();
-  absl::MutexLock lock(&pool->mu_);
-  gpublasHandle_t handle;
-  if (pool->handles_[stream].empty()) {
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpublasCreate(&handle)));
-  } else {
-    handle = pool->handles_[stream].back();
-    pool->handles_[stream].pop_back();
-  }
-  if (stream) {
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpublasSetStream(handle, stream)));
-  }
-  return Handle(pool, handle, stream);
-}
 
 namespace JAX_GPU_NAMESPACE {
 

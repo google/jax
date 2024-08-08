@@ -37,10 +37,6 @@ build --config=short_logs
 
 build --copt=-DMLIR_PYTHON_PACKAGE_PREFIX=jaxlib.mlir.
 
-# Later Bazel flag values override earlier values; if CUDA/ROCM/TPU are enabled,
-# these values are overridden.
-build --@xla//xla/python:enable_gpu=false
-
 ###########################################################################
 
 build:posix --copt=-fvisibility=hidden
@@ -68,9 +64,7 @@ build:cuda --repo_env TF_NCCL_USE_STUB=1
 build:cuda --action_env TF_CUDA_COMPUTE_CAPABILITIES="sm_50,sm_60,sm_70,sm_80,compute_90"
 build:cuda --crosstool_top=@local_config_cuda//crosstool:toolchain
 build:cuda --@local_config_cuda//:enable_cuda
-build:cuda --@xla//xla/python:enable_gpu=true
 build:cuda --@xla//xla/python:jax_cuda_pip_rpaths=true
-build:cuda --define=xla_python_enable_gpu=true
 
 # Build with nvcc for CUDA and clang for host
 build:nvcc_clang --config=cuda
@@ -83,15 +77,6 @@ build:nvcc_clang --@local_config_cuda//:cuda_compiler=nvcc
 build:win_clang --extra_toolchains=@local_config_cc//:cc-toolchain-x64_windows-clang-cl
 build:win_clang --extra_execution_platforms=//jax/tools/toolchains:x64_windows-clang-cl
 build:win_clang --compiler=clang-cl
-
-# Later Bazel flag values override earlier values.
-# TODO(jieying): remove enable_gpu and xla_python_enable_gpu from build:cuda
-# after the pluin is released.
-build:cuda_plugin --@xla//xla/python:enable_gpu=false
-build:cuda_plugin --define=xla_python_enable_gpu=false
-
-build:rocm_plugin --@xla//xla/python:enable_gpu=false
-build:rocm_plugin --define=xla_python_enable_gpu=false
 
 # Force the linker to set RPATH, not RUNPATH. When resolving dynamic libraries,
 # ld.so prefers in order: RPATH, LD_LIBRARY_PATH, RUNPATH. JAX sets RPATH to
@@ -121,8 +106,6 @@ build:cuda_clang --copt=-Qunused-arguments
 
 build:rocm --crosstool_top=@local_config_rocm//crosstool:toolchain
 build:rocm --define=using_rocm=true --define=using_rocm_hipcc=true
-build:rocm --@xla//xla/python:enable_gpu=true
-build:rocm --define=xla_python_enable_gpu=true
 build:rocm --repo_env TF_NEED_ROCM=1
 build:rocm --action_env TF_ROCM_AMDGPU_TARGETS="gfx900,gfx906,gfx908,gfx90a,gfx1030"
 

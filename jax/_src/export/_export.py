@@ -875,7 +875,7 @@ def _check_lowering(lowering) -> None:
   # Check that we do not see new compile_args. When we add a compile_args it is
   # safe to add it to the allowed_compile_args if it does not change the semantics
   # or the calling convention of the lowered module.
-  allowed_compile_args = [
+  allowed_compile_args = {
       "backend", "platforms", "mesh", "global_in_avals",
       "global_out_avals", "in_shardings", "out_shardings", "kept_var_idx",
       "mut", "spmd_lowering", "auto_spmd_lowering",
@@ -883,7 +883,7 @@ def _check_lowering(lowering) -> None:
       "keepalive", "host_callbacks", "pmap_nreps", "committed",
       "device_assignment", "jaxpr_debug_info", "shape_poly_state",
       "all_default_mem_kind", "in_layouts", "out_layouts", "all_args_info",
-      "pgle_profiler", "intermediate_shardings"]
+      "pgle_profiler", "intermediate_shardings", "context_mesh"}
   for compile_arg in lowering.compile_args.keys():
     if compile_arg not in allowed_compile_args:
       raise NotImplementedError(f"Unrecognized lowered.compile_args[{compile_arg}]")
@@ -920,6 +920,7 @@ def _check_lowering(lowering) -> None:
 
 _CPU_FFI_KERNELS = [
     "lapack_spotrf_ffi", "lapack_dpotrf_ffi", "lapack_cpotrf_ffi", "lapack_zpotrf_ffi",
+    "lapack_sgetrf_ffi", "lapack_dgetrf_ffi", "lapack_cgetrf_ffi", "lapack_zgetrf_ffi",
 ]
 # These are the JAX custom call target names that are guaranteed to be stable.
 # Their backwards compatibility is tested by back_compat_test.py.
@@ -934,6 +935,7 @@ _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
     "lapack_ssyevd", "lapack_dsyevd", "lapack_cheevd", "lapack_zheevd",
     # eigh on GPU
     "cusolver_syevj", "cusolver_syevd",
+    "hipsolver_syevj", "hipsolver_syevd",
     # eigh on TPU
     "Eigh",
     # eig on CPU
@@ -947,6 +949,8 @@ _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
     # qr on GPU
     "cusolver_geqrf", "cublas_geqrf_batched",
     "cusolver_orgqr",
+    "hipsolver_geqrf", "hipblas_geqrf_batched",
+    "hipsolver_orgqr",
     # qr and svd on TPU
     "Qr", "ProductOfElementaryHouseholderReflectors",
     # triangular_solve on CPU
@@ -959,6 +963,9 @@ _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
     # # lu on GPU
     # "cublas_getrf_batched", "cusolver_getrf",
     # "hipblas_getrf_batched", "hipsolver_getrf",
+    # TODO(b/357034884): This can be added once the mimimum version of jaxlib
+    # (v0.4.32) includes this new FFI call.
+    # "cusolver_getrf_ffi",
     # lu on TPU
     "LuDecomposition",
     # ApproxTopK on TPU

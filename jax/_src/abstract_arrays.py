@@ -18,7 +18,6 @@ from functools import partial
 
 import numpy as np
 
-from jax._src import ad_util
 from jax._src import core
 from jax._src import dtypes
 
@@ -61,11 +60,6 @@ for t in array_types:
   core.pytype_aval_mappings[t] = canonical_concrete_aval
 
 core.literalable_types.update(array_types)
-
-def _zeros_like_python_scalar(t, x):
-  dtype = dtypes.canonicalize_dtype(dtypes.python_scalar_dtypes[t])
-  aval = core.ShapedArray((), dtype, weak_type=True)
-  return ad_util.zeros_like_aval(aval)
 
 def _make_concrete_python_scalar(t, x):
   dtype = dtypes._scalar_type_to_dtype(t, x)

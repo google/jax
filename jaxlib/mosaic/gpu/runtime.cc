@@ -88,6 +88,13 @@ void mosaic_gpu_init_tma_desc(CUtensorMap *tma_desc, void *base_addr,
               tma_window_shape_i, rank - i - 1);
       abort();
     }
+    if (i == 0 && (tma_window_shape_i * elem_bytewidth) % 16 != 0) {
+      fprintf(stderr,
+              "The last dimension of window shape must have a bytewidth "
+              "divisible by 16, but got %d*%ld at index %ld\n",
+              tma_window_shape_i, elem_bytewidth, rank - i - 1);
+      abort();
+    }
     tma_window_shape[i] = tma_window_shape_i;
   }
   cuuint32_t element_strides[5] = {1, 1, 1, 1, 1};

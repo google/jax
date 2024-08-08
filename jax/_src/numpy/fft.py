@@ -465,12 +465,12 @@ def rfft(a: ArrayLike, n: int | None = None,
 
 def irfft(a: ArrayLike, n: int | None = None,
           axis: int = -1, norm: str | None = None) -> Array:
-  r"""Compute a one-dimensional inverse discrete Fourier transform for real input.
+  """Compute a real-valued one-dimensional inverse discrete Fourier transform.
 
   JAX implementation of :func:`numpy.fft.irfft`.
 
   Args:
-    a: real-valued input array.
+    a: input array.
     n: int. Specifies the dimension of the result along ``axis``. If not specified,
       ``n = 2*(m-1)``, where ``m`` is the dimension of ``a`` along ``axis``.
     axis: int, default=-1. Specifies the axis along which the transform is computed.
@@ -479,8 +479,8 @@ def irfft(a: ArrayLike, n: int | None = None,
       supported.
 
   Returns:
-    An array containing the one-dimensional inverse discrete Fourier transform
-    of ``a``, with a dimension of ``n`` along ``axis``.
+    A real-valued array containing the one-dimensional inverse discrete Fourier
+    transform of ``a``, with a dimension of ``n`` along ``axis``.
 
   See also:
     - :func:`jax.numpy.fft.ifft`: Computes a one-dimensional inverse discrete
@@ -522,18 +522,140 @@ def irfft(a: ArrayLike, n: int | None = None,
   return _fft_core_1d('irfft', xla_client.FftType.IRFFT, a, n=n, axis=axis,
                       norm=norm)
 
-@implements(np.fft.hfft)
+
 def hfft(a: ArrayLike, n: int | None = None,
          axis: int = -1, norm: str | None = None) -> Array:
+  """Compute a 1-D FFT of an array whose spectrum has Hermitian symmetry.
+
+  JAX implementation of :func:`numpy.fft.hfft`.
+
+  Args:
+    a: input array.
+    n: optional, int. Specifies the dimension of the result along ``axis``. If
+      not specified, ``n = 2*(m-1)``, where ``m`` is the dimension of ``a``
+      along ``axis``.
+    axis: optional, int, default=-1. Specifies the axis along which the transform
+      is computed. If not specified, the transform is computed along axis -1.
+    norm: optional, string. The normalization mode. "backward", "ortho" and "forward"
+      are supported. Default is "backward".
+
+  Returns:
+    A real-valued array containing the one-dimensional discret Fourier transform
+    of ``a`` by exploiting its inherent Hermitian-symmetry, having a dimension of
+    ``n`` along ``axis``.
+
+  See also:
+    - :func:`jax.numpy.fft.ihfft`: Computes a one-dimensional inverse FFT of an
+      array whose spectrum has Hermitian symmetry.
+    - :func:`jax.numpy.fft.fft`: Computes a one-dimensional discrete Fourier
+      transform.
+    - :func:`jax.numpy.fft.rfft`: Computes a one-dimensional discrete Fourier
+      transform of a real-valued input.
+
+  Examples:
+    >>> x = jnp.array([[1, 3, 5, 7],
+    ...                [2, 4, 6, 8]])
+    >>> jnp.fft.hfft(x)
+    Array([[24., -8.,  0., -2.,  0., -8.],
+           [30., -8.,  0., -2.,  0., -8.]], dtype=float32)
+
+    This value is equal to the real component of the discrete Fourier transform
+    of the following array ``x1`` computed using ``jnp.fft.fft``.
+
+    >>> x1 = jnp.array([[1, 3, 5, 7, 5, 3],
+    ...                 [2, 4, 6, 8, 6, 4]])
+    >>> jnp.fft.fft(x1)
+    Array([[24.+0.j, -8.+0.j,  0.+0.j, -2.+0.j,  0.+0.j, -8.+0.j],
+           [30.+0.j, -8.+0.j,  0.+0.j, -2.+0.j,  0.+0.j, -8.+0.j]],      dtype=complex64)
+    >>> jnp.allclose(jnp.fft.hfft(x), jnp.fft.fft(x1))
+    Array(True, dtype=bool)
+
+    To obtain an odd-length output from ``jnp.fft.hfft``, ``n`` must be specified
+    with an odd value, as the default behavior produces an even-length result
+    along the specified ``axis``.
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.fft.hfft(x, n=5))
+    [[17.   -5.24 -0.76 -0.76 -5.24]
+     [22.   -5.24 -0.76 -0.76 -5.24]]
+
+    When ``n=3`` and ``axis=0``, dimension of the transform along ``axis 0`` will
+    be ``3`` and dimension along other axes will be same as that of input.
+
+    >>> jnp.fft.hfft(x, n=3, axis=0)
+    Array([[ 5., 11., 17., 23.],
+           [-1., -1., -1., -1.],
+           [-1., -1., -1., -1.]], dtype=float32)
+
+    ``x`` can be reconstructed (but of complex datatype) using ``jnp.fft.ihfft``
+    from the result of ``jnp.fft.hfft``, only when ``n`` is specified as ``2*(m-1)``
+    if `m` is even or ``2*m-1`` if ``m`` is odd, where ``m`` is the dimension of
+    input along ``axis``.
+
+    >>> jnp.fft.ihfft(jnp.fft.hfft(x, 2*(x.shape[-1]-1)))
+    Array([[1.+0.j, 3.+0.j, 5.+0.j, 7.+0.j],
+           [2.+0.j, 4.+0.j, 6.+0.j, 8.+0.j]], dtype=complex64)
+    >>> jnp.allclose(x, jnp.fft.ihfft(jnp.fft.hfft(x, 2*(x.shape[-1]-1))))
+    Array(True, dtype=bool)
+
+    For complex-valued inputs:
+
+    >>> x2 = jnp.array([[1+2j, 3-4j, 5+6j],
+    ...                 [2-3j, 4+5j, 6-7j]])
+    >>> jnp.fft.hfft(x2)
+    Array([[ 12., -12.,   0.,   4.],
+           [ 16.,   6.,   0., -14.]], dtype=float32)
+  """
   conj_a = ufuncs.conj(a)
   _axis_check_1d('hfft', axis)
   nn = (conj_a.shape[axis] - 1) * 2 if n is None else n
   return _fft_core_1d('hfft', xla_client.FftType.IRFFT, conj_a, n=n, axis=axis,
                       norm=norm) * nn
 
-@implements(np.fft.ihfft)
+
 def ihfft(a: ArrayLike, n: int | None = None,
           axis: int = -1, norm: str | None = None) -> Array:
+  r"""Compute a 1-D inverse FFT of an array whose spectrum has Hermitian-symmetry.
+
+  JAX implementation of :func:`numpy.fft.ihfft`.
+
+  Args:
+    a: input array.
+    n: optional, int. Specifies the effective dimension of the input along ``axis``.
+      If not specified, it will default to the dimension of input along ``axis``.
+    axis: optional, int, default=-1. Specifies the axis along which the transform
+      is computed. If not specified, the transform is computed along axis -1.
+    norm: optional, string. The normalization mode. "backward", "ortho" and "forward"
+      are supported. Default is "backward".
+
+  Returns:
+    An array containing one-dimensional discrete Fourier transform of ``a`` by
+    exploiting its inherent Hermitian symmetry. The dimension of the array along
+    ``axis`` is ``(n/2)+1``, if ``n`` is even and ``(n+1)/2``, if ``n`` is odd.
+
+  See also:
+    - :func:`jax.numpy.fft.hfft`: Computes a one-dimensional FFT of an array
+      whose spectrum has Hermitian symmetry.
+    - :func:`jax.numpy.fft.fft`: Computes a one-dimensional discrete Fourier
+      transform.
+    - :func:`jax.numpy.fft.rfft`: Computes a one-dimensional discrete Fourier
+      transform of a real-valued input.
+
+  Examples:
+    >>> x = jnp.array([[1, 3, 5, 7],
+    ...                [2, 4, 6, 8]])
+    >>> jnp.fft.ihfft(x)
+    Array([[ 4.+0.j, -1.-1.j, -1.-0.j],
+           [ 5.+0.j, -1.-1.j, -1.-0.j]], dtype=complex64)
+
+    When ``n=4`` and ``axis=0``, dimension of the transform along ``axis 0`` will
+    be ``(4/2)+1 =3`` and dimension along other axes will be same as that of input.
+
+    >>> jnp.fft.ihfft(x, n=4, axis=0)
+    Array([[ 0.75+0.j ,  1.75+0.j ,  2.75+0.j ,  3.75+0.j ],
+           [ 0.25+0.5j,  0.75+1.j ,  1.25+1.5j,  1.75+2.j ],
+           [-0.25-0.j , -0.25-0.j , -0.25-0.j , -0.25-0.j ]], dtype=complex64)
+  """
   _axis_check_1d('ihfft', axis)
   arr = jnp.asarray(a)
   nn = arr.shape[axis] if n is None else n
@@ -704,15 +826,157 @@ def ifft2(a: ArrayLike, s: Shape | None = None, axes: Sequence[int] = (-2,-1),
   return _fft_core_2d('ifft2', xla_client.FftType.IFFT, a, s=s, axes=axes,
                       norm=norm)
 
-@implements(np.fft.rfft2)
+
 def rfft2(a: ArrayLike, s: Shape | None = None, axes: Sequence[int] = (-2,-1),
           norm: str | None = None) -> Array:
+  """Compute a two-dimensional discrete Fourier transform of a real-valued array.
+
+  JAX implementation of :func:`numpy.fft.rfft2`.
+
+  Args:
+    a: real-valued input array. Must have ``a.ndim >= 2``.
+    s: optional length-2 sequence of integers. Specifies the effective size of the
+      output along each specified axis. If not specified, it will default to the
+      dimension of input along ``axes``.
+    axes: optional length-2 sequence of integers, default=(-2,-1). Specifies the
+      axes along which the transform is computed.
+    norm: string, default="backward". The normalization mode. "backward", "ortho"
+      and "forward" are supported.
+
+  Returns:
+    An array containing the two-dimensional discrete Fourier transform of ``a``.
+    The size of the output along the axis ``axes[1]`` is ``(s[1]/2)+1``, if ``s[1]``
+    is even and ``(s[1]+1)/2``, if ``s[1]`` is odd. The size of the output along
+    the axis ``axes[0]`` is ``s[0]``.
+
+  See also:
+    - :func:`jax.numpy.fft.rfft`: Computes a one-dimensional discrete Fourier
+      transform of real-valued array.
+    - :func:`jax.numpy.fft.rfftn`: Computes a multidimensional discrete Fourier
+      transform of real-valued array.
+    - :func:`jax.numpy.fft.irfft2`: Computes a real-valued two-dimensional inverse
+      discrete Fourier transform.
+
+  Examples:
+    ``jnp.fft.rfft2`` computes the transform along the last two axes by default.
+
+    >>> x = jnp.array([[[1, 3, 5],
+    ...                 [2, 4, 6]],
+    ...                [[7, 9, 11],
+    ...                 [8, 10, 12]]])
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   jnp.fft.rfft2(x)
+    Array([[[21.+0.j  , -6.+3.46j],
+            [-3.+0.j  ,  0.+0.j  ]],
+    <BLANKLINE>
+           [[57.+0.j  , -6.+3.46j],
+            [-3.+0.j  ,  0.+0.j  ]]], dtype=complex64)
+
+    When ``s=[2, 4]``, dimension of the transform along ``axis -2`` will be
+    ``2``, along ``axis -1`` will be ``(4/2)+1) = 3`` and dimension along other
+    axes will be the same as that of input.
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   jnp.fft.rfft2(x, s=[2, 4])
+    Array([[[21. +0.j, -8. -7.j,  7. +0.j],
+            [-3. +0.j,  0. +1.j, -1. +0.j]],
+    <BLANKLINE>
+           [[57. +0.j, -8.-19.j, 19. +0.j],
+            [-3. +0.j,  0. +1.j, -1. +0.j]]], dtype=complex64)
+
+    When ``s=[3, 5]`` and ``axes=(0, 1)``, shape of the transform along ``axis 0``
+    will be ``3``, along ``axis 1`` will be ``(5+1)/2 = 3`` and dimension along
+    other axes will be same as that of input.
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   jnp.fft.rfft2(x, s=[3, 5], axes=(0, 1))
+    Array([[[ 18.   +0.j  ,  26.   +0.j  ,  34.   +0.j  ],
+            [ 11.09 -9.51j,  16.33-13.31j,  21.56-17.12j],
+            [ -0.09 -5.88j,   0.67 -8.23j,   1.44-10.58j]],
+    <BLANKLINE>
+          [[ -4.5 -12.99j,  -2.5 -16.45j,  -0.5 -19.92j],
+            [ -9.71 -6.3j , -10.05 -9.52j, -10.38-12.74j],
+            [ -4.95 +0.72j,  -5.78 -0.2j ,  -6.61 -1.12j]],
+    <BLANKLINE>
+          [[ -4.5 +12.99j,  -2.5 +16.45j,  -0.5 +19.92j],
+            [  3.47+10.11j,   6.43+11.42j,   9.38+12.74j],
+            [  3.19 +1.63j,   4.4  +1.38j,   5.61 +1.12j]]], dtype=complex64)
+  """
   return _fft_core_2d('rfft2', xla_client.FftType.RFFT, a, s=s, axes=axes,
                       norm=norm)
 
-@implements(np.fft.irfft2)
+
 def irfft2(a: ArrayLike, s: Shape | None = None, axes: Sequence[int] = (-2,-1),
            norm: str | None = None) -> Array:
+  """Compute a real-valued two-dimensional inverse discrete Fourier transform.
+
+  JAX implementation of :func:`numpy.fft.irfft2`.
+
+  Args:
+    a: input array. Must have ``a.ndim >= 2``.
+    s: optional length-2 sequence of integers. Specifies the size of the output
+      in each specified axis. If not specified, the dimension of output along
+      axis ``axes[1]`` is ``2*(m-1)``, ``m`` is the size of input along axis
+      ``axes[1]`` and the dimension along other axes will be the same as that of
+      input.
+    axes: optional length-2 sequence of integers, default=(-2,-1). Specifies the
+      axes along which the transform is computed.
+    norm: string, default="backward". The normalization mode. "backward", "ortho"
+      and "forward" are supported.
+
+  Returns:
+    A real-valued array containing the two-dimensional inverse discrete Fourier
+    transform of ``a``.
+
+  See also:
+    - :func:`jax.numpy.fft.rfft2`: Computes a two-dimensional discrete Fourier
+      transform of a real-valued array.
+    - :func:`jax.numpy.fft.irfft`: Computes a real-valued one-dimensional inverse
+      discrete Fourier transform.
+    - :func:`jax.numpy.fft.irfftn`: Computes a real-valued multidimensional inverse
+      discrete Fourier transform.
+
+  Examples:
+    ``jnp.fft.ifft2`` computes the transform along the last two axes by default.
+
+    >>> x = jnp.array([[[1, 3, 5],
+    ...                 [2, 4, 6]],
+    ...                [[7, 9, 11],
+    ...                 [8, 10, 12]]])
+    >>> jnp.fft.irfft2(x)
+    Array([[[ 3.5, -1. ,  0. , -1. ],
+            [-0.5,  0. ,  0. ,  0. ]],
+    <BLANKLINE>
+           [[ 9.5, -1. ,  0. , -1. ],
+            [-0.5,  0. ,  0. ,  0. ]]], dtype=float32)
+
+    When ``s=[3, 3]``, dimension of the transform along ``axes (-2, -1)`` will be
+    ``(3, 3)`` and dimension along other axes will be the same as that of input.
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   jnp.fft.irfft2(x, s=[3, 3])
+    Array([[[ 1.89, -0.44, -0.44],
+            [ 0.22, -0.78,  0.56],
+            [ 0.22,  0.56, -0.78]],
+    <BLANKLINE>
+           [[ 5.89, -0.44, -0.44],
+            [ 1.22, -1.78,  1.56],
+            [ 1.22,  1.56, -1.78]]], dtype=float32)
+
+    When ``s=[2, 3]`` and ``axes=(0, 1)``, shape of the transform along
+    ``axes (0, 1)`` will be ``(2, 3)`` and dimension along other axes will be
+    same as that of input.
+
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   jnp.fft.irfft2(x, s=[2, 3], axes=(0, 1))
+    Array([[[ 4.67,  6.67,  8.67],
+            [-0.33, -0.33, -0.33],
+            [-0.33, -0.33, -0.33]],
+    <BLANKLINE>
+           [[-3.  , -3.  , -3.  ],
+            [ 0.  ,  0.  ,  0.  ],
+            [ 0.  ,  0.  ,  0.  ]]], dtype=float32)
+  """
   return _fft_core_2d('irfft2', xla_client.FftType.IRFFT, a, s=s, axes=axes,
                       norm=norm)
 

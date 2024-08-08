@@ -16,8 +16,10 @@
 import contextlib
 import ctypes
 import functools
+import itertools
 import json
 import math
+import warnings
 
 import jax
 from jax._src.interpreters import mlir
@@ -154,9 +156,8 @@ class ProfilerSpec:
     entries = buffer.reshape(
         num_blocks, warpgroups_per_block, self.entries_per_warpgroup
     )
-    start_times = entries[..., :2].astype(np.int64)
-    start_times = (start_times[..., 0] << 32) + start_times[..., 1]
-    start_times -= start_times.min()  # Normalize
+    start_times = entries[..., 0]
+    sm_ids = entries[..., 1]
     entries_used = entries[..., 2]
     if np.any(entries_used > self.entries_per_warpgroup - 2):
       raise RuntimeError("Insufficient space to capture a full trace")
@@ -169,6 +170,7 @@ class ProfilerSpec:
       assert valid_entries % 2 == 0, valid_entries
       start_time = start_times[block_idx, wg_idx]
       block_events = []
+      last_time = float("-inf")
       for i in range(0, valid_entries, 2):
         tag = traces[block_idx, wg_idx, i]
         time = traces[block_idx, wg_idx, i + 1]
@@ -184,23 +186,34 @@ class ProfilerSpec:
           name_id = name_id ^ ProfilerSpec.EXIT
           begin = False
         name = unintern[name_id]
+        if last_time >= time:
+          if last_time - time > 10:
+            warnings.warn(
+                "Profiler clock went significantly backwards for event"
+                f" {'start' if begin else 'end'} `{name}`: {last_time} ->"
+                f" {time}"
+            )
+          time = last_time + 1
+        last_time = time
         block_events.append({
             "name": name,
             "ph": "B" if begin else "E",
             "ts": float(start_time + time) / 1e3,
-            "pid": 1 + block_idx,
-            "tid": 1 + wg_idx,
+            "pid": 1 + int(sm_ids[block_idx, wg_idx]),
+            "tid": 1 + wg_idx + warpgroups_per_block * block_idx,
         })
       else:  # If we didn't break
-        events.extend(block_events)
-    return json.dump({"displayTimeUnit": "ns", "traceEvents": events}, f)
+        events.append(block_events)
+    events = sorted(events, key=lambda x: x[0]["ts"])
+    flat_events = list(itertools.chain.from_iterable(events))
+    return json.dump({"displayTimeUnit": "ns", "traceEvents": flat_events}, f)
 
 
 class OnDeviceProfiler:
 
   def __init__(self, spec: ProfilerSpec, smem_buffer: ir.Value, gmem_buffer: ir.Value):
     self.spec = spec
-    # self.should_store = gpu.thread_id(gpu.Dimension.x)
+    self.start = globaltimer("low")
     i32 = ir.IntegerType.get_signless(32)
     index = ir.IndexType.get()
     self.entries_per_wg = spec.entries_per_warpgroup
@@ -214,7 +227,13 @@ class OnDeviceProfiler:
             self.entries_per_wg,
         ),
     )
+    self.smem_buffer_ptr = memref_ptr(self.smem_buffer, memory_space=3)
     self.gmem_buffer = gmem_buffer
+    self.is_profiling_thread = arith.cmpi(
+        arith.CmpIPredicate.eq,
+        arith.remui(thread_idx(), c(WARPGROUP_SIZE, i32)),
+        c(0, i32),
+    )
     # Hopefully mem2reg will remove the allocation.
     self.offset = memref.alloca(ir.MemRefType.get((), i32), [], [])
     memref.store(c(0, i32), self.offset, [])
@@ -222,21 +241,25 @@ class OnDeviceProfiler:
   @contextlib.contextmanager
   def record(self, name: str):
     i32 = ir.IntegerType.get_signless(32)
-    index = ir.IndexType.get()
     name_id = self.spec.intern_name(name)
     def store(modifier):
-      cur = arith.index_cast(index, memref.load(self.offset, []))
-      # TODO(apaszke): Clamp indices
-      # bound = arith.subi(self.entries_per_block, c(2, index))
-      # cur = arith.select(
-      #     arith.cmpi(arith.CmpIPredicate.ult, cur, bound), cur, bound
-      # )
-      memref.store(c(modifier | name_id, i32), self.smem_buffer, [cur])
-      memref.store(
-          clock(), self.smem_buffer, [arith.addi(cur, c(1, cur.type))]
+      cur = memref.load(self.offset, [])
+      i64 = ir.IntegerType.get_signless(64)
+      base_addr = arith.addi(
+          llvm.ptrtoint(i64, self.smem_buffer_ptr),
+          arith.extui(i64, arith.muli(cur, c(4, i32))),
+      )
+      llvm.inline_asm(
+          ir.Type.parse("!llvm.void"),
+          [self.is_profiling_thread, base_addr, c(modifier | name_id, i32)],
+          """
+          @$0 st.shared.v2.u32 [$1], {$2, %clock};
+          """,
+          "b,l,r",
+          has_side_effects=True,
       )
       memref.store(
-          arith.index_cast(i32, arith.addi(cur, c(2, cur.type))),
+          arith.addi(cur, c(2, cur.type)),
           self.offset,
           [],
       )
@@ -273,11 +296,8 @@ class OnDeviceProfiler:
         arith.cmpi(arith.CmpIPredicate.eq, thread_in_wg, c(0, i32))
     )
     with ir.InsertionPoint(if_first.then_block):
-      # TODO(apaszke): Either use globaltimer or delete
-      # memref.store(globaltimer("high"), block_gmem_buffer, [c(0, index)])
-      # memref.store(globaltimer("low"), block_gmem_buffer, [c(1, index)])
-      memref.store(c(0, i32), wg_gmem_buffer, [c(0, index)])
-      memref.store(c(0, i32), wg_gmem_buffer, [c(1, index)])
+      memref.store(self.start, wg_gmem_buffer, [c(0, index)])
+      memref.store(smid(), wg_gmem_buffer, [c(1, index)])
       memref.store(
           arith.addi(memref.load(self.offset, []), c(3, i32)),
           wg_gmem_buffer,

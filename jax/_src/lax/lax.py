@@ -2267,11 +2267,6 @@ def _add_transpose(t, x, y):
   else:
     return [_unbroadcast(x_aval, t), _unbroadcast(y_aval, t)]
 
-def _add_inverse(r, x, y):
-  xr = r - y
-  yr = r - x
-  return xr, yr
-
 # TODO(slebedev): Why does mypy fail to infer the type here?
 add_p: Primitive = standard_naryop([_num, _num], 'add')
 ad.primitive_jvps[add_p] = _add_jvp
@@ -2320,11 +2315,6 @@ def _mul_transpose(ct, x, y):
       return [None, ad_util.Zero(y.aval)]
     else:
       return [None, _unbroadcast(y.aval, mul(x, ct))]
-
-def _mul_inverse(r, x, y):
-  xr = r / y
-  yr = r / x
-  return xr, yr
 
 mul_p = standard_naryop([_num, _num], 'mul')
 ad.defjvp(mul_p,
@@ -3352,15 +3342,6 @@ def _broadcast_in_dim_lower(ctx, x, *dyn_shape, shape, broadcast_dimensions) -> 
   return [mlir.broadcast_in_dim(ctx, x, aval_out,
                                 broadcast_dimensions=broadcast_dimensions)]
 
-def _broadcast_in_dim_pp_rule(eqn, context, settings):
-  # Don't print shape or trivial broadcast_dimensions in params, since it can be
-  # inferred from the let-binder's type annotation.
-  printed_params = {}
-  if eqn.params['broadcast_dimensions']:
-    printed_params['broadcast_dimensions'] = eqn.params['broadcast_dimensions']
-  new_eqn = eqn.replpace(params=printed_params, invars=eqn.invars[:1])
-  return core._pp_eqn(new_eqn, context, settings)
-
 def _broadcast_in_dim_abstract_eval(x, *dyn_shape, shape, broadcast_dimensions):
   if (not dyn_shape and
       not any(isinstance(d, core.DArray) and
@@ -3385,8 +3366,6 @@ pe.custom_staging_rules[broadcast_in_dim_p] = _broadcast_in_dim_staging_rule
 pe.padding_rules[broadcast_in_dim_p] = _broadcast_in_dim_padding_rule
 core.custom_typechecks[broadcast_in_dim_p] = _broadcast_in_dim_typecheck_rule
 mlir.register_lowering(broadcast_in_dim_p, _broadcast_in_dim_lower)
-# TODO(mattjj): un-comment the next line
-# core.pp_eqn_rules[broadcast_in_dim_p] = _broadcast_in_dim_pp_rule
 
 
 def _clamp_shape_rule(min, operand, max):
@@ -4160,9 +4139,6 @@ batching.defreducer(reduce_prod_p, _get_prod_identity)
 pe.padding_rules[reduce_prod_p] = partial(_reducer_padding, _reduce_prod,
                                           _get_prod_identity)
 
-
-def _reduce_chooser_shape_rule(operand, *, axes):
-  return tuple(np.delete(operand.shape, axes))
 
 def _reduce_chooser_jvp_rule(g, ans, operand, *, axes):
   # TODO(mattjj): an alternative is to use variadic reduce to compute the chosen
@@ -4988,13 +4964,6 @@ def _iota_batching_rule(in_vals, in_dims, *, dtype, shape, dimension):
   iota = broadcasted_iota(dtype, shape, dimension+1)
   return iota, batching.RaggedAxis(ax, ((ragged_axis+1, segment_lengths),))
 batching.primitive_batchers[iota_p] = _iota_batching_rule
-
-def _iota_pp_rule(eqn, context, settings):
-  printed_params = {}
-  if len(eqn.params['shape']) > 1:
-    printed_params['dimension'] = eqn.params['dimension']
-  return core._pp_eqn(eqn.replace(params=printed_params), context, settings)
-# core.pp_eqn_rules[iota_p] = _iota_pp_rule
 
 def _iota_padding_rule(in_avals, out_avals, *dyn_shape, dtype, shape, dimension):
   out_aval, = out_avals

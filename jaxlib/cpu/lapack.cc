@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include <cstdint>
 #include <complex>
+#include <cstdint>
 
 #include "nanobind/nanobind.h"
 #include "jaxlib/cpu/lapack_kernels.h"
@@ -51,6 +51,14 @@ lapack_int GesddGetRealWorkspaceSize(lapack_int m, lapack_int n,
   svd::ComputationMode mode = GetSvdComputationMode(job_opt_compute_uv, true);
   return svd::GetRealWorkspaceSize(m, n, mode);
 }
+
+// Due to enforced kComputeEigenvectors, this assumes a larger workspace size.
+// Could be improved to more accurately estimate the expected size based on the
+// eig::ComputationMode value.
+template <lapack_int (&f)(int64_t, eig::ComputationMode)>
+inline constexpr auto BoundWithEigvecs = +[](lapack_int n) {
+  return f(n, eig::ComputationMode::kComputeEigenvectors);
+};
 
 void GetLapackKernelsFromScipy() {
   static bool initialized = false;  // Protected by GIL
@@ -128,11 +136,25 @@ void GetLapackKernelsFromScipy() {
   AssignKernelFn<RealSyevd<double>>(lapack_ptr("dsyevd"));
   AssignKernelFn<ComplexHeevd<std::complex<float>>>(lapack_ptr("cheevd"));
   AssignKernelFn<ComplexHeevd<std::complex<double>>>(lapack_ptr("zheevd"));
+  AssignKernelFn<EigenvalueDecompositionSymmetric<DataType::F32>>(
+      lapack_ptr("ssyevd"));
+  AssignKernelFn<EigenvalueDecompositionSymmetric<DataType::F64>>(
+      lapack_ptr("dsyevd"));
+  AssignKernelFn<EigenvalueDecompositionHermitian<DataType::C64>>(
+      lapack_ptr("cheevd"));
+  AssignKernelFn<EigenvalueDecompositionHermitian<DataType::C128>>(
+      lapack_ptr("zheevd"));
 
   AssignKernelFn<RealGeev<float>>(lapack_ptr("sgeev"));
   AssignKernelFn<RealGeev<double>>(lapack_ptr("dgeev"));
   AssignKernelFn<ComplexGeev<std::complex<float>>>(lapack_ptr("cgeev"));
   AssignKernelFn<ComplexGeev<std::complex<double>>>(lapack_ptr("zgeev"));
+  AssignKernelFn<EigenvalueDecomposition<DataType::F32>>(lapack_ptr("sgeev"));
+  AssignKernelFn<EigenvalueDecomposition<DataType::F64>>(lapack_ptr("dgeev"));
+  AssignKernelFn<EigenvalueDecompositionComplex<DataType::C64>>(
+      lapack_ptr("cgeev"));
+  AssignKernelFn<EigenvalueDecompositionComplex<DataType::C128>>(
+      lapack_ptr("zgeev"));
 
   AssignKernelFn<RealGees<float>>(lapack_ptr("sgees"));
   AssignKernelFn<RealGees<double>>(lapack_ptr("dgees"));
@@ -246,6 +268,14 @@ nb::dict Registrations() {
   dict["lapack_dgesdd_ffi"] = EncapsulateFunction(lapack_dgesdd_ffi);
   dict["lapack_cgesdd_ffi"] = EncapsulateFunction(lapack_cgesdd_ffi);
   dict["lapack_zgesdd_ffi"] = EncapsulateFunction(lapack_zgesdd_ffi);
+  dict["lapack_ssyevd_ffi"] = EncapsulateFunction(lapack_ssyevd_ffi);
+  dict["lapack_dsyevd_ffi"] = EncapsulateFunction(lapack_dsyevd_ffi);
+  dict["lapack_cheevd_ffi"] = EncapsulateFunction(lapack_cheevd_ffi);
+  dict["lapack_zheevd_ffi"] = EncapsulateFunction(lapack_zheevd_ffi);
+  dict["lapack_sgeev_ffi"] = EncapsulateFunction(lapack_sgeev_ffi);
+  dict["lapack_dgeev_ffi"] = EncapsulateFunction(lapack_dgeev_ffi);
+  dict["lapack_cgeev_ffi"] = EncapsulateFunction(lapack_cgeev_ffi);
+  dict["lapack_zgeev_ffi"] = EncapsulateFunction(lapack_zgeev_ffi);
 
   return dict;
 }
@@ -256,12 +286,16 @@ NB_MODULE(_lapack, m) {
   m.def("registrations", &Registrations);
   // Submodules
   auto svd = m.def_submodule("svd");
+  auto eig = m.def_submodule("eig");
   // Enums
   nb::enum_<svd::ComputationMode>(svd, "ComputationMode")
       // kComputeVtOverwriteXPartialU is not implemented
       .value("kComputeFullUVt", svd::ComputationMode::kComputeFullUVt)
       .value("kComputeMinUVt", svd::ComputationMode::kComputeMinUVt)
       .value("kNoComputeUVt", svd::ComputationMode::kNoComputeUVt);
+  nb::enum_<eig::ComputationMode>(eig, "ComputationMode")
+      .value("kComputeEigenvectors", eig::ComputationMode::kComputeEigenvectors)
+      .value("kNoEigenvectors", eig::ComputationMode::kNoEigenvectors);
 
   // Old-style LAPACK Workspace Size Queries
   m.def("lapack_sgeqrf_workspace", &Geqrf<float>::Workspace, nb::arg("m"),
@@ -353,6 +387,14 @@ NB_MODULE(_lapack, m) {
         nb::arg("m"), nb::arg("n"), nb::arg("mode"));
   m.def("zgesdd_work_size_ffi", &svd::SVDType<DataType::C128>::GetWorkspaceSize,
         nb::arg("m"), nb::arg("n"), nb::arg("mode"));
+  m.def("syevd_work_size_ffi", BoundWithEigvecs<eig::GetWorkspaceSize>,
+        nb::arg("n"));
+  m.def("syevd_iwork_size_ffi", BoundWithEigvecs<eig::GetIntWorkspaceSize>,
+        nb::arg("n"));
+  m.def("heevd_work_size_ffi", BoundWithEigvecs<eig::GetComplexWorkspaceSize>,
+        nb::arg("n"));
+  m.def("heevd_rwork_size_ffi", BoundWithEigvecs<eig::GetRealWorkspaceSize>,
+        nb::arg("n"));
 }
 
 }  // namespace

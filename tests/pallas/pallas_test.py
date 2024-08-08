@@ -27,12 +27,14 @@ from absl.testing import parameterized
 import jax
 from jax import lax
 from jax import random
+from jax._src import api_util
 from jax._src import checkify
 from jax._src import config
 from jax._src import dtypes
 from jax._src import test_util as jtu
 from jax._src.lax.control_flow.for_loop import for_loop
 from jax._src.lib import version as jaxlib_version
+from jax._src.pallas import core as pallas_core
 from jax._src.pallas.pallas_call import _trace_kernel_to_jaxpr
 from jax.experimental import pallas as pl
 import jax.numpy as jnp
@@ -400,7 +402,9 @@ class PallasCallTest(PallasBaseTest):
       block_size = math.prod(block_shape)
       block_size_is_power_2 = 0 == (block_size & (block_size - 1))
       if not block_size_is_power_2:
-        self.skipTest("TODO: Add GPU exception, now RET_CHECK failure")
+        test_context = self.assertRaisesRegex(
+            Exception,
+            "array arguments and results whose size is a power of 2")
 
     with test_context:
       res = self.pallas_call(
@@ -505,7 +509,7 @@ class PallasCallTest(PallasBaseTest):
 
     with self.assertRaisesRegex(
         ValueError,
-        "The kernel function .* should not capture constants"):
+        "The kernel function .* captures constants"):
       kernel(x)
 
   def test_vector_slicing(self):
@@ -710,7 +714,7 @@ class ApiErrorTest(PallasBaseTest):
                          out_shape=(a, a))
     with self.assertRaisesRegex(
         ValueError,
-        "The kernel function my_kernel at .*pallas_test.py:.* in a pallas_call should return None"):
+        "The kernel function .* my_kernel at .*pallas_test.py:.* should return None"):
       f(a)
 
   def test_pallas_call_kernel_with_no_signature_returns_something(self):
@@ -719,7 +723,7 @@ class ApiErrorTest(PallasBaseTest):
                          out_shape=a)
     with self.assertRaisesRegex(
         ValueError,
-        "The kernel function .* at .*pallas_test.py:.* in a pallas_call should return None"):
+        "The kernel function .* at .*pallas_test.py:.* should return None"):
       f(a)
 
   def test_pallas_call_in_specs_not_a_sequence(self):
@@ -823,7 +827,6 @@ class ApiErrorTest(PallasBaseTest):
          ".* `out_specs` is a tuple of length 1 but `out_shape` is a tuple of length 2.*", re.DOTALL)):
       f(a)
 
-
   def test_pallas_call_block_shape_ndim_mismatch(self):
     a = np.arange(256, dtype=np.int32)
     f = self.pallas_call(lambda x_ref, o1_ref: None,
@@ -882,6 +885,40 @@ class ApiErrorTest(PallasBaseTest):
       self.pallas_call(lambda x_ref, y_ref, o1_ref: None,
                        out_shape=[jax.ShapeDtypeStruct(x.shape, jnp.float32)],
                        input_output_aliases={1: 0})(x, x)
+
+  def test_name_and_src_info(self):
+    def the_kernel(): return None
+    ns1 = pallas_core.NameAndSrcInfo.from_pallas_call(
+        "my_name", api_util.fun_sourceinfo(the_kernel))
+    self.assertEqual("my_name", ns1.name)
+    self.assertIn("the_kernel", ns1.src_info)
+    self.assertIn("pallas_test.py:", ns1.src_info)
+    self.assertRegex(
+        str(ns1),
+        "my_name for kernel function the_kernel at .*pallas_test.py:.*")
+
+    ns2 = pallas_core.NameAndSrcInfo.from_pallas_call(
+        None,
+        api_util.fun_sourceinfo(the_kernel))
+    self.assertEqual("the_kernel", ns2.name)
+    self.assertIn("pallas_test.py:", ns2.src_info)
+    self.assertRegex(
+        str(ns2),
+        "the_kernel at .*pallas_test.py:.*")
+
+    ns3 = pallas_core.NameAndSrcInfo.from_pallas_call("my_name", None)
+    self.assertEqual("my_name", ns3.name)
+    self.assertEqual("", ns3.src_info)
+    self.assertEqual(str(ns3), "my_name")
+
+    ns4 = pallas_core.NameAndSrcInfo.from_pallas_call("my name with spaces",
+                                                      None)
+    self.assertEqual("my_name_with_spaces", ns4.name)
+    self.assertEqual("", ns4.src_info)
+
+    ns5 = pallas_core.NameAndSrcInfo.from_pallas_call(None, None)
+    self.assertEqual("unknown", ns5.name)
+    self.assertEqual("", ns5.src_info)
 
 
 class ApiErrorInterpreterTest(ApiErrorTest):

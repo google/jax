@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from functools import partial
+import types
 from typing import Any, Union
 
 import numpy as np
@@ -56,18 +57,7 @@ zip, unsafe_zip = safe_zip, zip
 get_p = core.Primitive("get")
 get_p.def_impl(partial(dispatch.apply_primitive, get_p))
 
-Indexer = tuple[Union[int, slice, Array], ...]
-# or Ellipsis, but that can't be annotated until Python 3.10? (types.EllipsisType)
-
-def _get_slice_output_shape(in_shape: tuple[int, ...],
-                            idx_shapes: tuple[tuple[int, ...], ...],
-                            indexed_dims: tuple[bool, ...]) -> tuple[int, ...]:
-  shape_suffix = [d for i, d in zip(indexed_dims, in_shape) if not i]
-  shape_prefix, = set(idx_shapes) or [()]  # tie fighter
-  # Move shape prefix dimensions to the front
-  shape = (*shape_prefix, *shape_suffix)
-  return shape
-
+Indexer = tuple[Union[int, slice, Array, types.EllipsisType], ...]
 
 def get_ref_and_indexers(
     ref_or_view: Any, idx: Indexer | None, function_name: str
@@ -407,11 +397,6 @@ pe.partial_eval_jaxpr_custom_rules[addupdate_p] = partial(
     _state_partial_eval_custom, addupdate_p)
 
 ##  get/swap/addupdate batching rules
-
-def _output_bdim(indexed_dims: tuple[bool, ...], ref_dim: int,
-                 idxs_shape: tuple[int, ...]):
-  num_idxs_to_left = sum(indexed_dims[:ref_dim])
-  return ref_dim - num_idxs_to_left + len(idxs_shape)
 
 def _batch_indexer(indexer: indexing.NDIndexer, dims,
                    axis_size: int,

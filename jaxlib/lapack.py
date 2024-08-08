@@ -139,7 +139,7 @@ def trsm_hlo(dtype, alpha, a, b,
 
 # # ?getrf: LU decomposition
 
-def getrf_hlo(dtype, a: ir.Value, *,
+def getrf_hlo(ctx, dtype, a: ir.Value, *,
               a_shape_vals: tuple[DimensionSize, ...]):
   _lapack.initialize()
   a_type = ir.RankedTensorType(a.type)
@@ -147,19 +147,8 @@ def getrf_hlo(dtype, a: ir.Value, *,
   batch_dims_vals = a_shape_vals[:-2]
   num_bd = len(a_shape_vals) - 2
   m, n = a_shape_vals[-2:]
+  fn_base = build_lapack_fn_target(fn_base="getrf", dtype=dtype)
 
-  if dtype == np.float32:
-    fn = "lapack_sgetrf"
-  elif dtype == np.float64:
-    fn = "lapack_dgetrf"
-  elif dtype == np.complex64:
-    fn = "lapack_cgetrf"
-  elif dtype == np.complex128:
-    fn = "lapack_zgetrf"
-  else:
-    raise NotImplementedError(f"Unsupported dtype {dtype}")
-
-  scalar_layout = []
   layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
 
   i32_type = ir.IntegerType.get_signless(32)
@@ -170,23 +159,43 @@ def getrf_hlo(dtype, a: ir.Value, *,
   ]
   result_types, result_shapes = mk_result_types_and_shapes(shape_type_pairs)
 
-  batch_size_val = hlo_s32(1)
-  for b_v in batch_dims_vals:
-    batch_size_val = hlo.multiply(batch_size_val, ensure_hlo_s32(b_v))
+  if ctx.is_forward_compat():
+    fn = fn_base
+    scalar_layout = []
+    batch_size_val = hlo_s32(1)
+    for b_v in batch_dims_vals:
+      batch_size_val = hlo.multiply(batch_size_val, ensure_hlo_s32(b_v))
 
-  return custom_call(
-      fn,
-      result_types=result_types,
-      operands=[batch_size_val, ensure_hlo_s32(m), ensure_hlo_s32(n), a],
-      operand_layouts=[scalar_layout] * 3 + [layout],
-      result_layouts=[
-        layout,
-        tuple(range(num_bd, -1, -1)),
-        tuple(range(num_bd - 1, -1, -1)),
-      ],
-      operand_output_aliases={3: 0},
-      result_shapes=result_shapes,
-  ).results
+    return custom_call(
+        fn,
+        result_types=result_types,
+        operands=[batch_size_val, ensure_hlo_s32(m), ensure_hlo_s32(n), a],
+        operand_layouts=[scalar_layout] * 3 + [layout],
+        result_layouts=[
+          layout,
+          tuple(range(num_bd, -1, -1)),
+          tuple(range(num_bd - 1, -1, -1)),
+        ],
+        operand_output_aliases={3: 0},
+        result_shapes=result_shapes,
+    ).results
+  else:
+    fn = fn_base + "_ffi"
+    return custom_call(
+        fn,
+        result_types=result_types,
+        operands=[a],
+        operand_layouts=[layout],
+        result_layouts=[
+          layout,
+          tuple(range(num_bd, -1, -1)),
+          tuple(range(num_bd - 1, -1, -1)),
+        ],
+        operand_output_aliases={0: 0},
+        result_shapes=result_shapes,
+        backend_config={},
+        api_version=4,
+    ).results
 
 # # ?geqrf: QR decomposition
 

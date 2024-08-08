@@ -11,6 +11,7 @@ from jax._src.lax.lax import PrecisionLike
 from jax._src.lax.slicing import GatherScatterMode
 from jax._src.lib import Device
 from jax._src.numpy.index_tricks import _Mgrid, _Ogrid, CClass as _CClass, RClass as _RClass
+from jax._src.numpy.array_api_metadata import ArrayNamespaceInfo
 from jax._src.typing import (
     Array, ArrayLike, DType, DTypeLike, DeprecatedArg,
     DimSize, DuckTypedArray, Shape, StaticScalar,
@@ -26,6 +27,9 @@ _Axis = Union[None, int, Sequence[int]]
 _Device = Device
 
 ComplexWarning: type
+
+__array_api_version__: str
+def __array_namespace_info__() -> ArrayNamespaceInfo: ...
 
 _deprecations: dict[str, tuple[str, Any]]
 def abs(x: ArrayLike, /) -> Array: ...

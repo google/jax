@@ -666,6 +666,7 @@ _array_operators = {
 }
 
 _array_methods = {
+  "__array_namespace__": array_api_metadata.__array_namespace__,
   "all": reductions.all,
   "any": reductions.any,
   "argmax": lax_numpy.argmax,
@@ -719,7 +720,6 @@ _impl_only_array_methods = {
 }
 
 _array_properties = {
-  "__array_namespace__": array_api_metadata._array_namespace_property,
   "flat": _notimplemented_flat,
   "T": lax_numpy.transpose,
   "mT": lax_numpy.matrix_transpose,

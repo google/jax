@@ -112,7 +112,8 @@ Not all block shapes are supported.
     must be equal to the array dimension, or be divisible by
     `128 * (32 / bitwidth(dtype))`.
 
-  * On GPU, only blocks with a size that is power of 2 are supported.
+  * On GPU, the size of the blocks themselves is not restricted, but each
+    operation must operate on arrays whose size is a power of 2.
 ```
 
 If the block shape does not divide evenly the overall shape then the

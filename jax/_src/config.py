@@ -1054,7 +1054,7 @@ def _update_jax_memories_thread_local(val):
 
 enable_memories = bool_state(
     'jax_enable_memories',
-    default=False,
+    default=True,
     upgrade=True,
     update_global_hook=_update_jax_memories_global,
     update_thread_local_hook=_update_jax_memories_thread_local,

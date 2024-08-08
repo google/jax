@@ -993,7 +993,9 @@ pytype_library(
         ],
     ),
     visibility = [":internal"] + jax_visibility("array_api"),
-    deps = [":jax"],
+    deps = [
+        ":jax",
+    ],
 )
 
 pytype_library(

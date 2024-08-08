@@ -7,7 +7,6 @@ JAX tutorials draft
 
 .. note::
 
-   This is a 
    The tutorials below are a work in progress; for the time being, please refer
    to the older tutorial content, including :ref:`beginner-guide`,
    :ref:`user-guides`, and the now-deleted *JAX 101* tutorials.
@@ -44,7 +43,6 @@ JAX 201
    advanced-debugging
    external-callbacks
    profiling-and-performance
-
 
 JAX 301
 -------

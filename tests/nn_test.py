@@ -57,10 +57,11 @@ class NNFunctionsTest(jtu.JaxTestCase):
       use_bias=[False, True],
       causal_mode=[None, 'is_causal', 'is_mask'],
       group_num=[1, 2, 4],
+      use_vmap=[False, True],
       impl=['xla', 'cudnn'],
   )
   def testDotProductAttentionInfer(self, dtype, use_bias, causal_mode,
-                                   group_num, impl):
+                                   group_num, use_vmap, impl):
     if impl == 'cudnn' and not _is_required_cudnn_version_satisfied():
       raise unittest.SkipTest("CUDA or cuDNN versions are not compatible.")
     if impl == 'cudnn' and dtype == jnp.float32:
@@ -84,15 +85,17 @@ class NNFunctionsTest(jtu.JaxTestCase):
     sdpa_ans = partial(sdpa, is_causal=is_causal, implementation=impl)
 
     if impl == 'cudnn':
-      lowered = jax.jit(sdpa_ans).lower(Q, K, V, bias=bias, mask=causal_mask)
+      lowered = jax.jit(sdpa_ans).lower(Q, K, V, bias, causal_mask)
       hlo = mlir.module_to_string(lowered.compiler_ir('stablehlo'))
       self.assertIn('__cudnn$fmha', hlo)
 
+    if use_vmap:
+      sdpa_ans = jax.vmap(sdpa_ans, in_axes=(0, 0, 0, None, None), out_axes=0)
     K_ref = jnp.repeat(K, G, axis=2) if G != 1 else K
     V_ref = jnp.repeat(V, G, axis=2) if G != 1 else V
-    out_ref = sdpa_ref(Q, K_ref, V_ref, bias=bias, mask=causal_mask)
+    out_ref = sdpa_ref(Q, K_ref, V_ref, bias, causal_mask)
 
-    out_ans = sdpa_ans(Q, K, V, bias=bias, mask=causal_mask)
+    out_ans = sdpa_ans(Q, K, V, bias, causal_mask)
     self.assertAllClose(out_ref, out_ans, atol=.01, rtol=.01)
 
   @parameterized.product(
@@ -100,10 +103,11 @@ class NNFunctionsTest(jtu.JaxTestCase):
       use_bias=[False, True],
       causal_mode=[None, 'is_causal', 'is_mask'],
       group_num=[1, 2, 4],
+      use_vmap=[False, True],
       impl=['xla', 'cudnn'],
   )
   def testDotProductAttentionTrain(self, dtype, use_bias, causal_mode,
-                                   group_num, impl):
+                                   group_num, use_vmap, impl):
     if impl == 'cudnn' and not _is_required_cudnn_version_satisfied():
       raise unittest.SkipTest("CUDA or cuDNN versions are not compatible.")
     if impl == 'cudnn' and dtype == jnp.float32:
@@ -127,16 +131,16 @@ class NNFunctionsTest(jtu.JaxTestCase):
     K_ref = jnp.repeat(K, G, axis=2) if G != 1 else K
     V_ref = jnp.repeat(V, G, axis=2) if G != 1 else V
     sdpa_ref = partial(sdpa, is_causal=is_causal, implementation=None)
-    fn_ref = lambda q, k, v, b, m: sdpa_ref(q, k, v, bias=b, mask=m)
-    _, sdpa_vjp_ref = jax.vjp(fn_ref, Q, K_ref, V_ref, bias, causal_mask)
+    _, sdpa_vjp_ref = jax.vjp(sdpa_ref, Q, K_ref, V_ref, bias, causal_mask)
     dQ_ref, dK_ref, dV_ref, dbias_ref, _ = sdpa_vjp_ref(grad)
     if G != 1:
       dK_ref = dK_ref.reshape(B, S, N // G, G, H).sum(axis=3)
       dV_ref = dV_ref.reshape(B, S, N // G, G, H).sum(axis=3)
 
     sdpa_ans = partial(sdpa, is_causal=is_causal, implementation=impl)
-    fn_ans = lambda q, k, v, b, m: sdpa_ans(q, k, v, bias=b, mask=m)
-    _, sdpa_vjp_ans = jax.vjp(fn_ans, Q, K, V, bias, causal_mask)
+    if use_vmap:
+      sdpa_ans = jax.vmap(sdpa_ans, in_axes=(0, 0, 0, None, None), out_axes=0)
+    _, sdpa_vjp_ans = jax.vjp(sdpa_ans, Q, K, V, bias, causal_mask)
     dQ_ans, dK_ans, dV_ans, dbias_ans, _ = sdpa_vjp_ans(grad)
 
     if impl == 'cudnn':
