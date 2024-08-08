@@ -42,12 +42,14 @@ limitations under the License.
 #include "mlir/Support/LogicalResult.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "third_party/llvm/llvm-project/llvm/include/llvm/ADT/ArrayRef.h"
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/include/mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/include/mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/include/mlir/IR/Attributes.h"
 #include "mlir/include/mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/include/mlir/IR/OpDefinition.h"
+#include "mlir/include/mlir/IR/Operation.h"
 #include "mlir/include/mlir/IR/Visitors.h"
 #include "jaxlib/mosaic/dialect/tpu/layout.h"
 #include "jaxlib/mosaic/dialect/tpu/tpu_dialect.h"
@@ -251,11 +253,11 @@ class VectorLayoutInferer {
           return failure();
         }
       } else if (auto op = dyn_cast<tpu::LoadOp>(any_op)) {
-        if (infer(op).failed()) {
+        if (inferLoad(op).failed()) {
           return failure();
         }
       } else if (auto op = dyn_cast<tpu::StoreOp>(any_op)) {
-        if (infer(op).failed()) {
+        if (inferStore(op).failed()) {
           return failure();
         }
       } else if (auto op = dyn_cast<tpu::StridedLoadOp>(any_op)) {
@@ -264,6 +266,14 @@ class VectorLayoutInferer {
         }
       } else if (auto op = dyn_cast<tpu::StridedStoreOp>(any_op)) {
         if (infer(op).failed()) {
+          return failure();
+        }
+      } else if (auto op = dyn_cast<tpu::ShuffledLoadOp>(any_op)) {
+        if (inferLoad(op).failed()) {
+          return failure();
+        }
+      } else if (auto op = dyn_cast<tpu::ShuffledStoreOp>(any_op)) {
+        if (inferStore(op).failed()) {
           return failure();
         }
       } else if (auto op = dyn_cast<tpu::MatmulOp>(any_op)) {
@@ -787,18 +797,37 @@ class VectorLayoutInferer {
     return success();
   }
 
-  LogicalResult infer(tpu::LoadOp op) {
+  template <typename OpTy>
+  LogicalResult inferLoad(OpTy op) {
     auto res_ty = op.getResult().getType();
     int8_t bitwidth = res_ty.getElementTypeBitWidth();
 
     // We expect the result is already a native-sized vreg.
-    TPU_CHECK_OP(bitwidth == 32 && res_ty.getShape()[0] == target_shape_[0] &&
-                     res_ty.getShape()[1] == target_shape_[1],
-                 "Only 32-bit loads supported");
+    TPU_CHECK_OP(
+        bitwidth == 32 && res_ty.getShape() == ArrayRef<int64_t>(target_shape_),
+        "Not implemented: only 32-bit and target shape loads supported");
     SmallVector<Layout, 4> in_layout(op->getNumOperands(), kNoLayout);
     auto out_layout = VectorLayout(bitwidth, {0, 0}, nativeTiling(bitwidth),
                                    ImplicitDim::kNone);
     setLayout(op, in_layout, out_layout);
+    return success();
+  }
+
+  template <typename OpTy>
+  LogicalResult inferStore(OpTy op) {
+    auto store_ty = op.getValueToStore().getType();
+    int8_t bitwidth = store_ty.getElementTypeBitWidth();
+
+    // We expect the value to store is already a native-sized vreg.
+    TPU_CHECK_OP(
+        bitwidth == 32 &&
+            store_ty.getShape() == ArrayRef<int64_t>(target_shape_),
+        "Not implemented: only 32-bit and target shape stores supported");
+    auto store_layout = VectorLayout(bitwidth, {0, 0}, nativeTiling(bitwidth),
+                                     ImplicitDim::kNone);
+    SmallVector<Layout, 5> in_layout{store_layout};
+    in_layout.insert(in_layout.end(), op.getIndices().size() + 1, kNoLayout);
+    setInLayout(op, in_layout);
     return success();
   }
 
@@ -898,22 +927,6 @@ class VectorLayoutInferer {
     setLayout(op, in_layout,
               VectorLayout(kNativeBitwidth, {0, 0}, default_tiling_,
                            ImplicitDim::kNone));
-    return success();
-  }
-
-  LogicalResult infer(tpu::StoreOp op) {
-    auto store_ty = op.getValueToStore().getType();
-    int8_t bitwidth = store_ty.getElementTypeBitWidth();
-
-    // We expect the value to store is already a native-sized vreg.
-    TPU_CHECK_OP(bitwidth == 32 && store_ty.getShape()[0] == target_shape_[0] &&
-                     store_ty.getShape()[1] == target_shape_[1],
-                 "Only 32-bit stores supported");
-    auto store_layout = VectorLayout(bitwidth, {0, 0}, nativeTiling(bitwidth),
-                                     ImplicitDim::kNone);
-    SmallVector<Layout, 5> in_layout{store_layout};
-    in_layout.insert(in_layout.end(), op.getIndices().size() + 1, kNoLayout);
-    setInLayout(op, in_layout);
     return success();
   }
 
