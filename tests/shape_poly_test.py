@@ -3354,9 +3354,6 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
     custom_call_harnesses = {
         "householder_product:gpu",
         "vmap_geqrf:gpu",  # used for linalg.qr
-        "vmap_lu:gpu",
-        # custom_linear_solve works as long as lu works.
-        "vmap_custom_linear_solve:gpu",
         "vmap_qr:gpu", "qr:gpu",
         "vmap_svd:gpu",
     }

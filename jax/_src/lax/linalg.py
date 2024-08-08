@@ -1383,11 +1383,7 @@ def _lu_cpu_gpu_lowering(getrf_impl, ctx, operand, *,
 
   # TODO(b/357034884): Remove once jaxlib 0.4.32 is the minimum version.
   ctx_arg = (ctx,) if jaxlib_version >= (0, 4, 32) else ()
-
-  out_aval, pivot_aval, perm_aval = ctx.avals_out
-  batch_dims = operand_aval.shape[:-2]
-  m = operand_aval.shape[-2]
-  if platform in ["cuda", "rocm"]:
+  if jaxlib_version < (0, 4, 32) and platform in ["cuda", "rocm"]:
     # TODO(necula): remove the platform kwarg when we implement GPU support.
     if not is_constant_shape(operand_aval.shape):
       raise NotImplementedError(
@@ -1396,9 +1392,12 @@ def _lu_cpu_gpu_lowering(getrf_impl, ctx, operand, *,
     lu, pivot, info = getrf_impl(*ctx_arg, operand_aval.dtype, operand)
   else:
     op_shape_vals = mlir.eval_dynamic_shape_as_ivals(ctx, operand_aval.shape)
-    # TODO(b/344892332): Remove the conditional after the compatibility period.
     lu, pivot, info = getrf_impl(
         *ctx_arg, operand_aval.dtype, operand, a_shape_vals=op_shape_vals)
+
+  out_aval, pivot_aval, perm_aval = ctx.avals_out
+  batch_dims = operand_aval.shape[:-2]
+  m = operand_aval.shape[-2]
   # Subtract 1 from the pivot to get 0-based indices.
   pivot = hlo.subtract(pivot, mlir.full_like_aval(ctx, 1, pivot_aval))
   ok = mlir.compare_hlo(
