@@ -1020,7 +1020,6 @@ def dot_product_attention(
           scale=scale_val, q_seqlen=q_sequence_lengths,
           kv_seqlen=kv_sequence_lengths,
       )
-      )
     case _:
       raise ValueError(f"Unsupported implementation option: {implementation}")
 
