@@ -920,6 +920,7 @@ def _check_lowering(lowering) -> None:
 
 _CPU_FFI_KERNELS = [
     "lapack_spotrf_ffi", "lapack_dpotrf_ffi", "lapack_cpotrf_ffi", "lapack_zpotrf_ffi",
+    "lapack_sgesdd_ffi", "lapack_dgesdd_ffi", "lapack_cgesdd_ffi", "lapack_zgesdd_ffi",
     "lapack_sgetrf_ffi", "lapack_dgetrf_ffi", "lapack_cgetrf_ffi", "lapack_zgetrf_ffi",
 ]
 # These are the JAX custom call target names that are guaranteed to be stable.

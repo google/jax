@@ -1974,7 +1974,9 @@ def _svd_cpu_gpu_lowering(
                                 compute_uv=compute_uv)
   else:
     a_shape_vals = mlir.eval_dynamic_shape_as_ivals(ctx, operand_aval.shape)
-    s, u, vt, info = gesvd_impl(operand_aval.dtype, operand,
+    # TODO(b/344892332): Remove the conditional after the compatibility period.
+    ctx_args = (ctx,) if jaxlib_version >= (0, 4, 32) else ()
+    s, u, vt, info = gesvd_impl(*ctx_args, operand_aval.dtype, operand,
                                 full_matrices=full_matrices,
                                 compute_uv=compute_uv,
                                 a_shape_vals=a_shape_vals)

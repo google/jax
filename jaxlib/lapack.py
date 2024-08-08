@@ -17,20 +17,23 @@
 
 from collections.abc import Sequence
 from enum import Enum
+from typing import Optional
 
 import numpy as np
 
 import jaxlib.mlir.ir as ir  # pylint: disable=consider-using-from-import
 import jaxlib.mlir.dialects.stablehlo as hlo
+import jaxlib.mlir.LoweringRuleContext as LoweringRuleContext  # pylint: disable=consider-using-from-import
 
 from jaxlib import xla_client
 
+from .cpu import _lapack
+from .cpu._lapack import svd
 from .hlo_helpers import (
     custom_call, hlo_u8, hlo_s32,
     ensure_hlo_s32, hlo_add, hlo_min,
     DimensionSize, ShapeTypePair, mk_result_types_and_shapes,
 )
-from .cpu import _lapack
 
 for _name, _value in _lapack.registrations().items():
   xla_client.register_custom_call_target(
@@ -67,6 +70,23 @@ def _matrix_transpose_attr(*, transpose: bool, conjugate: bool):
 
 def _matrix_diagonal_attr(*, unit_diag: bool):
   return _char_attr("U" if unit_diag else "N")
+
+
+def _svd_computation_attr(
+    *, compute_uv: bool, full_matrices: Optional[bool] = True
+):
+  mode = "A"
+  if full_matrices is None:
+    full_matrices = True
+  if not compute_uv:
+    # We should assert that `full_matrices` is never True here.
+    # This should never happen because `full_matrices` can only be computed when
+    # `compute_uv` is True. However, at this point there are too many tests that
+    # rely on this behavior.
+    mode = "N"
+  elif not full_matrices:
+    mode = "S"
+  return _char_attr(mode)
 
 
 LAPACK_DTYPE_PREFIX = {
@@ -375,7 +395,7 @@ def potrf_hlo(ctx, dtype, a: ir.Value, *, lower=False,
 
 # # ?gesdd: Singular value decomposition
 
-def gesdd_hlo(dtype, a: ir.Value, *, full_matrices=True, compute_uv=True,
+def gesdd_hlo(ctx: LoweringRuleContext, dtype, a: ir.Value, *, full_matrices=True, compute_uv=True,
               a_shape_vals: tuple[DimensionSize, ...]):
   _lapack.initialize()
   a_type = ir.RankedTensorType(a.type)
@@ -385,81 +405,150 @@ def gesdd_hlo(dtype, a: ir.Value, *, full_matrices=True, compute_uv=True,
   assert type(n) is int
   batch_dims_vals = a_shape_vals[:-2]
   num_bd = len(batch_dims_vals)
-  batch_size_val = hlo_s32(1)
-  for b_v in batch_dims_vals:
-    batch_size_val = hlo.multiply(batch_size_val, ensure_hlo_s32(b_v))
-
+  fn_base = build_lapack_fn_target(fn_base="gesdd", dtype=dtype)
   i32_type = ir.IntegerType.get_signless(32)
   workspace: list[ShapeTypePair]
+
+  # TODO(b/344892332): Remove the old kernel after the compatibility period.
+  if ctx.is_forward_compat():
+    fn = fn_base
+    batch_size_val = hlo_s32(1)
+    for b_v in batch_dims_vals:
+      batch_size_val = hlo.multiply(batch_size_val, ensure_hlo_s32(b_v))
+    if dtype == np.float32:
+      singular_vals_type = ir.F32Type.get()
+      lwork = _lapack.sgesdd_work_size(m, n, compute_uv, full_matrices)
+      workspace = [
+          ([_lapack.gesdd_iwork_size(m, n)], i32_type),
+          ([lwork], a_type.element_type),
+      ]
+      workspace_layouts = [[0], [0]]
+    elif dtype == np.float64:
+      singular_vals_type = ir.F64Type.get()
+      lwork = _lapack.dgesdd_work_size(m, n, compute_uv, full_matrices)
+      workspace = [
+          ([_lapack.gesdd_iwork_size(m, n)], i32_type),
+          ([lwork], a_type.element_type),
+      ]
+      workspace_layouts = [[0], [0]]
+    elif dtype == np.complex64:
+      singular_vals_type = ir.F32Type.get()
+      lwork = _lapack.cgesdd_work_size(m, n, compute_uv, full_matrices)
+      workspace = [
+          ([_lapack.gesdd_iwork_size(m, n)], i32_type),
+          ([_lapack.cgesdd_rwork_size(m, n, int(compute_uv))], ir.F32Type.get()),
+          ([lwork], a_type.element_type),
+      ]
+      workspace_layouts = [[0], [0], [0]]
+    elif dtype == np.complex128:
+      singular_vals_type = ir.F64Type.get()
+      lwork = _lapack.zgesdd_work_size(m, n, compute_uv, full_matrices)
+      workspace = [
+          ([_lapack.gesdd_iwork_size(m, n)], i32_type),
+          ([_lapack.cgesdd_rwork_size(m, n, int(compute_uv))], ir.F64Type.get()),
+          ([lwork], a_type.element_type),
+      ]
+      workspace_layouts = [[0], [0], [0]]
+    else:
+      raise NotImplementedError(f"Unsupported dtype {dtype}")
+
+    scalar_layout = []
+    layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
+
+    shape_type_pairs: Sequence[ShapeTypePair] = [
+      (a_shape_vals, a_type.element_type),
+      (batch_dims_vals + (min(m, n),), singular_vals_type),
+      (batch_dims_vals + (m, m if full_matrices else min(m, n)), a_type.element_type),
+      (batch_dims_vals + (n if full_matrices else min(m, n), n), a_type.element_type),
+      (batch_dims_vals, i32_type),
+    ] + workspace
+    result_types, result_shapes = mk_result_types_and_shapes(shape_type_pairs)
+    return custom_call(
+        fn,
+        result_types=result_types,
+        operands=[hlo_s32(int(full_matrices)), hlo_s32(int(compute_uv)), batch_size_val,
+        hlo_s32(m), hlo_s32(n), hlo_s32(lwork), a],
+        operand_layouts=[scalar_layout] * 6 + [layout],
+        result_layouts=[
+            layout,
+            (num_bd,) + tuple(range(num_bd - 1, -1, -1)),
+            layout,
+            layout,
+            tuple(range(num_bd - 1, -1, -1)),
+        ] + workspace_layouts,
+        operand_output_aliases={6: 0},
+        result_shapes=result_shapes
+    ).results[1:5]
+  fn = fn_base + "_ffi"
+  mode_attr = _svd_computation_attr(
+      compute_uv=compute_uv, full_matrices=full_matrices
+  )
+  mode_value = svd.ComputationMode(mode_attr.value)
   if dtype == np.float32:
-    fn = "lapack_sgesdd"
     singular_vals_type = ir.F32Type.get()
-    lwork = _lapack.sgesdd_work_size(m, n, compute_uv, full_matrices)
+    lwork = _lapack.sgesdd_work_size_ffi(m, n, mode_value)
     workspace = [
-        ([_lapack.gesdd_iwork_size(m, n)], i32_type),
+        ([_lapack.gesdd_iwork_size_ffi(m, n)], i32_type),
         ([lwork], a_type.element_type),
     ]
-    workspace_layouts = [[0], [0]]
   elif dtype == np.float64:
-    fn = "lapack_dgesdd"
     singular_vals_type = ir.F64Type.get()
-    lwork = _lapack.dgesdd_work_size(m, n, compute_uv, full_matrices)
+    lwork = _lapack.dgesdd_work_size_ffi(m, n, mode_value)
     workspace = [
-        ([_lapack.gesdd_iwork_size(m, n)], i32_type),
+        ([_lapack.gesdd_iwork_size_ffi(m, n)], i32_type),
         ([lwork], a_type.element_type),
     ]
-    workspace_layouts = [[0], [0]]
   elif dtype == np.complex64:
-    fn = "lapack_cgesdd"
     singular_vals_type = ir.F32Type.get()
-    lwork = _lapack.cgesdd_work_size(m, n, compute_uv, full_matrices)
+    lwork = _lapack.cgesdd_work_size_ffi(m, n, mode_value)
     workspace = [
-        ([_lapack.gesdd_iwork_size(m, n)], i32_type),
-        ([_lapack.cgesdd_rwork_size(m, n, int(compute_uv))], ir.F32Type.get()),
+        ([_lapack.gesdd_rwork_size_ffi(m, n, mode_value)], ir.F32Type.get()),
+        ([_lapack.gesdd_iwork_size_ffi(m, n)], i32_type),
         ([lwork], a_type.element_type),
     ]
-    workspace_layouts = [[0], [0], [0]]
   elif dtype == np.complex128:
-    fn = "lapack_zgesdd"
     singular_vals_type = ir.F64Type.get()
-    lwork = _lapack.zgesdd_work_size(m, n, compute_uv, full_matrices)
+    lwork = _lapack.zgesdd_work_size_ffi(m, n, mode_value)
     workspace = [
-        ([_lapack.gesdd_iwork_size(m, n)], i32_type),
-        ([_lapack.cgesdd_rwork_size(m, n, int(compute_uv))], ir.F64Type.get()),
+        ([_lapack.gesdd_rwork_size_ffi(m, n, mode_value)], ir.F64Type.get()),
+        ([_lapack.gesdd_iwork_size_ffi(m, n)], i32_type),
         ([lwork], a_type.element_type),
     ]
-    workspace_layouts = [[0], [0], [0]]
   else:
     raise NotImplementedError(f"Unsupported dtype {dtype}")
 
-  scalar_layout = []
   layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
-
+  a_elem_type = a_type.element_type
   shape_type_pairs: Sequence[ShapeTypePair] = [
-    (a_shape_vals, a_type.element_type),
-    (batch_dims_vals + (min(m, n),), singular_vals_type),
-    (batch_dims_vals + (m, m if full_matrices else min(m, n)), a_type.element_type),
-    (batch_dims_vals + (n if full_matrices else min(m, n), n), a_type.element_type),
-    (batch_dims_vals, i32_type),
-  ] + workspace
+      (a_shape_vals, a_elem_type),
+      (batch_dims_vals + (min(m, n),), singular_vals_type),
+      (batch_dims_vals + (m, m if full_matrices else min(m, n)), a_elem_type),
+      (batch_dims_vals + (n if full_matrices else min(m, n), n), a_elem_type),
+      (batch_dims_vals, i32_type),
+      *workspace,
+  ]
+  workspace_layout = [[0]] * len(workspace)
   result_types, result_shapes = mk_result_types_and_shapes(shape_type_pairs)
-  out = custom_call(
+  return custom_call(
       fn,
       result_types=result_types,
-      operands=[hlo_s32(int(full_matrices)), hlo_s32(int(compute_uv)), batch_size_val,
-       hlo_s32(m), hlo_s32(n), hlo_s32(lwork), a],
-      operand_layouts=[scalar_layout] * 6 + [layout],
+      operands=[a],
+      operand_layouts=[layout],
       result_layouts=[
           layout,
           (num_bd,) + tuple(range(num_bd - 1, -1, -1)),
           layout,
           layout,
           tuple(range(num_bd - 1, -1, -1)),
-      ] + workspace_layouts,
-      operand_output_aliases={6: 0},
-      result_shapes=result_shapes
-  ).results
-  return out[1:5]
+          *workspace_layout,
+      ],
+      operand_output_aliases={0: 0},
+      result_shapes=result_shapes,
+      backend_config={
+          "mode": mode_attr,
+      },
+      api_version=4,
+  ).results[1:5]
 
 
 # # syevd: Symmetric eigendecomposition

@@ -113,6 +113,7 @@ class CompatTest(bctu.CompatTestBase):
     cpu_ffi_testdatas = [
         cpu_cholesky_lapack_potrf.data_2024_05_31,
         cpu_lu_lapack_getrf.data_2024_05_31,
+        cpu_svd_lapack_gesdd.data_2024_08_05,
     ]
     # Add here all the testdatas that should cover the targets guaranteed
     # stable
@@ -566,6 +567,16 @@ class CompatTest(bctu.CompatTestBase):
     self.run_one_test(func, data, rtol=rtol, atol=atol,
                       check_results=partial(self.check_svd_results,
                                             input))
+    # TODO(b/344892332): Remove the check after the compatibility period.
+    has_xla_ffi_support = jaxlib_version >= (0, 4, 32)
+    if has_xla_ffi_support:
+      with config.export_ignore_forward_compatibility(True):
+        # FFI Kernel test
+        data = self.load_testdata(
+            cpu_svd_lapack_gesdd.data_2024_08_05[dtype_name]
+        )
+        self.run_one_test(func, data, rtol=rtol, atol=atol,
+                          check_results=partial(self.check_svd_results, input))
 
   @jtu.parameterized_filterable(
     kwargs=[
