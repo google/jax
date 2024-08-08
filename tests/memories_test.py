@@ -54,7 +54,6 @@ def _create_inputs(shape, pspec, mem_kind=None):
   return mesh, s, np_inp, inp
 
 
-@jtu.with_config(jax_enable_memories=True)
 class ShardingMemoriesTest(jtu.JaxTestCase):
 
   def setUp(self):
@@ -186,7 +185,6 @@ class ShardingMemoriesTest(jtu.JaxTestCase):
     self.assertEqual(dev.default_memory().kind, self._default_memory_kind)
 
 
-@jtu.with_config(jax_enable_memories=True)
 class DevicePutTest(jtu.JaxTestCase):
 
   def setUp(self):
@@ -668,7 +666,6 @@ class DevicePutTest(jtu.JaxTestCase):
     self._check_device_put_addressable_shards(out, np_inp * 2, s_dev, 'device')
 
 
-@jtu.with_config(jax_enable_memories=True)
 class ComputeOffload(jtu.BufferDonationTestCase):
 
   def setUp(self):
@@ -1375,7 +1372,6 @@ class ComputeOffload(jtu.BufferDonationTestCase):
     self.assertEqual(out.sharding.memory_kind, 'device')
 
 
-@jtu.with_config(jax_enable_memories=True)
 class ActivationOffloadingTest(jtu.JaxTestCase):
 
   def setUp(self):

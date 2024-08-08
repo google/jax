@@ -189,7 +189,7 @@ async def transfer_shard_to_host(shard: array.Shard) -> np.ndarray:
   data = shard.data
   has_pinned_host = any(
       m.kind == "pinned_host" for m in shard.device.addressable_memories())
-  if config.enable_memories.value and has_pinned_host:
+  if has_pinned_host:
     # If available, transfer to pinned host memory
     sharding = jax.sharding.SingleDeviceSharding(shard.device,
         memory_kind="pinned_host")

@@ -613,7 +613,6 @@ class CheckpointTest(jtu.JaxTestCase):
     self.assertArraysEqual(out + out, out * 2)
 
 
-@jtu.with_config(jax_enable_memories=True)
 class TransferShardTest(jtu.JaxTestCase):
 
   @jtu.skip_on_devices('cpu')

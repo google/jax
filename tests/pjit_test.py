@@ -3773,6 +3773,20 @@ class ArrayPjitTest(jtu.JaxTestCase):
     self.assertArraysEqual(out2, np_inp * 2)
     self.assertEqual(out2.sharding, SingleDeviceSharding(jax.devices()[0]))
 
+  def test_device_put_in_jit_default_mem_kind_no_op(self):
+    mesh = jtu.create_global_mesh((2,), 'x')
+    np_inp = np.arange(8)
+    arr = jax.device_put(np_inp, NamedSharding(mesh, P('x')))
+
+    @jax.jit
+    def f(x):
+      y = x * 2
+      return jax.device_put(y, NamedSharding(mesh, P()))
+
+    lowered_text = f.lower(arr).as_text()
+    self.assertNotIn('@Sharding', lowered_text)
+    self.assertNotIn('@annotate_device_placement', lowered_text)
+
   def test_jit_both_shardings_none(self):
     mesh = jtu.create_global_mesh((4, 2), ('x', 'y'))
     np_inp = np.arange(16).reshape(8, 2)

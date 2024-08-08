@@ -548,6 +548,8 @@ def _device_put_batcher(batched_args, batch_dims, **params):
 batching.primitive_batchers[device_put_p] = _device_put_batcher
 
 def _tpu_gpu_device_put_lowering(ctx, *xs, devices, srcs):
+  if ctx.module_context.all_default_mem_kind:
+    return xs
   def lower(x, device, src, aval, out_aval):
     if (isinstance(device, (Sharding, TransferToMemoryKind)) and
         device.memory_kind is not None):
@@ -558,6 +560,7 @@ def _tpu_gpu_device_put_lowering(ctx, *xs, devices, srcs):
       return x
     return x
   return list(map(lower, xs, devices, srcs, ctx.avals_in, ctx.avals_out))
+
 mlir.register_lowering(
   device_put_p, _tpu_gpu_device_put_lowering, platform='tpu')
 mlir.register_lowering(

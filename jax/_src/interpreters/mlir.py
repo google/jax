@@ -604,6 +604,7 @@ class ModuleContext:
   host_callbacks: list[Any]
   # Keep state for the lowering of shape polymorphism
   shape_poly_state: ShapePolyLoweringState
+  all_default_mem_kind: bool
 
   # Cached primitive lowerings.
   cached_primitive_lowerings: dict[Any, func_dialect.FuncOp]
@@ -633,7 +634,8 @@ class ModuleContext:
       symbol_table: ir.SymbolTable | None = None,
       cached_primitive_lowerings: None | (dict[Any, func_dialect.FuncOp]) = None,
       traceback_caches: None | TracebackCaches = None,
-      shape_poly_state = None):
+      shape_poly_state = None,
+      all_default_mem_kind: bool = True):
 
     self.context = context or make_ir_context()
     self.module = module or ir.Module.create(loc=ir.Location.unknown(self.context))
@@ -651,6 +653,7 @@ class ModuleContext:
     self.host_callbacks = host_callbacks
     self.shape_poly_state = (
       shape_poly_state or ShapePolyLoweringState((), tuple(platforms)))
+    self.all_default_mem_kind = all_default_mem_kind
     self.lowering_parameters = lowering_parameters
 
   @property
@@ -1034,7 +1037,8 @@ def lower_jaxpr_to_module(
                       channel_iterator=channel_iter,
                       host_callbacks=host_callbacks,
                       lowering_parameters=lowering_parameters,
-                      shape_poly_state=ShapePolyLoweringState(dim_vars, platforms))
+                      shape_poly_state=ShapePolyLoweringState(dim_vars, platforms),
+                      all_default_mem_kind=all_default_mem_kind)
   with ctx.context, ir.Location.unknown(ctx.context):
     # Remove module name characters that XLA would alter. This ensures that
     # XLA computation preserves the module name.

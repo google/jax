@@ -2172,8 +2172,6 @@ def lower_sharding_computation(
       devices_from_context)
 
   platforms = lowering_platforms or (backend.platform,)
-  # TODO(yashkatariya): Enable this when offload APIs are stable.
-  # transfer_mem_kind_in_jaxpr = list(jaxpr_transfer_mem_kinds(jaxpr))
 
   committed = bool(
       devices_from_context or
@@ -2184,18 +2182,18 @@ def lower_sharding_computation(
 
   da_object = _create_da_object(tuple(device_assignment))
 
+  transfer_mem_kind_in_jaxpr = list(jaxpr_transfer_mem_kinds(jaxpr))
   all_default_mem_kind = are_all_shardings_default_mem_kind(
       da_object,
       it.chain(in_shardings, out_shardings,
-               [js for js, _ in unique_intermediate_shardings]))
+               [js for js, _ in unique_intermediate_shardings],
+               transfer_mem_kind_in_jaxpr))  # pytype: disable=wrong-arg-types
 
-  # TODO(yashkatariya): Remove this when XLA can propagate memory kinds or when
-  # JAX puts memory kinds in the types of jaxpr.
-  if not all_default_mem_kind:
+  if all_default_mem_kind:
+    propagated_out_mem_kinds = (None,) * len(global_out_avals)
+  else:
     propagated_out_mem_kinds = get_out_memory_kinds_via_propagation(
         closed_jaxpr, in_shardings)
-  else:
-    propagated_out_mem_kinds = (None,) * len(global_out_avals)
 
   # 2. Build up the HLO
   semantic_in_shardings = SemanticallyEqualShardings(
@@ -2253,7 +2251,6 @@ def lower_sharding_computation(
       out_layouts=out_layouts,
       pmap_nreps=nreps,
       shape_poly_state=shape_poly_state,
-      all_default_mem_kind=all_default_mem_kind,
       all_args_info=all_args_info,
       pgle_profiler=pgle_profiler,
       intermediate_shardings=[s for s, _ in unique_intermediate_shardings],
@@ -2317,22 +2314,14 @@ def get_out_shardings_from_executable(
     xla_executable,
     device_assignment: Sequence[xc.Device],
     num_out_avals: int,
-    num_ordered_effects: int,
-    all_default_mem_kind: bool,
-) -> Sequence[sharding_impls.GSPMDSharding] | None:
+    num_ordered_effects: int) -> Sequence[sharding_impls.GSPMDSharding] | None:
   from jax._src import pjit
 
-  if config.enable_memories.value:
-    if all_default_mem_kind:
-      omk = [None] * num_out_avals
-    else:
-      try:
-        omk = xla_executable.get_output_memory_kinds()[0]
-        if num_ordered_effects > 0:
-          omk = omk[num_ordered_effects:]
-      except:
-        omk = [None] * num_out_avals
-  else:
+  try:
+    omk = xla_executable.get_output_memory_kinds()[0]
+    if num_ordered_effects > 0:
+      omk = omk[num_ordered_effects:]
+  except:
     omk = [None] * num_out_avals
 
   assert len(omk) == num_out_avals, (len(omk), num_out_avals)
@@ -2675,11 +2664,10 @@ def _maybe_get_and_check_in_shardings(
 
 def _maybe_get_and_check_out_shardings(
     xla_executable, out_shardings, device_assignment, global_out_avals,
-    num_ordered_effects, all_default_mem_kind
-  ):
+    num_ordered_effects):
   out_shardings_xla = get_out_shardings_from_executable(
       xla_executable, device_assignment, len(global_out_avals),
-      num_ordered_effects, all_default_mem_kind)
+      num_ordered_effects)
   if out_shardings_xla is None:
     return out_shardings
 
@@ -2779,7 +2767,6 @@ class UnloadedMeshExecutable:
                pmap_nreps: int = 1,
                mut: MutationData | None = None,
                shape_poly_state: mlir.ShapePolyLoweringState | None = None,
-               all_default_mem_kind: bool = True,
                all_args_info: AllArgsInfo | None = None,
                compiler_options=None,
                pgle_profiler: profiler.PGLEProfiler | None = None,
@@ -2832,7 +2819,7 @@ class UnloadedMeshExecutable:
             len(ordered_effects))
         out_shardings = _maybe_get_and_check_out_shardings(
             xla_executable, out_shardings, tuple(da), global_out_avals,
-            len(ordered_effects), all_default_mem_kind)
+            len(ordered_effects))
       else:
         in_shardings, out_shardings, committed, da = _get_metadata_jit_pmap(
             xla_executable.local_devices(), len(in_shardings), len(out_shardings))
