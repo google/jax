@@ -273,6 +273,7 @@ def compile_or_get_cached(
 ) -> xc.LoadedExecutable:
   sym_name = computation.operation.attributes['sym_name']
   module_name = ir.StringAttr(sym_name).value
+  breakpoint()
 
   if dumped_to := mlir.dump_module_to_file(computation, "compile"):
     logging.info("Dumped the module to %s.", dumped_to)
@@ -287,8 +288,7 @@ def compile_or_get_cached(
 
   try:
     cache_key = compilation_cache.get_cache_key(
-        computation, devices, compile_options, backend, 
-        config.remove_custom_partitioning_ptr_from_cache_key.value)
+        computation, devices, compile_options, backend)
   except xc._xla.XlaRuntimeError as ex:
     logger.error("compile_or_get_cached: unable to generate cache key, "
                  "skipping the cache: %s", ex)

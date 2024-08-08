@@ -14,8 +14,10 @@
 
 import hashlib
 import os
+import re
 import sys
 import unittest
+from typing import cast as type_cast
 
 import numpy as np
 
@@ -23,12 +25,15 @@ from absl.testing import absltest
 from absl.testing import parameterized
 import jax
 from jax import lax
+from jax.experimental.custom_partitioning import custom_partitioning
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from jax._src import cache_key
 from jax._src import compiler
 from jax._src import config
 from jax._src import test_util as jtu
 from jax._src import xla_bridge
 from jax._src.lib import xla_client
+from jax._src.lib.mlir import ir
 
 
 config.parse_flags_with_absl()
@@ -154,6 +159,49 @@ class CacheKeyTest(jtu.JaxTestCase):
         cache_key.get(computation1, devices, compile_options, backend),
         cache_key.get(computation2, devices, compile_options, backend),
     )
+  
+  def test_custom_partitioning_ptr_removal(self):
+    def _partition(mesh, arg_shapes, result_shape):
+      arg_shardings = jax.tree.map(lambda x: x.sharding, arg_shapes)
+      result_shardings = NamedSharding(mesh, arg_shapes[0].sharding.spec)
+      return mesh, jax.numpy.add, result_shardings, arg_shardings
+
+    def _infer_sharding_from_operands(mesh, arg_shapes, result_shape):
+      return NamedSharding(mesh, arg_shapes[0].sharding.spec)
+
+    @custom_partitioning
+    def _cp_add(x, y):
+        return jax.numpy.add(x, y)
+
+    _cp_add.def_partition(
+      infer_sharding_from_operands=_infer_sharding_from_operands, 
+      partition=_partition)
+    
+    devices = np.asarray(jax.devices())
+    with Mesh(devices, ('x',)) as m:
+      computation = jax.jit(
+        _cp_add, 
+        in_shardings=(NamedSharding(m, P('x')), 
+                      NamedSharding(m, P('x'))), 
+                      out_shardings=NamedSharding(m, P('x'))
+      ).lower(
+        jax.ShapeDtypeStruct([1024], dtype=jax.numpy.float32),
+        jax.ShapeDtypeStruct([1024], dtype=jax.numpy.float32),
+      ).compiler_ir()
+      pattern = (
+          r'stablehlo\.custom_call @CustomSPMDPartitioning\('
+          r'(.*?)\) \{'
+          r'(.*?backend_config\s*=\s*"([^"]*)".*?)'
+          r'\}'
+      )
+      with config.remove_custom_partitioning_ptr_from_cache_key(True):
+        with computation.context:
+          updated_module = cache_key._remove_custom_partitioning_ptr(
+            type_cast(ir.Module, computation.operation.clone()))
+          bcs = [match[2] for 
+                 match in re.findall(pattern, str(updated_module), re.DOTALL)]
+          for bc in bcs:
+            self.assertEqual(bc, "REMOVED")
 
   def test_different_device_assignment(self):
     computation = jax.jit(lambda x, y: x + y).lower(1, 1).compiler_ir()
