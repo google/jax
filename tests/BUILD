@@ -234,6 +234,11 @@ jax_test(
         "tpu": ["notsan"],  # Times out under tsan.
         "gpu": ["noasan"],  # Memory leaks in NCCL, see https://github.com/NVIDIA/nccl/pull/1143
     },
+    enable_configs = [
+        "gpu_shardy_2gpu",
+        "tpu_shardy_df_2x2",
+        "tpu_shardy_pf_2x2",
+    ],
     shard_count = {
         "cpu": 5,
         "gpu": 5,

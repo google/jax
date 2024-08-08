@@ -1040,14 +1040,21 @@ def lower_jaxpr_to_module(
     # XLA computation preserves the module name.
     attrs = ctx.module.operation.attributes
     if config.use_shardy_partitioner.value:
-      assert (isinstance(axis_context, sharding_impls.ShardingContext) and
-              axis_context.mesh_shape is not None)
-      ctx.module.body.append(
-          dialects.sdy.MeshOp(
-              "mesh",
-              dialects.sdy.MeshAttr.get(
-                  [dialects.sdy.MeshAxisAttr.get(name, size)
-                  for name, size in axis_context.mesh_shape])))
+      assert (isinstance(axis_context, sharding_impls.ShardingContext))
+      if axis_context.mesh_shape:
+        ctx.module.body.append(
+            dialects.sdy.MeshOp(
+                "mesh",
+                dialects.sdy.MeshAttr.get(
+                    [dialects.sdy.MeshAxisAttr.get(name, size)
+                    for name, size in axis_context.mesh_shape])))
+      else:
+        ctx.module.body.append(
+            dialects.sdy.MeshOp("mesh", dialects.sdy.MeshAttr.get_device_id(0)))
+      # A single device mesh is needed when handling maximal shardings or
+      # when using SingleDeviceSharding.
+      ctx.module.body.append(dialects.sdy.MeshOp(
+          "maximal_mesh", dialects.sdy.MeshAttr.get_device_id(0)))
     module_name = _module_name_regex.sub("_", module_name)
     attrs["sym_name"] = ir.StringAttr.get(module_name)
     attrs["mhlo.num_replicas"] = i32_attr(num_replicas)
@@ -1554,9 +1561,17 @@ def replicate_trailing_dims(ctx, val: ir.Value, aval) -> ir.Value:
   # For example: if the key.shape is (8, 2) and key_data(key).shape is (8, 2, 2),
   # then the sharding will be P(P.UNCONSTRAINED, P.UNCONSTRAINED, None).
   # The below custom call achieves the sharding like above example.
+  if config.use_shardy_partitioner.value:
+    s = sharding.SdyArraySharding(
+        mesh_name='mesh',
+        dimension_shardings=[sharding.SdyDimSharding(axes=[], is_closed=False)
+                             for _ in range(val.type.rank)])
+    for i in range(aval.ndim, val.type.rank):
+      s.dimension_shardings[i].is_closed = True
+  else:
+    s = xc.HloSharding.replicate().to_proto()
   return wrap_with_sharding_op(
-      ctx, val, aval, xc.HloSharding.replicate().to_proto(),
-      unspecified_dims=set(range(aval.ndim)))
+      ctx, val, aval, s, unspecified_dims=set(range(aval.ndim)))
 
 
 def _emit_lowering_rule_as_fun(lowering_rule,
