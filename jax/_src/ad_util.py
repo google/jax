@@ -20,6 +20,7 @@ from typing import Any, TypeVar
 from jax._src import core
 from jax._src import traceback_util
 from jax._src.core import Primitive, valid_jaxtype, raise_to_shaped, get_aval
+from jax._src.state.types import AbstractRef
 from jax._src.tree_util import register_pytree_node
 from jax._src.typing import Array, ArrayLike
 from jax._src.util import safe_map
@@ -76,11 +77,22 @@ def _stop_gradient_impl(x: T) -> T:
   if not valid_jaxtype(x):
     raise TypeError("stop_gradient only works on valid JAX arrays, but "
                     f"input argument is: {x}")
+  a = get_aval(x)
+  if isinstance(a, AbstractRef):
+    raise TypeError(f"can't apply stop_gradient to mutable array, but got {a}. "
+                    "Maybe you meant stop_gradient(ref[...]) instead of "
+                    "stop_gradient(ref)?")
   return x
 
 stop_gradient_p : Primitive = Primitive('stop_gradient')
 stop_gradient_p.def_impl(_stop_gradient_impl)
-stop_gradient_p.def_abstract_eval(lambda x: x)
+@stop_gradient_p.def_abstract_eval
+def stop_gradient_abstract_eval(a):
+  if isinstance(a, AbstractRef):
+    raise TypeError(f"can't apply stop_gradient to mutable array, but got {a}. "
+                    "Maybe you meant stop_gradient(ref[...]) instead of "
+                    "stop_gradient(ref)?")
+  return a
 
 
 class SymbolicZero:
