@@ -1954,6 +1954,7 @@ class DArray:
     assert data.shape == pad_shape
     self._aval = aval
     self._data = data
+
   shape = property(lambda self: self._aval.shape)
   dtype = property(lambda self: self._aval.dtype)
   aval = property(lambda self: self._aval)
@@ -1964,20 +1965,37 @@ class DArray:
 
     dtypestr = _short_dtype_name(self._aval.dtype)
     shapestr = ','.join(map(str, self.shape))
-    slices = tuple(slice(int(d._data)) if type(d) is DArray and
-                   type(d.dtype) is bint else slice(None) for d in self.shape)
-    data = self._data[slices]
+    data = self.data
     return f'{dtypestr}[{shapestr}] with value: {data}'
+
   def __hash__(self) -> int:
     if not self.shape:
       return hash((self._aval, int(self._data)))
     raise TypeError("unhashable type: DArray")
+
   def __eq__(self, other):
     if isinstance(other, DArray) and self._aval == other._aval:
       return self._data == other._data
     return False
+
   def __len__(self):
     return self.shape[0]
+
+  @property
+  def data(self):
+    if not self.shape and type(self.dtype) is bint:
+      # special-case scalar bints
+      return self._data
+
+    slices = tuple(
+        slice(int(d._data))
+        if type(d) is DArray and type(d.dtype) is bint
+        else slice(None)
+        for d in self.shape
+    )
+    data = self._data[slices]
+    return data
+
 
 pytype_aval_mappings[DArray] = \
     lambda x: DConcreteArray(x._aval.shape, x._aval.dtype, x._aval.weak_type,

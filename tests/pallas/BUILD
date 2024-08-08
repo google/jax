@@ -63,6 +63,29 @@ jax_test(
 )
 
 jax_test(
+    name = "pallas_jumble_test",
+    srcs = [
+        "pallas_jumble_test.py",
+    ],
+    disable_configs = [
+        "gpu",
+        "gpu_x32",
+        "gpu_a100",
+        "gpu_p100",
+        "gpu_p100_x32",
+        "gpu_h100",
+    ],
+    shard_count = {
+        "tpu": 1,
+    },
+    deps = [
+        "//jax:pallas",
+        "//jax:pallas_tpu",
+        "//jax:pallas_tpu_ops",
+    ] + py_deps("absl/testing") + py_deps("numpy"),
+)
+
+jax_test(
     name = "ops_test",
     srcs = [
         "ops_test.py",

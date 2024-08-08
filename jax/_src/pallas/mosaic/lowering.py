@@ -297,6 +297,7 @@ class MosaicGridMapping:
     self.jaxpr = jaxpr
     self.block_mappings = grid_mapping.block_mappings
     self.mapped_dims = grid_mapping.vmapped_dims
+    # TODO(mvoz): Generalize to not need this
     user_grid = tuple(
         g for i, g in enumerate(self.grid) if i not in self.mapped_dims
     )
@@ -344,9 +345,17 @@ class MosaicGridMapping:
         for _ in range(len(self.grid))
     ])
     self._prepare_mesh_info(mesh)
-    def _get_grid_indices(indices):
-      return indices
-    self.get_grid_indices = _get_grid_indices
+
+    if grid_mapping.get_grid_indices is None:
+      def _get_grid_indices(indices, maybe_include_mapped_dims: bool):
+        if maybe_include_mapped_dims:
+          return indices
+        return tuple(idx for i, idx in enumerate(indices)
+                            if i not in self.mapped_dims)
+
+      self.get_grid_indices = _get_grid_indices
+    else:
+      self.get_grid_indices = grid_mapping.get_grid_indices
 
   def _prepare_mesh_info(self, mesh: mesh_lib.Mesh | None):
     if not self.has_communication:
@@ -593,7 +602,7 @@ def lower_jaxpr_to_transform_func(
   ]
   def body_func(*args):
     grid_indices, scalar_prefetch = split_list(args, [num_grid])
-    jaxpr_indices = mosaic_grid_mapping.get_grid_indices(grid_indices)
+    jaxpr_indices = mosaic_grid_mapping.get_grid_indices(grid_indices, maybe_include_mapped_dims=True)
     arg_block_shapes = [
         *[()] * len(jaxpr_indices),
         *mosaic_grid_mapping.scalar_prefetch_block_shapes,
@@ -665,9 +674,7 @@ def lower_jaxpr_to_func(
   def body_func(*args):
     grid_indices, scalar_prefetch, operands_and_scratch = split_list(
         args, [num_grid, num_scalar_prefetch])
-    grid_indices = mosaic_grid_mapping.get_grid_indices(grid_indices)
-    jaxpr_indices = tuple(idx for i, idx in enumerate(grid_indices)
-                          if i not in mosaic_grid_mapping.mapped_dims)
+    jaxpr_indices = mosaic_grid_mapping.get_grid_indices(grid_indices, maybe_include_mapped_dims=False)
     mesh_info = mosaic_grid_mapping.mesh_info
     if mesh_info is not None:
       mesh_context = MeshContext(
@@ -2370,6 +2377,7 @@ lowering_rules[debugging.debug_callback_p] = _debug_callback_lowering_rule
 
 
 def _program_id_lowering_rule(ctx: LoweringRuleContext, *, axis: int):
+
   if ctx.lowering_context.user_grid_indices is None:
     raise ValueError(
         f"program id: {axis} was passed, but user did not provide a grid."

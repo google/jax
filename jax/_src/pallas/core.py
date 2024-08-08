@@ -112,7 +112,10 @@ class AbstractMemoryRef(state.AbstractRef):
 
   def __init__(self, inner_aval: jax_core.AbstractValue,
                memory_space: Any):
-    assert isinstance(inner_aval, jax_core.ShapedArray)
+
+    assert isinstance(
+        inner_aval, jax_core.ShapedArray
+    ), f"Illegal ref, got {type(inner_aval)}"
     self.inner_aval = inner_aval
     self.memory_space = memory_space
 
@@ -167,9 +170,7 @@ class PallasGridContext:
   mapped_dims: tuple[int, ...]
 
   def size(self, axis: int) -> int | DynamicGridDim:
-    valid_grid = tuple(
-        s for i, s in enumerate(self.grid) if i not in self.mapped_dims
-    )
+    valid_grid = tuple(self.grid)
     try:
       size = valid_grid[axis]
     except IndexError as e:
@@ -323,7 +324,10 @@ class BlockMapping:
     )
 
     assert not self.index_map_jaxpr.consts
-    assert len(self.block_shape) == len(self.index_map_jaxpr.out_avals)
+    assert len(self.block_shape) == len(self.index_map_jaxpr.out_avals), (
+        self.block_shape,
+        self.index_map_jaxpr.out_avals,
+    )
     assert all(ov.shape == () and
                (ov.dtype == jnp.int32 or ov.dtype == jnp.int64)
                for ov in self.index_map_jaxpr.out_avals), (
@@ -407,6 +411,7 @@ class GridMapping:
   num_inputs: int
   num_outputs: int
   num_scratch_operands: int
+  get_grid_indices: Callable | None = None
 
   def check_invariants(self) -> None:
     if not config.enable_checks.value: return
@@ -427,8 +432,8 @@ class GridMapping:
     assert len(index_map_args) >= len(self.grid)
     for i in range(len(self.grid)):
       index_map_arg = index_map_args[i]
-      assert index_map_arg.shape == ()
-      assert index_map_arg.dtype == jnp.int32
+      assert index_map_arg.shape == (), f"index_map_arg: {index_map_arg}"
+      assert index_map_arg.dtype == jnp.int32, f"index_map_arg: {index_map_arg}"
 
     assert len(self.vmapped_dims) <= len(self.grid)
     for i in self.vmapped_dims:
@@ -439,8 +444,11 @@ class GridMapping:
 
     for bm in self.block_mappings:
       bm.check_invariants()
-      assert tuple(self.index_map_avals) == tuple(bm.index_map_jaxpr.in_avals), (
+      assert tuple(self.index_map_avals) == tuple(
+          bm.index_map_jaxpr.in_avals
+      ), (
           self.index_map_avals,
+          "|",
           bm.index_map_jaxpr.in_avals,
       )
 
@@ -532,6 +540,17 @@ def _is_valid_grid_dim(dim: int | jax.Array) -> bool:
     return True
   return jax_core.is_dim(dim)
 
+
+def _max_shape_from_aval(array_aval: jax_core.ShapedArray):
+  array_aval_shape = list(array_aval.shape)
+  for i, s in enumerate(array_aval.shape):
+    aval = jax_core.get_aval(s)
+    if isinstance(aval, jax_core.DShapedArray):
+      array_aval_shape[i] = aval.dtype.bound
+
+  return tuple(array_aval_shape)
+
+
 def _convert_block_spec_to_block_mapping(
     block_spec: BlockSpec,
     origin: OriginStr,
@@ -560,8 +579,15 @@ def _convert_block_spec_to_block_mapping(
           f"array shape {array_aval.shape}.")
 
   unmapped_block_shape = tuple(s for s in block_shape if s is not None)
-  block_aval = AbstractMemoryRef(array_aval.update(shape=unmapped_block_shape),
-                                 block_spec.memory_space)
+  block_array_aval = array_aval.update(shape=unmapped_block_shape)
+  if isinstance(array_aval, jax_core.DShapedArray):
+    # Get the "max" shape for the ragged array.
+    block_array_aval = jax_core.ShapedArray(
+        block_array_aval.shape,
+        block_array_aval.dtype,
+        block_array_aval.weak_type,
+    )
+  block_aval = AbstractMemoryRef(block_array_aval, block_spec.memory_space)
 
   if not jax_core.is_constant_shape(block_aval.shape):
     raise ValueError(
@@ -594,12 +620,12 @@ def _convert_block_spec_to_block_mapping(
           f"{origin} must return integer scalars. Output[{i}] has type "
           f"{ov}.")
 
-
   if consts:
     raise ValueError(
         f"Index map function {index_map_src_info} for "
         f"{origin} must not capture constants: {consts}")
 
+  array_aval_shape = _max_shape_from_aval(array_aval)
 
   mapping = BlockMapping(
       block_shape=mapped_block_shape,
@@ -607,7 +633,9 @@ def _convert_block_spec_to_block_mapping(
       index_map_jaxpr=jax_core.ClosedJaxpr(jaxpr, consts),
       index_map_src_info=index_map_src_info,
       indexing_mode=block_spec.indexing_mode,
-      array_shape_dtype=jax.ShapeDtypeStruct(array_aval.shape, array_aval.dtype),
+      array_shape_dtype=jax.ShapeDtypeStruct(
+          array_aval_shape, array_aval.dtype
+      ),
       origin=origin,
   )
   mapping.check_invariants()
