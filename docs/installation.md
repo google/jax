@@ -28,13 +28,13 @@ different builds for different operating systems and accelerators.
 
 The table below shows all supported platforms and installation options. Check if your setup is supported; and if it says _"yes"_ or _"experimental"_, then click on the corresponding link to learn how to install JAX in greater detail.
 
-|                  | Linux, x86_64                        | Linux, aarch64      | macOS, Intel x86_64, AMD GPU   | macOS, Apple Silicon, ARM-based       | Windows, x86_64         | Windows WSL2, x86_64           |
-|------------------|---------------------------------------|--------------------------------|----------------------------------------|----------------------------------------|-------------------------|-----------------------------------------|
-| CPU              | {ref}`yes <install-cpu>`              | {ref}`yes <install-cpu>`        | {ref}`yes <install-cpu>`| {ref}`yes <install-cpu>`| {ref}`yes <install-cpu>` | {ref}`yes <install-cpu>`|
-| NVIDIA GPU       | {ref}`yes <install-nvidia-gpu>`       | {ref}`yes <install-nvidia-gpu>` | no | n/a | no | {ref}`experimental <install-nvidia-gpu>` |
-| Google Cloud TPU | {ref}`yes <install-google-tpu>`       | n/a | n/a | n/a | n/a | n/a |
-| AMD GPU          | {ref}`experimental <install-amd-gpu>` | no | no | n/a | no | no |
-| Apple GPU    | n/a                                   | no | {ref}`experimental <install-apple-gpu>` | {ref}`experimental <install-apple-gpu>` | n/a |  n/a |
+|                  | Linux, x86_64                         | Linux, aarch64                  | Mac, x86_64                           | Mac, aarch64                          | Windows, x86_64          | Windows WSL2, x86_64                     |
+|------------------|---------------------------------------|---------------------------------|---------------------------------------|---------------------------------------|--------------------------|------------------------------------------|
+| CPU              | {ref}`yes <install-cpu>`              | {ref}`yes <install-cpu>`        | {ref}`yes <install-cpu>`              | {ref}`yes <install-cpu>`              | {ref}`yes <install-cpu>` | {ref}`yes <install-cpu>`                 |
+| NVIDIA GPU       | {ref}`yes <install-nvidia-gpu>`       | {ref}`yes <install-nvidia-gpu>` | no                                    | n/a                                   | no                       | {ref}`experimental <install-nvidia-gpu>` |
+| Google Cloud TPU | {ref}`yes <install-google-tpu>`       | n/a                             | n/a                                   | n/a                                   | n/a                      | n/a                                      |
+| AMD GPU          | {ref}`experimental <install-amd-gpu>` | no                              | {ref}`experimental <install-mac-gpu>` | n/a                                   | no                       | no                                       |
+| Apple GPU        | n/a                                   | no                              | n/a                                   | {ref}`experimental <install-mac-gpu>` | n/a                      | n/a                                      |
 
 
 (install-cpu)=
@@ -204,12 +204,12 @@ pip install jax[tpu] -f https://storage.googleapis.com/jax-releases/libtpu_relea
 For users of Colab (https://colab.research.google.com/), be sure you are
 using *TPU v2* and not the older, deprecated TPU runtime.
 
-(install-apple-gpu)=
-## Apple Silicon GPU (ARM-based)
+(install-mac-gpu)=
+## Mac GPU
 
-### pip installation: Apple ARM-based Silicon GPUs
+### pip installation
 
-Apple provides an experimental Metal plugin for Apple ARM-based GPU hardware. For details,
+Apple provides an experimental Metal plugin. For details,
 refer to
 [Apple's JAX on Metal documentation](https://developer.apple.com/metal/jax/).
 
@@ -223,7 +223,7 @@ refer to
   matures.
 
 (install-amd-gpu)=
-## AMD GPU
+## AMD GPU (Linux)
 
 JAX has experimental ROCm support. There are two ways to install JAX:
 
