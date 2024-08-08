@@ -1386,21 +1386,33 @@ class VectorLayoutInferer {
     for (const ImplicitDim implicit_dim : candidate_implicit_dims) {
       const std::array<int64_t, 2> res_tiled_ishape =
           VectorLayout::getImplicitTiledDims(implicit_dim, res_shape, 1);
-      // Sublane (un)folding.
-      if (src_tiled_ishape[1] == res_tiled_ishape[1] &&
-          src_tiled_ishape[0] % vreg_slice[0] == 0 &&
-          res_tiled_ishape[0] % vreg_slice[0] == 0) {
-        // TODO(b/343808585): We shouldn't force second minor offset to 0 when
-        //                    unfolding, it's still a no-op, but we need to add
-        //                    support in apply-vector-layout.
-        const LayoutOffsets offsets = {0, layout.offsets()[1]};
-        setLayout(op,
-                  VectorLayout(layout.bitwidth(), offsets, layout.tiling(),
-                               layout.implicit_dim()),
-                  VectorLayout(layout.bitwidth(), offsets, layout.tiling(),
-                               implicit_dim));
-        return success();
-      }
+      // Sublane (un)folding. We attempt to reduce the sublane tiling, which
+      // might make this reshape a no-op. We use do-while to handle the packed
+      // 1D tilings that use 1 in the sublane dimension.
+      int64_t sublane_tiling = vreg_slice[0];
+      do {
+        if (src_tiled_ishape[1] == res_tiled_ishape[1] &&
+            src_tiled_ishape[0] % sublane_tiling == 0 &&
+            res_tiled_ishape[0] % sublane_tiling == 0) {
+          std::array<int64_t, 2> tiling = {sublane_tiling, target_shape_[1]};
+          LayoutOffsets offsets;
+          if (sublane_tiling == vreg_slice[0]) {
+            offsets = layout.offsets();
+          } else {
+            offsets = {layout.offsets()[0].value_or(0) < sublane_tiling
+                           ? layout.offsets()[0].value_or(0)
+                           : 0,
+                       layout.offsets()[1]};
+          }
+          setLayout(op,
+                    VectorLayout(layout.bitwidth(), offsets, tiling,
+                                layout.implicit_dim()),
+                    VectorLayout(layout.bitwidth(), offsets, tiling,
+                                implicit_dim));
+          return success();
+        }
+        sublane_tiling /= 2;
+      } while (sublane_tiling > layout.packing());
       // Lane (un)folding.
       if (src_tiled_ishape[1] != res_tiled_ishape[1] &&
           src_tiled_ishape[1] % layout.tiling()[1] == 0 &&
