@@ -17,7 +17,6 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 import dataclasses
 from functools import update_wrapper, reduce, partial, wraps
-import inspect
 from typing import Any, Generic, TypeVar
 
 from jax._src import config
@@ -30,7 +29,8 @@ from jax._src import linear_util as lu
 from jax._src import traceback_util
 from jax._src.ad_util import (
     stop_gradient_p, SymbolicZero, Zero, zeros_like_aval)
-from jax._src.api_util import argnums_partial, flatten_fun_nokwargs
+from jax._src.api_util import (
+    argnums_partial, flatten_fun_nokwargs, resolve_kwargs)
 from jax._src.core import raise_to_shaped
 from jax._src.errors import UnexpectedTracerError
 from jax._src.interpreters import ad
@@ -55,17 +55,6 @@ zip = safe_zip
 
 
 ### util
-
-def _resolve_kwargs(fun, args, kwargs):
-  if isinstance(fun, partial):
-    # functools.partial should have an opaque signature.
-    fun = lambda *args, **kwargs: None
-  ba = inspect.signature(fun).bind(*args, **kwargs)
-  ba.apply_defaults()
-  if ba.kwargs:
-    raise TypeError("keyword arguments could not be resolved to positions")
-  else:
-    return ba.args
 
 def _initial_style_jaxpr(fun, in_avals):
   jaxpr, _, consts, () = pe.trace_to_jaxpr_dynamic(fun, in_avals)
@@ -240,7 +229,7 @@ class custom_jvp(Generic[ReturnValue]):
       msg = f"No JVP defined for custom_jvp function {primal_name} using defjvp."
       raise AttributeError(msg)
     jvp_name    = getattr(self.jvp, '__name__', str(self.jvp))
-    args = _resolve_kwargs(self.fun, args, kwargs)
+    args = resolve_kwargs(self.fun, args, kwargs)
     if self.nondiff_argnums:
       nondiff_argnums = set(self.nondiff_argnums)
       args = tuple(_stop_gradient(x) if i in nondiff_argnums else x
@@ -599,7 +588,7 @@ class custom_vjp(Generic[ReturnValue]):
       msg = f"No VJP defined for custom_vjp function {primal_name} using defvjp."
       raise AttributeError(msg)
     fwd_name = getattr(self.fwd, '__name__', str(self.fwd))
-    args = _resolve_kwargs(self.fun, args, kwargs)
+    args = resolve_kwargs(self.fun, args, kwargs)
     if self.optimize_remat:
       fwd = optimize_remat_of_custom_vjp_fwd(
           self.fun, self.fwd, nondiff_argnums=self.nondiff_argnums,
@@ -1451,7 +1440,7 @@ def optimize_remat_of_custom_vjp_fwd(
     # above and it would be good to consolidate it.
     primal_name = getattr(fun, "__name__", str(fun))
     fwd_name = getattr(fwd, "__name__", str(fwd))
-    args = _resolve_kwargs(fwd, args, kwargs)
+    args = resolve_kwargs(fwd, args, kwargs)
     if nondiff_argnums:
       for i in nondiff_argnums: _check_for_tracers(args[i])
       nondiff_argnums_ = set(nondiff_argnums)

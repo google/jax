@@ -69,5 +69,21 @@ class ApiUtilTest(jtu.JaxTestCase):
     self.assertEqual(expected,
                      api_util.rebase_donate_argnums(donate, static))
 
+  def test_resolve_kwargs(self):
+    def fun(x, y, z=3):
+      return x, y, z
+    assert api_util.resolve_kwargs(fun, (1,), {"y": 2}) == (1, 2, 3)
+    assert api_util.resolve_kwargs(fun, (1, 2), {"z": 3}) == (1, 2, 3)
+    assert api_util.resolve_kwargs(
+        fun, (), {"x": 1, "y": 2, "z": 3}) == (1, 2, 3)
+
+  def test_resolve_kwargs_with_keyword(self):
+    def fun(x, y, z, *, kw=True):
+      del kw
+      return x, y, z
+    assert api_util.resolve_kwargs(fun, (1, 2), {"z": 3}) == (1, 2, 3)
+    with self.assertRaisesRegex(TypeError, "keyword arguments"):
+      api_util.resolve_kwargs(fun, (1, 2), {"z": 3, "kw": False})
+
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())

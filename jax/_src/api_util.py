@@ -556,6 +556,26 @@ def _assert_no_intersection(static_argnames, donate_argnames):
         f"{out} appear in both static_argnames and donate_argnames")
 
 
+def resolve_kwargs(fun: Callable, args, kwargs) -> tuple[Any, ...]:
+  """Resolve input arguments to positional following a function's signature.
+  
+  This will raise a TypeError if any keyword-only arguments were passed by the
+  caller.
+  """
+  if isinstance(fun, partial):
+    # functools.partial should have an opaque signature.
+    fun = lambda *args, **kwargs: None
+  ba = inspect.signature(fun).bind(*args, **kwargs)
+  ba.apply_defaults()
+  if ba.kwargs:
+    passed_kwargs = [k for k in ba.kwargs if k in kwargs]
+    if passed_kwargs:
+      raise TypeError(
+          f"keyword arguments ({passed_kwargs}) could not be resolved to "
+          "positions")
+  return ba.args
+
+
 def _dtype(x):
   try:
     return dtypes.result_type(x)
