@@ -44,6 +44,7 @@ from jax._src.cloud_tpu_init import get_tpu_library_path
 from jax._src.lib import cuda_versions
 from jax._src.lib import xla_client
 from jax._src.lib import xla_extension
+from jax._src.lib import xla_extension_version
 
 logger = logging.getLogger(__name__)
 
@@ -141,9 +142,21 @@ def tpu_client_timer_callback(timer_secs: float) -> xla_client.Client | None:
   t.start()
 
   try:
-    client = xla_client.make_tpu_client(
-        get_tpu_library_path(),
-        _options_from_jax_configs("tpu"))
+    # TODO(b/353788247): Remove the version check and type ignore.
+    if xla_extension_version < 281:
+      return xla_client.make_tpu_client(
+          library_path=get_tpu_library_path(),
+          options=_options_from_jax_configs("tpu"),
+      )
+    else:
+      client = xla_client.make_tpu_client(
+          library_path=get_tpu_library_path(),
+          options=_options_from_jax_configs("tpu"),
+          # Optional arguments.
+          distributed_client=distributed.global_state.client,
+          node_id=distributed.global_state.process_id,
+          num_nodes=distributed.global_state.num_processes,
+      )  # type: ignore
   finally:
     t.cancel()
 
