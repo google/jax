@@ -55,17 +55,21 @@ class NNFunctionsTest(jtu.JaxTestCase):
   @parameterized.product(
       dtype=[jnp.float32, jnp.bfloat16, jnp.float16],
       use_bias=[False, True],
-      causal_mode=[None, 'is_causal', 'is_mask'],
+      causal_mode=[None, 'attr', 'mask'],
       group_num=[1, 2, 4],
       use_vmap=[False, True],
+      use_seqlen=[False, True],
       impl=['xla', 'cudnn'],
   )
   def testDotProductAttentionInfer(self, dtype, use_bias, causal_mode,
-                                   group_num, use_vmap, impl):
+                                   group_num, use_vmap, use_seqlen, impl):
     if impl == 'cudnn' and not _is_required_cudnn_version_satisfied():
       raise unittest.SkipTest("CUDA or cuDNN versions are not compatible.")
     if impl == 'cudnn' and dtype == jnp.float32:
       raise unittest.SkipTest("cuDNN only supports fp16 or bf16.")
+    if use_vmap and use_seqlen:
+      raise unittest.SkipTest("vmap cannot be used together with variable "
+                              "seqence lengths")
 
     sdpa = nn.dot_product_attention
     B, S, T, N, H, G = 2, 128, 128, 4, 32, group_num
@@ -77,41 +81,60 @@ class NNFunctionsTest(jtu.JaxTestCase):
       bias = random.normal(keys[3], (1, N, T, S), dtype)
     else:
       bias = None
+    if use_seqlen:
+      q_seqlen = jnp.array([T // 2, T // 4], dtype=jnp.int32)
+      kv_seqlen = jnp.array([S // 4, S // 2], dtype=jnp.int32)
+    else:
+      q_seqlen = None
+      kv_seqlen = None
 
-    is_causal = causal_mode == 'is_causal'
-    causal_mask = _get_causal_mask(T, S) if causal_mode == 'is_mask' else None
+    is_causal = causal_mode == 'attr'
+    causal_mask = _get_causal_mask(T, S) if causal_mode == 'mask' else None
 
     sdpa_ref = partial(sdpa, is_causal=is_causal, implementation=None)
     sdpa_ans = partial(sdpa, is_causal=is_causal, implementation=impl)
 
     if impl == 'cudnn':
-      lowered = jax.jit(sdpa_ans).lower(Q, K, V, bias, causal_mask)
+      lowered = jax.jit(sdpa_ans).lower(Q, K, V, bias, causal_mask,
+                                        q_sequence_lengths=q_seqlen,
+                                        kv_sequence_lengths=kv_seqlen)
       hlo = mlir.module_to_string(lowered.compiler_ir('stablehlo'))
       self.assertIn('__cudnn$fmha', hlo)
 
-    if use_vmap:
-      sdpa_ans = jax.vmap(sdpa_ans, in_axes=(0, 0, 0, None, None), out_axes=0)
     K_ref = jnp.repeat(K, G, axis=2) if G != 1 else K
     V_ref = jnp.repeat(V, G, axis=2) if G != 1 else V
-    out_ref = sdpa_ref(Q, K_ref, V_ref, bias, causal_mask)
+    out_ref = sdpa_ref(Q, K_ref, V_ref, bias, causal_mask,
+                       q_sequence_lengths=q_seqlen,
+                       kv_sequence_lengths=kv_seqlen)
+    if use_vmap:
+      sdpa_ans = jax.vmap(sdpa_ans, in_axes=(0, 0, 0, None, None), out_axes=0)
 
-    out_ans = sdpa_ans(Q, K, V, bias, causal_mask)
+    out_ans = sdpa_ans(Q, K, V, bias, causal_mask,
+                       q_sequence_lengths=q_seqlen,
+                       kv_sequence_lengths=kv_seqlen)
     self.assertAllClose(out_ref, out_ans, atol=.01, rtol=.01)
 
   @parameterized.product(
       dtype=[jnp.float32, jnp.bfloat16, jnp.float16],
       use_bias=[False, True],
-      causal_mode=[None, 'is_causal', 'is_mask'],
+      causal_mode=[None, 'attr', 'mask'],
       group_num=[1, 2, 4],
       use_vmap=[False, True],
+      use_seqlen=[False, True],
       impl=['xla', 'cudnn'],
   )
   def testDotProductAttentionTrain(self, dtype, use_bias, causal_mode,
-                                   group_num, use_vmap, impl):
+                                   group_num, use_vmap, use_seqlen, impl):
     if impl == 'cudnn' and not _is_required_cudnn_version_satisfied():
       raise unittest.SkipTest("CUDA or cuDNN versions are not compatible.")
     if impl == 'cudnn' and dtype == jnp.float32:
       raise unittest.SkipTest("cuDNN only supports fp16 or bf16.")
+    if use_vmap and use_seqlen:
+      raise unittest.SkipTest("vmap cannot be used together with variable "
+                              "seqence lengths")
+    if use_seqlen and use_bias and impl == 'cudnn':
+      raise unittest.SkipTest("cudnn has limited support for dbias when using "
+                              "variable seqence lengths")
 
     sdpa = nn.dot_product_attention
     B, S, T, N, H, G = 2, 128, 128, 4, 32, group_num
@@ -124,24 +147,41 @@ class NNFunctionsTest(jtu.JaxTestCase):
       bias = random.normal(keys[4], (1, N, T, S), dtype)
     else:
       bias = None
+    if use_seqlen:
+      q_seqlen = jnp.array([T // 2, T // 4], dtype=jnp.int32)
+      kv_seqlen = jnp.array([S // 4, S // 2], dtype=jnp.int32)
+    else:
+      q_seqlen = None
+      kv_seqlen = None
 
-    is_causal = causal_mode == 'is_causal'
-    causal_mask = _get_causal_mask(T, S) if causal_mode == 'is_mask' else None
+    is_causal = causal_mode == 'attr'
+    causal_mask = _get_causal_mask(T, S) if causal_mode == 'mask' else None
 
     K_ref = jnp.repeat(K, G, axis=2) if G != 1 else K
     V_ref = jnp.repeat(V, G, axis=2) if G != 1 else V
     sdpa_ref = partial(sdpa, is_causal=is_causal, implementation=None)
-    _, sdpa_vjp_ref = jax.vjp(sdpa_ref, Q, K_ref, V_ref, bias, causal_mask)
-    dQ_ref, dK_ref, dV_ref, dbias_ref, _ = sdpa_vjp_ref(grad)
+    # Convert the keyword arguments to positional ones.
+    fn_ref = lambda q, k, v, b, m, qs, kvs: sdpa_ref(
+        q, k, v, b, m, q_sequence_lengths=qs, kv_sequence_lengths=kvs
+    )
+    _, sdpa_vjp_ref = jax.vjp(fn_ref, Q, K_ref, V_ref, bias, causal_mask,
+                              q_seqlen, kv_seqlen)
+    dQ_ref, dK_ref, dV_ref, dbias_ref = sdpa_vjp_ref(grad)[:4]
     if G != 1:
       dK_ref = dK_ref.reshape(B, S, N // G, G, H).sum(axis=3)
       dV_ref = dV_ref.reshape(B, S, N // G, G, H).sum(axis=3)
 
     sdpa_ans = partial(sdpa, is_causal=is_causal, implementation=impl)
-    if use_vmap:
+    if use_vmap and not use_seqlen:
       sdpa_ans = jax.vmap(sdpa_ans, in_axes=(0, 0, 0, None, None), out_axes=0)
-    _, sdpa_vjp_ans = jax.vjp(sdpa_ans, Q, K, V, bias, causal_mask)
-    dQ_ans, dK_ans, dV_ans, dbias_ans, _ = sdpa_vjp_ans(grad)
+      _, sdpa_vjp_ans = jax.vjp(sdpa_ans, Q, K, V, bias, causal_mask)
+    else:
+      fn_ans = lambda q, k, v, b, m, qs, kvs: sdpa_ans(
+          q, k, v, b, m, q_sequence_lengths=qs, kv_sequence_lengths=kvs
+      )
+      _, sdpa_vjp_ans = jax.vjp(fn_ans, Q, K, V, bias, causal_mask, q_seqlen,
+                                kv_seqlen)
+    dQ_ans, dK_ans, dV_ans, dbias_ans = sdpa_vjp_ans(grad)[:4]
 
     if impl == 'cudnn':
       lowered = jax.jit(sdpa_vjp_ans).lower(grad)

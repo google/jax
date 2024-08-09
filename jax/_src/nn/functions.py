@@ -35,7 +35,7 @@ from jax._src.core import AxisName
 from jax._src.cudnn.fused_attention_stablehlo import (
     dot_product_attention as cudnn_dot_product_attention, MaskType)
 from jax._src.numpy import util as numpy_util
-from jax._src.typing import Array, ArrayLike
+from jax._src.typing import Array, ArrayLike, DType
 from jax._src.ops.special import logsumexp as _logsumexp
 
 
@@ -781,13 +781,48 @@ def _get_large_negative(dtype):
   dtype_max = jnp.finfo(dtype).max
   return jnp.asarray(-0.7 * dtype_max, dtype=dtype)
 
-def _get_causal_mask(T, S, dtype):
-  pred = jnp.tril(jnp.ones((T, S), dtype=jnp.bool_))
-  mask = jnp.where(pred, jnp.asarray(0.0, dtype), _get_large_negative(dtype))
-  return mask
+def _get_causal_mask(T, S):
+  mask = jnp.tril(jnp.ones((T, S), dtype=jnp.bool_))
+  return mask[None, None, :, :]
+
+def _get_padding_mask_logits(T, S, q_seqlen, kv_seqlen):
+  q_indices = jnp.arange(0, T)[None, :, None]
+  kv_indices = jnp.arange(0, S)[None, None, :]
+  q_mask = q_indices < q_seqlen[:, None, None]
+  kv_mask = kv_indices < kv_seqlen[:, None, None]
+  mask = jnp.logical_and(q_mask, kv_mask)
+  return mask[:, None, :, :]
+
+def _get_padding_mask_encoded(T, q_seqlen):
+  q_indices = jnp.arange(0, T)[None, :]
+  mask = q_indices < q_seqlen[:, None]
+  return mask[:, :, None, None]
+
+def _apply_masks(logits, mask, is_causal, q_seqlen, kv_seqlen):
+  if mask is None and not is_causal and q_seqlen is None and kv_seqlen is None:
+    return logits
+
+  combined_mask = jnp.ones_like(logits, dtype=jnp.bool_)
+  if mask is not None:
+    assert mask.dtype == jnp.bool_
+    combined_mask = jnp.logical_and(combined_mask, mask)
+
+  T, S = logits.shape[2], logits.shape[3]
+
+  if is_causal:
+    mask = _get_causal_mask(T, S)
+    combined_mask = jnp.logical_and(combined_mask, mask)
+
+  if q_seqlen is not None and kv_seqlen is not None:
+    mask = _get_padding_mask_logits(T, S, q_seqlen, kv_seqlen)
+    combined_mask = jnp.logical_and(combined_mask, mask)
+
+  large_negative_number = _get_large_negative(logits.dtype)
+  padded_logits = jnp.where(combined_mask, logits, large_negative_number)
+  return padded_logits
 
 def _dot_product_attention_core(query, key, value, bias, mask, is_causal,
-                                scale):
+                                scale, q_seqlen, kv_seqlen):
   logits_dtype = jnp.promote_types(query.dtype, jnp.float32)
   logits = jnp.einsum('BTNH,BSNH->BNTS', query, key,
                       preferred_element_type=logits_dtype)
@@ -797,24 +832,16 @@ def _dot_product_attention_core(query, key, value, bias, mask, is_causal,
   if bias is not None:
     logits = (logits + bias).astype(logits.dtype)
 
-  if mask is not None:
-    assert mask.dtype == jnp.bool_
-    large_negative_number = _get_large_negative(logits.dtype)
-    padded_logits = jnp.where(mask, logits, large_negative_number)
-  else:
-    padded_logits = logits
-
-  if is_causal:
-    T, S = query.shape[1], key.shape[1]
-    mask = jnp.broadcast_to(_get_causal_mask(T, S, logits.dtype),
-                            padded_logits.shape)
-    padded_logits = padded_logits + mask
-
+  padded_logits = _apply_masks(logits, mask, is_causal, q_seqlen, kv_seqlen)
+  
   # Softmax and it is always carried out in fp32.
   padded_logits = padded_logits.astype(jnp.float32)
   probs = jax.nn.softmax(padded_logits, axis=-1).astype(key.dtype)
 
   encoded = jnp.einsum('BNTS,BSNH->BTNH', probs, value)
+  if q_seqlen is not None and kv_seqlen is not None:
+    mask = _get_padding_mask_encoded(encoded.shape[1], q_seqlen)
+    encoded *= mask.astype(encoded.dtype)
   return encoded
 
 def _dot_product_attention_xla(
@@ -824,7 +851,9 @@ def _dot_product_attention_xla(
     bias: Array | None,
     mask: Array | None,
     is_causal: bool,
-    scale: float):
+    scale: float,
+    q_seqlen: Array | None,
+    kv_seqlen: Array | None):
 
   B, T, N, H = query.shape
   _, S, K, _ = key.shape
@@ -843,9 +872,10 @@ def _dot_product_attention_xla(
   bias = _reshape_to_grouped(bias)
   mask = _reshape_to_grouped(mask)
   vmapped_fn = jax.vmap(_dot_product_attention_core,
-                        in_axes=(3, None, None, 2, 2, None, None),
+                        in_axes=(3, None, None, 2, 2, None, None, None, None),
                         out_axes=3)
-  encoded = vmapped_fn(query, key, value, bias, mask, is_causal, scale)
+  encoded = vmapped_fn(query, key, value, bias, mask, is_causal, scale,
+                       q_seqlen, kv_seqlen)
   encoded = jnp.reshape(encoded, (B, T, N, H))
   return encoded
 
@@ -858,6 +888,8 @@ def dot_product_attention(
     *,
     scale: float | None = None,
     is_causal: bool = False,
+    q_sequence_lengths: ArrayLike | None = None,
+    kv_sequence_lengths: ArrayLike | None = None,
     implementation: Literal['xla', 'cudnn'] | None = None) -> Array:
   r"""Scaled dot product attention function.
 
@@ -903,7 +935,11 @@ def dot_product_attention(
       logits to mask out the non-causal parts of the attention matrix, but other
       implementations like `cudnn` will avoid computing the non-causal regions,
       providing speedups.
-    implementation: A string to control which implementation backend to use.
+    q_sequence_lengths: `int32` array of sequence lengths for query; shape
+      :code:`(B)`
+    kv_sequence_lengths: `int32` array of sequence lengths for key and value;
+      shape :code:`(B)`
+    implementaion: A string to control which implementation backend to use.
       Supported strings are `xla`, `cudnn` (cuDNN flash attention). It defaults
       to `None`, which will automatically select the best available backend.
       Note, `cudnn` supports only a subset of shapes/dtypes, and an exception
@@ -925,46 +961,64 @@ def dot_product_attention(
   value_arr = _ensure_4d(value)
   bias = _ensure_4d(bias) if bias is not None else None
   mask = _ensure_4d(mask) if mask is not None else None
+  if q_sequence_lengths is not None:
+    q_sequence_lengths = jnp.asarray(q_sequence_lengths)
+  if kv_sequence_lengths is not None:
+    kv_sequence_lengths = jnp.asarray(kv_sequence_lengths)
 
-  def _check_has_shape(t: Array, shape: Sequence[int], name: str) -> None:
+  def _check_shape_and_dtype(t: Array, shape: Sequence[int],
+                             dtype: DType | None, name: str) -> None:
+    if t is None:
+      return
     if t.ndim != len(shape):
       raise ValueError(f"{name} ndim should be {len(shape)}, but got {t.ndim}")
+    if dtype is not None and t.dtype != dtype:
+      raise ValueError(f"{name} dtype should be {dtype}, but got {t.dtype}")
     for i in range(t.ndim):
       if shape[i] != -1 and t.shape[i] != shape[i]:
         raise ValueError(f"{name} shape should be {shape}: but got {t.shape}")
 
   B, S, K, H = key_arr.shape
-  _check_has_shape(value_arr, [B, S, K, H], 'value')
-  _check_has_shape(query_arr, [B, -1, -1, H], 'query')
+  _check_shape_and_dtype(value_arr, [B, S, K, H], key_arr.dtype, 'value')
+  _check_shape_and_dtype(query_arr, [B, -1, -1, H], key_arr.dtype, 'query')
+  _check_shape_and_dtype(mask, [-1] * 4, jnp.bool_, 'mask')
+  _check_shape_and_dtype(bias, [-1] * 4, None, 'bias')
+  _check_shape_and_dtype(q_sequence_lengths, [B], jnp.int32,
+                         'q_sequence_lengths')
+  _check_shape_and_dtype(kv_sequence_lengths, [B], jnp.int32,
+                         'kv_sequence_lengths')
   if query_arr.shape[-2] % K != 0:
     raise ValueError(f"The number of query heads must be a multiple of "
                      f"key/value heads, but got {query_arr.shape[-2]} vs {K}")
-  if not (query_arr.dtype == key_arr.dtype == value_arr.dtype):
-    raise ValueError(f"query/key/value should have the same dtype, but got "
-                     f"{query_arr.dtype} vs {key_arr.dtype} vs {value_arr.dtype}.")
-  if mask is not None and mask.dtype != jnp.bool_ and mask.ndim != 4:
-    raise ValueError(f"Mask must be a 4D boolean tensor, but got "
-                     f"rank={mask.ndim}, dtype={mask.dtype}.")
-  if bias is not None and bias.ndim != 4:
-    raise ValueError(f"Bias must be a 4D tensor, but got rank={bias.ndim}.")
 
   scale_val = (1.0 / np.sqrt(H)) if scale is None else scale
 
   match implementation:
     case 'xla':
       out = _dot_product_attention_xla(
-          query_arr, key_arr, value_arr, bias, mask, is_causal=is_causal, scale=scale_val,
+          query_arr, key_arr, value_arr, bias, mask, is_causal=is_causal,
+          scale=scale_val, q_seqlen=q_sequence_lengths,
+          kv_seqlen=kv_sequence_lengths,
       )
     case 'cudnn':
-      mask_type = MaskType.CAUSAL if is_causal else MaskType.NO_MASK
+      mask_type = MaskType.NO_MASK
+      if q_sequence_lengths is not None and is_causal:
+        mask_type = MaskType.PADDING_CAUSAL
+      elif is_causal:
+        mask_type = MaskType.CAUSAL
+      elif q_sequence_lengths is not None:
+        mask_type = MaskType.PADDING
       out = cudnn_dot_product_attention(
-          query_arr, key_arr, value_arr, bias, mask, scale=scale_val, mask_type=mask_type
+          query_arr, key_arr, value_arr, bias, mask, q_sequence_lengths,
+          kv_sequence_lengths, scale=scale_val, mask_type=mask_type
       )
     case None:
       # TODO(kaixih@nvidia) Defaults to XLA for now. Will automatically select
       # best backend.
       out = _dot_product_attention_xla(
-          query_arr, key_arr, value_arr, bias, mask, is_causal=is_causal, scale=scale_val,
+          query_arr, key_arr, value_arr, bias, mask, is_causal=is_causal,
+          scale=scale_val, q_seqlen=q_sequence_lengths,
+          kv_seqlen=kv_sequence_lengths,
       )
     case _:
       raise ValueError(f"Unsupported implementation option: {implementation}")
