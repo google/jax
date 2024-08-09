@@ -577,10 +577,23 @@ class FragmentedArray:
     match self.layout:
       case WGMMAFragLayout():
         self._store_untiled_wgmma(ref)
+      case WGSplatFragLayout():
+        self._store_untiled_splat(ref)
       case WGStridedFragLayout():
         self._store_untiled_wg_strided(ref)
       case _:
         raise NotImplementedError(self.layout)
+
+  def _store_untiled_splat(self, ref: ir.Value):
+    vec_size = 8 // mgpu.bytewidth(self.mlir_dtype)
+    if np.prod(self.shape) < vec_size * WARPGROUP_SIZE:
+      vec_size = 1
+    fa = FragmentedArray.splat(
+        self.registers.flat[0],
+        self.shape,
+        layout=WGStridedFragLayout(shape=self.shape, vec_size=vec_size),
+    )
+    fa.store_untiled(ref)
 
   def _store_untiled_wg_strided(self, ref: ir.Value):
     ref_ty = ir.MemRefType(ref.type)

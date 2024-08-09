@@ -374,6 +374,22 @@ class WGMMATest(TestCase):
     )()
     np.testing.assert_array_equal(iota, expected)
 
+  @parameterized.named_parameters(
+      ("f32", ir.F32Type, jnp.float32, 256),
+      ("f16", ir.F16Type, jnp.float16, 256),
+      ("f16_small", ir.F16Type, jnp.float16, 128),
+  )
+  def test_store_untiled_splat(self, mlir_dtype_cls, jax_dtype, size):
+    mlir_dtype = mlir_dtype_cls.get()
+    def kernel(ctx, out, _):
+      del ctx
+      mgpu.FragmentedArray.splat(c(1., mlir_dtype), (size,)).store_untiled(out)
+    expected = jnp.ones((size,), jax_dtype)
+    mosaic_ones = mosaic_gpu.as_gpu_kernel(
+        kernel, (1, 1, 1), (128, 1, 1), (), expected, ()
+    )()
+    np.testing.assert_array_equal(mosaic_ones, expected)
+
   @parameterized.product(
       dtypes=(
           (ir.F32Type.get, jnp.float32),
