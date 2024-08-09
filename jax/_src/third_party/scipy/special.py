@@ -10,6 +10,37 @@ from jax._src.numpy.util import promote_args_inexact
 from jax._src.typing import Array, ArrayLike
 
 
+@jit
+def sincospi(
+  x: Array,
+) -> tuple[Array, Array]:
+  """
+  Accurate evaluation of sin(pi * x) and cos(pi * x).
+
+  As based on the sinpi and cospi functions from SciPy, see:
+  - https://github.com/scipy/scipy/blob/v1.14.0/scipy/special/special/cephes/trig.h
+  """
+  s = jnp.sign(x)
+  x = jnp.abs(x)
+  r = jnp.fmod(x, 2.0)
+
+  sinpi = jnp.where(
+    r < 0.5,
+    s * jnp.sin(jnp.pi * r),
+    jnp.where(
+      r > 1.5,
+      s * jnp.sin(jnp.pi * (r - 2.0)),
+      -s * jnp.sin(jnp.pi * (r - 1.0)),
+    ),
+  )
+  cospi = jnp.where(
+    r == 0.5,
+    0.0,
+    jnp.where(r < 1.0, -jnp.sin(jnp.pi * (r - 0.5)), jnp.sin(jnp.pi * (r - 1.5))),
+  )
+
+  return sinpi, cospi
+
 
 @custom_derivatives.custom_jvp
 def fresnel(x: ArrayLike) -> tuple[Array, Array]:
@@ -135,37 +166,6 @@ def fresnel(x: ArrayLike) -> tuple[Array, Array]:
     +8.39158816283118707363e-19,
     +1.86958710162783236342e-22,
   ])
-
-  @jit
-  def sincospi(
-    x: Array,
-  ) -> tuple[Array, Array]:
-    """
-    Accurate evaluation of sin(pi * x) and cos(pi * x).
-
-    As based on the sinpi and cospi functions from SciPy, see:
-    - https://github.com/scipy/scipy/blob/ae7e7c7109d957bb3c9798497d35e2fe65cd78be/scipy/special/special/cephes/trig.h
-    """
-    s = jnp.sign(x)
-    x = jnp.abs(x)
-    r = jnp.fmod(x, 2.0)
-
-    sinpi = jnp.where(
-      r < 0.5,
-      s * jnp.sin(jnp.pi * r),
-      jnp.where(
-        r > 1.5,
-        s * jnp.sin(jnp.pi * (r - 2.0)),
-        -s * jnp.sin(jnp.pi * (r - 1.0)),
-      ),
-    )
-    cospi = jnp.where(
-      r == 0.5,
-      0.0,
-      jnp.where(r < 1.0, -jnp.sin(jnp.pi * (r - 0.5)), jnp.sin(jnp.pi * (r - 1.5))),
-    )
-
-    return sinpi, cospi
 
   x = jnp.abs(xxa)
 
