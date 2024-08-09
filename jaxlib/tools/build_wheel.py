@@ -56,13 +56,6 @@ parser.add_argument(
     action="store_true",
     help="Create an 'editable' jaxlib build instead of a wheel.",
 )
-parser.add_argument(
-    "--skip_gpu_kernels",
-    # args.skip_gpu_kernels is True when
-    # --skip_gpu_kernels is in the command
-    action="store_true",
-    help="Whether to skip gpu kernels in jaxlib.",
-)
 args = parser.parse_args()
 
 r = runfiles.Create()
@@ -169,7 +162,7 @@ plat-name={tag}
     )
 
 
-def prepare_wheel(sources_path: pathlib.Path, *, cpu, skip_gpu_kernels):
+def prepare_wheel(sources_path: pathlib.Path, *, cpu):
   """Assembles a source tree for the wheel in `sources_path`."""
   copy_runfiles = functools.partial(build_utils.copy_file, runfiles=r)
 
@@ -219,33 +212,6 @@ def prepare_wheel(sources_path: pathlib.Path, *, cpu, skip_gpu_kernels):
           f"__main__/jaxlib/cpu/_lapack.{pyext}",
       ],
   )
-
-  if exists(f"__main__/jaxlib/cuda/_solver.{pyext}") and not skip_gpu_kernels:
-    copy_runfiles(
-        dst_dir=jaxlib_dir / "cuda",
-        src_files=[
-            f"__main__/jaxlib/cuda/_solver.{pyext}",
-            f"__main__/jaxlib/cuda/_blas.{pyext}",
-            f"__main__/jaxlib/cuda/_linalg.{pyext}",
-            f"__main__/jaxlib/cuda/_prng.{pyext}",
-            f"__main__/jaxlib/cuda/_rnn.{pyext}",
-            f"__main__/jaxlib/cuda/_sparse.{pyext}",
-            f"__main__/jaxlib/cuda/_triton.{pyext}",
-            f"__main__/jaxlib/cuda/_versions.{pyext}",
-        ],
-    )
-  if exists(f"__main__/jaxlib/rocm/_solver.{pyext}") and not skip_gpu_kernels:
-    copy_runfiles(
-        dst_dir=jaxlib_dir / "rocm",
-        src_files=[
-            f"__main__/jaxlib/rocm/_solver.{pyext}",
-            f"__main__/jaxlib/rocm/_blas.{pyext}",
-            f"__main__/jaxlib/rocm/_linalg.{pyext}",
-            f"__main__/jaxlib/rocm/_prng.{pyext}",
-            f"__main__/jaxlib/rocm/_sparse.{pyext}",
-            f"__main__/jaxlib/rocm/_triton.{pyext}",
-        ],
-    )
 
   mosaic_python_dir = jaxlib_dir / "mosaic" / "python"
   copy_runfiles(
@@ -403,7 +369,6 @@ try:
   prepare_wheel(
       pathlib.Path(sources_path),
       cpu=args.cpu,
-      skip_gpu_kernels=args.skip_gpu_kernels,
   )
   package_name = "jaxlib"
   if args.editable:
