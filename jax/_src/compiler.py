@@ -273,6 +273,7 @@ def compile_or_get_cached(
 ) -> xc.LoadedExecutable:
   sym_name = computation.operation.attributes['sym_name']
   module_name = ir.StringAttr(sym_name).value
+  breakpoint()
 
   if dumped_to := mlir.dump_module_to_file(computation, "compile"):
     logging.info("Dumped the module to %s.", dumped_to)

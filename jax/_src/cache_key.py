@@ -83,7 +83,8 @@ def get(module: ir.Module,
    'jit__psum-14ac577cdb2ef6d986078b4054cc9893a9a14a16dbb0d8f37b89167c1f1aacdf'
   """
   entries = [
-      ("computation", lambda hash_obj: _hash_computation(hash_obj, module)),
+      ("computation", 
+       lambda hash_obj: _hash_computation(hash_obj, module)),
       ("jax_lib version",
        lambda hash_obj: hash_obj.update(
            bytes(jaxlib_version_str.encode("utf-8")))),
@@ -129,8 +130,22 @@ def _log_cache_key_hash(hash_obj, last_serialized: str, hashfn):
     )
 
 
+def _remove_custom_partitioning_ptr(m: ir.Module):
+  def _update_bc_attribute(op: ir.Operation) -> ir.WalkResult:
+    if (op.name == "stablehlo.custom_call" and 
+        op.attributes["call_target_name"].value == "CustomSPMDPartitioning"):
+      op.attributes["backend_config"] = ir.StringAttr.get("REMOVED")
+    return ir.WalkResult.ADVANCE
+  
+  m.operation.walk(_update_bc_attribute)
+  return m
+  
+
 def _serialize_ir(m: ir.Module) -> bytes:
   output = io.BytesIO()
+  if config.remove_custom_partitioning_ptr_from_cache_key.value:
+    m = _remove_custom_partitioning_ptr(type_cast(ir.Module,
+                                                  m.operation.clone()))
   m.operation.write_bytecode(file=output)
   return output.getvalue()
 
