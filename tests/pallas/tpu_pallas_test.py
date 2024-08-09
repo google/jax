@@ -2170,6 +2170,43 @@ class PallasCallTPUCheckifyInterpretTest(PallasCallTPUCheckifyTest):
   INTERPRET: bool = True
 
 
+class PrettyPrintingTest(PallasBaseTest):
+
+  @parameterized.parameters(
+      (
+          lambda i: (i, pl.ds(0, 8), pl.ds(0, 128)),
+          'dma_start c[d,:,:] -> e[...] f',
+      ),
+      (
+          lambda i: (0, pl.ds(i, 8), pl.ds(0, 128)),
+          'dma_start c[0,d:d+8,:] -> e[...] f',
+      ),
+      (
+          lambda i: (i, pl.ds(2, 4), pl.ds(0, 100)),
+          'dma_start c[d,2:6,:100] -> e[...] f',
+      ),
+      (
+          lambda i: (i, pl.ds(2, 6), pl.ds(4, 100)),
+          'dma_start c[d,2:,4:104] -> e[...] f',
+      ),
+  )
+  def test_dma_custom_pretty_print(self, indexer, expected):
+    def body(x_hbm_ref, i):
+      def inner(x_ref, sem):
+        pltpu.async_copy(x_hbm_ref.at[indexer(i)], x_ref, sem).wait()
+
+      pl.run_scoped(
+          inner, pltpu.VMEM((8, 128), jnp.float32), pltpu.SemaphoreType.DMA
+      )
+      return []
+
+    jaxpr, _, _, () = pe.trace_to_jaxpr_dynamic(
+        lu.wrap_init(body), [state.shaped_array_ref((2, 8, 128), jnp.int32),
+                             jax.core.ShapedArray((), jnp.int32)]
+    )
+    self.assertIn(expected, jaxpr.pretty_print(use_color=False))
+
+
 def only_passes_in_interpret(unless_generation: int | None = None):
   def decorator(f):
     def wrapper(self):

@@ -14,10 +14,13 @@
 
 """Tests for common JAX operations within pallas_call."""
 
+from collections.abc import Sequence
 import contextlib
 import functools
 import itertools
 import sys
+from typing import Any
+import unittest
 
 import numpy as np
 from absl.testing import absltest
@@ -41,10 +44,19 @@ else:
   plgpu = None
   pltpu = None
 
+try:
+  import hypothesis as hp
+except (ModuleNotFoundError, ImportError):
+  raise unittest.SkipTest("tests depend on hypothesis library")
+
+import hypothesis.extra.numpy as hnp
+import hypothesis.strategies as hps
+
 # There are many inherited redefinitions of _
 # ruff: noqa: F811
 
 jax.config.parse_flags_with_absl()
+jtu.setup_hypothesis(max_examples=100)
 
 
 def smem_on_tpu():
@@ -52,6 +64,181 @@ def smem_on_tpu():
     return pltpu.SMEM
   else:
     return None
+
+
+def _random_value(key: jax.Array, shape_dtype: jax.ShapeDtypeStruct
+                  ) -> jax.Array:
+  if jnp.issubdtype(shape_dtype.dtype, jnp.floating):
+    return random.normal(key, shape_dtype.shape, dtype=shape_dtype.dtype)
+  elif jnp.issubdtype(shape_dtype.dtype, jnp.integer):
+    return random.randint(
+        key, shape_dtype.shape, minval=-4, maxval=4, dtype=shape_dtype.dtype
+    )
+  raise NotImplementedError(shape_dtype)
+
+
+_DTYPES = (
+    "float32",
+    "bfloat16",
+    "int32",
+    "int16",
+    "int8",
+    "bool",
+)
+
+
+@hps.composite
+def make_shape_dtype_strategy(
+    draw, *,
+    min_rank: int,
+    max_rank: int,
+    min_size_exp: int,
+    max_size_exp: int,
+    valid_dtypes: Sequence[jnp.dtype],
+    max_bytes: int = 2**16,
+) -> jax.ShapeDtypeStruct:
+  dtype = draw(hps.sampled_from(valid_dtypes))
+  # To generate shapes with power-of-two sizes, we draw the exponents of the
+  # sizes, and then generate the sizes from the exponents.
+  shape_exponents = tuple(
+      draw(hps.lists(
+          hps.integers(min_value=min_size_exp, max_value=max_size_exp),
+          min_size=min_rank, max_size=max_rank))
+  )
+  shape = tuple(2**exp for exp in shape_exponents)
+  size = np.prod(shape) * dtype.itemsize
+  hp.assume(size <= max_bytes)  # Make sure we don't take more than 4K VMEM
+  return jax.ShapeDtypeStruct(shape, dtype)
+
+
+@hps.composite
+def arrays(
+    draw, shape: tuple[int, ...], dtype: np.dtype,
+    *, elements: hps.SearchStrategy[Any] | None = None,
+) -> np.ndarray:
+  cast_to_bf16 = False
+  if dtype == np.dtype(jnp.bfloat16):
+    dtype = np.dtype('float32')
+    cast_to_bf16 = True
+  arr = draw(hnp.arrays(shape=shape, dtype=dtype, elements=elements))
+  if cast_to_bf16:
+    arr = arr.astype(np.dtype(jnp.bfloat16))
+  return arr
+
+
+@hps.composite
+def select_n_strategy(
+    draw, *, max_cases: int = 4,
+    min_rank: int = 0, max_rank: int = 2,
+    min_size_exp: int = 0, max_size_exp: int = 8,
+) -> tuple[np.ndarray, ...]:
+  n_cases = draw(hps.integers(min_value=1, max_value=max_cases))
+  case_shape_dtype = draw(
+      make_shape_dtype_strategy(
+          min_rank=min_rank, max_rank=max_rank,
+          min_size_exp=min_size_exp, max_size_exp=max_size_exp,
+          valid_dtypes=[
+              np.dtype("int32"),
+              np.dtype("float32"),
+              # TODO(sharadmv,apaszke): enable bf16
+              # np.dtype(jnp.bfloat16),
+          ],
+      )
+  )
+  allowed_elements = hps.integers(min_value=0, max_value=n_cases - 1)
+  pred_shape = draw(hps.sampled_from([(), case_shape_dtype.shape]))
+  # TODO(sharadmv,apaszke): enable passing bool arrays into Pallas kernels
+  if n_cases == 2 and not pred_shape:
+    pred_dtype = draw(hps.sampled_from([np.dtype(np.bool_),
+                                        np.dtype(np.int32)]))
+    allowed_elements = hps.booleans()
+  else:
+    pred_dtype = np.int32
+  pred = draw(arrays(shape=pred_shape, dtype=pred_dtype,
+                     elements=allowed_elements))
+  cases = (
+      draw(
+          arrays(shape=case_shape_dtype.shape, dtype=case_shape_dtype.dtype)
+      )
+      for _ in range(n_cases)
+  )
+  return pred, *cases
+
+
+UNARY_PRIMITIVES = [
+    # TODO(sharadmv,apaszke): enable zero rank
+    # TODO(sharadmv,apaszke): enable one rank
+    # TODO(sharadmv,apaszke): enable zero dim sizes
+    # TODO(sharadmv,apaszke): enable one dim sizes
+    (
+        lax.neg_p,
+        make_shape_dtype_strategy(
+            min_rank=2,
+            max_rank=3,
+            min_size_exp=1,
+            max_size_exp=6,
+            valid_dtypes=[jnp.dtype("float32"), jnp.dtype("int32")],
+        ),
+    ),
+    (
+        lax.not_p,
+        make_shape_dtype_strategy(
+            min_rank=2,
+            max_rank=3,
+            min_size_exp=1,
+            max_size_exp=6,
+            valid_dtypes=[jnp.dtype("int32")],
+        ),
+    ),
+    *[
+        (
+            prim,
+            make_shape_dtype_strategy(
+                min_rank=2,
+                max_rank=3,
+                min_size_exp=1,
+                max_size_exp=6,
+                valid_dtypes=[jnp.dtype("float32")],
+            ),
+        )
+        for prim in [
+            lax.exp_p,
+            lax.tanh_p,
+            lax.logistic_p,
+            lax.rsqrt_p,
+            lax.log_p,
+            lax.exp2_p,
+            lax.abs_p,
+            lax.log1p_p,
+            lax.sin_p,
+            lax.sqrt_p,
+        ]
+    ],
+]
+
+UNARY_FUNCTIONS = [
+    (prim.name, prim.bind, strategy) for prim, strategy in UNARY_PRIMITIVES
+] + [
+    (
+        name,
+        func,
+        make_shape_dtype_strategy(
+            min_rank=2,
+            max_rank=3,
+            min_size_exp=1,
+            max_size_exp=6,
+            valid_dtypes=[jnp.dtype("float32")],
+        ),
+    )
+    for name, func in [
+        ("relu", jax.nn.relu),
+        ("pow2", lambda x: jnp.power(2, x)),
+        ("square", jnp.square),
+        ("reciprocal", jnp.reciprocal),
+        ("round", jnp.round),
+        ("rint", jnp.rint),
+    ]
+]
 
 
 class PallasBaseTest(jtu.JaxTestCase):
@@ -291,6 +478,190 @@ class OpsTest(PallasBaseTest):
     )(x)
 
     np.testing.assert_allclose(result[0, 0], reduction_op(x), atol=1e-5)
+
+  # TODO(sharadmv): test rank < 2, size < 2
+  @hp.given(select_n_strategy(max_cases=2, min_rank=2, max_rank=4,
+                              min_size_exp=1))
+  def test_select_n(self, args):
+    if jtu.test_device_matches(["gpu"]):
+      self.skipTest("TODO: error on GPU, lowering bug for select_n")
+    pred, *cases = args
+    scalar_pred = not pred.shape
+
+    def kernel(*refs):
+      if scalar_pred:
+        *case_refs, o_ref = refs
+        pred_ = pred
+      else:
+        pred_ref, *case_refs, o_ref = refs
+        pred_ = pred_ref[...]
+      vals = [case_ref[...] for case_ref in case_refs]
+      o_ref[...] = lax.select_n(pred_, *vals)
+    out_ref = lax.select_n(pred, *cases)
+    if scalar_pred:
+      args = cases
+    else:
+      args = [pred, *cases]
+    out = self.pallas_call(
+        kernel, out_shape=jax.ShapeDtypeStruct(out_ref.shape, out_ref.dtype),
+    )(*args)
+    if out.dtype == jnp.bfloat16:
+      out, out_ref = out.astype(jnp.float32), out_ref.astype(jnp.float32)
+    np.testing.assert_allclose(out, out_ref)
+
+  @parameterized.named_parameters(
+      (name, name, func, strategy)
+      for name, func, strategy in UNARY_FUNCTIONS
+  )
+  @hp.given(hps.data())
+  def test_unary_primitives(self, name, func, shape_dtype_strategy, data):
+    if self.INTERPRET:
+      self.skipTest("This hypothesis test is slow, even more so in interpret mode.")
+    # We want exact equality here to match how JAX lowers to XLA
+    tol = 0.
+    if jtu.test_device_matches(["gpu"]):
+      if func == jnp.round or func == jnp.rint:
+        self.skipTest("TODO: not implemented on GPU")
+      if name == "tanh":
+        tol = 1e-6
+      elif name == "exp2":
+        tol = 1e-6
+    elif jtu.test_device_matches(["tpu"]):
+      if not jtu.is_device_tpu_at_least(version=5) and False:
+        self.skipTest("TODO: not implemented on TPU v{3,4}")
+
+    def kernel(x_ref, y_ref):
+      y_ref[...] = func(x_ref[...])
+    x_shape_dtype = data.draw(shape_dtype_strategy)
+    key = random.key(0)
+    x = _random_value(key, x_shape_dtype)
+    out = self.pallas_call(kernel, out_shape=x_shape_dtype)(x)
+    self.assertAllClose(out, func(x), atol=tol, rtol=tol)
+
+  @parameterized.product(from_dtype=_DTYPES, to_dtype=_DTYPES)
+  @hp.given(hps.data())
+  def test_cast(self, from_dtype, to_dtype, data):
+    if from_dtype == to_dtype:
+      self.skipTest("Unnecessary test")
+    if jtu.is_device_tpu(version=4):
+      if from_dtype in {"int16", "int8"} or to_dtype in {"int16", "int8"}:
+        self.skipTest(
+            "Not supported: TPU generation doesn't support this cast."
+        )
+    if jtu.test_device_matches(["tpu"]) and jtu.get_tpu_version() < 4:
+      if from_dtype in {"int32", "float32", "bfloat16"} and to_dtype in {"int16", "int8"}:
+        self.skipTest(
+            "Not supported: TPU generation doesn't support this cast."
+        )
+
+    # TODO(sharadmv,apaszke): add support for the following casts
+    if from_dtype == "int16" and to_dtype == "int8":
+      self.skipTest("Not supported: bad canonicalization")
+    if from_dtype == "int8" and to_dtype == "int16":
+      self.skipTest("Not supported: bad canonicalization")
+    if from_dtype == "bool" and to_dtype in {"int16", "int8"}:
+      self.skipTest("Not supported: cannot extend to sub-32 bit types")
+    if from_dtype in {"int32", "bfloat16", "float32"} and to_dtype == "bool":
+      self.skipTest("Not supported: unsupported relayout")
+    if from_dtype == "bool" and to_dtype in {"int32", "bfloat16", "float32"}:
+      self.skipTest("Not supported: unsupported relayout")
+    if from_dtype in {"int16", "int8"} and to_dtype == "bool":
+      self.skipTest("Not supported: cannot truncate from sub-32 bit types")
+    if from_dtype in {"int16", "int8"} and to_dtype == "bool":
+      self.skipTest("Not supported: cannot truncate from sub-32 bit types")
+    if jtu.test_device_matches(["gpu"]):
+      if (from_dtype in {"bfloat16", "float32"} and
+          to_dtype in {"int8", "int16", "int32"}):
+        self.skipTest("TODO: wrong result on GPU")
+
+    if from_dtype == "bfloat16":
+      from_dtype = jnp.bfloat16
+    if to_dtype == "bfloat16":
+      to_dtype = jnp.bfloat16
+
+    if from_dtype == jnp.bfloat16:
+      x = jnp.asarray(data.draw(hnp.arrays(jnp.float32, (8, 128))))
+      x = x.astype(jnp.bfloat16)
+    else:
+      x = data.draw(hnp.arrays(from_dtype, (8, 128)))
+    x = jnp.asarray(x)
+    if from_dtype == jnp.dtype("bool"):
+      x = x.astype(jnp.int32)
+    def kernel(x_ref, y_ref):
+      x = x_ref[...]
+      if from_dtype == jnp.dtype("bool"):
+        x = x.astype(jnp.dtype("bool"))
+      y = x.astype(to_dtype)
+      if to_dtype == jnp.dtype("bool"):
+        y = y.astype(jnp.int32)
+      y_ref[...] = y
+    if (y_dtype := to_dtype) == jnp.dtype("bool"):
+      y_dtype = jnp.int32
+    y = self.pallas_call(
+        kernel, out_shape=jax.ShapeDtypeStruct(x.shape, y_dtype))(x)
+    if to_dtype == jnp.dtype("bool"):
+      y = y.astype(jnp.dtype("bool"))
+    y_ref = x.astype(to_dtype)
+    if to_dtype == jnp.bfloat16:
+      y, y_ref = y.astype(np.float32), y_ref.astype(np.float32)
+    np.testing.assert_allclose(y, y_ref, atol=0., rtol=0.)
+
+  @parameterized.product(
+      shape=((64,), (8, 8)),
+      dtype=(jnp.int32, jnp.int16, jnp.int8),
+  )
+  def test_scalar_map(self, shape, dtype):
+    if dtype != jnp.int32 and len(shape) < 2:
+      # TODO(b/299280718): Implement this.
+      self.skipTest(
+          "Loads and stores not implemented for 1D arrays of non-32bit types"
+      )
+    def kernel(x_ref, y_ref):
+      for idx in np.ndindex(shape):
+        x = x_ref[idx].astype(jnp.int32)
+        y_ref[idx] = (x * x).astype(y_ref.dtype)
+    f = self.pallas_call(
+        kernel,
+        in_specs=[
+            pl.BlockSpec(memory_space=pltpu.SMEM),
+        ],
+        out_specs=pl.BlockSpec(memory_space=pltpu.SMEM),
+        out_shape=jax.ShapeDtypeStruct(shape, dtype),
+    )
+    x = jnp.arange(np.prod(shape), dtype=dtype).reshape(shape)
+    self.assertAllClose(f(x), x * x)
+
+  @jtu.skip_on_devices("gpu")  # TODO: not implemented
+  def test_extract_scalar(self):
+    def kernel(x_ref, y_ref):
+      y_ref[0, 0] = x_ref[:][0, 0]
+    f = self.pallas_call(
+        kernel,
+        out_shape=jax.ShapeDtypeStruct((1, 1), jnp.float32),
+        out_specs=pl.BlockSpec(memory_space=pltpu.SMEM),
+    )
+    x = np.arange(1024, dtype=jnp.float32).reshape(8, 128) + 10
+    self.assertAllClose(f(x).item(), 10.0)
+
+  @jtu.skip_on_devices("gpu")  # TODO: not implemented
+  def test_concat_constant(self):
+    def kernel(out):
+      result = []
+      for i in range(16):
+        result.append(jnp.full((1, 128), i, jnp.float32))
+      out[:] = jnp.stack(result).reshape(16, 128)
+
+    def run(interpret=False):
+      return pl.pallas_call(
+          kernel,
+          out_shape=jax.ShapeDtypeStruct((16, 128), jnp.float32),
+          out_specs=pl.BlockSpec(memory_space=pltpu.VMEM),
+          interpret=interpret,
+      )()
+    expected = run(True)
+    if not self.INTERPRET:
+      actual = run(False)
+      self.assertAllClose(actual, expected)
 
 
 class OpsInterpreterTest(OpsTest):
@@ -1130,7 +1501,7 @@ class OpsExtraTest(PallasBaseTest):
       np.testing.assert_allclose(y, y_ref, atol=1e-2, rtol=1e-2, err_msg=i)
 
 
-class OpsExtraInterpreterTest(OpsTest):
+class OpsExtraInterpreterTest(OpsExtraTest):
   INTERPRET = True
 
 

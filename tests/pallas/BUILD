@@ -84,12 +84,17 @@ jax_test(
         "gpu_a100_x32",
         "gpu_h100_x32",
     ],
+    shard_count = {
+        "cpu": 4,
+        "gpu": 4,
+        "tpu": 4,
+    },
     deps = [
         "//jax:pallas",
         "//jax:pallas_gpu",  # build_cleaner: keep
         "//jax:pallas_tpu",
         "//jax:pallas_tpu_ops",
-    ] + py_deps("absl/testing") + py_deps("numpy"),
+    ] + py_deps("absl/testing") + py_deps("hypothesis") + py_deps("numpy"),
 )
 
 jax_test(
@@ -99,10 +104,10 @@ jax_test(
     ],
     disable_backends = [
         "gpu",
-        "tpu",
     ],
     deps = [
         "//jax:pallas",
+        "//jax:pallas_tpu",
     ] + py_deps("absl/testing") + py_deps("hypothesis") + py_deps("numpy"),
 )
 
@@ -315,6 +320,22 @@ jax_test(
         "//jax:pallas_tpu",
         "//jax:pallas_tpu_ops",
     ],
+)
+
+jax_test(
+    name = "tpu_ops_test",
+    srcs = [
+        "tpu_ops_test.py",
+    ],
+    disable_backends = [
+        "gpu",
+    ],
+    deps = [
+        "//jax:pallas",
+        "//jax:pallas_gpu",  # build_cleaner: keep
+        "//jax:pallas_tpu",
+        "//jax:pallas_tpu_ops",
+    ] + py_deps("absl/testing") + py_deps("hypothesis") + py_deps("numpy"),
 )
 
 jax_test(
