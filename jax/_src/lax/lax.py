@@ -1338,16 +1338,27 @@ def iota(dtype: DTypeLike, size: int) -> Array:
   """
   return broadcasted_iota(dtype, (size,), 0)
 
-def broadcasted_iota(dtype: DTypeLike, shape: Shape, dimension: int) -> Array:
+def broadcasted_iota(dtype: DTypeLike, shape: Shape, dimension: int,
+                     *, sharding: Sharding | None = None) -> Array:
   """Convenience wrapper around ``iota``."""
+  # We have to add this redirection due jax.jit circular import problem in this submodule
   dtype = dtypes.canonicalize_dtype(dtype)
   shape = canonicalize_shape(shape)
-  dynamic_shape = [d for d in shape if isinstance(d, core.Tracer)]
-  static_shape = [None if isinstance(d, core.Tracer) else d for d in shape]
   dimension = core.concrete_or_error(
       int, dimension, "dimension argument of lax.broadcasted_iota")
+  return jax.jit(
+    _broadcasted_iota,
+    static_argnames=('dtype', 'shape', 'dimension'),
+    inline=True,
+    out_shardings=sharding,
+  )(dtype, shape=shape, dimension=dimension)
+
+def _broadcasted_iota(dtype: DTypeLike, shape: Shape, dimension: int) -> Array:
+  dynamic_shape = [d for d in shape if isinstance(d, core.Tracer)]
+  static_shape = [None if isinstance(d, core.Tracer) else d for d in shape]
   return iota_p.bind(*dynamic_shape, dtype=dtype, shape=tuple(static_shape),
                      dimension=dimension)
+
 
 def _eye(dtype: DTypeLike, shape: Shape, offset: DimSize) -> Array:
   """Like numpy.eye, create a 2D array with ones on a diagonal."""

@@ -4871,12 +4871,19 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     device = jax.devices()[-1] if specify_device else None
     kwargs = {"device": device}
     jaxpr = jax.make_jaxpr(lambda: jnp.arange(*args, **kwargs))()
-    # We have 2 statements in jaxpr:
-    # [a:i32[5] = iota[dimension=0 dtype=int32 shape=(5,)],
-    #  a:i32[5] = device_put[devices=[None] srcs=[None]] b]
-    num_eqs = 2 if device is not None else 1
-    self.assertEqual(len(jaxpr.jaxpr.eqns), num_eqs)
-    self.assertEqual(jaxpr.jaxpr.eqns[0].primitive, lax.iota_p)
+    self.assertEqual(len(jaxpr.jaxpr.eqns), 1)
+    eq = jaxpr.jaxpr.eqns[0]
+    if device is not None:
+      self.assertEqual(eq.primitive.name, "pjit")
+      out_shardings = eq.params["out_shardings"]
+      self.assertEqual(len(out_shardings), 1)
+      self.assertIsInstance(out_shardings[0], SingleDeviceSharding)
+      self.assertEqual(out_shardings[0]._device, device)
+      expr = eq.params["jaxpr"]
+      self.assertEqual(len(expr.eqns), 1)
+      eq = expr.eqns[0]
+
+    self.assertEqual(eq.primitive, lax.iota_p)
 
   def testIssue830(self):
     a = jnp.arange(4, dtype=jnp.complex64)

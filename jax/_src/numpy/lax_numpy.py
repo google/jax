@@ -4222,17 +4222,6 @@ def eye(N: DimSize, M: DimSize | None = None,
            [0., 0., 1., 0., 0.],
            [0., 0., 0., 1., 0.]], dtype=float32)
   """
-  # TODO(vfdev-5): optimize putting the array directly on the device specified
-  # instead of putting it on default device and then on the specific device
-  output = _eye(N, M=M, k=k, dtype=dtype)
-  if device is not None:
-    return jax.device_put(output, device=device)
-  return output
-
-
-def _eye(N: DimSize, M: DimSize | None = None,
-        k: int | ArrayLike = 0,
-        dtype: DTypeLike | None = None) -> Array:
   dtypes.check_user_dtype_supported(dtype, "eye")
   if isinstance(k, int):
     k = lax_internal._clip_int_to_valid_range(k, np.int32,
@@ -4245,8 +4234,9 @@ def _eye(N: DimSize, M: DimSize | None = None,
   M_int = N_int if M is None else core.canonicalize_dim(M, "argument 'M' of jnp.eye()")
   if N_int < 0 or M_int < 0:
     raise ValueError(f"negative dimensions are not allowed, got {N} and {M}")
-  i = lax.broadcasted_iota(offset.dtype, (N_int, M_int), 0)
-  j = lax.broadcasted_iota(offset.dtype, (N_int, M_int), 1)
+  sharding = canonicalize_device_to_sharding(device)
+  i = lax.broadcasted_iota(offset.dtype, (N_int, M_int), 0, sharding=sharding)
+  j = lax.broadcasted_iota(offset.dtype, (N_int, M_int), 1, sharding=sharding)
   return (i + offset == j).astype(dtype)
 
 
@@ -4354,16 +4344,6 @@ def arange(start: ArrayLike | DimSize, stop: ArrayLike | DimSize | None = None,
     - :func:`jax.numpy.linspace`: generate a fixed number of evenly-spaced values.
     - :func:`jax.lax.iota`: directly generate integer sequences in XLA.
   """
-  # TODO(vfdev-5): optimize putting the array directly on the device specified
-  # instead of putting it on default device and then on the specific device
-  output = _arange(start, stop=stop, step=step, dtype=dtype)
-  if device is not None:
-    return jax.device_put(output, device=device)
-  return output
-
-
-def _arange(start: ArrayLike | DimSize, stop: ArrayLike | DimSize | None = None,
-            step: ArrayLike | None = None, dtype: DTypeLike | None = None) -> Array:
   dtypes.check_user_dtype_supported(dtype, "arange")
   if not config.dynamic_shapes.value:
     util.check_arraylike("arange", start)
@@ -4375,6 +4355,7 @@ def _arange(start: ArrayLike | DimSize, stop: ArrayLike | DimSize | None = None,
   stop = core.concrete_or_error(None, stop, "It arose in the jnp.arange argument 'stop'")
   step = core.concrete_or_error(None, step, "It arose in the jnp.arange argument 'step'")
   start_name = "stop" if stop is None and step is None else "start"
+  sharding = canonicalize_device_to_sharding(device)
   for name, val in [(start_name, start), ("stop", stop), ("step", step)]:
     if val is not None and np.ndim(val) != 0:
       raise ValueError(f"jax.numpy.arange: arguments must be scalars; got {name}={val}")
@@ -4386,7 +4367,9 @@ def _arange(start: ArrayLike | DimSize, stop: ArrayLike | DimSize | None = None,
       step = 1
     elif stop is not None and step is None:
       step = 1
-    return _arange_dynamic(start, stop, step, dtype or dtypes.canonicalize_dtype(np.int64))
+    return _arange_dynamic(
+      start, stop, step, dtype or dtypes.canonicalize_dtype(np.int64), sharding=sharding
+    )
   if dtype is None:
     dtype = result_type(start, *(x for x in [stop, step] if x is not None))
   dtype = _jnp_dtype(dtype)
@@ -4396,15 +4379,17 @@ def _arange(start: ArrayLike | DimSize, stop: ArrayLike | DimSize | None = None,
         not dtypes.issubdtype(start_dtype, dtypes.extended)):
       ceil_ = ufuncs.ceil if isinstance(start, core.Tracer) else np.ceil
       start = ceil_(start).astype(int)  # type: ignore[operator]
-    return lax.iota(dtype, start)  # type: ignore[arg-type]
+    return lax.broadcasted_iota(dtype, (start, ), 0, sharding=sharding)
   else:
     if step is None and start == 0 and stop is not None:
-      return lax.iota(dtype, np.ceil(stop).astype(int))  # type: ignore[arg-type]
-    return array(np.arange(start, stop=stop, step=step, dtype=dtype))
+      size = np.ceil(stop).astype(int)
+      return lax.broadcasted_iota(dtype, (size, ), 0, sharding=sharding)
+    return array(np.arange(start, stop=stop, step=step, dtype=dtype), device=sharding)
 
 
 def _arange_dynamic(
-    start: DimSize, stop: DimSize, step: DimSize, dtype: DTypeLike) -> Array:
+    start: DimSize, stop: DimSize, step: DimSize, dtype: DTypeLike,
+    sharding: Sharding | None = None) -> Array:
   # Here if at least one of start, stop, step are dynamic.
   if any(not core.is_dim(v) for v in (start, stop, step)):
     raise ValueError(
@@ -4423,8 +4408,8 @@ def _arange_dynamic(
   gap = step if step_gt_0 else - step
   distance = (stop - start) if step_gt_0 else (start - stop)
   size = core.max_dim(0, distance + gap - 1) // gap
-  return (array(start, dtype=dtype) +
-          array(step, dtype=dtype) * lax.iota(dtype, size))
+  iota = lax.broadcasted_iota(dtype, (size, ), 0, sharding=sharding)
+  return array(start, dtype=dtype) + array(step, dtype=dtype) * iota
 
 @overload
 def linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
