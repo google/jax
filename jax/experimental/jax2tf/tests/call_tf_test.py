@@ -1136,6 +1136,16 @@ class RoundTripToJaxTest(tf_test_util.JaxToTfTestCase):
     # Jit mode
     self.assertAllClose(jax.jit(grad_fun_jax)(x), jax.jit(grad_fun_jax_rt)(x))
 
+  def test_grad_pytree_arg_with_none_leaf(self):
+    def tf_f(x, params):
+      return x * params["y"]
+
+    x = jnp.array(1.0)
+    y = jnp.array(2.0)
+    actual = jax.grad(
+        jax2tf.call_tf(tf_f), argnums=(1,))(x, {"y": y, "other": None})
+    self.assertDictEqual(actual[0], {"y": x, "other": None})
+
 
 class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
   "Reloading output of call_tf into TF with jax2tf."
