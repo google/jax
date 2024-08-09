@@ -1075,7 +1075,7 @@ def _gather(operand, start_indices, *, dimension_numbers,
             fill_value, _in_avals: Sequence[core.ShapedArray],
             _out_aval: core.ShapedArray):
   """Tensorflow implementation of gather."""
-  if mode == lax.GatherScatterMode.FILL_OR_DROP:
+  if mode in [lax.GatherScatterMode.DEFAULT, lax.GatherScatterMode.FILL_OR_DROP]:
     gather_fill_fn = jax2tf._convert_jax_impl(lax_slicing._gather_fill,
                                               multiple_results=False)
     return gather_fill_fn(
@@ -1249,8 +1249,9 @@ def convert_scatter_jax_to_tf(update_op, unsorted_segment_op=None):
     if inserted_window_dims != scatter_to_operand_dims:
       raise _scatter_error("Complex scatters are not supported")
 
-    if (mode != lax.GatherScatterMode.FILL_OR_DROP and
-        mode != lax.GatherScatterMode.PROMISE_IN_BOUNDS):
+    if mode not in [lax.GatherScatterMode.DEFAULT,
+                    lax.GatherScatterMode.FILL_OR_DROP,
+                    lax.GatherScatterMode.PROMISE_IN_BOUNDS]:
       # The OOB behavior for tf.scatter is as follows:
       # - When running in eager or graph mode, it throws an error.
       #   TODO(marcvanzee): Fix this case by removing the OOB indices.

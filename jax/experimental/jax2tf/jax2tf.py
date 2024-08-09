@@ -2884,7 +2884,7 @@ def _gather(operand, start_indices, *, dimension_numbers, slice_sizes: core.Shap
             _in_avals: Sequence[core.ShapedArray],
             _out_aval: core.ShapedArray):
   """Tensorflow implementation of gather."""
-  if mode == lax.GatherScatterMode.FILL_OR_DROP:
+  if mode in [lax.GatherScatterMode.DEFAULT, lax.GatherScatterMode.FILL_OR_DROP]:
     gather_fill_fn = _convert_jax_impl(lax_slicing._gather_fill,
                                        multiple_results=False)
     return gather_fill_fn(

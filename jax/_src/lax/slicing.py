@@ -250,6 +250,9 @@ class GatherScatterMode(enum.Enum):
 
   Possible values are:
 
+  DEFAULT:
+    Identical semantics to FILL_OR_DROP, but tools like checkify will flag
+    out-of-bound errors.
   CLIP:
     Indices will be clamped to the nearest in-range value, i.e., such that the
     entire window to be gathered is in-range.
@@ -268,14 +271,17 @@ class GatherScatterMode(enum.Enum):
   CLIP = enum.auto()
   FILL_OR_DROP = enum.auto()
   PROMISE_IN_BOUNDS = enum.auto()
+  DEFAULT = enum.auto()
 
   @staticmethod
   def from_any(s: str | GatherScatterMode | None):
     if isinstance(s, GatherScatterMode):
       return s
+    if s is None or s == "default":
+      return GatherScatterMode.DEFAULT
     if s == "clip":
       return GatherScatterMode.CLIP
-    if s is None or s == "fill" or s == "drop":
+    if s == "fill" or s == "drop":
       return GatherScatterMode.FILL_OR_DROP
     if s == "promise_in_bounds":
       return GatherScatterMode.PROMISE_IN_BOUNDS
@@ -330,7 +336,7 @@ def gather(operand: ArrayLike, start_indices: ArrayLike,
   if mode is None:
     mode = GatherScatterMode.PROMISE_IN_BOUNDS
   parsed_mode = GatherScatterMode.from_any(mode)
-  if parsed_mode == GatherScatterMode.FILL_OR_DROP:
+  if parsed_mode in [GatherScatterMode.DEFAULT, GatherScatterMode.FILL_OR_DROP]:
     if fill_value is None:
       dtype = _dtype(operand)
       if dtypes.issubdtype(dtype, np.inexact):
@@ -1810,7 +1816,7 @@ def _gather_lower(ctx, operand, indices, *,
         indices_are_sorted=indices_are_sorted, mode=mode,
         fill_value=fill_value)]
 
-  if mode == GatherScatterMode.FILL_OR_DROP:
+  if mode in (GatherScatterMode.DEFAULT, GatherScatterMode.FILL_OR_DROP):
     gather_fill_fn = mlir.lower_fun(_gather_fill, multiple_results=False)
     return gather_fill_fn(
         ctx, operand, indices,

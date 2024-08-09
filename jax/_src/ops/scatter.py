@@ -167,7 +167,7 @@ def _segment_update(name: str,
                     reducer: Callable | None = None,
                     mode: lax.GatherScatterMode | None = None) -> Array:
   check_arraylike(name, data, segment_ids)
-  mode = lax.GatherScatterMode.FILL_OR_DROP if mode is None else mode
+  mode = lax.GatherScatterMode.DEFAULT if mode is None else mode
   data = jnp.asarray(data)
   segment_ids = jnp.asarray(segment_ids)
   dtype = data.dtype
