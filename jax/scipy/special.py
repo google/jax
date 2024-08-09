@@ -61,3 +61,7 @@ from jax._src.scipy.special import (
   xlogy as xlogy,
   zeta as zeta,
 )
+
+from jax._src.third_party.scipy.special import (
+  fresnel as fresnel,
+)

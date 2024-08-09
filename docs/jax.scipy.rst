@@ -164,6 +164,7 @@ jax.scipy.special
    expit
    expn
    factorial
+   fresnel
    gamma
    gammainc
    gammaincc
