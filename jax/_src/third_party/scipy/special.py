@@ -226,8 +226,8 @@ def fresnel(x: ArrayLike) -> tuple[Array, Array]:
   t = x2 * x2
 
   if single_precision:
-    s_small = x * x2 * jnp.polyval(fresnl_sn[:6], t)
-    c_small = x * jnp.polyval(fresnl_cn[:6], t)
+    s_small = x * x2 * jnp.polyval(fresnl_sn, t)
+    c_small = x * jnp.polyval(fresnl_cn, t)
   else:
     s_small = x * x2 * jnp.polyval(fresnl_sn[:6], t) / jnp.polyval(fresnl_sd[:7], t)
     c_small = x * jnp.polyval(fresnl_cn[:6], t) / jnp.polyval(fresnl_cd[:7], t)
