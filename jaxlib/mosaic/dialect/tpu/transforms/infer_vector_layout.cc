@@ -1217,7 +1217,11 @@ class VectorLayoutInferer {
       if (failed(infer_offset(*offsets[1], 1))) {
         return failure();
       }
-      std::array<int64_t, 2> layout_tiling{tiling[0], tiling[1]};
+      CHECK(offsets[0] && offsets[1]);
+      // TODO(tlongeri): The tile_res_shape[1] > target_shape_[1] check below
+      // needs to account for offsets (the intention is to check that we are
+      // loading more than one sublane), but fixing makes us hit unimplemented
+      // cases in tests and kernels.
       if (num_sublanes == 1 && bitwidth == 32 &&
           tiling[1] == target_shape_[1] &&
           tile_res_shape[1] > target_shape_[1]) {
@@ -1225,18 +1229,19 @@ class VectorLayoutInferer {
         // multiple times. Enabling this helps load one entire row from memref
         // more efficiently.
         setLayout(op, in_layout,
-                  VectorLayout(bitwidth, offsets, {1, layout_tiling[1]},
+                  VectorLayout(bitwidth, offsets, {1, tiling[1]},
                                ImplicitDim::kNone));
       } else if (num_sublanes == 1 && bitwidth == 32 &&
-                 tiling == target_shape_) {
+                 tile_res_shape[1] <= target_shape_[1]) {
         // We can use replicated loads if we're only loading a single sublane.
+        // Always load into native tiling to replicate on all sublanes.
         setLayout(op, in_layout,
                   VectorLayout(bitwidth, {std::nullopt, offsets[1]},
-                               layout_tiling, ImplicitDim::kNone));
+                               target_shape_, ImplicitDim::kNone));
       } else {
-        setLayout(
-            op, in_layout,
-            VectorLayout(bitwidth, offsets, layout_tiling, ImplicitDim::kNone));
+        setLayout(op, in_layout,
+                  VectorLayout(bitwidth, offsets, {tiling[0], tiling[1]},
+                               ImplicitDim::kNone));
       }
     }
     return success();

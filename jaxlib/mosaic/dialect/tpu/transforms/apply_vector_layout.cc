@@ -2824,18 +2824,13 @@ LogicalResult vector_load_rule(RewriteContext &ctx, Operation &op,
   FAILUREOR_ASSIGN_OR_RETURN(
       Tiling memref_tiling,
       getMemRefTiling(load_op.getBase(), ctx.target_shape));
-  if (memref_tiling != layout_out.tiling() &&
-      !(memref_tiling[0] == 1 && layout_out.tiling()[0] == 1 &&
-        memref_tiling[1] % layout_out.tiling()[1] == 0)) {
-    // Now we can handle the case when tiling is (1, TARGET_SHAPE.lanes).
-    // TODO(b/295393167): need to support strided load for bitwidth < 32.
-    if (layout_out.bitwidth() != 32 ||
-        layout_out.tiling() != std::array<int64_t, 2>{1, ctx.target_shape[1]}) {
-      return op.emitOpError("Not implemented");
-    }
-  }
   // TODO(apaszke): Check that loads are from vmem!
 
+  const LayoutOffsets offsets = layout_out.offsets();
+  if (!offsets[1]) {
+    return op.emitOpError(
+        "Not implemented: Load replicated along lanes is unsupported");
+  }
   bool can_support_unaligned_dynamic_index = false;
   bool must_support_unaligned_dynamic_index = false;
   if (load_op.getIndices().size() > 1) {
@@ -2848,28 +2843,46 @@ LogicalResult vector_load_rule(RewriteContext &ctx, Operation &op,
   const SmallVector<int64_t> implicit_shape =
       layout_out.implicitShape(vty.getShape());
   const int64_t ss = implicit_shape[implicit_shape.size() - 2];
-  int64_t sublane_stride = 1;
-  // Handle special patterns that allow us to support more flexible loads.
+  int64_t sublane_stride;
   if (layout_out.bitwidth() == 32 &&
       layout_out.tiling() == std::array<int64_t, 2>{1, ctx.target_shape[1]} &&
       ss == 1) {
     // Loading a single row on the 2nd minor dim into the (1, 128) layout. We
     // can use sublane striding to perform the relayout as part of the load.
+    // TODO(b/295393167): need to support strided load for bitwidth < 32.
     sublane_stride = memref_tiling[0];
     can_support_unaligned_dynamic_index = true;
+  } else if (layout_out.bitwidth() == 32 &&
+             layout_out.hasNativeTiling(ctx.target_shape) && ss == 1 &&
+             !offsets[0]) {
+    // Sublane-replicated load into 32-bit native tiling.
+    sublane_stride = 0;
+    can_support_unaligned_dynamic_index = true;
   } else {
-    // Otherwise, if the memref has a short last dimension and is contiguous
-    // all the tiled layouts become equivalent, so we can handle unaligned
-    // dynamic indices without any special case.
+    if (memref_tiling != layout_out.tiling()) {
+      if (memref_tiling[0] != 1 || layout_out.tiling()[0] != 1 ||
+          memref_tiling[1] % layout_out.tiling()[1] != 0) {
+        return op.emitOpError(
+            "Not implemented: Unsupported mismatched tilings");
+      }
+    }
+    if (!offsets[0]) {
+      return op.emitOpError(
+          "Not implemented: Unsupported sublane-replicated load");
+    }
+    sublane_stride = 1;
+    // If the memref has a short last dimension and is contiguous all the tiled
+    // layouts become equivalent, so we can handle unaligned dynamic indices
+    // without any special case.
     auto mem_layout = dyn_cast<TiledLayoutAttr>(memref_ty.getLayout());
     if (!mem_layout) {
       return op.emitOpError("Expected a tiled memref");
     }
     auto tile_strides = mem_layout.getTileStrides();
-    if (memref_ty.getShape().back() == ctx.target_shape[1] &&
-        tile_strides.take_back(2) == ArrayRef<int64_t>{1, 1}) {
-      can_support_unaligned_dynamic_index = true;
-    }
+    can_support_unaligned_dynamic_index =
+        layout_out.bitwidth() == 32 &&
+        memref_ty.getShape().back() <= memref_tiling[1] &&
+        tile_strides.take_back(2) == ArrayRef<int64_t>{1, 1};
   }
 
   auto add_idx = [&](const Value &v, int64_t d) -> Value {
@@ -2910,28 +2923,6 @@ LogicalResult vector_load_rule(RewriteContext &ctx, Operation &op,
   // a bunch of scalar core work.
   auto tile_base_idxs = ArrayRef<Value>(base_indices).take_back(tiled_dims);
   auto batch_base_idxs = ArrayRef<Value>(base_indices).drop_back(tiled_dims);
-  const LayoutOffsets offsets = layout_out.offsets();
-  AffineMap load_map;
-  if (offsets[1] == std::nullopt) {
-    return op.emitOpError(
-        "Not implemented: Load replicated along lanes is unsupported");
-  }
-  if (offsets[0] == std::nullopt) {
-    if (ss != 1) {
-      return op.emitOpError(
-          "Not implemented: Sublane-replicated load with size > 1 is "
-          "unsupported");
-    }
-    if (!layout_out.hasNativeTiling(ctx.target_shape)) {
-      return op.emitOpError("Not implemented");
-    }
-    // affine_map<(..., j) -> (0, j)
-    load_map =
-        AffineMap::get(memref_ty.getRank(), 0,
-                       {getAffineConstantExpr(0, mlir_ctx),
-                        getAffineDimExpr(memref_ty.getRank() - 1, mlir_ctx)},
-                       mlir_ctx);
-  }
 
   xla::Array<Value> tiles(
       layout_out.tileArrayShape(vty.getShape(), ctx.target_shape));
@@ -2949,7 +2940,7 @@ LogicalResult vector_load_rule(RewriteContext &ctx, Operation &op,
         const auto base_l = tile_base_idxs.back();
         const int64_t lidx = tile_idxs[num_dims - 1];
         idxs[num_dims - 1] =
-            add_idx(base_l, lidx * vreg_slice[1] - offsets[1].value_or(0));
+            add_idx(base_l, lidx * vreg_slice[1] - *offsets[1]);
         if (!is_1d) {
           CHECK_EQ(tile_base_idxs.size(), 2);
           const auto base_s = tile_base_idxs.front();
@@ -2962,35 +2953,10 @@ LogicalResult vector_load_rule(RewriteContext &ctx, Operation &op,
         std::unique_ptr<VRegDataBounds> bounds = layout_out.tileDataBounds(
             mlir_ctx, vty.getShape(), toArrayRef(tile_idxs), ctx.target_shape,
             /*allow_replicated =*/{true, false});
-        Operation *tile;
-        if (bounds->maskVariesAlong(Direction::kSublanes, ctx.target_shape)) {
-          CHECK(offsets[0].has_value());
-          tile = builder.create<tpu::LoadOp>(
-              target_ty, base_addr, idxs,
-              bounds->getSublaneMask(mlir_ctx, ctx.target_shape),
-              builder.getI32IntegerAttr(sublane_stride));
-        } else {
-          if (load_map) {
-            if (layout_out.bitwidth() != 32) {
-              load_op.emitOpError("Not implemented");
-              return absl::UnimplementedError("");
-            }
-            tile = builder.create<vector::TransferReadOp>(
-                target_ty, base_addr, idxs, load_map,
-                // TODO(tlongeri): Not sure whether we are obeying the semantics
-                // of in_bounds, but our lowering ignores it and this path will
-                // removed soon anyway.
-                SmallVector<bool>(2, true));
-          } else {
-            const SmallVector<bool> sublane_mask(ctx.target_shape[0], true);
-            const auto sublane_mask_attr =
-                DenseBoolArrayAttr::get(mlir_ctx, sublane_mask);
-            tile = builder.create<tpu::LoadOp>(
-                target_ty, base_addr, idxs, sublane_mask_attr,
-                builder.getI32IntegerAttr(sublane_stride));
-          }
-        }
-        tiles(tile_idxs) = tile->getResult(0);
+        tiles(tile_idxs) = builder.create<tpu::LoadOp>(
+            target_ty, base_addr, idxs,
+            bounds->getSublaneMask(mlir_ctx, ctx.target_shape),
+            builder.getI32IntegerAttr(sublane_stride));
         return absl::OkStatus();
       });
   if (!status.ok()) {
@@ -3982,16 +3948,6 @@ LogicalResult vector_store_rule(RewriteContext &ctx, Operation &op,
   FAILUREOR_ASSIGN_OR_RETURN(
       const Tiling memref_tiling,
       getMemRefTiling(store_op.getBase(), ctx.target_shape));
-  if (memref_tiling != to_store_layout.tiling() &&
-      !(memref_tiling[0] == 1 && to_store_layout.tiling()[0] == 1 &&
-        memref_tiling[1] % to_store_layout.tiling()[1] == 0)) {
-    // Now we can handle the case when tiling is (1, TARGET_SHAPE.lanes).
-    // TODO(b/295393167): need to support strided store for bitwidth < 32.
-    if (to_store_layout.bitwidth() != 32 ||
-        to_store_layout.tiling() != Tiling{1, ctx.target_shape[1]}) {
-      return op.emitOpError("Not implemented");
-    }
-  }
 
   bool can_support_unaligned_dynamic_index = false;
   bool must_support_unaligned_dynamic_index = false;
@@ -4002,8 +3958,7 @@ LogicalResult vector_store_rule(RewriteContext &ctx, Operation &op,
       must_support_unaligned_dynamic_index = true;
     }
   }
-  int64_t sublane_stride = 1;
-  // Handle special patterns that allow us to support more flexible loads.
+  int64_t sublane_stride;
   if (to_store_layout.bitwidth() == 32 &&
       to_store_layout.tiling() == Tiling{1, ctx.target_shape[1]}) {
     // Storing a single row on the 2nd minor dim from the (1, 128) layout. We
@@ -4013,6 +3968,14 @@ LogicalResult vector_store_rule(RewriteContext &ctx, Operation &op,
     sublane_stride = memref_tiling[0];
     can_support_unaligned_dynamic_index = true;
   } else {
+    if (memref_tiling != to_store_layout.tiling()) {
+      if (memref_tiling[0] != 1 || to_store_layout.tiling()[0] != 1 ||
+          memref_tiling[1] % to_store_layout.tiling()[1] != 0) {
+        return op.emitOpError(
+            "Not implemented: Unsupported mismatched tilings");
+      }
+    }
+    sublane_stride = 1;
     // Otherwise, if the memref has a short last dimension and is contiguous
     // all the tiled layouts become equivalent, so we can handle unaligned
     // dynamic indices without any special case.
@@ -4021,10 +3984,10 @@ LogicalResult vector_store_rule(RewriteContext &ctx, Operation &op,
       return op.emitOpError("Expected a tiled memref");
     }
     auto tile_strides = mem_layout.getTileStrides();
-    if (memref_ty.getShape().back() == ctx.target_shape[1] &&
-        tile_strides.take_back(2) == ArrayRef<int64_t>{1, 1}) {
-      can_support_unaligned_dynamic_index = true;
-    }
+    can_support_unaligned_dynamic_index =
+        to_store_layout.bitwidth() == 32 &&
+        memref_ty.getShape().back() <= memref_tiling[1] &&
+        tile_strides.take_back(2) == ArrayRef<int64_t>{1, 1};
   }
 
   auto add_idx = [&](const Value &v, int64_t d) -> Value {
