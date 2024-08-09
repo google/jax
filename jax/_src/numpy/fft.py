@@ -261,11 +261,13 @@ def rfftn(a: ArrayLike, s: Shape | None = None,
 
   Args:
     a: real-valued input array.
-    s: optional sequence of integers. Specifies the effective size of the output
+    s: optional sequence of integers. Controls the effective size of the input
       along each specified axis. If not specified, it will default to the
       dimension of input along ``axes``.
     axes: optional sequence of integers, default=None. Specifies the axes along
-      which the transform is computed.
+      which the transform is computed. If not specified, transform is computed
+      along the last ``len(s)`` axes or along all the axes, if ``s`` is also not
+      specified.
     norm: string, default="backward". The normalization mode. "backward", "ortho"
       and "forward" are supported.
 
@@ -273,7 +275,7 @@ def rfftn(a: ArrayLike, s: Shape | None = None,
     An array containing the multidimensional discrete Fourier transform of ``a``
     having size specified in ``s`` along the axes ``axes`` except along the axis
     ``axes[-1]``. The size of the output along the axis ``axes[-1]`` is 
-    ``(s[-1]/2)+1``, if ``s[-1]`` is even and ``(s[-1]+1)/2``, if ``s[-1]`` is odd.
+    ``s[-1]//2+1``.
 
   See also:
     - :func:`jax.numpy.fft.rfft`: Computes a one-dimensional discrete Fourier
@@ -284,8 +286,6 @@ def rfftn(a: ArrayLike, s: Shape | None = None,
       discrete Fourier transform.
 
   Examples:
-    ``jnp.fft.rfftn`` computes the transform along all the axes by default.
-
     >>> x = jnp.array([[[1, 3, 5],
     ...                 [2, 4, 6]],
     ...                [[7, 9, 11],
@@ -298,10 +298,9 @@ def rfftn(a: ArrayLike, s: Shape | None = None,
            [[-36.+0.j  ,   0.+0.j  ],
             [  0.+0.j  ,   0.+0.j  ]]], dtype=complex64)
 
-    When ``s=[3, 3, 4]``, transform is compted along ``axes (-3, -2, -1)``
-    dimension of the transform along ``axes -3 and -2`` will be ``3 and 3``,
-    along ``axis -1`` will be ``(4/2)+1) = 3`` and dimension along other axes
-    (if available) will be the same as that of input.
+    When ``s=[3, 3, 4]``,  size of the transform along ``axes (-3, -2)`` will
+    be (3, 3), and along ``axis -1`` will be ``4//2+1 = 3`` and size along
+    other axes will be the same as that of input.
 
     >>> with jnp.printoptions(precision=2, suppress=True):
     ...   jnp.fft.rfftn(x, s=[3, 3, 4])
@@ -317,10 +316,9 @@ def rfftn(a: ArrayLike, s: Shape | None = None,
             [ 19.5 +12.99j,   0.33 -6.5j ,   6.5  +4.33j],
             [-25.5  +7.79j,   4.6  +5.04j,  -8.5  +2.6j ]]], dtype=complex64)
 
-    When ``s=[3, 5]`` and ``axes=(0, 1)``, transform is computed along
-    ``axes (0, 1)`` and size of the transform along ``axis 0`` will be ``3``,
-    along ``axis 1`` will be ``(5+1)/2 = 3`` and dimension along other axes will
-    be same as that of input.
+    When ``s=[3, 5]`` and ``axes=(0, 1)``, size of the transform along ``axis 0``
+    will be ``3``, along ``axis 1`` will be ``5//2+1 = 3`` and dimension along
+    other axes will be same as that of input.
 
     >>> with jnp.printoptions(precision=2, suppress=True):
     ...   jnp.fft.rfftn(x, s=[3, 5], axes=[0, 1])
@@ -359,7 +357,9 @@ def irfftn(a: ArrayLike, s: Shape | None = None,
       ``axes[-1]`` is ``2*(m-1)``, ``m`` is the size of input along axis ``axes[-1]``
       and the dimension along other axes will be the same as that of input.
     axes: optional sequence of integers, default=None. Specifies the axes along
-      which the transform is computed.
+      which the transform is computed. If not specified, transform is computed
+      along the last ``len(s)`` axes or along all the axes, if ``s`` is also not
+      specified.
     norm: string, default="backward". The normalization mode. "backward", "ortho"
       and "forward" are supported.
 
@@ -389,9 +389,8 @@ def irfftn(a: ArrayLike, s: Shape | None = None,
            [[-3. ,  0. ,  0. ,  0. ],
             [ 0. ,  0. ,  0. ,  0. ]]], dtype=float32)
 
-    When ``s=[3, 4]``, transform is compted along ``axes (-2, -1)`` and size of
-    the transform along ``axes (-2, -1)`` will be ``(3, 4)`` and size along
-    other axes will be the same as that of input.
+    When ``s=[3, 4]``, size of the transform along ``axes (-2, -1)`` will be
+    ``(3, 4)`` and size along other axes will be the same as that of input.
 
     >>> with jnp.printoptions(precision=2, suppress=True):
     ...   jnp.fft.irfftn(x, s=[3, 4])
@@ -403,9 +402,8 @@ def irfftn(a: ArrayLike, s: Shape | None = None,
             [ 1.33, -1.61,  0.  ,  1.28],
             [ 1.33,  1.28,  0.  , -1.61]]], dtype=float32)
 
-    When ``s=[3]`` and ``axes=(0)``, transform is computed along ``axis 0`` and
-    size of the transform along ``axes 0`` will be ``3`` and dimension along other
-    axes will be same as that of input.
+    When ``s=[3]`` and ``axes=[0]``, size of the transform along ``axes 0`` will
+    be ``3`` and dimension along other axes will be same as that of input.
 
     >>> with jnp.printoptions(precision=2, suppress=True):
     ...   jnp.fft.irfftn(x, s=[3], axes=[0])
