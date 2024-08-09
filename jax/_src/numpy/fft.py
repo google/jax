@@ -265,9 +265,9 @@ def rfftn(a: ArrayLike, s: Shape | None = None,
       along each specified axis. If not specified, it will default to the
       dimension of input along ``axes``.
     axes: optional sequence of integers, default=None. Specifies the axes along
-      which the transform is computed. If not specified, transform is computed
-      along the last ``len(s)`` axes or along all the axes, if ``s`` is also not
-      specified.
+      which the transform is computed. If not specified, the transform is computed
+      along the last ``len(s)`` axes. If neither ``axes`` nor ``s`` is specified,
+      the transform is computed along all the axes.
     norm: string, default="backward". The normalization mode. "backward", "ortho"
       and "forward" are supported.
 
@@ -357,15 +357,16 @@ def irfftn(a: ArrayLike, s: Shape | None = None,
       ``axes[-1]`` is ``2*(m-1)``, ``m`` is the size of input along axis ``axes[-1]``
       and the dimension along other axes will be the same as that of input.
     axes: optional sequence of integers, default=None. Specifies the axes along
-      which the transform is computed. If not specified, transform is computed
-      along the last ``len(s)`` axes or along all the axes, if ``s`` is also not
-      specified.
+      which the transform is computed. If not specified, the transform is computed
+      along the last ``len(s)`` axes. If neither ``axes`` nor ``s`` is specified,
+      the transform is computed along all the axes.
     norm: string, default="backward". The normalization mode. "backward", "ortho"
       and "forward" are supported.
 
   Returns:
     A real-valued array containing the multidimensional inverse discrete Fourier
-    transform of ``a``.
+    transform of ``a`` with size ``s`` along specified ``axes``, and the same as
+    the input along other axes.
 
   See also:
     - :func:`jax.numpy.fft.rfftn`: Computes a multidimensional discrete Fourier
