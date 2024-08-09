@@ -57,20 +57,6 @@ config_setting(
     },
 )
 
-# When `build_cuda_plugin_from_source` is true, it assumes running `bazel test` without preinstalled
-# cuda plugin.
-bool_flag(
-    name = "build_cuda_plugin_from_source",
-    build_setting_default = False,
-)
-
-config_setting(
-    name = "enable_build_cuda_plugin_from_source",
-    flag_values = {
-        ":build_cuda_plugin_from_source": "True",
-    },
-)
-
 exports_files([
     "LICENSE",
     "version.py",
