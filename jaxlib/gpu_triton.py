@@ -35,6 +35,7 @@ if _cuda_triton:
   create_array_parameter = _cuda_triton.create_array_parameter
   create_scalar_parameter = _cuda_triton.create_scalar_parameter
   get_compute_capability = _cuda_triton.get_compute_capability
+  get_arch_details = _cuda_triton.get_arch_details
   get_custom_call = _cuda_triton.get_custom_call
   get_serialized_metadata = _cuda_triton.get_serialized_metadata
 
@@ -58,5 +59,6 @@ if _hip_triton:
   create_array_parameter = _hip_triton.create_array_parameter
   create_scalar_parameter = _hip_triton.create_scalar_parameter
   get_compute_capability = _hip_triton.get_compute_capability
+  get_arch_details = _hip_triton.get_arch_details
   get_custom_call = _hip_triton.get_custom_call
   get_serialized_metadata = _hip_triton.get_serialized_metadata
