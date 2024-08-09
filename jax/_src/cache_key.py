@@ -189,6 +189,23 @@ def _hash_serialized_compile_options(hash_obj, compile_options_obj,
   # as the same values are used every time for each field.
   debug_options = compile_options_copy.executable_build_options.debug_options
   # LINT.IfChange(debug_options)
+  debug_options.xla_gpu_autotune_gemm_rtol = 0.
+  debug_options.xla_syntax_sugar_async_ops = False
+  debug_options.xla_cmd_buffer_trace_cache_size = 0
+  debug_options.xla_gpu_per_fusion_autotune_cache_dir = ""
+  debug_options.xla_gpu_kernel_cache_file = ""
+  debug_options.xla_gpu_nccl_terminate_on_error = False
+  debug_options.xla_gpu_dump_autotune_logs_to = ""
+  debug_options.xla_gpu_verify_triton_fusion_numerics = False
+  debug_options.xla_dump_large_constants = False
+  debug_options.xla_gpu_use_memcpy_local_p2p = False
+  debug_options.xla_gpu_require_complete_aot_autotune_results = ""
+  debug_options.xla_gpu_nccl_p2p_max_nchannels = 0
+  debug_options.xla_gpu_enable_nccl_per_stream_comms = False
+  debug_options.xla_debug_buffer_assignment_show_max = 0
+  debug_options.xla_gpu_mock_custom_calls = 0
+  debug_options.xla_gpu_dump_autotuned_gemm_fusions = False
+  debug_options.xla_gpu_dump_autotune_results_to = ""
   debug_options.xla_force_host_platform_device_count = 0
   debug_options.xla_dump_to = ""
   debug_options.xla_dump_hlo_module_re = ""
@@ -235,6 +252,23 @@ def _hash_platform(hash_obj, backend):
 def _hash_xla_flags(hash_obj, extra_flag_prefixes: list[str]):
   # LINT.IfChange(xla_flags)
   xla_flags_to_exclude_from_cache_key = [
+      "--xla_gpu_autotune_gemm_rtol",
+      "--xla_syntax_sugar_async_ops",
+      "--xla_cmd_buffer_trace_cache_size",
+      "--xla_gpu_per_fusion_autotune_cache_dir",
+      "--xla_gpu_kernel_cache_file",
+      "--xla_gpu_nccl_terminate_on_error",
+      "--xla_gpu_dump_autotune_logs_to",
+      "--xla_gpu_verify_triton_fusion_numerics",
+      "--xla_dump_large_constants",
+      "--xla_gpu_use_memcpy_local_p2p",
+      "--xla_gpu_require_complete_aot_autotune_results",
+      "--xla_gpu_nccl_p2p_max_nchannels",
+      "--xla_gpu_enable_nccl_per_stream_comms",
+      "--xla_debug_buffer_assignment_show_maxy",
+      "--xla_gpu_mock_custom_calls",
+      "--xla_gpu_dump_autotuned_gemm_fusions",
+      "--xla_gpu_dump_autotune_results_to",
       "--xla_dump_compress_protos",
       "--xla_dump_module_metadata",
       "--xla_dump_max_hlo_modules",
