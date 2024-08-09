@@ -284,8 +284,8 @@ def check_layout(query, key, value, bias, q_seqlen, kv_seqlen, layout):
       raise ValueError(f"kv_seqlen must have same batch as Q, got {kv_seq_b}")
 
 def check_is_flash_attention(
-    query, key, layout, cudnn_version, has_bias, is_training):
-  if layout == AttentionLayout.BNTH:
+    query, key, layout: int, cudnn_version, has_bias, is_training):
+  if layout == AttentionLayout.BNTH.value:
     _, _, T, H = query.shape
     _, _, S, _ = key.shape
   else:
