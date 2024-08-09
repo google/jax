@@ -33,8 +33,9 @@ class LaxBackedScipyInterpolateTests(jtu.JaxTestCase):
   @jtu.sample_product(
     spaces=(((0., 10., 10),), ((-15., 20., 12), (3., 4., 24))),
     method=("linear", "nearest"),
+    fill_value=(np.nan, None),
   )
-  def testRegularGridInterpolator(self, spaces, method):
+  def testRegularGridInterpolator(self, spaces, method, fill_value):
     rng = jtu.rand_default(self.rng())
     scipy_fun = lambda init_args, call_args: sp_interp.RegularGridInterpolator(
         *init_args[:2], method, False, *init_args[2:])(*call_args)
@@ -44,7 +45,6 @@ class LaxBackedScipyInterpolateTests(jtu.JaxTestCase):
     def args_maker():
       points = tuple(map(lambda x: np.linspace(*x), spaces))
       values = rng(reduce(operator.add, tuple(map(np.shape, points))), float)
-      fill_value = np.nan
 
       init_args = (points, values, fill_value)
       n_validation_points = 50
