@@ -275,9 +275,9 @@ class GatherScatterMode(enum.Enum):
       return s
     if s == "clip":
       return GatherScatterMode.CLIP
-    if s is None or s == "fill" or s == "drop":
+    if s == "fill" or s == "drop":
       return GatherScatterMode.FILL_OR_DROP
-    if s == "promise_in_bounds":
+    if s is None or s == "promise_in_bounds":
       return GatherScatterMode.PROMISE_IN_BOUNDS
     else:
       raise ValueError(f'Unknown gather mode "{s}"')
@@ -327,8 +327,6 @@ def gather(operand: ArrayLike, start_indices: ArrayLike,
   Returns:
     An array containing the gather output.
   """
-  if mode is None:
-    mode = GatherScatterMode.PROMISE_IN_BOUNDS
   parsed_mode = GatherScatterMode.from_any(mode)
   if parsed_mode == GatherScatterMode.FILL_OR_DROP:
     if fill_value is None:
