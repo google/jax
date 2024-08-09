@@ -403,7 +403,6 @@ class JVPTrace(Trace):
         *res, *tangents_in, num_res=res_tree.num_leaves, bwd=bwd,
         out_avals=avals_out, symbolic_zeros=symbolic_zeros)
     tangents_out = map(jax._src.lax.lax.tie_p.bind, primals_out, tangents_out)
-    tangents_out = map(recast_to_float0, primals_out, tangents_out)
     return map(partial(JVPTracer, self), primals_out, tangents_out)
 
   def post_process_custom_vjp_call(self, out_tracers, _):
@@ -480,7 +479,8 @@ def _primal_tangent_shapes_match(primal, tangent):
     tangent_aval = raise_to_shaped(get_aval(tangent), weak_type=False)
     assert core.definitely_equal_shape(primal_aval.shape, tangent_aval.shape)
     expected_tangent_dtype = core.primal_dtype_to_tangent_dtype(primal_aval.dtype)
-    assert expected_tangent_dtype == tangent_aval.dtype, (expected_tangent_dtype, tangent_aval.dtype)
+    assert expected_tangent_dtype == tangent_aval.dtype or \
+        expected_tangent_dtype == float0, (expected_tangent_dtype, tangent_aval.dtype)
 
 call_param_updaters: dict[core.Primitive, Callable] = {}
 call_transpose_param_updaters: dict[core.Primitive, Callable] = {}
