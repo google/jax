@@ -29,7 +29,7 @@ from jax.tree_util import (tree_leaves, tree_map, tree_structure,
 from jax._src import dtypes
 from jax._src.lax import lax as lax_internal
 from jax._src.util import safe_map as map
-
+from jax._src.third_party.scipy.bunch import make_tuple_bunch
 
 _dot = partial(jnp.dot, precision=lax.Precision.HIGHEST)
 _vdot = partial(jnp.vdot, precision=lax.Precision.HIGHEST)
@@ -131,9 +131,16 @@ def _cg_solve(A, b, x0=None, *, maxiter, tol=1e-5, atol=0.0, M=_identity):
   gamma0 = _vdot_real_tree(r0, z0).astype(dtype)
   initial_value = (x0, r0, gamma0, p0, 0)
 
-  x_final, *_ = lax.while_loop(cond_fun, body_fun, initial_value)
+  x_final, r, gamma, _, k = lax.while_loop(cond_fun, body_fun, initial_value)
 
-  return x_final
+  # compute the final error and whever it has converged.
+  rs = gamma if M is _identity else _vdot_real_tree(r, r)
+  converged = rs <= atol2
+
+  # additional info output structure
+  info = {'error': rs, 'converged':converged, 'niter': k}
+
+  return x_final, info
 
 
 # aliases for working with pytrees
@@ -180,9 +187,16 @@ def _bicgstab_solve(A, b, x0=None, *, maxiter, tol=1e-5, atol=0.0, M=_identity):
       1, *dtypes._lattice_result_type(*tree_leaves(b)))
   initial_value = (x0, r0, r0, alpha0, omega0, rho0, r0, r0, 0)
 
-  x_final, *_ = lax.while_loop(cond_fun, body_fun, initial_value)
+  x_final, r, *_, k = lax.while_loop(cond_fun, body_fun, initial_value)
 
-  return x_final
+  # compute the final error and whever it has converged.
+  rs = _vdot_real_tree(r, r)
+  converged = rs <= atol2
+
+  # additional info output structure
+  info = {'error': rs, 'converged':converged, 'niter': k}
+
+  return x_final, info
 
 
 def _shapes(pytree):
@@ -190,7 +204,7 @@ def _shapes(pytree):
 
 
 def _isolve(_isolve_solve, A, b, x0=None, *, tol=1e-5, atol=0.0,
-            maxiter=None, M=None, check_symmetric=False):
+            maxiter=None, M=None, check_symmetric=False, has_aux=False):
   if x0 is None:
     x0 = tree_map(jnp.zeros_like, b)
 
@@ -223,12 +237,11 @@ def _isolve(_isolve_solve, A, b, x0=None, *, tol=1e-5, atol=0.0,
     return not issubclass(x.dtype.type, np.complexfloating)
   symmetric = all(map(real_valued, tree_leaves(b))) \
     if check_symmetric else False
-  x = lax.custom_linear_solve(
+  return lax.custom_linear_solve(
       A, b, solve=isolve_solve, transpose_solve=isolve_solve,
-      symmetric=symmetric)
-  info = None
-  return x, info
+      symmetric=symmetric, has_aux=has_aux)
 
+CGSolveResult = make_tuple_bunch("CGSolveResult", ["solution", "niter"], ["converged", "error"])
 
 def cg(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None):
   """Use Conjugate Gradient iteration to solve ``Ax = b``.
@@ -283,9 +296,11 @@ def cg(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None):
   scipy.sparse.linalg.cg
   jax.lax.custom_linear_solve
   """
-  return _isolve(_cg_solve,
+  sol, info = _isolve(_cg_solve,
                  A=A, b=b, x0=x0, tol=tol, atol=atol,
-                 maxiter=maxiter, M=M, check_symmetric=True)
+                 maxiter=maxiter, M=M, check_symmetric=True, has_aux=True)
+
+  return CGSolveResult(solution=sol, niter=info["niter"], converged=info["converged"], error=info["error"])
 
 
 def _safe_normalize(x, thresh=None):
@@ -703,6 +718,7 @@ def gmres(A, b, x0=None, *, tol=1e-5, atol=0.0, restart=20, maxiter=None,
   info = jnp.where(failed, -1, 0)
   return x, info
 
+BICGSSolveResult = make_tuple_bunch("BICGSSolveResult", ["solution", "niter"], ["converged", "error"])
 
 def bicgstab(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None):
   """Use Bi-Conjugate Gradient Stable iteration to solve ``Ax = b``.
@@ -759,6 +775,8 @@ def bicgstab(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None):
   jax.lax.custom_linear_solve
   """
 
-  return _isolve(_bicgstab_solve,
+  sol, info = _isolve(_bicgstab_solve,
                  A=A, b=b, x0=x0, tol=tol, atol=atol,
-                 maxiter=maxiter, M=M)
+                 maxiter=maxiter, M=M, has_aux=True)
+
+  return BICGSSolveResult(solution=sol, niter=info["niter"], converged=info["converged"], error=info["error"])
