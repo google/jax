@@ -38,6 +38,14 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
 
 ## jaxlib 0.4.32
 
+* Breaking changes
+  * Hermetic CUDA support is added.
+    Hermetic CUDA uses a specific downloadable version of CUDA instead of the
+    user’s locally installed CUDA. Bazel will download CUDA, CUDNN and NCCL
+    distributions, and then use CUDA libraries and tools as dependencies in
+    various Bazel targets. This enables more reproducible builds for JAX and its
+    supported CUDA versions.
+
 ## jax 0.4.31 (July 29, 2024)
 
 * Deletion

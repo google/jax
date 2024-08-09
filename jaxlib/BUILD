@@ -21,6 +21,7 @@ load(
     "pybind_extension",
     "pytype_library",
 )
+load("@xla//xla/tsl:tsl.bzl", "if_hermetic_cuda_libs")
 
 licenses(["notice"])
 
@@ -229,7 +230,15 @@ pybind_extension(
         "@xla//xla/tsl/cuda:cublas",
         "@xla//xla/tsl/cuda:cudart",
         "@xla//xla/tsl/python/lib/core:numpy",
-    ],
+    ] + if_hermetic_cuda_libs([
+        "@cuda_cudart//:cuda_driver",
+        # The dependency below is required because
+        # @xla//xla/pjrt/c:pjrt_c_api_gpu_plugin.so
+        # depends on NCCL, but //jax_plugins/cuda:pjrt_c_api_gpu_plugin is a symlink to
+        # @xla//xla/pjrt/c:pjrt_c_api_gpu_plugin.so, and thus Bazel
+        # can't properly resolve the dependency paths.
+        "@cuda_nccl//:nccl",
+    ]),
 )
 
 pybind_extension(
