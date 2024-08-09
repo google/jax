@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import collections
 from collections.abc import Callable, Hashable, Iterable, Sequence
+import dataclasses
 from dataclasses import dataclass
 import difflib
 import functools
@@ -1000,6 +1001,18 @@ def register_dataclass(
   # caller were to pass in lists that are later mutated.
   meta_fields = tuple(meta_fields)
   data_fields = tuple(data_fields)
+
+  init_fields = {f.name for f in dataclasses.fields(nodetype) if f.init}
+  if {*meta_fields, *data_fields} != init_fields:
+    msg = (
+        f"data_fields and meta_fields must include all fields with"
+        f" ``init=True`` and only them."
+    )
+    if missing := init_fields - {*meta_fields, *data_fields}:
+      msg += f" Missing fields: {missing}."
+    if unexpected := {*meta_fields, *data_fields} - init_fields:
+      msg += f" Unexpected fields: {unexpected}."
+    raise ValueError(msg)
 
   def flatten_with_keys(x):
     meta = tuple(getattr(x, name) for name in meta_fields)

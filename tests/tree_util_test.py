@@ -1257,5 +1257,23 @@ class TreeAliasTest(jtu.JaxTestCase):
     )
 
 
+class RegistrationTest(jtu.JaxTestCase):
+
+  def test_register_dataclass_invalid(self):
+    @dataclasses.dataclass
+    class Foo:
+      x: int
+      y: int
+      z: float = dataclasses.field(init=False)
+
+    with self.assertRaisesRegex(
+        ValueError, "data_fields and meta_fields must include all fields"
+    ):
+      tree_util.register_dataclass(Foo, data_fields=["x"], meta_fields=[])
+
+    # ``z`` is not required, because it's not included in ``__init__``.
+    tree_util.register_dataclass(Foo, data_fields=["x"], meta_fields=["y"])
+
+
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())

@@ -20,6 +20,8 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
     more cases. Previously non-parallel computations were always dispatched
     synchronously. You can recover the old behavior by setting
     `jax.config.update('jax_cpu_enable_async_dispatch', False)`.
+  * ``jax.tree_util.register_dataclass`` now requires that ``data_fields``
+    and ``meta_fields`` includes all fields with ``init=True`` and only them.
 
 * Breaking changes
   * The MHLO MLIR dialect (`jax.extend.mlir.mhlo`) has been removed. Use the
