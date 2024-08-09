@@ -1687,7 +1687,7 @@ def _get_and_check_device_assignment(
     devices = tuple(devices)
 
   for i, s_type, source_info in shardings:
-    if is_unspecified(i):
+    if is_unspecified(i) or isinstance(i, sharding_impls.AbstractNamedSharding):
       continue
 
     if first_sharding_info is None:
