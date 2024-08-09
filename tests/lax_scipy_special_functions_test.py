@@ -99,7 +99,8 @@ JAX_SPECIAL_FUNCTION_RECORDS = [
     # (i.e., very small but rapid oscillations for large x),
     # but the derivative is non-zero.
     op_record(
-        "fresnel", 1, float_dtypes, jtu.rand_fresnel, False
+        "fresnel", 1, float_dtypes,
+        functools.partial(jtu.rand_default, scale=30000), False
     ),
     op_record(
         "i0", 1, float_dtypes, jtu.rand_default, True

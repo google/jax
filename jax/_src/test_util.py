@@ -773,33 +773,6 @@ def rand_uniform(rng, low=0.0, high=1.0):
   return partial(_rand_dtype, rng.rand, post=post)
 
 
-def rand_fresnel(rng):
-  # Uniform random numbers generation for `jax.scipy.special`.
-  # Fresnel integrals are defined in three regions, this random
-  # number generator makes sure we sample numbers in each of the three
-  # regions
-
-  small = jax.numpy.sqrt(2.5625)
-  large = 36974.0
-
-  def post(x):
-    x_neg = x - 0.5  # Half of samples are negative
-    x_pos = jax.numpy.abs(x) * 2
-    x_small = x_pos < .33
-    x_large = x_pos > .66
-    small_range = small
-    medium_range = large - small
-    large_range = large * (large - 1)
-
-    x = jax.numpy.where(x_small, x_pos * small_range,
-                        jax.numpy.where(x_large, x_pos * large_range + large,
-                                        x_pos * medium_range + small))
-
-    return jax.numpy.copysign(x, x_neg)
-
-  return partial(_rand_dtype, rng.rand, post=post)
-
-
 def rand_some_equal(rng):
 
   def post(x):
