@@ -549,6 +549,7 @@ pytype_strict_library(
     srcs = ["_src/mesh.py"],
     deps = [
         ":config",
+        ":core",
         ":util",
         ":xla_bridge",
         "//jax/_src/lib",

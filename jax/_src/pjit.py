@@ -65,7 +65,7 @@ from jax._src.lib import jax_jit
 from jax._src.lib import xla_client as xc
 from jax._src import sharding
 from jax._src.sharding_impls import (
-    NamedSharding, GSPMDSharding,
+    NamedSharding, GSPMDSharding, AbstractNamedSharding,
     SingleDeviceSharding, PmapSharding, AUTO, UNSPECIFIED, UnspecifiedValue,
     ParsedPartitionSpec, get_single_pspec, is_unspecified,
     is_unspecified_or_auto, prepare_axis_resources, parse_flatten_op_sharding)
@@ -547,6 +547,7 @@ def _infer_params_impl(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     in_avals: tuple[core.AbstractValue, ...] | None,
+    mesh_shape: core.MeshShape | None,
 ) -> tuple[PjitParams, list[Any]]:
   have_kwargs = bool(kwargs)
   if have_kwargs and ji.user_specified_in_shardings:
@@ -623,6 +624,10 @@ def _infer_params_impl(
   else:
     in_type = in_avals
 
+  if mesh_shape is None:
+    mesh_shape = get_mesh_shape_from_args(explicit_args, ji.in_shardings_leaves,
+                                          device_or_backend_set)
+
   in_shardings_flat, in_layouts_flat = _process_in_axis_resources(
       in_shardings_treedef, in_shardings_leaves,
       ji.in_layouts_treedef, ji.in_layouts_leaves,
@@ -632,7 +637,7 @@ def _infer_params_impl(
   jaxpr, consts, out_avals, attrs_tracked = _create_pjit_jaxpr(
       flat_fun, in_type, attr_token, dbg,
       HashableFunction(res_paths, closure=()),
-      IgnoreKey(ji.inline))
+      IgnoreKey(ji.inline), mesh_shape)
   _attr_update(flat_fun, in_type, attr_token, attrs_tracked)
 
   out_shardings_flat, out_layouts_flat = _check_and_canonicalize_out_shardings(
@@ -673,6 +678,40 @@ def _infer_params_impl(
                     donated_invars, dbg.arg_names if dbg else None, len(consts),
                     attrs_tracked), args_flat
 
+def maybe_get_mesh_shape(x) -> core.MeshShape | None:
+  if hasattr(x, 'sharding') and isinstance(x.sharding, NamedSharding):
+    return x.sharding.mesh.shape_tuple
+
+
+def get_mesh_shape_from_args(flat_args, in_shardings,
+                             device_or_backend_set) -> core.MeshShape | None:
+  if device_or_backend_set:
+    return None
+
+  mesh_shape = core.thread_local_state.trace_state.mesh_shape
+  for x in flat_args:
+    x_ms = maybe_get_mesh_shape(x)
+    if x_ms is not None:
+      if mesh_shape is not None and x_ms != mesh_shape:
+        # TODO(yashkatariya): Improve the error
+        raise ValueError(
+            'All args do not have the same `jax.sharding.Mesh`. Please ensure'
+            f' that the mesh is the same for all args. Got {mesh_shape} and'
+            f' {x_ms}')
+      mesh_shape = x_ms
+
+  if mesh_shape is None:
+    for i in in_shardings:
+      if isinstance(i, NamedSharding):
+        if mesh_shape is not None and mesh_shape != i.mesh.shape_tuple:
+          raise ValueError(
+              'All in_shardings do not have the same `jax.sharding.Mesh`.'
+              ' Please ensure that the mesh is the same for all args. Got'
+              f' {mesh_shape} and {i.mesh.shape_tuple}')
+        mesh_shape = i.mesh.shape_tuple
+
+  return mesh_shape
+
 
 class InferParamsCacheEntry:
   """Mutable value object for _infer_params_cached."""
@@ -697,6 +736,7 @@ def _infer_params_cached(
     in_avals: tuple[core.AbstractValue, ...],
     pjit_mesh: mesh_lib.Mesh | None,
     resource_env: mesh_lib.ResourceEnv | None,
+    mesh_shape: core.MeshShape | None,
 ) -> InferParamsCacheEntry:
   return InferParamsCacheEntry()
 
@@ -720,20 +760,23 @@ def _infer_params(
         ji.static_argnames, tree_util.default_registry)
     try:
       avals = tuple(shaped_abstractify(a) for a in dynargs)
+      mesh_shape = get_mesh_shape_from_args(dynargs, ji.in_shardings_leaves,
+                                            bool(ji.backend or ji.device))
     except (OverflowError, TypeError):
       # If we see something we don't understand, use the slow path.
       skip_cache = True
 
   if skip_cache:
     p, args_flat = _infer_params_impl(fun, ji, pjit_mesh, resource_env, args,
-                                      kwargs, in_avals=None)
+                                      kwargs, in_avals=None, mesh_shape=None)
     return p, p.consts + args_flat
 
   entry = _infer_params_cached(
-      fun, ji, signature, avals, pjit_mesh, resource_env)
+      fun, ji, signature, avals, pjit_mesh, resource_env, mesh_shape)
   if entry.pjit_params is None:
     p, args_flat = _infer_params_impl(
-        fun, ji, pjit_mesh, resource_env, args, kwargs, in_avals=avals)
+        fun, ji, pjit_mesh, resource_env, args, kwargs, in_avals=avals,
+        mesh_shape=mesh_shape)
     if p.attrs_tracked:
       # If there are attrs_tracked, don't use the cache.
       return p, p.consts + args_flat
@@ -1132,7 +1175,7 @@ def explain_tracing_cache_miss(
   if config.check_tracer_leaks.value: return
 
   def unpack(key):
-    transforms, (), _, (in_type, _, debug_info, _, inline), *_, ctx = key
+    transforms, (), _, (in_type, _, debug_info, _, inline, _), *_, ctx = key
     # TODO(dougalm,mattjj): enable cache miss explanation with attrs
     _, (_, (in_tree,)), *_ = transforms
     return in_tree, in_type, debug_info, inline.val, ctx
@@ -1257,10 +1300,11 @@ def explain_tracing_cache_miss(
 def _create_pjit_jaxpr(
     fun: lu.WrappedFun,
     in_type: core.InputType | Sequence[core.AbstractValue],
-    attr_data: int,
+    attr_data: int,  # only for caching
     debug_info: lu.TracingDebugInfo,
     out_paths: Callable,
-    ignored_inline: IgnoreKey
+    ignored_inline: IgnoreKey,
+    mesh_shape: core.MeshShape | None,
 ) -> tuple[core.ClosedJaxpr, list[Any], list[core.AbstractValue],
            list[tuple[PyTreeDef, PyTreeDef, tuple[Any, str]]]]:
   del ignored_inline  # just for explain_cache_miss
@@ -1268,14 +1312,14 @@ def _create_pjit_jaxpr(
       "Finished tracing + transforming {fun_name} for pjit in {elapsed_time:.9f} sec",
       fun_name=fun.__name__, event=dispatch.JAXPR_TRACE_EVENT):
     pe_debug = debug_info and pe.debug_info_final(fun, debug_info.traced_for)
-    if config.dynamic_shapes.value:
-      jaxpr, global_out_avals, consts = pe.trace_to_jaxpr_dynamic2(
-          lu.annotate(fun, cast(core.InputType, in_type)), debug_info=pe_debug)
-      attrs_tracked = []
-    else:
-      jaxpr, global_out_avals, consts, attrs_tracked = pe.trace_to_jaxpr_dynamic(
-          fun, in_type, debug_info=pe_debug)
-      # assert attr_data is sentinel or attr_data matches attrs_tracked
+    with core.set_mesh_shape(mesh_shape):
+      if config.dynamic_shapes.value:
+        jaxpr, global_out_avals, consts = pe.trace_to_jaxpr_dynamic2(
+            lu.annotate(fun, cast(core.InputType, in_type)), debug_info=pe_debug)
+        attrs_tracked = []
+      else:
+        jaxpr, global_out_avals, consts, attrs_tracked = pe.trace_to_jaxpr_dynamic(
+            fun, in_type, debug_info=pe_debug)
 
   # TODO(dougalm,mattjj): enable debug info with attrs_tracked
   if not config.dynamic_shapes.value and not attrs_tracked:
@@ -1389,7 +1433,7 @@ def pjit_check_aval_sharding(
       if hasattr(s, 'check_compatible_aval'):
         s.check_compatible_aval(shape)
       else:
-        s._to_xla_hlo_sharding(len(shape))
+        s._to_xla_hlo_sharding(len(shape))  # type: ignore
     except ValueError as e:
       raise ValueError(
           f'One of {what_aval}{name_str} is incompatible with its sharding '
@@ -1397,7 +1441,7 @@ def pjit_check_aval_sharding(
     # Use the `OpSharding` proto to find out how many ways each dimension of
     # the aval is sharded. This approach will work across all
     # Sharding.
-    hlo_sharding = s._to_xla_hlo_sharding(len(shape))
+    hlo_sharding = s._to_xla_hlo_sharding(len(shape))  # type: ignore
     assert hlo_sharding is not None
     num_ways_dim_sharded, _ = op_shardings.get_num_ways_dim_sharded(hlo_sharding)
     for i, size in enumerate(num_ways_dim_sharded):
@@ -2424,7 +2468,6 @@ def with_sharding_constraint(x, shardings):
   .. _Distributed arrays and automatic parallelization: https://jax.readthedocs.io/en/latest/notebooks/Distributed_arrays_and_automatic_parallelization.html
   """
   x_flat, tree = tree_flatten(x)
-
   layouts, shardings = _split_layout_and_sharding(shardings)
 
   user_shardings = prepare_axis_resources(
@@ -2440,16 +2483,31 @@ def with_sharding_constraint(x, shardings):
   del layouts
 
   resource_env = mesh_lib.thread_resources.env
-  mesh = resource_env.physical_mesh
+  user_mesh = resource_env.physical_mesh
 
-  shardings_flat = [_create_sharding_for_array(mesh, a, 'shardings',
-                                               'with_sharding_constraint')
-                    for a in user_shardings_flat]
+  shardings_flat = []
+  mesh_shape = core.thread_local_state.trace_state.mesh_shape
+  for s, x in safe_zip(user_shardings_flat, x_flat):
+    if isinstance(s, sharding.Sharding):
+      shardings_flat.append(s)
+    else:
+      if mesh_shape is not None and isinstance(s, ParsedPartitionSpec):
+        shardings_flat.append(AbstractNamedSharding(
+            mesh_shape, s.get_partition_spec(), _parsed_pspec=s))
+      else:
+        mesh = (x.sharding.mesh if (user_mesh.empty and hasattr(x, 'sharding')
+                                    and isinstance(x.sharding, NamedSharding))
+                else user_mesh)
+        shardings_flat.append(_create_sharding_for_array(
+            mesh, s, 'shardings', 'with_sharding_constraint'))
+
+  assert len(shardings_flat) == len(x_flat)
+
   # TODO(bartchr): remove `unconstrained_dims` after migrating to Shardy. It's
   # already part of the shardings.
   unconstrained_dims = [get_unconstrained_dims(s)
-                        if isinstance(s, NamedSharding) else {}
-                        for s in shardings_flat]
+                        if isinstance(s, (NamedSharding, AbstractNamedSharding))
+                        else {} for s in shardings_flat]
   del user_shardings_flat
 
   pjit_check_aval_sharding(

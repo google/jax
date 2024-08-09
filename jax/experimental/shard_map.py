@@ -26,8 +26,8 @@ import numpy as np
 
 import jax
 import jax.numpy as jnp
-from jax.sharding import NamedSharding, PartitionSpec, Mesh
 from jax._src import ad_checkpoint
+from jax._src import array
 from jax._src import ad_util
 from jax._src import callback
 from jax._src import config
@@ -47,6 +47,9 @@ from jax._src import traceback_util
 from jax._src import util
 from jax._src.core import Tracer
 from jax._src.api import _shared_code_pmap, _prepare_pmap
+from jax._src.mesh import AbstractMesh, Mesh
+from jax._src.sharding_impls import (NamedSharding, PartitionSpec,
+                                     AbstractNamedSharding)
 from jax._src.lax import (lax, parallel as lax_parallel, slicing,
                           windowed_reductions, convolution, fft, linalg,
                           special, control_flow, ann)
@@ -79,7 +82,7 @@ AxisName = Hashable
 
 
 @traceback_util.api_boundary
-def shard_map(f: Callable, mesh: Mesh, in_specs: Specs, out_specs: Specs,
+def shard_map(f: Callable, mesh: Mesh | None, in_specs: Specs, out_specs: Specs,
               check_rep: bool = True, auto: frozenset[AxisName] = frozenset()):
   """Map a function over shards of data.
 
@@ -134,18 +137,28 @@ def shard_map(f: Callable, mesh: Mesh, in_specs: Specs, out_specs: Specs,
   """
   return _shard_map(f, mesh, in_specs, out_specs, check_rep, auto)
 
-def _shard_map(f: Callable, mesh: Mesh, in_specs: Specs,
+def _shard_map(f: Callable, mesh: Mesh | None, in_specs: Specs,
                out_specs: Specs | Callable[[], Specs],
                check_rep: bool, auto: frozenset[AxisName]):
   if not callable(f):
     raise TypeError("shard_map requires a callable for its first argument, "
                     f"but got {f} of type {type(f)}.")
-  if not isinstance(mesh, Mesh):
-    raise TypeError("shard_map requires a `jax.sharding.Mesh` instance for its "
-                    f"second argument, but got {mesh} of type {type(mesh)}.")
-  if not auto.issubset(mesh.axis_names):
-    raise ValueError(f"shard_map requires auto={auto} to be a subset of "
-                     f"mesh.axis_names={mesh.axis_names}")
+  if mesh is not None and not isinstance(mesh, Mesh):
+    raise TypeError(
+        "shard_map requires a `jax.sharding.Mesh` instance or `None` for its "
+        f"second argument, but got {mesh} of type {type(mesh)}.")
+
+  mesh_shape = core.thread_local_state.trace_state.mesh_shape
+  if (mesh is not None and mesh_shape is not None and
+      mesh_shape != mesh.shape_tuple):
+    raise ValueError(
+        f"mesh passed to shard_map {mesh.shape_tuple} does not match the mesh"
+        f" inferred by the arguments: {mesh_shape}. Pass `mesh=None` to"
+        " `shard_map` or use the same mesh that you used for the arguments.")
+
+  if mesh is None and mesh_shape is not None:
+    mesh = AbstractMesh(mesh_shape)
+
   _check_specs(SpecErrorType.input, in_specs, auto)
   if not callable(out_specs):
     _check_specs(SpecErrorType.out, out_specs, auto)
@@ -156,14 +169,37 @@ def _shard_map(f: Callable, mesh: Mesh, in_specs: Specs,
     fun = lu.wrap_init(f)
     args_flat, in_tree = tree_flatten(args)
     fun, out_tree = flatten_fun_nokwargs(fun, in_tree)
-    try: in_specs_flat = broadcast_prefix(in_specs, args,
-                                          is_leaf=lambda x: x is None)
+    try:
+      in_specs_flat = broadcast_prefix(in_specs, args, is_leaf=lambda x: x is None)
     except ValueError:
       e, *_ = prefix_errors(in_specs, args)
       raise e('shard_map in_specs') from None
     dyn_argnums, in_specs_flat = unzip2((i, s) for i, s in enumerate(in_specs_flat)
                                         if s is not None)
     fun, args_flat = argnums_partial(fun, dyn_argnums, args_flat)
+
+    nonlocal mesh
+    if mesh is None:
+      for i, a in enumerate(args_flat):
+        if hasattr(a, 'sharding') and isinstance(a.sharding, NamedSharding):
+          if mesh is not None and a.sharding.mesh.shape_tuple != mesh.shape_tuple:
+            raise ValueError(
+                "mesh on the arguments passed to shard_map do not match. Got"
+                f" mesh {a.sharding.mesh.shape_tuple} for argument {i} and a"
+                f" previous argument with mesh {mesh.shape_tuple}")
+          mesh = a.sharding.mesh
+      if mesh is None:
+        raise ValueError(
+            "mesh for shard_map could not be inferred from arguments, jit"
+            " context and the mesh argument passed to shard_map. Please create"
+            " your arguments via NamedSharding or pass `jax.sharding.Mesh` to"
+            " shard_map to its second argument.")
+
+    assert mesh is not None
+    if not auto.issubset(mesh.axis_names):
+      raise ValueError(f"shard_map requires auto={auto} to be a subset of "
+                       f"mesh.axis_names={mesh.axis_names}")
+
     _check_specs_vs_args(f, mesh, in_tree, in_specs, dyn_argnums, in_specs_flat, args_flat)
     in_names_flat = tuple(map(_canonicalize_spec, in_specs_flat))
 
@@ -175,7 +211,8 @@ def _shard_map(f: Callable, mesh: Mesh, in_specs: Specs,
       else:
         out_specs_ = out_specs
       dummy = tree_unflatten(out_tree(), [object()] * out_tree().num_leaves)
-      try: out_specs_flat = broadcast_prefix(out_specs_, dummy)
+      try:
+        out_specs_flat = broadcast_prefix(out_specs_, dummy)
       except ValueError:
         e, *_ = prefix_errors(out_specs_, dummy)
         raise e('shard_map out_specs') from None
@@ -668,9 +705,11 @@ def _make_scoped_manual_sharding(ctx, mesh, axes):
     manual_axes = axis_ctx.manual_axes
   else:
     manual_axes = frozenset({})
-  return NamedSharding(
-      mesh, sharding_impls.array_mapping_to_axis_resources(axes),  # pytype: disable=wrong-arg-types
-      _manual_axes=manual_axes)
+  pspec = sharding_impls.array_mapping_to_axis_resources(axes)
+  if isinstance(mesh, AbstractMesh):
+    return AbstractNamedSharding(mesh.shape_tuple, pspec,
+                                 _manual_axes=manual_axes)
+  return NamedSharding(mesh, pspec, _manual_axes=manual_axes)
 
 def _xla_shard(ctx: mlir.LoweringRuleContext, mesh, auto, names,
                aval_in, aval_out, x):

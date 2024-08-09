@@ -4357,6 +4357,86 @@ class ArrayPjitTest(jtu.JaxTestCase):
         "Compiled object called with input sharding.*does not match"):
       compiled(cpu_arr)
 
+  def test_wsc_with_pspec_mesh_from_args_cache_miss(self):
+    mesh = jtu.create_global_mesh((4, 2), ('i', 'j'))
+    np_inp = np.arange(64).reshape(8, 8)
+    x = jax.device_put(np_inp, NamedSharding(mesh, P('i', 'j')))
+
+    mesh2 = jtu.create_global_mesh((2, 4), ('i', 'j'))
+    y = jax.device_put(np_inp, NamedSharding(mesh2, P('i', 'j')))
+
+    def f(x):
+      y = jax.lax.with_sharding_constraint(x, P('i'))
+      return y * 2
+
+    g = jax.jit(f)
+
+    with (jtu.count_jit_tracing_cache_miss() as count,
+          jtu.count_pjit_cpp_cache_miss() as count2):
+      out1 = g(x)
+      out2 = g(y)  # must re-trace
+    self.assertEqual(count[0], 4)  # 2 miss for `f` and 2 for `*` (mul)
+    self.assertEqual(count2[0], 2)
+
+    self.assertArraysEqual(out1, np_inp * 2)
+    self.assertArraysEqual(out2, np_inp * 2)
+    self.assertEqual(out1.sharding, NamedSharding(mesh, P('i')))
+    self.assertEqual(out2.sharding, NamedSharding(mesh2, P('i')))
+
+    out1_eager = f(x)
+    out2_eager = f(y)
+
+    self.assertArraysEqual(out1_eager, np_inp * 2)
+    self.assertArraysEqual(out2_eager, np_inp * 2)
+    self.assertEqual(out1_eager.sharding, NamedSharding(mesh, P('i')))
+    self.assertEqual(out2_eager.sharding, NamedSharding(mesh2, P('i')))
+
+    @jax.jit
+    def g(x, y):
+      return x, y
+
+    with self.assertRaisesRegex(
+        ValueError, 'All args do not have the same `jax.sharding.Mesh`'):
+      g(x, y)
+
+  def test_different_devices_wsc_pspec_only_cache_hit(self):
+    if jax.device_count() < 4:
+      self.skipTest('Requires >=4 devices')
+
+    mesh1 = jax.sharding.Mesh(jax.devices()[:2], 'x')
+    mesh2 = jax.sharding.Mesh(jax.devices()[2:4], 'x')
+
+    @jax.jit
+    def f(x):
+      x = with_sharding_constraint(x, P('x'))
+      return jnp.sin(x)
+
+    def g(a):
+      a = jax.device_put(a, NamedSharding(mesh1, P()))
+      out_a = f(a)  # tracing and lowering cached
+
+      # same num_devices but different devices.
+      b = jax.device_put(out_a, NamedSharding(mesh2, P()))
+      f(b)  # tracing and lowering cache *hit*
+
+    with (jtu.count_jit_and_pmap_compiles() as count,
+          jtu.count_jit_tracing_cache_miss() as count2):
+      g(np.arange(8.))
+    # self.assertEqual(count[0], 1)e
+    self.assertEqual(count2[0], 2)  # 1 miss for `f` and 1 miss for `sin`.
+
+  def test_wsc_sds_pspec_only(self):
+    mesh = jtu.create_global_mesh((2,), 'x')
+    s = NamedSharding(mesh, P())
+
+    @jax.jit
+    def f(x):
+      x = with_sharding_constraint(x, P('x'))
+      return x * 2
+
+    sds = jax.ShapeDtypeStruct((8, 2), np.float32, sharding=s)
+    f.eval_shape(sds)  # doesn't crash
+
 
 def spec_regex(s):
   return str(s).replace(r"(", r"\(").replace(r")", r"\)")

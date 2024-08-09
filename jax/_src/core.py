@@ -1037,23 +1037,37 @@ class Sublevel:
 AxisEnvFrame = namedtuple('AxisEnvFrame', ['name', 'size', 'main_trace'])
 AxisName = Hashable
 
+MeshShape = tuple[tuple[str, int], ...]
+
+@contextmanager
+def set_mesh_shape(m: MeshShape):
+  state = thread_local_state.trace_state
+  prev, state.mesh_shape = state.mesh_shape, m
+  try:
+    yield
+  finally:
+    state.mesh_shape = prev
+
 no_axis_name = object()
 
 class TraceState:
   trace_stack: TraceStack
   substack: list[Sublevel]
   axis_env: list[AxisEnvFrame]
+  mesh_shape: MeshShape | None
 
   def __init__(self) -> None:
     self.trace_stack = TraceStack()
     self.substack = [Sublevel(0)]
     self.axis_env = []
+    self.mesh_shape = None
 
   def copy(self):
     new = self.__new__(TraceState)
     new.trace_stack = self.trace_stack.copy()
     new.substack = self.substack[:]
     new.axis_env = self.axis_env[:]
+    new.mesh_shape = self.mesh_shape  # immutable
     return new
 
 

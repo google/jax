@@ -18,6 +18,7 @@ from __future__ import annotations
 import collections
 from collections.abc import Hashable, Sequence
 import contextlib
+import dataclasses
 import functools
 import math
 import threading
@@ -25,6 +26,7 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
+from jax._src import core
 from jax._src import config as jax_config
 from jax._src import xla_bridge as xb
 from jax._src import util
@@ -307,6 +309,41 @@ class Mesh(contextlib.ContextDecorator):
   def local_devices(self):
     return [d for d in self.devices.flat
             if d.process_index == d.client.process_index()]
+
+
+class AbstractMesh:
+  def __init__(self, shape_tuple):
+    self.shape_tuple = shape_tuple
+    self._axis_names, self._axis_sizes = list(zip(*self.shape_tuple))
+
+  def __hash__(self):
+    return hash(self.shape_tuple)
+
+  def __eq__(self, other):
+    if not isinstance(other, AbstractMesh):
+      return False
+    if id(self) == id(other):
+      return True
+    return self.shape_tuple == other.shape_tuple
+
+  def __repr__(self):
+    return f"AbstractMesh({self.shape_tuple})"
+
+  @functools.cached_property
+  def axis_names(self):
+    return self._axis_names
+
+  @functools.cached_property
+  def size(self):
+    return math.prod(self._axis_sizes)
+
+  @functools.cached_property
+  def shape(self):
+    return collections.OrderedDict(self.shape_tuple)
+
+  @property
+  def _is_jax_device_mesh(self):
+    return False
 
 
 EMPTY_ENV = ResourceEnv(Mesh(np.empty((), dtype=object), ()))

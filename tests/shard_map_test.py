@@ -743,6 +743,83 @@ class ShardMapTest(jtu.JaxTestCase):
     self.assertIn('out_names', e.params)
     self.assertEqual(e.params['out_names'], ({0: ('x', 'y',)},))
 
+  def test_shard_map_mesh_from_args(self):
+    mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
+    np_inp = np.arange(16).reshape(8, 2)
+    arr = jax.device_put(np_inp, NamedSharding(mesh, P('x', 'y')))
+
+    def f(x):
+      return shard_map(lambda x: x, mesh=None, in_specs=P('x'),
+                       out_specs=P('x'))(x)
+
+    out1 = jax.jit(f)(arr)
+    self.assertArraysEqual(out1, np_inp)
+    self.assertEqual(out1.sharding, NamedSharding(mesh, P('x')))
+
+    out2 = f(arr)
+    self.assertArraysEqual(out2, np_inp)
+    self.assertEqual(out2.sharding, NamedSharding(mesh, P('x')))
+
+  def test_different_devices_shmap_pspec_only_cache_hit(self):
+    if jax.device_count() < 4:
+      self.skipTest('Requires >=4 devices')
+
+    mesh1 = jax.sharding.Mesh(jax.devices()[:2], 'i')
+    mesh2 = jax.sharding.Mesh(jax.devices()[2:4], 'i')
+
+    @jax.jit
+    def f(x):
+      x = shard_map(lambda x: x, mesh=None, in_specs=P('i'), out_specs=P('i'))(x)
+      return jnp.sin(x)
+
+    def g(a):
+      a = jax.device_put(a, NamedSharding(mesh1, P()))
+      out_a = f(a)  # tracing and lowering cached
+
+      # same num_devices but different devices.
+      b = jax.device_put(out_a, NamedSharding(mesh2, P()))
+      f(b)  # tracing and lowering cache *hit*
+
+    with (jtu.count_jit_and_pmap_compiles() as count,
+          jtu.count_jit_tracing_cache_miss() as count2):
+      g(np.arange(8.))
+    self.assertEqual(count[0], 1)
+    self.assertEqual(count2[0], 2)  # 1 miss for `f` and 1 miss for `sin`
+
+  def test_shmap_jit_mesh_error(self):
+    mesh1 = jax.sharding.Mesh(jax.devices()[:2], 'x')
+    mesh2 = jax.sharding.Mesh(
+        np.array(jax.devices()[2:4]).reshape(2, 1), ('x', 'y'))
+    arr_mesh1 = jax.device_put(np.arange(8), NamedSharding(mesh1, P('x')))
+    arr_mesh2 = jax.device_put(np.arange(8), NamedSharding(mesh2, P('x')))
+
+    @jax.jit
+    def f(x):
+      return shard_map(lambda x: x, mesh=mesh2, in_specs=P(), out_specs=P())(x)
+
+    with self.assertRaisesRegex(
+        ValueError, 'mesh passed to shard_map.*does not match'):
+      f(arr_mesh1)
+
+    def g(x):
+      return shard_map(lambda x: x, mesh=None, in_specs=P(), out_specs=P())(x)
+
+    with self.assertRaisesRegex(
+        ValueError, "mesh for shard_map could not be inferred from arguments"):
+      g(np.arange(8))
+
+    with self.assertRaisesRegex(
+        ValueError, "mesh for shard_map could not be inferred from arguments"):
+      jax.jit(g)(np.arange(8))
+
+    def h(x, y):
+      return shard_map(lambda x, y: (x, y), mesh=None, in_specs=P(),
+                       out_specs=P())(x, y)
+
+    with self.assertRaisesRegex(
+        ValueError, "mesh on the arguments passed to shard_map do not match"):
+      h(arr_mesh1, arr_mesh2)
+
   @parameterized.parameters([True, False])
   @jtu.run_on_devices('cpu', 'gpu', 'tpu')
   def test_debug_print_jit(self, jit):

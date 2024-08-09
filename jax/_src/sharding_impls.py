@@ -96,15 +96,16 @@ def device_replica_id_map(sharding, global_shape: Shape) -> Mapping[Device, int]
 
 @util.cache(max_size=4096, trace_context_in_key=False)
 def named_sharding_to_xla_hlo_sharding(
-    self, num_dimensions: int) -> xc.HloSharding:
-  mesh_shape = self.mesh.shape
-  array_mapping = get_array_mapping(self._parsed_pspec)
-  mesh_axis_pos = {name: i for i, name in enumerate(self.mesh.axis_names)}
+    mesh_shape, parsed_pspec, manual_axes,
+    num_dimensions: int) -> xc.HloSharding:
+  mesh_shape = collections.OrderedDict(mesh_shape)
+  array_mapping = get_array_mapping(parsed_pspec)
+  mesh_axis_pos = {name: i for i, name in enumerate(mesh_shape)}
 
+  axis_names = tuple(mesh_shape.keys())
   special_axes = {}
-  if self._manual_axes:
-    axis_names = self.mesh.axis_names
-    for manual_axis in self._manual_axes:
+  if manual_axes:
+    for manual_axis in manual_axes:
       special_axes[axis_names.index(manual_axis)] = xc.OpSharding.Type.MANUAL
 
   replicated_mesh_axes = []
@@ -152,7 +153,7 @@ def named_sharding_to_xla_hlo_sharding(
   #     transpose_perm = [3, 1, 2, 0]  # 'a' is replicated hence 0 is at the end
   #     subgroup_types = [xc.OpSharding.Type.REPLICATED]
   return xc.HloSharding.iota_tile(
-      dims=new_mesh_shape, reshape_dims=tuple(self.mesh.shape.values()),
+      dims=new_mesh_shape, reshape_dims=tuple(mesh_shape.values()),
       transpose_perm=mesh_permutation, subgroup_types=last_tile_dims)
 
 
@@ -252,8 +253,7 @@ class NamedSharding(sharding.Sharding):
 
   @classmethod
   def _from_parsed_pspec(
-      cls, mesh, parsed_pspec, *, memory_kind=None, _manual_axes=frozenset()
-  ):
+      cls, mesh, parsed_pspec, *, memory_kind=None, _manual_axes=frozenset()):
     return cls(mesh, parsed_pspec.get_partition_spec(),
                 memory_kind=memory_kind, _parsed_pspec=parsed_pspec,
                 _manual_axes=_manual_axes)
@@ -282,7 +282,7 @@ class NamedSharding(sharding.Sharding):
   def is_fully_replicated(self) -> bool:
     if self.mesh.size == 1:
       return True
-    array_mapping = cast(ParsedPartitionSpec, get_array_mapping(self._parsed_pspec))
+    array_mapping = get_array_mapping(self._parsed_pspec)  # type: ignore
     mesh_shape = self.mesh.shape
     num_partitions = 1
     for name in array_mapping:
@@ -293,7 +293,123 @@ class NamedSharding(sharding.Sharding):
     return NamedSharding(self.mesh, self.spec, memory_kind=kind)
 
   def _to_xla_hlo_sharding(self, num_dimensions: int) -> xc.HloSharding:
-    return named_sharding_to_xla_hlo_sharding(self, num_dimensions)
+    return named_sharding_to_xla_hlo_sharding(
+        self.mesh.shape_tuple, self._parsed_pspec, self._manual_axes,
+        num_dimensions)
+
+  def _to_sdy_sharding(self, num_dimensions: int) -> sharding.SdyArraySharding:
+    dim_shardings = [sharding.SdyDimSharding(axes=[], is_closed=True)
+                     for _ in range(num_dimensions)]
+    for i, dim_spec in enumerate(self._parsed_pspec):
+      if dim_spec is None:
+        dim_shardings[i].is_closed = False
+      elif not dim_spec:
+        # Already empty and closed sharding.
+        pass
+      else:
+        dim_shardings[i].axes = dim_spec
+    return sharding.SdyArraySharding('mesh', dim_shardings)
+
+
+class AbstractNamedSharding(sharding.Sharding):
+  mesh: core.MeshShape
+  spec: PartitionSpec
+  _memory_kind: str | None
+  _parsed_pspec: ParsedPartitionSpec
+  _manual_axes: frozenset[MeshAxisName]
+
+  def __init__(
+      self, mesh_shape: core.MeshShape, spec: PartitionSpec, *,
+      memory_kind: str | None = None, _parsed_pspec=None,
+      _manual_axes=frozenset()):
+    self.mesh_shape = mesh_shape
+    self.spec = spec
+    self._memory_kind = memory_kind
+    self._manual_axes = _manual_axes
+    if _parsed_pspec is None:
+      _parsed_pspec = prepare_axis_resources(
+          PartitionSpec() if spec is None else spec,
+          "NamedSharding spec", allow_unconstrained_dims=True)
+    self._parsed_pspec = _parsed_pspec
+
+  def __repr__(self):
+    mesh_repr = ", ".join(f"'{v[0]}': {v[1]}" for v in self.mesh_shape)
+    mem = '' if self.memory_kind is None else f', memory_kind={self.memory_kind}'
+    return f'AbstractNamedSharding(mesh=Mesh({mesh_repr}), spec={self.spec}{mem})'
+
+  @property
+  def memory_kind(self) -> str | None:
+    return self._memory_kind
+
+  def __hash__(self):
+    if not hasattr(self, '_hash'):
+      self._hash = hash(
+          (self.mesh_shape, self.memory_kind, self._parsed_pspec, self._manual_axes))
+    return self._hash
+
+  def __eq__(self, other):
+    if not isinstance(other, NamedSharding):
+      return False
+    if self is other:
+      return True
+    if (self._parsed_pspec != other._parsed_pspec
+        or self.memory_kind != other.memory_kind
+        or self._manual_axes != other._manual_axes):
+      return False
+    return (self.mesh_shape is other.mesh_shape or
+            self.mesh_shape == other.mesh_shape)
+
+  def check_compatible_aval(self, aval_shape: Shape) -> None:
+    assert self._parsed_pspec is not None
+    if len(aval_shape) < len(self._parsed_pspec):
+      extra_msg = (' For scalars the PartitionSpec should be P()'
+                   if len(aval_shape) == 0 else '')
+      raise ValueError(
+          f"Sharding {self} is only valid for values of rank at least "
+          f"{len(self._parsed_pspec)}, but was applied to a value of rank "
+          f"{len(aval_shape)}.{extra_msg}")
+
+  @classmethod
+  def _from_parsed_pspec(
+      cls, mesh_shape, parsed_pspec, *, memory_kind=None, _manual_axes=frozenset()):
+    return cls(mesh_shape, parsed_pspec.get_partition_spec(),
+               memory_kind=memory_kind, _parsed_pspec=parsed_pspec,
+               _manual_axes=_manual_axes)
+
+  @property
+  def device_set(self) -> set[Device]:
+    raise NotImplementedError
+
+  @property
+  def _device_assignment(self) -> XLADeviceAssignment:
+    raise NotImplementedError
+
+  @property
+  def is_fully_addressable(self) -> bool:
+    raise NotImplementedError
+
+  @property
+  def addressable_devices(self) -> set[Device]:
+    raise NotImplementedError
+
+  @functools.cached_property
+  def is_fully_replicated(self) -> bool:
+    _, axis_sizes = zip(*self.mesh_shape)
+    if math.prod(axis_sizes) == 1:
+      return True
+    array_mapping = cast(ParsedPartitionSpec, get_array_mapping(self._parsed_pspec))
+    dms = dict(self.mesh_shape)
+    num_partitions = 1
+    for name in array_mapping:
+      num_partitions *= dms[name]
+    return num_partitions == 1
+
+  def with_memory_kind(self, kind: str) -> AbstractNamedSharding:
+    return AbstractNamedSharding(self.mesh_shape, self.spec, memory_kind=kind)
+
+  def _to_xla_hlo_sharding(self, num_dimensions: int) -> xc.HloSharding:
+    return named_sharding_to_xla_hlo_sharding(
+        self.mesh_shape, self._parsed_pspec, self._manual_axes, num_dimensions)
 
   def _to_sdy_sharding(self, num_dimensions: int) -> sharding.SdyArraySharding:
     dim_shardings = [sharding.SdyDimSharding(axes=[], is_closed=True)
@@ -890,7 +1006,7 @@ that would mean that a flat list of chunks would get assigned to a flattened lis
 mesh devices without any modifications. If the mapping was {'y': 1, 'x': 1}, then the
 mesh devices ndarray would have to be transposed before flattening and assignment.
 """
-ArrayMapping = OrderedDict[MeshAxisName, int]
+ArrayMapping = Mapping[MeshAxisName, int]
 ArrayMappingOrAutoOrUnspecified = Union[ArrayMapping, AUTO, UnspecifiedValue]
 
 def array_mapping_to_axis_resources(array_mapping: ArrayMapping):
