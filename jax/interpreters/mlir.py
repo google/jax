@@ -49,6 +49,7 @@ from jax._src.interpreters.mlir import (
   i32_attr as i32_attr,
   i64_attr as i64_attr,
   ir as ir,
+  ir_attribute as ir_attribute,
   ir_constant as ir_constant,
   ir_type_handlers as ir_type_handlers,
   jaxpr_subcomp as jaxpr_subcomp,

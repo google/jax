@@ -31,8 +31,6 @@ from jax._src import prng
 from jax._src import test_util as jtu
 from jax._src import xla_bridge
 from jax._src.interpreters import mlir
-from jax._src.lib.mlir import ir
-from jax._src.extend import ffi
 
 jax.config.parse_flags_with_absl()
 
@@ -103,25 +101,34 @@ class FfiTest(jtu.JaxTestCase):
     for header in ["c_api.h", "api.h", "ffi.h"]:
       self.assertTrue(os.path.exists(os.path.join(base_dir, header)))
 
-  @parameterized.parameters(
-      [True, int(1), float(5.0),
-       np.int32(-5), np.float32(0.5)])
-  def testIrAttribute(self, value):
-    with mlir.make_ir_context(), ir.Location.unknown():
-      const = mlir.ir_constant(value)
-      attr = ffi._ir_attribute(value)
-      assert const.type.element_type == attr.type
+  @parameterized.parameters([
+      (True, mlir.ir.BoolAttr.get),
+      (1, mlir.i64_attr),
+      (5.0, lambda x: mlir.ir.FloatAttr.get(mlir.ir.F64Type.get(), x)),
+      ("param", mlir.ir.StringAttr.get),
+      (np.float32(0.5),
+       lambda x: mlir.ir.FloatAttr.get(mlir.ir.F32Type.get(), x)),
+  ])
+  def testParams(self, param, expected_builder):
+    def fun(x):
+      return jex.ffi.ffi_call("test_ffi", x, x, param=param)
 
-  @parameterized.parameters([True, 1, 5.0, "param", np.float32(0.5)])
-  def testParams(self, param):
-    prim = core.Primitive("test_ffi")
-    prim.def_abstract_eval(lambda *args, **kwargs: args[0])
-    mlir.register_lowering(prim, jex.ffi.ffi_lowering("test_ffi"))
-
-    # TODO(dfm): Currently testing that lowering works with different types of
-    # parameters, but we should probably actually check the emitted HLO.
-    func = jax.jit(lambda *args: prim.bind(*args, param=param))
-    func.lower(jnp.linspace(0, 5, 10))
+    # Here we inspect the lowered IR to test that the parameter has been
+    # serialized with the appropriate type.
+    module = jax.jit(fun).lower(0.5).compiler_ir("stablehlo")
+    for func in module.body.operations:
+      for block in func.body.blocks:
+        for op in block.operations:
+          if op.OPERATION_NAME == "stablehlo.custom_call":
+            config = op.attributes["mhlo.backend_config"]
+            assert isinstance(config, mlir.ir.DictAttr)
+            assert "param" in config
+            with mlir.make_ir_context(), mlir.ir.Location.unknown():
+              expected = expected_builder(param)
+            assert type(config["param"]) == type(expected)
+            assert expected.type.isinstance(config["param"].type)
+            return
+    self.fail("No custom_call found in the lowered IR")
 
   @jtu.sample_product(
     shape=[(1,), (4,), (5,)],

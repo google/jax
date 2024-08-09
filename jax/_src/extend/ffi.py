@@ -137,7 +137,7 @@ def ffi_lowering(
     kwargs = dict(lowering_args)
     kwargs.setdefault("api_version", 4)
     kwargs["backend_config"] = dict(
-      backend_config or {}, **{k: _ir_attribute(v) for k, v in params.items()})
+      backend_config or {}, **{k: mlir.ir_attribute(v) for k, v in params.items()})
     if "result_types" not in kwargs:
       kwargs["result_types"] = [mlir.aval_to_ir_type(aval) for aval in ctx.avals_out]
     if operand_layouts is None:
@@ -152,28 +152,6 @@ def ffi_lowering(
 
 def _default_layouts(shapes: Iterable[Sequence[DimSize]]) -> list[list[DimSize]]:
   return [list(reversed(range(len(shape)))) for shape in shapes]
-
-
-def _ir_attribute(obj: Any) -> ir.Attribute:
-  # TODO(dfm): Similar functions exist in Pallas and Mosaic GPU. Perhaps these
-  # could be consolidated into mlir or similar.
-  if isinstance(obj, str):
-    return ir.StringAttr.get(obj)
-  elif isinstance(obj, bool):
-    return ir.BoolAttr.get(obj)
-  elif isinstance(obj, int):
-    return mlir.i64_attr(obj)
-  elif isinstance(obj, float):
-    return ir.FloatAttr.get_f64(obj)
-  elif hasattr(obj, "dtype"):
-    if not (dtypes.is_python_scalar(obj) or np.isscalar(obj)):
-      raise TypeError("Only scalar attributes are supported")
-    mlir_type = mlir.dtype_to_ir_type(obj.dtype)
-    if isinstance(mlir_type, ir.IntegerType):
-      return ir.IntegerAttr.get(mlir_type, obj)
-    elif isinstance(mlir_type, ir.FloatType):
-      return ir.FloatAttr.get(mlir_type, obj)
-  raise TypeError(f"Unsupported attribute type: {type(obj)}")
 
 
 def ffi_call(
