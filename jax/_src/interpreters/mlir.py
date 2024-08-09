@@ -277,12 +277,7 @@ def ir_constant(val: Any) -> IrValues:
   raise TypeError(f"No constant handler for type: {type(val)}")
 
 def _numpy_array_constant(x: np.ndarray | np.generic) -> IrValues:
-  element_type = dtype_to_ir_type(x.dtype)
-  shape = x.shape
-  if x.dtype == np.bool_:
-    x = np.packbits(x, bitorder='little')  # type: ignore
-  x = np.ascontiguousarray(x)
-  attr = ir.DenseElementsAttr.get(x, type=element_type, shape=shape)  # type: ignore
+  attr = _numpy_array_attribute(x)
   return hlo.constant(attr)
 
 
@@ -343,6 +338,90 @@ for ptype, dtype in dtypes.python_scalar_dtypes.items():
 def _token_constant_handler(val):
   return hlo.create_token()
 register_constant_handler(core.Token, _token_constant_handler)
+
+# Attributes
+
+class AttributeHandler(Protocol):
+  def __call__(self, val: Any) -> ir.Attribute:
+    ...
+
+_attribute_handlers: dict[type[Any], AttributeHandler] = {}
+
+def register_attribute_handler(type_: type[Any], handler_fun: AttributeHandler):
+  _attribute_handlers[type_] = handler_fun
+
+def get_attribute_handler(type_: type[Any]) -> AttributeHandler:
+  return _attribute_handlers[type_]
+
+def _numpy_scalar_attribute(val: Any) -> ir.Attribute:
+  mlir_type = dtype_to_ir_type(val.dtype)
+  if isinstance(mlir_type, ir.IntegerType):
+    return ir.IntegerAttr.get(mlir_type, val)
+  elif isinstance(mlir_type, ir.FloatType):
+    return ir.FloatAttr.get(mlir_type, val)
+  else:
+    raise TypeError(f"Unsupported scalar attribute type: {type(val)}")
+
+def _numpy_array_attribute(x: np.ndarray | np.generic) -> ir.Attribute:
+  element_type = dtype_to_ir_type(x.dtype)
+  shape = x.shape
+  if x.dtype == np.bool_:
+    x = np.packbits(x, bitorder='little')  # type: ignore
+  x = np.ascontiguousarray(x)
+  return ir.DenseElementsAttr.get(x, type=element_type, shape=shape)  # type: ignore
+
+def _numpy_array_attribute_handler(val: np.ndarray | np.generic) -> ir.Attribute:
+  if 0 in val.strides and val.size > 0:
+    raise ValueError(
+        "numpy arrays with zero strides are not supported as MLIR attributes")
+  if val.dtype == dtypes.float0:
+    val = np.zeros(val.shape, dtype=np.bool_)
+  if dtypes.is_python_scalar(val) or np.isscalar(val):
+    return _numpy_scalar_attribute(val)
+  else:
+    return _numpy_array_attribute(val)
+
+register_attribute_handler(np.ndarray, _numpy_array_attribute_handler)
+
+for _scalar_type in [np.int8, np.int16, np.int32, np.int64,
+                     np.uint8, np.uint16, np.uint32, np.uint64,
+                     np.float16, np.float32, np.float64,
+                     np.complex64, np.complex128,
+                     np.bool_, np.longlong, dtypes.bfloat16]:
+  register_attribute_handler(_scalar_type, _numpy_array_attribute_handler)  # type: ignore
+
+def _python_scalar_attribute_handler(dtype, val):
+  return _numpy_scalar_attribute(np.array(val, dtype))
+
+for ptype, dtype in dtypes.python_scalar_dtypes.items():
+  register_attribute_handler(
+      ptype, partial(_python_scalar_attribute_handler, dtype))
+
+register_attribute_handler(str, ir.StringAttr.get)
+register_attribute_handler(bytes, ir.StringAttr.get)
+
+def _dict_attribute_handler(val: dict[str, Any]) -> ir.Attribute:
+  return ir.DictAttr.get({k: ir_attribute(v) for k, v in val.items()})
+
+register_attribute_handler(dict, _dict_attribute_handler)
+
+def _sequence_attribute_handler(val: Sequence[Any]) -> ir.Attribute:
+  return ir.ArrayAttr.get([ir_attribute(v) for v in val])
+
+register_attribute_handler(list, _sequence_attribute_handler)
+register_attribute_handler(tuple, _sequence_attribute_handler)
+
+def ir_attribute(val: Any) -> ir.Attribute:
+  """Convert a Python value to an MLIR attribute."""
+  for t in type(val).__mro__:
+    handler = _attribute_handlers.get(t)
+    if handler:
+      out = handler(val)
+      assert isinstance(out, ir.Attribute), (type(val), out)
+      return out
+  if hasattr(val, '__jax_array__'):
+    return ir_attribute(val.__jax_array__())
+  raise TypeError(f"No attribute handler defined for type: {type(val)}")
 
 # Source locations
 

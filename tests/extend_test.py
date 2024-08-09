@@ -31,8 +31,6 @@ from jax._src import prng
 from jax._src import test_util as jtu
 from jax._src import xla_bridge
 from jax._src.interpreters import mlir
-from jax._src.lib.mlir import ir
-from jax._src.extend import ffi
 
 jax.config.parse_flags_with_absl()
 
@@ -102,15 +100,6 @@ class FfiTest(jtu.JaxTestCase):
     base_dir = os.path.join(jex.ffi.include_dir(), "xla", "ffi", "api")
     for header in ["c_api.h", "api.h", "ffi.h"]:
       self.assertTrue(os.path.exists(os.path.join(base_dir, header)))
-
-  @parameterized.parameters(
-      [True, int(1), float(5.0),
-       np.int32(-5), np.float32(0.5)])
-  def testIrAttribute(self, value):
-    with mlir.make_ir_context(), ir.Location.unknown():
-      const = mlir.ir_constant(value)
-      attr = ffi._ir_attribute(value)
-      assert const.type.element_type == attr.type
 
   @parameterized.parameters([True, 1, 5.0, "param", np.float32(0.5)])
   def testParams(self, param):
