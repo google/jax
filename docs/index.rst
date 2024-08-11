@@ -79,10 +79,10 @@ For an end-to-end transformer library built on JAX, see MaxText_.
 
    user_guides
    advanced_guide
+   jax
    contributor_guide
    building_on_jax
    notes
-   jax
 
 
 .. toctree::
