@@ -16,6 +16,7 @@ following example:
 ```python
 >>> import jax
 >>> from jax import export
+>>> from jax.typing import DimSize, Shape
 >>> from jax import numpy as jnp
 >>> def f(x):  # f: f32[a, b]
 ...   return jnp.concatenate([x, x], axis=1)
@@ -24,7 +25,7 @@ following example:
 >>> a, b = export.symbolic_shape("a, b")
 
 >>> # We can use the symbolic dimensions to construct shapes.
->>> x_shape = (a, b)
+>>> x_shape: Shape = (a, b)
 >>> x_shape
 (a, b)
 
@@ -54,6 +55,9 @@ constants to construct shapes. The dimension expression objects
 overload most integer operators, so you can use them as
 you'd use integer constants in most cases.
 See {ref}`computing-with-dimension-variables` for more details.
+
+You can use the type `jax.typing.DimSize` for the type of dimensions,
+which can be either integer constants or symbolic.
 
 Additionally, we provide the {func}`jax.export.symbolic_args_specs` that
 can be used to construct pytrees of `jax.ShapeDtypeStruct` objects based

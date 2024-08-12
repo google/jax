@@ -20,6 +20,10 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
     more cases. Previously non-parallel computations were always dispatched
     synchronously. You can recover the old behavior by setting
     `jax.config.update('jax_cpu_enable_async_dispatch', False)`.
+  * Added {obj}`jax.typing.DimSize` for annotating shape dimensions, which
+    can be either integer constants or symbolic dimensions (in the presence
+    of shape polymorphism). The {obj}`jax.typing.Shape` denotes a sequence
+    of `DimSize`.
 
 * Breaking changes
   * The MHLO MLIR dialect (`jax.extend.mlir.mhlo`) has been removed. Use the

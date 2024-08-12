@@ -62,9 +62,7 @@ DTypeLike = Union[
   SupportsDType,  # like jnp.float32, jnp.int32
 ]
 
-# Shapes are tuples of dimension sizes, which are normally integers. We allow
-# modules to extend the set of dimension sizes to contain other types, e.g.,
-# symbolic dimensions in export.DimExpr.
+# DimSize is used for shape dimensions, can be integer or symbolic
 DimSize = Union[int, Any]  # extensible
 Shape = Sequence[DimSize]
 
