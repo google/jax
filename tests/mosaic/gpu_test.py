@@ -1199,6 +1199,18 @@ class ProfilerTest(TestCase):
     x = jnp.arange(1024 * 1024)
     profiler.measure(lambda x, y: x + y, x, x)  # This is just a smoke test
 
+  def test_cached_measure(self):
+    call_count = 0
+    def f(a, b):
+      nonlocal call_count
+      call_count += 1
+      return a + b
+
+    ones = jnp.ones((10,))
+    profiler.measure(f, ones, ones)
+    self.assertEqual(call_count, 1)
+    profiler.measure(f, ones, ones)
+    self.assertEqual(call_count, 1)
 
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())

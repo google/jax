@@ -24,6 +24,7 @@ import warnings
 import jax
 from jax._src.interpreters import mlir
 from jax._src.lib import xla_client
+import jax._src.util as ju
 import jax.numpy as jnp
 from jaxlib.mlir import ir
 from jaxlib.mlir.dialects import arith
@@ -78,29 +79,30 @@ def _record_event(args, event):
       treedef, record_event_p.bind(*flat_args, event=event)
   )
 
+
 def measure(f, *args, **kwargs):
+  run, start_event, end_event = measured(f)
+  jax.block_until_ready(run(*args, **kwargs))  # Warmup.
+  results = jax.block_until_ready(run(*args, **kwargs))
+  elapsed = mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_elapsed(
+      start_event, end_event
+  )
+  return results, elapsed
+
+
+@ju.weakref_lru_cache
+def measured(f):
   # TODO(apaszke): Raise if this is called under jit.
   start_event = mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_create()
   end_event = mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_create()
-  try:
+  @jax.jit
+  def run(*args, **kwargs):
+    flat_args, treedef = jax.tree.flatten((args, kwargs))
+    flat_args = _record_event(flat_args, start_event)
+    args, kwargs = jax.tree.unflatten(treedef, flat_args)
+    return _record_event(f(*args, **kwargs), end_event)
 
-    @jax.jit
-    def run(*args, **kwargs):
-      flat_args, treedef = jax.tree.flatten((args, kwargs))
-      flat_args = _record_event(flat_args, start_event)
-      args, kwargs = jax.tree.unflatten(treedef, flat_args)
-      return _record_event(f(*args, **kwargs), end_event)
-
-    jax.block_until_ready(run(*args, **kwargs))  # Warmup.
-    results = jax.block_until_ready(run(*args, **kwargs))
-    elapsed = mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_elapsed(
-        start_event, end_event
-    )
-  finally:
-    mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_destroy(start_event)
-    mosaic_gpu_lib._mosaic_gpu_ext._gpu_event_destroy(end_event)
-  return results, elapsed
-
+  return run, start_event, end_event
 
 class ProfilerSpec:
   ENTER = 0
