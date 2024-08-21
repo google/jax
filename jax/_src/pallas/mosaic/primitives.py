@@ -464,7 +464,11 @@ def dma_start_discharge_rule(in_avals, out_avals,
       src_indexers_avals,
       _,
       dst_indexers_avals,
-      *_
+      _,
+      dst_sem_indexers_avals,
+      _,
+      src_sem_indexers_avals,
+      _,
   ) = tree_util.tree_unflatten(tree, in_avals)
   del out_avals, dst_sem, dst_sem_indexers
   is_remote = device_id is not None
@@ -474,7 +478,9 @@ def dma_start_discharge_rule(in_avals, out_avals,
     assert src_sem_indexers is None
 
   num_src_index_vals = len(tree_util.tree_leaves(src_indexers_avals))
+  num_src_sem_index_vals = len(tree_util.tree_leaves(src_indexers_avals))
   num_dst_index_vals = len(tree_util.tree_leaves(dst_indexers_avals))
+  num_dst_sem_index_vals = len(tree_util.tree_leaves(dst_sem_indexers_avals))
 
   if src_indexers:
     updates = state_discharge.index_array(src_ref, src_indexers)
@@ -542,8 +548,11 @@ def dma_start_discharge_rule(in_avals, out_avals,
   new_avals += (new_dst,)  # dst_aval
   new_avals += (None,) * num_dst_index_vals
   new_avals += (None,)  # dst_sem_aval
+  new_avals += (None,) * num_dst_sem_index_vals  # dst_sem_indexers_aval
   if is_remote:
-    new_avals += (None, None)  # src_sem_aval, device_id
+    new_avals += (None,)  # src_sem_aval
+    new_avals += (None,) * num_src_sem_index_vals  # src_sem_indexers_aval
+    new_avals += (None,)  # device_id
   assert (len(new_avals) ==
           len(in_avals)), f"{len(new_avals), new_avals} != {len(in_avals)}"
   return new_avals, []

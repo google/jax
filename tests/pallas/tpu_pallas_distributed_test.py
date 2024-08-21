@@ -275,8 +275,8 @@ class PallasCallRemoteDMAInterpretTest(parameterized.TestCase):
       input_to_output_copy = pltpu.make_async_remote_copy(
           src_ref=x_ref,
           dst_ref=o_ref,
-          send_sem=copy_send_sem,
-          recv_sem=copy_recv_sem,
+          send_sem=copy_send_sem.at[0],
+          recv_sem=copy_recv_sem.at[0],
           device_id=dst_device,
           device_id_type=pltpu.DeviceIdType.LOGICAL,
       )
@@ -290,7 +290,7 @@ class PallasCallRemoteDMAInterpretTest(parameterized.TestCase):
                 pl.BlockSpec(memory_space=pltpu.TPUMemorySpace.ANY),
             ],
             scratch_shapes=(
-                [pltpu.SemaphoreType.DMA] * 2
+                [pltpu.SemaphoreType.DMA((1,))] * 2
             )
         )
 

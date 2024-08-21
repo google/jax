@@ -1312,6 +1312,29 @@ class PallasCallDMATest(PallasBaseTest):
     )(x)
     np.testing.assert_allclose(y, x.reshape((16, 128)))
 
+  def test_hbm_vmem_dma_indexing_with_sem_array(self):
+    def kernel(x_hbm_ref, y_ref):
+      def body(sem):
+        dma1 = pltpu.async_copy(
+            x_hbm_ref.at[0], y_ref.at[pl.ds(0, 8)], sem.at[0]
+        )
+        dma2 = pltpu.async_copy(
+            x_hbm_ref.at[1], y_ref.at[pl.ds(8, 8)], sem.at[0]
+        )
+        dma1.wait()
+        dma2.wait()
+      pl.run_scoped(body, pltpu.SemaphoreType.DMA((1,)))
+    x = jnp.arange(2 * 8 * 128.).reshape((2, 8, 128))
+    y = self.pallas_call(
+        kernel,
+        in_specs=[
+            pl.BlockSpec(memory_space=pltpu.TPUMemorySpace.ANY),
+        ],
+        out_specs=pl.BlockSpec(memory_space=pltpu.TPUMemorySpace.VMEM),
+        out_shape=jax.ShapeDtypeStruct((16, 128), jnp.float32),
+    )(x)
+    np.testing.assert_allclose(y, x.reshape((16, 128)))
+
   def test_hbm_vmem_dma_multiple_indexing(self):
     if self.INTERPRET:
       self.skipTest('Multiple indexing not supported in interpret mode.')
