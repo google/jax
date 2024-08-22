@@ -674,7 +674,7 @@ def _infer_fp8_fwd_output_sharding(mesh, arg_shapes, is_training):
     *batch_spec, q_seq_spec, num_head_spec, _ = query_spec
     activation_sharding = NamedSharding(
       mesh, PartitionSpec(*batch_spec, num_head_spec, q_seq_spec, None))
-    return [out_sharding, amax_sharding, amax_sharding, Nonactivation_sharding]
+    return [out_sharding, amax_sharding, amax_sharding, activation_sharding]
   return [out_sharding, amax_sharding, amax_sharding]
 
 _dot_product_attention_fp8_fwd_lower = custom_partitioning(
