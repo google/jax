@@ -76,15 +76,6 @@ def sdpa_train(query: Array,
   return out, (query_grad, key_grad, value_grad)
 
 def sdpa_ref(query: Array,
-<<<<<<< HEAD
-      key: Array,
-      value: Array,
-      bias: Array | None = None,
-      mask: Array | None = None,
-      scale: float = 0.5,
-      mask_type: MaskType = MaskType.NO_MASK,
-      dropout_rate: float = 0.1) -> Array:
-=======
              key: Array,
              value: Array,
              bias: Array | None = None,
@@ -92,7 +83,6 @@ def sdpa_ref(query: Array,
              scale: float = 0.5,
              mask_type: MaskType = MaskType.NO_MASK,
              dropout_rate: float = 0.1) -> Array:
->>>>>>> Unit test
 
   def get_causal_mask(logits):
     large_negative_number = get_large_negative_number(logits.dtype)
@@ -152,16 +142,6 @@ def sdpa_ref(query: Array,
   return encoded
 
 def sdpa_train_ref(query: Array,
-<<<<<<< HEAD
-            key: Array,
-            value: Array,
-            grad: Array,
-            bias: Array | None = None,
-            mask: Array | None = None,
-            scale: float = 0.5,
-            mask_type: MaskType = MaskType.NO_MASK,
-            dropout_rate: float = 0.1) -> Array:
-=======
                    key: Array,
                    value: Array,
                    grad: Array,
@@ -170,7 +150,6 @@ def sdpa_train_ref(query: Array,
                    scale: float = 0.5,
                    mask_type: MaskType = MaskType.NO_MASK,
                    dropout_rate: float = 0.1) -> Array:
->>>>>>> Unit test
   out_ref, sdpa_vjp_ref = jax.vjp(
     partial(
       sdpa_ref, scale=scale, mask_type=mask_type, dropout_rate=dropout_rate),
@@ -476,16 +455,17 @@ class DotProductAttentionTest(jtu.JaxTestCase):
 class DotProductAttentionF8Test(jtu.JaxTestCase):
   def setUp(self):
     super().setUp()
-   if jax.device_count() < 4:
-     self.skipTest("Requires more than 4 devices.")
-   try:
-     cudnn_version = check_cudnn_version()
-     check_compute_capability((80, 90))
-   except RuntimeError as e:
-     self.skipTest(str(e))
-     return
-   if cudnn_version < 9010:
-     self.skipTest("Requires >= cuDNN 9.1.0")
+    if jax.device_count() < 4:
+      self.skipTest("Requires more than 4 devices.")
+    try:
+      cudnn_version = check_cudnn_version()
+    except RuntimeError as e:
+      self.skipTest(str(e))
+      return
+    if cudnn_version < 9010:
+      self.skipTest("Requires >= cuDNN 9.1.0")
+    if not jtu.is_cuda_compute_capability_at_least("9.0"):
+      self.skipTest("Requires at least Hopper arch")
 
   @jtu.sample_product(
       batch_size=[2, 4],
@@ -501,9 +481,6 @@ class DotProductAttentionF8Test(jtu.JaxTestCase):
   def test_sdpa_fp8(self, batch_size: int, seq_len: int, num_heads: int,
                     head_dim: int, use_causal_mask: bool, qkv_layout: str,
                     scale: float, dtype: jnp.dtype):
-   if len(jax.local_devices()) < 4:
-     self.skipTest("Require at least 4 devices to run sharding tests.")
-
     k1, k2, k3, k4 = jax.random.split(jax.random.key(0), 4)
     input_shape = (batch_size, num_heads, seq_len, head_dim)
     query_h = jax.random.normal(

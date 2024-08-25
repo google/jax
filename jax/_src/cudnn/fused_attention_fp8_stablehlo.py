@@ -7,11 +7,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import pdb
 from enum import Enum
 from functools import partial, reduce
 import operator
-from typing import Optional
 import json
 
 import jax
@@ -114,14 +112,14 @@ def get_custom_call_name(is_bwd):
   return _custom_name_maps[(is_bwd,)]
 
 def create_dot_product_attention_fp8_backend_config(batch,
-                                                num_heads,
-                                                seq_q,
-                                                seq_kv,
-                                                dtype,
-                                                fmha_scale,
-                                                mask_type,
-                                                layout,
-                                                is_bwd):
+                                                    num_heads,
+                                                    seq_q,
+                                                    seq_kv,
+                                                    dtype,
+                                                    fmha_scale,
+                                                    mask_type,
+                                                    layout,
+                                                    is_bwd):
   # Q, K, V: query, key, value in shape of BT(S)NH or BNT(S)H
   # P: BMM1 output in shape of BNTS
   # O: BMM2 output in the same shape with Q
@@ -250,16 +248,11 @@ def check_compute_capability(cc):
     if compute_cap not in cc:
       raise RuntimeError("Require compute capability in " + str(cc))
 
-############### fp8
-
 def _dot_product_attention_fp8_fwd(
     query, key, value,
     descale_q, descale_k, descale_v, descale_s, scale_s, scale_o,
-    # descale_o, descale_dO, descale_dP, scale_dQ, scale_dK, scale_dV, scale_dP, 
     scale, use_causal_mask, layout, cudnn_version):
   # check if flash attention is supported for this attention pattern
-  # pdb.set_trace()
-  # return None, None, None
   check_is_flash_attention(
       query, key, layout, cudnn_version, False)
   outputs = _dot_product_attention_fp8_fwd_p_wrapper.bind(
@@ -295,37 +288,64 @@ def _dot_product_attention_fp8_bwd_rule(
    descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s, descale_dP, 
    scale_s, scale_dQ, scale_dK, scale_dV, scale_dP) = res
   grad_output = g[0]
+  # dQ, dK, dV, amax_dq, amax_dk ,amax_dv, amax_dp
   grads = _dot_product_attention_fp8_bwd_p_wrapper.bind(
-      query, key, value, fwd_output, grad_output, activation,
-      descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s, descale_dP,
-      scale_s, scale_dQ, scale_dK, scale_dV, scale_dP,
-      scale=scale, use_causal_mask=use_causal_mask, layout=layout,
-  ) # dQ, dK, dV, amax_dq, amax_dk ,amax_dv, amax_dp
+    query,
+    key,
+    value,
+    fwd_output,
+    grad_output,
+    activation,
+    descale_q,
+    descale_k,
+    descale_v,
+    descale_o,
+    descale_dO,
+    descale_s,
+    descale_dP,
+    scale_s,
+    scale_dQ,
+    scale_dK,
+    scale_dV,
+    scale_dP,
+    scale=scale,
+    use_causal_mask=use_causal_mask,
+    layout=layout,
+    )
   grads = (*grads,) + (None,) * (20 - len(grads))
   return grads
 
-# #####################
 def _dot_product_attention_fp8_fwd_impl(
     query, key, value,
     descale_q, descale_k, descale_v, descale_s, scale_s, scale_o,
     scale, use_causal_mask, layout, is_training):
   # args: {Q, K, V, mask*}
   outputs = _dot_product_attention_fp8_fwd_p.bind(
-      query, key, value,
-      descale_q, descale_k, descale_v, descale_s,
-      scale_s, scale_o,
-      scale=scale, use_causal_mask=use_causal_mask, layout=layout, is_training=is_training)
+      query,
+      key,
+      value,
+      descale_q,
+      descale_k,
+      descale_v,
+      descale_s,
+      scale_s,
+      scale_o,
+      scale=scale,
+      use_causal_mask=use_causal_mask,
+      layout=layout,
+      is_training=is_training,
+  )
   return outputs
 
 def _dot_product_attention_fp8_bwd_impl(
     query, key, value, fwd_output, grad_output, activation,
-    descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s, descale_dP,
-    scale_s, scale_dQ, scale_dK, scale_dV, scale_dP,
+    descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s,
+    descale_dP, scale_s, scale_dQ, scale_dK, scale_dV, scale_dP,
     scale, use_causal_mask, layout):
   grads = _dot_product_attention_fp8_bwd_p.bind(
       query, key, value, fwd_output, grad_output, activation,
-      descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s, descale_dP, 
-      scale_s, scale_dQ, scale_dK, scale_dV, scale_dP,
+      descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s,
+      descale_dP, scale_s, scale_dQ, scale_dK, scale_dV, scale_dP,
       scale=scale, use_causal_mask=use_causal_mask, layout=layout)
   return grads  # dQ, dK, dV, amax_dq, amax_dk ,amax_dv, amax_dp
 
@@ -360,7 +380,8 @@ def _dot_product_attention_fp8_fwd_abstract(
 
 def _dot_product_attention_fp8_bwd_abstract(
     query, key, value, fwd_output, grad_output, activation,
-    descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s, descale_dP, scale_s, scale_dQ, scale_dK, scale_dV, scale_dP,
+    descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s,
+    descale_dP, scale_s, scale_dQ, scale_dK, scale_dV, scale_dP,
     scale, use_causal_mask, layout):
   query_dtype = dtypes.canonicalize_dtype(query.dtype)
   key_dtype = dtypes.canonicalize_dtype(key.dtype)
@@ -400,7 +421,6 @@ def _dot_product_attention_fp8_fwd_cuda_lowering(
   query_shape = query_type.shape
   key_type = ir.RankedTensorType(key.type)
   key_shape = key_type.shape
-  # descale_q_type = ir.RankedTensorType(descale_q.type)
 
   if layout == AttentionLayout.BNTH.value:
     B, N, T, H = query_shape
@@ -419,7 +439,6 @@ def _dot_product_attention_fp8_fwd_cuda_lowering(
   amax_shape = (1,1,1,1)
   workspace_type = ir.IntegerType.get_unsigned(8)
   mask_type = MaskType.CAUSAL if use_causal_mask else MaskType.NO_MASK
-  # pdb.set_trace()
   backend_config = create_dot_product_attention_fp8_backend_config(
       B, N, T, S, ir.BF16Type.get(),#query_type.element_type, 
       scale, mask_type, layout, is_bwd=False,
@@ -448,20 +467,16 @@ def _dot_product_attention_fp8_fwd_cuda_lowering(
       ir.RankedTensorType.get(workspace_shape, workspace_type)
     ]
     result_layouts = [output_layout] + default_layouts(amax_shape, amax_shape, workspace_shape)
-  # create custom call here
-  # pdb.set_trace()
+
   tmp_shapes = [ir.RankedTensorType(operand.type).shape for operand in operands[:3]]
-  tmp_shapes += [[1,1,1,1]] * 6
-  operand_layouts=default_layouts(
-      *tmp_shapes)
+  tmp_shapes += [[1, 1, 1, 1]] * 6
+  operand_layouts = default_layouts(*tmp_shapes)
   out = mlir.custom_call(
     custom_call_name,
     result_types=result_types,
     operands=operands,
     backend_config=backend_config,
     operand_layouts=operand_layouts,
-    # default_layouts(
-      # *[ir.RankedTensorType(operand.type).shape for operand in operands]),
     result_layouts=result_layouts,
   )
   # drop workspace memory
@@ -475,9 +490,9 @@ def _dot_product_attention_fp8_fwd_cuda_lowering(
 
 def _dot_product_attention_fp8_bwd_cuda_lowering(
     ctx, query, key, value, fwd_output, grad_output, activation,
-    descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s, descale_dP, 
-    scale_s, scale_dQ, scale_dK, scale_dV, scale_dP,
-    scale, use_causal_mask, layout):
+    descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s,
+    descale_dP, scale_s, scale_dQ, scale_dK, scale_dV, scale_dP, scale,
+    use_causal_mask, layout):
   query_type = ir.RankedTensorType(query.type)
   query_shape = query_type.shape
   key_type = ir.RankedTensorType(key.type)
@@ -505,15 +520,31 @@ def _dot_product_attention_fp8_bwd_cuda_lowering(
   mask_type = MaskType.CAUSAL if use_causal_mask else MaskType.NO_MASK
 
   backend_config = create_dot_product_attention_fp8_backend_config(
-      B, q_N, T, S, ir.BF16Type.get(),#query_type.element_type, 
+      B, q_N, T, S, ir.BF16Type.get(),
       scale, mask_type, layout, is_bwd=True,
   )
 
   # create operands
-  operands = [query, key, value, fwd_output, grad_output, activation,
-              descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s,
-              descale_dP, scale_s, scale_dQ, scale_dK, scale_dV, scale_dP
-              ]
+  operands = [
+    query,
+    key,
+    value,
+    fwd_output,
+    grad_output,
+    activation,
+    descale_q,
+    descale_k,
+    descale_v,
+    descale_o,
+    descale_dO,
+    descale_s,
+    descale_dP,
+    scale_s,
+    scale_dQ,
+    scale_dK,
+    scale_dV,
+    scale_dP,
+  ]
 
   # get custom call name
   custom_call_name = get_custom_call_name(True)
@@ -596,7 +627,7 @@ def _dot_product_attention_fp8_fwd_batcher(
     return (output, amax_s, amax_o), out_bdims
 
 def _dot_product_attention_fp8_bwd_batcher(
-     batched_args, batch_dims, *, scale, use_causal_mask, layout):
+    batched_args, batch_dims, *, scale, use_causal_mask, layout):
   _check_valid_batch_dims(batch_dims)
   query, key, value, fwd_output, grad_output, activation,\
     descale_q, descale_k, descale_v, descale_o, descale_dO, descale_s, descale_dP,\
@@ -678,7 +709,7 @@ def _infer_fp8_fwd_output_sharding(mesh, arg_shapes, is_training):
   return [out_sharding, amax_sharding, amax_sharding]
 
 _dot_product_attention_fp8_fwd_lower = custom_partitioning(
-    _dot_product_attention_fp8_fwd_impl, static_argnums=(9,10,11,12))
+    _dot_product_attention_fp8_fwd_impl, static_argnums=(9, 10, 11, 12))
 
 def _dot_product_attention_fp8_fwd_infer_sharding_from_operands(
     scale, use_causal_mask, layout, is_training,
@@ -738,7 +769,7 @@ def _dot_product_attention_fp8_bwd_partition(
   return mesh, impl, out_shardings, arg_shardings
 
 
-# Create dot_product_attention_fwd_p for forward operation.
+# Create dot_product_attention_fp8_fwd_p for forward operation.
 _dot_product_attention_fp8_fwd_p = core.Primitive("dot_product_attention_fp8_fwd")
 _dot_product_attention_fp8_fwd_p.multiple_results = True
 _dot_product_attention_fp8_fwd_p.def_impl(
@@ -823,7 +854,7 @@ dispatch.prim_requires_devices_during_lowering.add(
 )
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(20,21,22,23))
+@partial(jax.custom_vjp, nondiff_argnums=(20, 21, 22, 23))
 def _dot_product_attention_fp8(query: Array,
                                key: Array,
                                value: Array,
@@ -831,34 +862,30 @@ def _dot_product_attention_fp8(query: Array,
                                amax_dK: Array,
                                amax_dV: Array,
                                amax_dP: Array,
-                                descale_q: Array,
-                                descale_k: Array, 
-                                descale_v: Array, 
-                                descale_s: Array, 
-                                scale_s: Array, 
-                                scale_o: Array,
-                                descale_o: Array,
-                              descale_dO: Array,
-                              descale_dP: Array,
-                              scale_dQ: Array,
-                              scale_dK: Array,
-                              scale_dV: Array,
-                              scale_dP: Array,                                                  
+                               descale_q: Array,
+                               descale_k: Array, 
+                               descale_v: Array, 
+                               descale_s: Array, 
+                               scale_s: Array, 
+                               scale_o: Array,
+                               descale_o: Array,
+                               descale_dO: Array,
+                               descale_dP: Array,
+                               scale_dQ: Array,
+                               scale_dK: Array,
+                               scale_dV: Array,
+                               scale_dP: Array,                                                  
                                scale: float,
                                use_causal_mask: bool,
                                layout: int,
                                cudnn_version: int):
-  # pdb.set_trace()
-  # return None, None, None
   output, amax_s, amax_o = _dot_product_attention_fp8_fwd(
       query, key, value,
-      # amax_dQ, amax_dK, amax_dV, amax_dP, # placeholder
       descale_q, descale_k, descale_v, descale_s, scale_s, scale_o,
-      # descale_o, descale_dO, descale_dP,  scale_dQ, scale_dK, scale_dV, scale_dP,
-      scale, use_causal_mask, layout, cudnn_version)
+      scale, use_causal_mask, layout, cudnn_version
+  )
   return output, amax_s, amax_o
 
-# _dot_product_attention_fwd must have the same func signature as _dot_product_attention
 _dot_product_attention_fp8.defvjp(_dot_product_attention_fp8_fwd_rule, _dot_product_attention_fp8_bwd_rule)
 
 # User interface for fp8
@@ -944,7 +971,6 @@ def dot_product_attention_fp8(query: Array,
   layout = _normalize_layout(qkv_layout)
   # check if input shape and data type is compatiable
   check_layout(query, key, value, layout)
-  # pdb.set_trace()
   output, amax_s, amax_o = _dot_product_attention_fp8(
       query, key, value, 
       amax_dQ, amax_dK, amax_dV, amax_dP,
