@@ -766,6 +766,8 @@ def _mean(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
     else:
       normalizer = core.dimension_as_value(_axis_size(a, axis))
   else:
+    if np.result_type(where) != bool:
+      raise ValueError("where must be of dtype bool.")
     normalizer = sum(_broadcast_to(where, np.shape(a)), axis, dtype=dtype, keepdims=keepdims)
 
   return lax.div(
