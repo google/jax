@@ -26,10 +26,12 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
 #include "absl/synchronization/mutex.h"
+#include "jaxlib/ffi_helpers.h"
 #include "jaxlib/gpu/gpu_kernel_helpers.h"
 #include "jaxlib/gpu/triton.pb.h"
 #include "jaxlib/gpu/triton_utils.h"
 #include "jaxlib/gpu/vendor.h"
+#include "xla/ffi/api/ffi.h"
 #include "xla/service/custom_call_status.h"
 
 #ifdef JAX_GPU_CUDA
@@ -39,6 +41,9 @@
 #define GPU_RETURN_IF_ERROR(expr) JAX_RETURN_IF_ERROR(JAX_AS_STATUS(expr))
 
 namespace jax::JAX_GPU_NAMESPACE {
+
+namespace ffi = ::xla::ffi;
+
 namespace {
 
 constexpr float kBenchmarkTimeMillis = 10.;
@@ -132,7 +137,7 @@ absl::StatusOr<float> Benchmark(gpuStream_t stream, KernelCall& kernel_call,
   return elapsed_ms;
 }
 
-absl::StatusOr<KernelCall*> GetKernelCall(absl::string_view opaque,
+absl::StatusOr<KernelCall*> GetKernelCall(std::string_view opaque,
                                           gpuStream_t stream, void** buffers) {
   static absl::Mutex mutex;
   static auto& kernel_calls =
@@ -665,13 +670,51 @@ void TritonKernelCall(gpuStream_t stream, void** buffers, const char* opaque,
   absl::Status result = [=] {
     JAX_ASSIGN_OR_RETURN(
         KernelCall * kernel_call,
-        GetKernelCall(absl::string_view(opaque, opaque_len), stream, buffers));
+        GetKernelCall(std::string_view(opaque, opaque_len), stream, buffers));
     return kernel_call->Launch(stream, buffers);
   }();
   if (!result.ok()) {
-    absl::string_view msg = result.message();
+    std::string_view msg = result.message();
     XlaCustomCallStatusSetFailure(status, msg.data(), msg.length());
   }
 }
+
+namespace {
+ffi::Error TritonKernelCallFfiImpl(gpuStream_t stream,
+                                   std::string_view serialized,
+                                   ffi::RemainingArgs inputs,
+                                   ffi::RemainingRets outputs) {
+  size_t num_inputs = inputs.size();
+  size_t num_outputs = outputs.size();
+  size_t num_buffers = num_inputs + num_outputs;
+  std::vector<void*> buffers;
+  buffers.reserve(num_buffers);
+  for (size_t n = 0; n < num_inputs; ++n) {
+    auto input = inputs.get<ffi::AnyBuffer>(n);
+    if (ABSL_PREDICT_FALSE(!input.has_value())) {
+      return input.error();
+    }
+    buffers.push_back(input.value().untyped_data());
+  }
+  for (size_t n = 0; n < num_outputs; ++n) {
+    auto output = outputs.get<ffi::AnyBuffer>(n);
+    if (ABSL_PREDICT_FALSE(!output.has_value())) {
+      return output.error();
+    }
+    buffers.push_back(output.value()->untyped_data());
+  }
+  FFI_ASSIGN_OR_RETURN(auto* kernel_call,
+                       GetKernelCall(serialized, stream, buffers.data()));
+  FFI_RETURN_IF_ERROR_STATUS(kernel_call->Launch(stream, buffers.data()));
+  return ffi::Error::Success();
+}
+}  // namespace
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(TritonKernelCallFfi, TritonKernelCallFfiImpl,
+                              ffi::Ffi::Bind()
+                                  .Ctx<ffi::PlatformStream<gpuStream_t>>()
+                                  .Attr<std::string_view>("serialized")
+                                  .RemainingArgs()
+                                  .RemainingRets());
 
 }  // namespace jax::JAX_GPU_NAMESPACE
