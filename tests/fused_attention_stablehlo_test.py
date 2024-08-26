@@ -159,7 +159,6 @@ def sdpa_train_ref(query: Array,
     return out_ref, (query_grad_ref, key_grad_ref, value_grad_ref, bias_grad_ref)
   return out_ref, (query_grad_ref, key_grad_ref, value_grad_ref)
 
-
 class DotProductAttentionTest(jtu.JaxTestCase):
   def setUp(self):
     super().setUp()
