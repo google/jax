@@ -1068,9 +1068,13 @@ def lower_jaxpr_to_module(
       xla_donated_args = donated_args
       donated_args = [False] * len(donated_args)
     if xla_donated_args is None:
+      default_layout_device = None
+      if arg_shardings and arg_shardings[0] is not None:
+        default_layout_device = arg_shardings[0]._device_assignment[0]
       input_output_aliases, donated_args, xla_donated_args = _set_up_aliases(
           input_output_aliases, in_avals, out_avals, donated_args,
-          arg_memory_kinds, result_memory_kinds, in_layouts, out_layouts)
+          arg_memory_kinds, result_memory_kinds, in_layouts, out_layouts,
+          default_layout_device)
   unlowerable_effects = lowerable_effects.filter_not_in(jaxpr.effects)
   if unlowerable_effects:
     raise ValueError(f'Cannot lower jaxpr with effects: {jaxpr.effects}')
@@ -1166,10 +1170,16 @@ def lower_jaxpr_to_module(
                         ctx.shape_poly_state)
 
 
+def _canonicalize_layout(d, aval, l):
+  if l is not None: return l
+  return DeviceLocalLayout.from_pjrt_layout(
+      d.client.get_default_layout(aval.dtype, aval.shape, d))
+
+
 def _set_up_aliases(input_output_aliases, avals_in, avals_out,
                     donated_args,
                     arg_memory_kinds, result_memory_kinds,
-                    in_layouts, out_layouts):
+                    in_layouts, out_layouts, default_layout_device):
   if input_output_aliases is None:
     input_output_aliases = [None] * len(avals_in)
   else:
@@ -1198,6 +1208,14 @@ def _set_up_aliases(input_output_aliases, avals_in, avals_out,
     if donated and aliased is None:
       donations[(aval, am)].append(i)
 
+  def _compare_layouts(aval, l0, l1):
+    if default_layout_device is not None:
+      if l0 == l1:
+        return True
+      l0 = _canonicalize_layout(default_layout_device, aval, l0)
+      l1 = _canonicalize_layout(default_layout_device, aval, l1)
+    return l0 == l1
+
   xla_donated_args = None
   out_donated_args = list(donated_args)
   for i, (aval, rm) in enumerate(zip(avals_out, result_memory_kinds)):
@@ -1209,13 +1227,13 @@ def _set_up_aliases(input_output_aliases, avals_in, avals_out,
       out_donated_args[input_id] = False
       if (in_layouts is None or
           out_layouts is None or
-          in_layouts[input_id] == out_layouts[i] or
           # We can alias if XLA performs layout assignment because XLA will
           # respect the aliases when assigning layouts. Its only for two
           # mismatched explicitly assigned layouts that XLA will certainly
           # fail.
-          isinstance(in_layouts[input_id], (AutoLayout, type(None))) or
-          isinstance(out_layouts[i], (AutoLayout, type(None)))):
+          isinstance(in_layouts[input_id], AutoLayout) or
+          isinstance(out_layouts[i], AutoLayout) or
+          _compare_layouts(aval, in_layouts[input_id], out_layouts[i])):
         input_output_aliases[input_id] = i
       else:
         # Fallback to xla donation if layouts don't match.
