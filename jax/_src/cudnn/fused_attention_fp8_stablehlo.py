@@ -216,6 +216,11 @@ def create_dot_product_attention_fp8_backend_config(batch,
 
 def check_is_flash_attention(
     query, key, layout, cudnn_version, is_training):
+  # check if minimum cudnn version requirement is satisfied
+  if cudnn_version < 9010:
+    raise RuntimeError(
+      "JAX requires cuDNN >= 9.1.0 to use flash cross attention.")
+  
   if layout == AttentionLayout.BNTH:
     _, _, T, H = query.shape
     _, _, S, _ = key.shape
@@ -223,16 +228,10 @@ def check_is_flash_attention(
     _, T, _, H = query.shape
     _, S, _, _ = key.shape
 
-  if not ((H <= 128 and H % 8 == 0) and
-        (not is_training or T % 2 == 0 and S % 2 == 0)):
-    # check if flash attention is supported
-    # for training, for patterns with bias, seqlen should be divisible by 2
+  # requires that all seq_len % 128 and only H=128 for bprop. For fprop it is all H <= 256 with H % 16 == 0
+  if not ((is_training and H == 128 and T % 128 == 0 and S % 128 == 0) or (not is_training and H <= 256 and H % 16 == 0)):
     raise NotImplementedError(
       f"Unsupported sequence length Q {T}, KV {S} and head dim {H}.")
-  # check if minimum cudnn version requirement is satisfied
-  if cudnn_version < 8904:
-    raise RuntimeError(
-      "JAX requires cuDNN >= 8.9.4 to use flash cross attention.")
     
 def check_cudnn_version():
   # check if cuDNN is installed
