@@ -13,33 +13,55 @@
 # limitations under the License.
 """Tests for serialization and deserialization of GDA."""
 
+# pylint: disable=g-importing-member
 import asyncio
 import contextlib
+from dataclasses import dataclass
+import functools
+import json
+import logging
 import math
-from functools import partial
 import os
 import pathlib
+import pickle
+import tempfile
+import time
 import tracemalloc as tm
+from typing import Any
 
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
-import jax.numpy as jnp
-from jax._src import test_util as jtu
+from jax import random
+from jax import tree
 from jax._src import array
-from jax._src import xla_bridge as xb
-from jax.sharding import NamedSharding, GSPMDSharding, SingleDeviceSharding
-from jax.sharding import PartitionSpec as P
+from jax._src import test_util as jtu
+from jax._src.layout import DeviceLocalLayout as DLL
+from jax._src.layout import Layout
+from jax.experimental.array_serialization import pytree_serialization
 from jax.experimental.array_serialization import serialization
-from jax.experimental.layout import Layout, DeviceLocalLayout as DLL
+from jax.experimental.array_serialization import tensorstore_impl as ts_impl
+from jax.experimental.array_serialization.pytree_serialization_utils import (
+  default_serialization_registry)
+import jax.numpy as jnp
+
+from jax.sharding import GSPMDSharding
+from jax.sharding import NamedSharding
+from jax.sharding import PartitionSpec as P
+from jax.sharding import SingleDeviceSharding
 import numpy as np
 import tensorstore as ts
+# pylint: enable=g-importing-member
+
+REGISTRY = default_serialization_registry
 
 jax.config.parse_flags_with_absl()
 _exit_stack = contextlib.ExitStack()
 
+
 def setUpModule():
   _exit_stack.enter_context(jtu.set_host_platform_device_count(8))
+
 
 def tearDownModule():
   _exit_stack.close()
@@ -62,18 +84,19 @@ class CheckpointTest(jtu.JaxTestCase):
         inp_shape, sharding,
         lambda idx: src[idx])
     ckpt_dir = pathlib.Path(self.create_tempdir('memprof').full_path)
-    tspec = serialization.get_tensorstore_spec(str(ckpt_dir))
+    tspec = ts_impl.get_tensorstore_spec(str(ckpt_dir))
 
     manager = serialization.GlobalAsyncCheckpointManager()
     manager.serialize(
         [inp], [tspec],
-        on_commit_callback=partial(self._on_commit_callback, ckpt_dir, ckpt_dir))
+        on_commit_callback=functools.partial(
+            self._on_commit_callback, ckpt_dir, ckpt_dir))
     manager.wait_until_finished()
 
     async def deserialize_with_byte_limit():
       r = await serialization.async_deserialize(
-        sharding, tspec, inp_shape,
-        byte_limiter=serialization._LimitInFlightBytes(4_200_000))
+          sharding, tspec, inp_shape,
+          byte_limiter=serialization._LimitInFlightBytes(4_200_000))
       r.block_until_ready()
 
     tm.start()
@@ -107,24 +130,21 @@ class CheckpointTest(jtu.JaxTestCase):
         inp_shape, sharding, lambda idx: src[idx]
     )
     ckpt_dir = pathlib.Path(self.create_tempdir('memprofsave').full_path)
-    tspec = serialization.get_tensorstore_spec(str(ckpt_dir))
+    tspec = ts_impl.get_tensorstore_spec(str(ckpt_dir))
     tspec['metadata'] = {
         'shape': inp.shape,
-        'compressor': None,
-        'chunks': inp.shape,
+        'data_type': jnp.dtype(inp.dtype).name,
+        'chunk_grid': {
+            'name': 'regular',
+            'configuration': {'chunk_shape': np.array(np.maximum(1, inp.shape))}
+        }
     }
-
     is_cpu = jtu.test_device_matches(['cpu'])
     tm.start()
     try:
       manager = serialization.GlobalAsyncCheckpointManager()
-      manager.serialize(
-          [inp],
-          [tspec],
-          on_commit_callback=partial(
-              self._on_commit_callback, ckpt_dir, ckpt_dir
-          ),
-      )
+      manager.serialize([inp], [tspec], on_commit_callback=functools.partial(
+          self._on_commit_callback, ckpt_dir, ckpt_dir))
       manager.wait_until_finished()
       unused_current, peak = tm.get_traced_memory()
       self.assertLess(peak, src.nbytes * (1 * (not is_cpu) + 0.5))
@@ -150,7 +170,8 @@ class CheckpointTest(jtu.JaxTestCase):
     manager = serialization.GlobalAsyncCheckpointManager()
     manager.serialize_with_paths(
         [a1], ckpt_paths,
-        on_commit_callback=partial(self._on_commit_callback, ckpt_dir, ckpt_dir))
+        on_commit_callback=functools.partial(
+            self._on_commit_callback, ckpt_dir, ckpt_dir))
     manager.wait_until_finished()
 
     m1, = manager.deserialize_with_paths(
@@ -175,7 +196,8 @@ class CheckpointTest(jtu.JaxTestCase):
         inp_shape, NamedSharding(global_mesh, pspec),
         lambda idx: global_input_data1[idx])
     ckpt_dir = pathlib.Path(self.create_tempdir('ckpt').full_path)
-    ckpt_path1 = pathlib.Path(self.create_tempdir(f'{ckpt_dir}/first').full_path)
+    ckpt_path1 = pathlib.Path(
+        self.create_tempdir(f'{ckpt_dir}/first').full_path)
 
     # Second Array
     global_input_data2 = np.arange(
@@ -183,7 +205,8 @@ class CheckpointTest(jtu.JaxTestCase):
     a2 = array.make_array_from_callback(
         inp_shape, NamedSharding(global_mesh, pspec),
         lambda idx: global_input_data2[idx])
-    ckpt_path2 = pathlib.Path(self.create_tempdir(f'{ckpt_dir}/second').full_path)
+    ckpt_path2 = pathlib.Path(
+        self.create_tempdir(f'{ckpt_dir}/second').full_path)
 
     # Third Array
     def cb3(_):
@@ -191,18 +214,20 @@ class CheckpointTest(jtu.JaxTestCase):
     global_mesh1d = jtu.create_mesh((8,), ('x',))
     a3 = array.make_array_from_callback(
         (0,), NamedSharding(global_mesh1d, P(None)), cb3)
-    ckpt_path3 = pathlib.Path(self.create_tempdir(f'{ckpt_dir}/third').full_path)
+    ckpt_path3 = pathlib.Path(
+        self.create_tempdir(f'{ckpt_dir}/third').full_path)
 
     ckpt_paths = [str(ckpt_path1), str(ckpt_path2), str(ckpt_path3)]
-    tspecs = jax.tree_util.tree_map(serialization.get_tensorstore_spec, ckpt_paths)
+    tspecs = jax.tree_util.tree_map(ts_impl.get_tensorstore_spec, ckpt_paths)
 
     manager = serialization.GlobalAsyncCheckpointManager()
     manager.serialize(
         [a1, a2, a3], tspecs,
-        on_commit_callback=partial(self._on_commit_callback, ckpt_dir, ckpt_dir))
+        on_commit_callback=functools.partial(
+            self._on_commit_callback, ckpt_dir, ckpt_dir))
     manager.wait_until_finished()
 
-    m1, m2, m3 = serialization.run_deserialization(
+    m1, m2, m3 = ts_impl.run_deserialization(
         [NamedSharding(global_mesh, pspec),
          NamedSharding(global_mesh, P('x')),
          NamedSharding(global_mesh1d, P(None))],
@@ -270,29 +295,23 @@ class CheckpointTest(jtu.JaxTestCase):
 
     ckpt_paths = [str(ckpt_path1), str(ckpt_path2), str(ckpt_path3)]
     tspecs = jax.tree_util.tree_map(
-        lambda p: serialization.get_tensorstore_spec(p, ocdbt=True), ckpt_paths
-    )
+        lambda p: ts_impl.get_tensorstore_spec(p, ocdbt=True), ckpt_paths)
 
     manager = serialization.GlobalAsyncCheckpointManager()
     with ts.Transaction(atomic=True) as transaction:
       manager.serialize(
           [a1, a2, a3],
           tspecs,
-          on_commit_callback=partial(
+          on_commit_callback=functools.partial(
               self._on_commit_callback, ckpt_dir, ckpt_dir
           ),
           transaction=transaction,
       )
     manager.wait_until_finished()
 
-    m1, m2, m3 = serialization.run_deserialization(
-        [
-            NamedSharding(global_mesh, pspec),
-            NamedSharding(global_mesh, P('x')),
-            NamedSharding(global_mesh1d, P(None)),
-        ],
-        tspecs,
-    )
+    m1, m2, m3 = ts_impl.run_deserialization(
+        [NamedSharding(global_mesh, pspec), NamedSharding(global_mesh, P('x')),
+         NamedSharding(global_mesh1d, P(None))], tspecs)
 
     self.assertIsInstance(m1, array.ArrayImpl)
     self.assertArraysEqual(
@@ -341,19 +360,19 @@ class CheckpointTest(jtu.JaxTestCase):
     ckpt_dir = pathlib.Path(self.create_tempdir('first').full_path)
 
     ckpt_paths = [str(ckpt_dir)]
-    tspecs = jax.tree_util.tree_map(serialization.get_tensorstore_spec, ckpt_paths)
+    tspecs = jax.tree_util.tree_map(ts_impl.get_tensorstore_spec, ckpt_paths)
 
     manager = serialization.GlobalAsyncCheckpointManager()
     manager.serialize(
         [arr], tspecs,
-        on_commit_callback=partial(self._on_commit_callback, ckpt_dir, ckpt_dir))
+        on_commit_callback=functools.partial(
+            self._on_commit_callback, ckpt_dir, ckpt_dir))
     manager.wait_until_finished()
 
     ds = NamedSharding(jtu.create_mesh((4, 2), ('x', 'y'), iota_order=True),
                        P('x', 'y'))
 
-    m1, = serialization.run_deserialization([ds], tspecs, [(12, 2)],
-                                            [np.float32])
+    m1, = ts_impl.run_deserialization([ds], tspecs, [(12, 2)], [np.float32])
 
     expected_data = {
         0: np.array([[0], [2], [4]], dtype=np.float32),
@@ -370,7 +389,7 @@ class CheckpointTest(jtu.JaxTestCase):
       self.assertArraysEqual(np.asarray(l.data), expected_data[l.device.id])
 
     new_ds = GSPMDSharding.get_replicated(list(global_mesh.devices.flat))
-    m2, = serialization.run_deserialization([new_ds], tspecs, [(8, 2)], [np.float32])
+    m2, = ts_impl.run_deserialization([new_ds], tspecs, [(8, 2)], [np.float32])
     for l in m2.addressable_shards:
       self.assertArraysEqual(l.data, global_input_data1.astype('float32'))
 
@@ -390,20 +409,20 @@ class CheckpointTest(jtu.JaxTestCase):
     ckpt_dir = pathlib.Path(self.create_tempdir('first').full_path)
 
     ckpt_paths = [str(ckpt_dir)]
-    tspecs = jax.tree_util.tree_map(serialization.get_tensorstore_spec, ckpt_paths)
+    tspecs = jax.tree_util.tree_map(ts_impl.get_tensorstore_spec, ckpt_paths)
 
     manager = serialization.GlobalAsyncCheckpointManager()
     manager.serialize(
         [arr], tspecs,
-        on_commit_callback=partial(self._on_commit_callback, ckpt_dir, ckpt_dir))
+        on_commit_callback=functools.partial(
+            self._on_commit_callback, ckpt_dir, ckpt_dir))
     manager.wait_until_finished()
 
     ds = NamedSharding(jtu.create_mesh((4, 2), ('x', 'y'), iota_order=True),
                        P('x', 'y'))
 
     target_dtype = jnp.dtype('int4')
-    m1, = serialization.run_deserialization([ds], tspecs, [(12, 2)],
-                                            [target_dtype])
+    m1, = ts_impl.run_deserialization([ds], tspecs, [(12, 2)], [target_dtype])
 
     # values bigger than 7 are converted properly.
     expected_data = {
@@ -421,7 +440,8 @@ class CheckpointTest(jtu.JaxTestCase):
       self.assertArraysEqual(np.asarray(l.data), expected_data[l.device.id])
 
     new_ds = GSPMDSharding.get_replicated(list(global_mesh.devices.flat))
-    m2, = serialization.run_deserialization([new_ds], tspecs, [(8, 2)], [target_dtype])
+    m2, = ts_impl.run_deserialization([new_ds], tspecs, [(8, 2)],
+                                      [target_dtype])
     for l in m2.addressable_shards:
       self.assertArraysEqual(l.data, global_input_data.astype(target_dtype))
 
@@ -435,22 +455,19 @@ class CheckpointTest(jtu.JaxTestCase):
     ckpt_dir = pathlib.Path(self.create_tempdir('first').full_path)
 
     ckpt_paths = [str(ckpt_dir)]
-    tspecs = jax.tree_util.tree_map(serialization.get_tensorstore_spec, ckpt_paths)
+    tspecs = jax.tree_util.tree_map(
+        ts_impl.get_tensorstore_spec, ckpt_paths)
 
     manager = serialization.GlobalAsyncCheckpointManager()
     manager.serialize(
         [array1], tspecs,
-        on_commit_callback=partial(self._on_commit_callback, ckpt_dir, ckpt_dir))
+        on_commit_callback=functools.partial(
+            self._on_commit_callback, ckpt_dir, ckpt_dir))
     manager.wait_until_finished()
 
     ds = NamedSharding(jtu.create_mesh((2,), ('x')), P(None))
 
-    m1, = serialization.run_deserialization(
-        [ds],
-        tspecs,
-        [()],
-        [np.float32]
-    )
+    m1, = ts_impl.run_deserialization([ds], tspecs, [()], [np.float32])
 
     for l in m1.addressable_shards:
       self.assertArraysEqual(np.asarray(l.data), data.astype(np.float32))
@@ -459,10 +476,8 @@ class CheckpointTest(jtu.JaxTestCase):
     global_mesh = jtu.create_mesh((2,), ('x'))
     data = np.arange(1024)
     tspec = ts.array(data).spec()
-    m1, = serialization.run_deserialization(
-        [NamedSharding(global_mesh, P(None))],
-        [tspec]
-    )
+    m1, = ts_impl.run_deserialization([NamedSharding(global_mesh, P(None))],
+                                      [tspec])
     for l in m1.addressable_shards:
       self.assertArraysEqual(np.asarray(l.data), data)
 
@@ -479,9 +494,9 @@ class CheckpointTest(jtu.JaxTestCase):
         },
         'f': 4
     }
-    self.assertTrue(serialization._spec_has_metadata(spec))
+    self.assertTrue(ts_impl._spec_has_metadata(spec))
     self.assertTrue(
-        serialization._spec_has_metadata({
+        ts_impl._spec_has_metadata({
             'driver': 'zarr',
             'kvstore': 'gfile',
             'metadata': {
@@ -503,39 +518,40 @@ class CheckpointTest(jtu.JaxTestCase):
         },
         'f': 4
     }
-    self.assertFalse(serialization._spec_has_metadata(spec))
+    self.assertFalse(ts_impl._spec_has_metadata(spec))
 
   def test_empty_spec_has_no_metadata(self):
     spec = {}
-    self.assertFalse(serialization._spec_has_metadata(spec))
+    self.assertFalse(ts_impl._spec_has_metadata(spec))
 
   @parameterized.named_parameters(
       ('gcs', 'gs://my/ckpt/dir/path'),
       ('file', '/my/ckpt/dir/path')
   )
   def test_get_tensorstore_spec_ocdbt(self, path):
-    spec = serialization.get_tensorstore_spec(path, ocdbt=True)
+    spec = ts_impl.get_tensorstore_spec(path, ocdbt=True)
     is_gcs_path = path.startswith('gs://')
+    # for OCDBT the last part of the path is the key in the kvstore
+    expected_path = os.path.split(path)[0]
     if is_gcs_path:
-      self.assertEqual(spec['kvstore']['base'], os.path.dirname(path))
+      self.assertEqual(spec['kvstore']['base']['driver'], 'gcs')
+      self.assertTrue(expected_path.endswith(spec['kvstore']['base']['path']))
     else:
-      self.assertEqual(spec['kvstore']['base'],
-                       f'{serialization._DEFAULT_DRIVER}://{os.path.dirname(path)}')
-    self.assertEqual(spec['kvstore']['path'], 'path')
+      self.assertEqual(spec['kvstore']['base']['path'], expected_path)
 
   def test_get_tensorstore_spec_not_absolute_path(self):
     path = 'my/ckpt/path'
     with self.assertRaisesRegex(ValueError,
-                                "Checkpoint path should be absolute"):
-      serialization.get_tensorstore_spec(path, ocdbt=True)
+                                'Checkpoint path should be absolute'):
+      ts_impl.get_tensorstore_spec(path, ocdbt=True)
 
   def test_maybe_cloud_storage(self):
-    gs_path = 'gs://some-buck/path'
-    gs_spec = serialization.get_tensorstore_spec(gs_path, ocdbt=True)
+    gs_path = 'gs://some-buck/path/array_name'
+    gs_spec = ts_impl.get_tensorstore_spec(gs_path, ocdbt=True)
     self.assertTrue(serialization.is_remote_storage(gs_spec))
 
-    local_path = '/tmp/checkpoint'
-    local_spec = serialization.get_tensorstore_spec(local_path, ocdbt=True)
+    local_path = '/tmp/checkpoint/array_name'
+    local_spec = ts_impl.get_tensorstore_spec(local_path, ocdbt=True)
     self.assertFalse(serialization.is_remote_storage(local_spec))
 
     nested_tspec = {
@@ -543,7 +559,8 @@ class CheckpointTest(jtu.JaxTestCase):
         'dtype': 'int32',
         'base': {
             'driver': 'zarr',
-            'kvstore': {'driver': 'ocdbt', 'base': 's3://some-bucket/path'},
+            'kvstore': {'driver': 'ocdbt',
+                        'base': 's3://some-bucket/path/array_name'},
         },
     }
     self.assertTrue(serialization.is_remote_storage(nested_tspec))
@@ -564,15 +581,16 @@ class CheckpointTest(jtu.JaxTestCase):
 
     ckpt_dir = pathlib.Path(self.create_tempdir('ckpt').full_path)
     ckpt_path = pathlib.Path(self.create_tempdir(f'{ckpt_dir}/first').full_path)
-    tspecs = jax.tree_util.tree_map(serialization.get_tensorstore_spec, [ckpt_path])
+    tspecs = jax.tree_util.tree_map(ts_impl.get_tensorstore_spec, [ckpt_path])
 
     manager = serialization.GlobalAsyncCheckpointManager()
     manager.serialize(
         [arr], tspecs,
-        on_commit_callback=partial(self._on_commit_callback, ckpt_dir, ckpt_dir))
+        on_commit_callback=functools.partial(
+            self._on_commit_callback, ckpt_dir, ckpt_dir))
     manager.wait_until_finished()
 
-    out, = serialization.run_deserialization([out_layout], tspecs)
+    out, = ts_impl.run_deserialization([out_layout], tspecs)
 
     self.assertEqual(out.layout, out_layout)
     self.assertIsInstance(out, array.ArrayImpl)
@@ -591,9 +609,7 @@ class CheckpointTest(jtu.JaxTestCase):
 
     # Run serialization.
     sharding = jax.sharding.GSPMDSharding.get_replicated(jax.devices())
-    tspecs = jax.tree_util.tree_map(
-        serialization.get_tensorstore_spec, [ckpt_dir]
-    )
+    tspecs = jax.tree_util.tree_map(ts_impl.get_tensorstore_spec, [ckpt_dir])
     manager = serialization.GlobalAsyncCheckpointManager()
     manager.serialize(
         [arr],
@@ -603,12 +619,9 @@ class CheckpointTest(jtu.JaxTestCase):
     manager.wait_until_finished()
 
     # Run deserialization.
-    deserialized_arr, = serialization.run_deserialization(
-        shardings=[sharding],
-        tensorstore_specs=tspecs,
-        global_shapes=[shape],
-        dtypes=[dtype],
-    )
+    deserialized_arr, = ts_impl.run_deserialization(
+        shardings=[sharding], tensorstore_specs=tspecs, global_shapes=[shape],
+        dtypes=[dtype])
 
     out = deserialized_arr.astype(jnp.int8)  # doesn't crash
     self.assertEqual(out.dtype, jnp.int8)
@@ -620,13 +633,282 @@ class TransferShardTest(jtu.JaxTestCase):
   @jtu.skip_on_devices('cpu')
   def test_transfer_shard_to_host(self):
     np_inp = np.arange(16).reshape((4, 4))
-    sharding = SingleDeviceSharding(jax.devices()[0], memory_kind="device")
+    sharding = SingleDeviceSharding(jax.devices()[0], memory_kind='device')
     arr = jax.device_put(np_inp, sharding)
     shard = arr.addressable_shards[0]
 
-    np_out = asyncio.run(serialization.transfer_shard_to_host(shard))
+    np_out = asyncio.run(ts_impl._transfer_shard_to_host(shard))
 
     self.assertArraysEqual(np_out, np_inp)
+
+
+class UserAPITestCase(jtu.JaxTestCase):
+  name: str | None
+  path: pathlib.Path | None
+
+  def setUp(self):
+    super().setUp()
+    tmpdir = tempfile.TemporaryDirectory()
+    self.enter_context(tmpdir)
+    self.name = tmpdir.name
+    self.path = pathlib.Path(self.name)
+
+  def tearDown(self):
+    self.path = None
+    self.name = None
+    super().tearDown()
+
+  def generate_random_fp32(self, shape, dtype=jnp.float32):
+    seed = round(time.time() * 1e6) % (2 ** 31)
+    key = random.key(seed)
+    return random.normal(key, shape=shape).astype(dtype)
+
+  def generate_clean_tree(self, dtype=jnp.float32):
+    r1 = self.generate_random_fp32((), dtype=dtype)
+    r2 = self.generate_random_fp32((4,), dtype=dtype)
+    r3 = self.generate_random_fp32((2, 3), dtype=dtype)
+    return (r1, {'a': r2, 'rs': [r1, r2, r3], 'c': {'d': {'e': (r2,)}}})
+
+  def _is_equal(self, el1, el2):
+    if not isinstance(el1, type(el2)) or not isinstance(el2, type(el1)):
+      return False
+    if isinstance(el1, (np.ndarray, jax.Array)):
+      return (el1.dtype == el2.dtype and el1.shape == el2.shape
+              and jnp.allclose(el1, el2))
+    else:
+      return el1 == el2
+
+  def assertPyTreeEqual(self, p1, p2):
+    leaves1, struct1 = tree.flatten(p1)
+    leaves2, struct2 = tree.flatten(p2)
+    self.assertEqual(struct1, struct2)
+    self.assertTrue(all(self._is_equal(el1, el2)
+                        for (el1, el2) in zip(leaves1, leaves2)))
+
+_DTYPES_LIST = [
+    jnp.uint8,
+    jnp.uint16,
+    jnp.uint32,
+    jnp.int8,
+    jnp.int16,
+    jnp.int32,
+    jnp.float8_e4m3fn,
+    jnp.float8_e4m3fnuz,
+    jnp.float8_e5m2,
+    jnp.float8_e5m2fnuz,
+    jnp.float8_e4m3b11fnuz,
+    jnp.bfloat16,
+    jnp.float16,
+    jnp.float32,
+    jnp.complex64,
+]
+
+if jax.config.x64_enabled:
+  _DTYPES_LIST.extend([
+      jnp.uint64,
+      jnp.int64,
+      jnp.float64,
+      jnp.complex128,
+  ])
+
+
+class CustomNode:
+  def __init__(self, a):
+    self.a = a
+
+  def tree_flatten(self):
+    return (self.a,), None
+
+  @classmethod
+  def tree_unflatten(cls, aux_data, children):
+    del aux_data
+    return cls(*children)
+
+
+@dataclass
+class CustomDataclass:
+  a: int
+  c: str
+  d: int
+
+
+class CustomStatic:
+  def __init__(self, a):
+    self.a = a
+
+
+class UserAPITest(UserAPITestCase):
+  @parameterized.product(tree=[{'a': 1}, [1, 2, 3], (1, 2, 3),
+                               'hello', 1, 2, 3])
+  def test_save_then_load(self, tree):  # pylint: disable=redefined-outer-name
+    pytree_serialization.save(tree, self.path)
+    tree2 = pytree_serialization.load(self.path)
+    self.assertPyTreeEqual(tree, tree2)
+
+  @parameterized.product(dtype=_DTYPES_LIST)
+  def test_saving_dtype(self, dtype):
+    test_tree = self.generate_clean_tree(dtype=dtype)
+    print('Generated tree', flush=True)
+    pytree_serialization.save(test_tree, self.path)
+    new_tree = pytree_serialization.load(self.path)
+    self.assertPyTreeEqual(test_tree, new_tree)
+
+  def test_do_not_overwrite_noncheckpoint_directories(self):
+    (self.path / 'hello.txt').write_text('Hello World')
+    with self.assertRaises(AssertionError):
+      pytree_serialization.save({'a': 1}, self.path)
+
+  def test_checkpoint_exists(self):
+    pytree_serialization.save({'a': 1}, self.path)
+    with self.assertRaises(NotImplementedError):
+      pytree_serialization.save({'a': 1}, self.path, overwrite=False)
+
+  @parameterized.product(use_node=[True, False], use_dataclass=[True, False],
+                         use_static=[True, False], save_pickle=[True, False],
+                         load_pickle=[True, False])
+  def test_custom_types(self, use_node, use_dataclass, use_static, save_pickle,
+                        load_pickle):
+    if not use_node and not use_dataclass and not use_static:
+      return
+    magic_value = 37
+    n = CustomNode(magic_value) if use_node else None
+    d = (CustomDataclass(magic_value, 'hello', magic_value + 1)
+         if use_dataclass else None)
+    s = CustomStatic(magic_value - 1)
+    tree_to_save = [n, (d, s)]
+
+    if save_pickle:
+      with REGISTRY.with_fallback(pickle.dumps, pickle.loads):
+        pytree_serialization.save(tree_to_save, self.path)
+    else:
+      with self.assertRaises(ValueError):
+        pytree_serialization.save(tree_to_save, self.path)
+      return
+
+    if load_pickle:
+      with REGISTRY.with_fallback(pickle.dumps,
+                                                        pickle.loads):
+        REGISTRY.register_type(CustomStatic, pickle.dumps, pickle.loads)
+        REGISTRY.register_type(CustomNode, pickle.dumps, pickle.loads)
+        REGISTRY.register_type(CustomDataclass, pickle.dumps, pickle.loads)
+        tree2 = pytree_serialization.load(self.path)
+        REGISTRY.deregister_type(CustomStatic)
+        REGISTRY.deregister_type(CustomNode)
+        REGISTRY.deregister_type(CustomDataclass)
+    else:
+      with self.assertRaises(ValueError):
+        _ = pytree_serialization.load(self.path)
+      return
+
+    if use_node:
+      self.assertEqual(tree2[0].a, magic_value)
+    if use_dataclass:
+      self.assertEqual(tree2[1][0].a, magic_value)
+      self.assertEqual(tree2[1][0].c, 'hello')
+      self.assertEqual(tree2[1][0].d, magic_value + 1)
+    if use_static:
+      self.assertEqual(tree2[1][1].a, magic_value - 1)
+
+  @parameterized.product(register=[True, False])
+  def test_best_effort(self, register):
+    magic_value = 37
+    n = CustomNode(magic_value)
+    d = CustomDataclass(magic_value, 'hello', magic_value + 1)
+    s = CustomStatic(magic_value - 1)
+    tree_to_save = [n, (d, s)]
+
+    if register:
+      # jax.tree_util.register_dataclass(
+      #     CustomDataclass, data_fields=["a", "d"], meta_fields=["c"])
+      jax.tree_util.register_pytree_node_class(CustomNode)
+      jax.tree_util.register_static(CustomStatic)
+
+    with REGISTRY.with_fallback(pickle.dumps, pickle.loads):
+      pytree_serialization.save(tree_to_save, self.path)
+    with self.assertRaises(ValueError):
+      _ = pytree_serialization.load(self.path)
+    _ = pytree_serialization.load(self.path, best_effort=True)
+
+  def test_flax_frozen_dict(self):
+    try:
+      # pylint: disable=g-import-not-at-top
+      # pylint: disable=g-importing-member
+      from flax.core.frozen_dict import FrozenDict
+      # pylint: enable=g-importing-member
+      # pylint: enable=g-import-not-at-top
+    except ImportError:
+      logging.warning('Skipping Flax FrozenDict tests as flax is not installed')
+      return
+
+    try:
+      REGISTRY.register_type(FrozenDict, pickle.dumps, pickle.loads)
+      pytree_serialization.save(FrozenDict(a=1, b=self.generate_clean_tree()),
+                            self.path)
+      pytree_serialization.load(self.path)
+    finally:
+      REGISTRY.deregister_type(FrozenDict)
+
+  def test_incremental_writes(self):
+    incremental_tree = [None, None, None]
+    pytree_serialization.save(incremental_tree, self.path, partial_write=True)
+    incremental_tree[0] = 1
+    pytree_serialization.save(incremental_tree, self.path, partial_write=True)
+    ret = pytree_serialization.load(self.path)
+    assert ret[0] == 1 and ret[1] is None and ret[2] is None
+    incremental_tree[0], incremental_tree[2] = None, jnp.ones(4)
+    pytree_serialization.save(incremental_tree, self.path, partial_write=True)
+    ret = pytree_serialization.load(self.path)
+    assert (ret[0] == 1 and ret[1] is None
+            and (np.testing.assert_allclose(ret[2], jnp.ones(4)) is None))
+
+  def test_custom_node_leaf_registration(self):
+    @dataclass
+    class P:
+      a: int = 2
+
+    @functools.partial(jax.tree_util.register_dataclass, data_fields=['a', 'b'],
+                      meta_fields=['op'])
+    @dataclass
+    class D:
+      a: Any
+      b: Any
+      op: str
+
+    def serialize_D(data):
+      return json.dumps(data)
+
+    def deserialize_D(data):
+      return json.loads(data)
+
+    data = ['hello', {'world': ['!', (1, 2)]}, None, P()]
+
+    serialize_fn = lambda p: json.dumps(p.a)
+    deserialize_fn = lambda data: P(json.loads(data))
+
+    with self.assertRaises(ValueError):
+      pytree_serialization.save(data, self.path)
+
+    REGISTRY.register_type(P, serialize_fn, deserialize_fn)
+    magic_value = -171
+    data[-1].a = magic_value
+    pytree_serialization.save(data, self.path)
+    ret = pytree_serialization.load(self.path)
+    self.assertLen(ret, len(data))
+    self.assertEqual(ret[-1].a, magic_value)
+
+    magic_string = str(hash('hello'))
+    data.append(D(1, jax.numpy.zeros(2), magic_string))
+    with self.assertRaises(ValueError):
+      pytree_serialization.save(data, self.path)
+
+    REGISTRY.register_type(D, serialize_D, deserialize_D)
+    pytree_serialization.save(data, self.path)
+    ret = pytree_serialization.load(self.path)
+    self.assertLen(ret, len(data))
+    self.assertEqual(ret[-1].op, magic_string)
+
+    jax.tree.flatten(data)
+
 
 if __name__ == '__main__':
   absltest.main(testLoader=jtu.JaxTestLoader())
