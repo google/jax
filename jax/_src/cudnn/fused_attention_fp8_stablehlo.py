@@ -103,9 +103,9 @@ def check_layout(query, key, value, layout):
 # mapping from (is_bwd, has_mask) to custom call name
 _custom_name_maps = {
   # fMHA forward call targets.
-  (False,): "__cudnn$fmhaSoftmax$f8",
+  (False,): "__cudnn$fmhaSoftmaxF8",
   # fMHA backward call targets.
-  (True,): "__cudnn$fmhaSoftmaxBackward$f8",
+  (True,): "__cudnn$fmhaSoftmaxBackwardF8",
 }
 
 def get_custom_call_name(is_bwd):
