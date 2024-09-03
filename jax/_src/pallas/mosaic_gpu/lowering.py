@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import dataclasses
 import functools
+import itertools
 import math
 from typing import Any, cast
 
@@ -30,11 +31,14 @@ from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.lax import lax
 from jax._src.lib.mlir import ir
+from jax._src.lib.mlir.dialects import nvvm as nvvm_dialect
 from jax._src.lib.mlir.dialects import arith as arith_dialect
 from jax._src.lib.mlir.dialects import gpu as gpu_dialect
 from jax._src.lib.mlir.dialects import memref as memref_dialect
 from jax._src.pallas import core as pallas_core
 from jax._src.pallas import primitives
+from jax._src.pallas.mosaic_gpu import core as mgpu_core
+from jax._src.pallas.mosaic_gpu import primitives as mgpu_primitives
 from jax._src.state import primitives as sp
 from jax.experimental.mosaic import gpu as mosaic_gpu
 from jax.experimental.mosaic.gpu import dsl as mgpu
@@ -151,6 +155,57 @@ def _eval_index_map(
   return tuple(result)
 
 
+@dataclasses.dataclass(frozen=True)
+class SmemBlockInfo:
+  tiled_shape: tuple[int, ...]
+  untiled_shape: tuple[int, ...]
+  dtype: jnp.dtype
+  swizzle: int | None = None
+  tma_transpose: bool = False
+
+  @property
+  def ndim(self) -> int:
+    return len(self.untiled_shape)
+
+  @property
+  def byte_size(self) -> int:
+    return math.prod(self.untiled_shape) * self.dtype.itemsize
+
+  @property
+  def gmem_transform(self) -> mgpu.MemRefTransform | tuple[mgpu.MemRefTransform, ...]:
+    if len(self.tiled_shape) == len(self.untiled_shape):
+      return ()
+
+    transform = (mosaic_gpu.TileTransform(self.tiled_shape[2:]),)
+    if self.tma_transpose:
+      transform += (mosaic_gpu.TransposeTransform((1, 0, 2, 3)),)
+    return transform
+
+  def gmem_slice(self, *dim_start: ir.Value) -> tuple[mgpu.DynamicSlice, ...]:
+    gslice = map(mgpu.ds, dim_start, self.untiled_shape)
+    if self.tma_transpose:
+      return tuple(gslice[::-1])
+    return tuple(gslice)
+
+  @classmethod
+  def from_block_mapping(cls, bm):
+    memspace = bm.block_aval.memory_space or mgpu_core.SMemSpace(None)
+    if not isinstance(memspace, mgpu_core.SMemSpace):
+      raise ValueError(f"Can only pre-load shared memory blocks. Not {bm.block_aval.memory_space}")
+
+    if memspace.wgmma_operand_config:
+      cfg = bm.block_aval.memory_space.wgmma_operand_config
+      return cls(
+          tiled_shape=cfg.tiled_shape,
+          untiled_shape=cfg.shape,
+          swizzle=cfg.swizzle,
+          tma_transpose=cfg.tma_transpose,
+          dtype=bm.array_shape_dtype.dtype
+      )
+
+
+    return cls(tiled_shape=bm.block_shape, untiled_shape=bm.block_shape, dtype=bm.array_shape_dtype.dtype)
+
 def lower_jaxpr_to_module(
     grid_mapping: pallas_core.GridMapping,
     jaxpr: jax_core.Jaxpr,
@@ -160,6 +215,9 @@ def lower_jaxpr_to_module(
 ) -> LoweringResult:
   del cost_estimate  # Unused.
 
+  block_infos = [SmemBlockInfo.from_block_mapping(bm) for bm in grid_mapping.block_mappings]
+  in_block_infos = block_infos[:grid_mapping.num_inputs]
+  out_block_infos = block_infos[grid_mapping.num_inputs:]
   assert len(jaxpr.outvars) == 0
   assert not grid_mapping.vmapped_dims
   if len(grid_mapping.grid) > 3:
@@ -191,26 +249,22 @@ def lower_jaxpr_to_module(
   if len(grid) < 3:
     grid += (1,) * (3 - len(grid))
   block = (128,) + (1,) * (len(grid) - 1)
-
   in_structs_gmem = [*grid_mapping.in_shapes]
   in_structs_smem = [
-      jax.ShapeDtypeStruct(bm.block_shape, s.dtype)
-      for bm, s in zip(
-          grid_mapping.block_mappings[: grid_mapping.num_inputs],
-          grid_mapping.in_shapes,
-      )
+      jax.ShapeDtypeStruct(bi.tiled_shape, s.dtype)
+      for bi, s in zip(in_block_infos, grid_mapping.in_shapes,)
   ]
   out_structs_gmem = [*grid_mapping.out_shapes]
   out_structs_smem = [
-      jax.ShapeDtypeStruct(bm.block_shape, s.dtype)
-      for bm, s in zip(
-          grid_mapping.block_mappings[grid_mapping.num_inputs :],
+      jax.ShapeDtypeStruct(bi.tiled_shape, s.dtype)
+      for bi, s in zip(
+          out_block_infos,
           grid_mapping.out_shapes,
       )
   ]
 
   def body(launch_ctx: mosaic_gpu.LaunchContext, *buffers):
-    *buffers_gmem, (*buffers_smem, runtime_smem, barriers) = buffers
+    *buffers_gmem, (*buffers_smem, barrier, runtime_smem) = buffers
     assert len(buffers_gmem) == len(buffers_smem)
     in_buffers_gmem, out_buffers_gmem = util.split_list(
         buffers_gmem, [grid_mapping.num_inputs]
@@ -219,7 +273,7 @@ def lower_jaxpr_to_module(
         buffers_smem, [grid_mapping.num_inputs]
     )
 
-    [barrier] = cast(mgpu.BarrierRef, barriers)
+    barrier = cast(mgpu.BarrierRef, barrier)
 
     module_ctx = ModuleContext(
         name_and_src_info.name, grid_mapping, runtime_smem, smem_used_bytes=0
@@ -233,20 +287,21 @@ def lower_jaxpr_to_module(
         start_indices, [grid_mapping.num_inputs]
     )
 
+    txcount = sum(bi.byte_size for bi in in_block_infos)
+
     with mgpu.single_thread():
-      for start_indices, b_gmem, b_smem in zip(
-          in_start_indices, in_buffers_gmem, in_buffers_smem
+      barrier.arrive_expect_tx(txcount)
+      for start_indices, b_gmem, b_smem, bi in unsafe_zip(
+          in_start_indices, in_buffers_gmem, in_buffers_smem, in_block_infos
       ):
-        # TODO(slebedev): Support 128-byte swizzling, once we can lower matmuls.
         launch_ctx.async_copy(
             src_ref=b_gmem,
             dst_ref=b_smem,
-            gmem_slice=tuple(
-                map(mgpu.ds, start_indices, ir.MemRefType(b_smem.type).shape)
-            ),
+            gmem_slice=bi.gmem_slice(*start_indices),
+            gmem_transform=bi.gmem_transform,
             barrier=barrier,
-            swizzle=None,
-            arrive=True,
+            swizzle=bi.swizzle,
+            arrive=False,
             uniform=False,
         )
 
@@ -257,17 +312,17 @@ def lower_jaxpr_to_module(
     _ = lower_jaxpr_to_mosaic_gpu(module_ctx, jaxpr, buffers_smem)
     mgpu.commit_shared()
 
-    for start_indices, b_gmem, b_smem in zip(
-        out_start_indices, out_buffers_gmem, out_buffers_smem
+
+    for start_indices, b_gmem, b_smem, bi in zip(
+        out_start_indices, out_buffers_gmem, out_buffers_smem, out_block_infos
     ):
       # TODO(slebedev): Support 128-byte swizzling, once we can lower matmuls.
       launch_ctx.async_copy(
           src_ref=b_smem,
           dst_ref=b_gmem,
-          gmem_slice=tuple(
-              map(mgpu.ds, start_indices, ir.MemRefType(b_smem.type).shape)
-          ),
-          swizzle=None,
+          gmem_slice=tuple(map(mgpu.ds, start_indices, bi.untiled_shape)),
+          gmem_transform=bi.gmem_transform,
+          swizzle=bi.swizzle,
       )
 
     launch_ctx.await_async_copy(0)
@@ -291,8 +346,8 @@ def lower_jaxpr_to_module(
           smem_scratch_shape=(
               *in_structs_smem,
               *out_structs_smem,
-              *extra_smem_scratch,
               mgpu.TMABarrier(),
+              *extra_smem_scratch,
           ),
           module_name=name_and_src_info.name,
       )
@@ -383,9 +438,14 @@ def _num_programs_lowering_rule(ctx: LoweringRuleContext, axis):
 
 @register_lowering_rule(sp.get_p)
 def _get_lowering_rule(ctx: LoweringRuleContext, x_smem, *indexers, tree):
-  del ctx, tree  # Unused.
+  del tree  # Unused.
   if indexers:
     raise NotImplementedError("No support for indexers yet")
+
+  [out_aval] = ctx.avals_out
+  if isinstance(x_smem, mgpu.WGMMAAccumulator):
+    return x_smem
+
   return mgpu.FragmentedArray.load_strided(x_smem)
 
 
@@ -393,9 +453,20 @@ def _get_lowering_rule(ctx: LoweringRuleContext, x_smem, *indexers, tree):
 def _swap_lowering_rule(
     ctx: LoweringRuleContext, x_smem, value, *indexers, tree
 ):
-  del ctx, tree  # Unused.
+  del tree  # Unused.
   if indexers:
     raise NotImplementedError("No support for indexers yet")
+
+  if isinstance(value, mgpu.WGMMAAccumulator):
+    value = value.value
+
+  if value.layout == mgpu.WGMMA_LAYOUT:
+    assert len(ctx.avals_in) == 2, value
+    aref = cast(pallas_core.AbstractMemoryRef, ctx.avals_in[0])
+    assert isinstance(aref.memory_space, mgpu_core.SMemSpace) and aref.memory_space.wgmma_operand_config, ctx.avals_in
+    value.store_tiled(x_smem, swizzle=aref.memory_space.wgmma_operand_config.swizzle)
+    return
+
   old_value = mgpu.FragmentedArray.load_strided(x_smem)
   value.store_untiled(x_smem)
   return old_value
@@ -480,14 +551,60 @@ def _debug_print_lowering_rule(
   return ()
 
 
+def _is_accum_aval(aval):
+  return (
+      aval.memory_space
+      and isinstance(aval.memory_space, mgpu_core.RegsSpace)
+      and aval.memory_space.wgmma_config
+  )
+
+
+def _is_smem_aval(aval):
+  return aval.memory_space is None or isinstance(
+      aval.memory_space, mgpu_core.SMemSpace
+  )
+
+
+def _partition(lst, pred) -> tuple[list[Any], list[Any]]:
+  return [x for x in lst if pred(x)], [x for x in lst if not pred(x)]
+
+
+def _idx_partition(idx_avals: list[tuple[int, Any]], pred) -> tuple[list[int], list[Any], list[tuple[int, Any]]]:
+  avals, rest = _partition(idx_avals, lambda x: pred(x[1]))
+  if not avals:
+    return [], [], list(rest)
+
+  return *zip(*avals), rest
+
 @register_lowering_rule(primitives.run_scoped_p)
 def _run_scoped_lowering_rule(
     ctx: LoweringRuleContext, *consts, jaxpr: jax_core.Jaxpr
 ):
-  in_avals = [v.aval.inner_aval for v in jaxpr.invars]
-  bytes_allocated, input_refs = ctx.module_context.scratch_view(
-      [jax.ShapeDtypeStruct(shape=aval.shape, dtype=aval.dtype) for aval in in_avals]
-  )
+  if len(jaxpr.invars):
+    idx_inavals = [(i, v.aval) for i, v in enumerate(jaxpr.invars)]
+    in_smem_idx, in_smem_avals, idx_inavals = _idx_partition(idx_inavals, _is_smem_aval)
+    in_accum_idx, in_accum_avals, idx_inavals = _idx_partition(idx_inavals, _is_accum_aval)
+    if len(idx_inavals) != 0:
+      raise ValueError("Unexpacted avals: ", idx_inavals)
+
+    accum_refs = [
+        mgpu.WGMMAAccumulator.zero(*aval.shape, mlir.dtype_to_ir_type(aval.dtype))
+        for aval in in_accum_avals
+    ]
+
+    bytes_allocated, in_smem_refs = ctx.module_context.scratch_view(
+        [jax.ShapeDtypeStruct(shape=aval.shape, dtype=aval.dtype) for aval in in_smem_avals]
+    )
+
+    # zip the accum refs and in_smem_refs back in argument order.
+    idx_refs = zip(in_accum_idx, accum_refs) + zip(in_smem_idx, in_smem_refs)
+
+    assert len(idx_refs) == len(jaxpr.invars), (idx_refs, jaxpr.invars)
+    _, input_refs = zip(*sorted(idx_refs, key=lambda x: x[0]))
+  else:
+    bytes_allocated = 0
+    input_refs = []
+
   outs = lower_jaxpr_to_mosaic_gpu(
       ctx.module_context, jaxpr, input_refs, consts
   )
@@ -495,13 +612,50 @@ def _run_scoped_lowering_rule(
   return outs
 
 
+@register_lowering_rule(mgpu_primitives.wgmma_zero_accumulator_p)
+def _wgmma_zero_accumulator_lowering_rule(
+    ctx: LoweringRuleContext, m: int, n: int, config
+):
+  del ctx, config
+  return mgpu.wgmma.WGMMAAccumulator.zero(m, n)
+
+@register_lowering_rule(mgpu_primitives.wgmma_p)
+def _wgmma_lowering_rule(
+    ctx: LoweringRuleContext, acc, a, b, swizzle, b_row_major,
+):
+  del ctx
+  acc.value = mgpu.wgmma(
+      acc,
+      a,
+      b,
+      swizzle=swizzle,
+      b_order=mgpu.WGMMALayout.ROW_MAJOR
+      if b_row_major
+      else mgpu.WGMMALayout.COL_MAJOR,
+  ).value
+  nvvm_dialect.wgmma_commit_group_sync_aligned()
+  return []
+
+@register_lowering_rule(mgpu_primitives.wgmma_wait_p)
+def _wgmma_wait_lowering_rule(ctx: LoweringRuleContext, wait_until):
+  del ctx
+  nvvm_dialect.wgmma_wait_group_sync_aligned(wait_until)
+  return ()
+
+
 def _bcast(
-    x: ir.Value,
-    y: ir.Value,
+    x,
+    y,
     x_aval: jax_core.ShapedArray,
     y_aval: jax_core.ShapedArray,
     out_aval: jax_core.ShapedArray,
 ) -> ir.Value:
+  if isinstance(x, mgpu.WGMMAAccumulator):
+    x = x.value
+
+  if isinstance(y, mgpu.WGMMAAccumulator):
+    x = y.value
+
   if isinstance(x, (np.ndarray, np.number, int, float)):
     x_dtype = x_aval.dtype
     if x_aval.weak_type:
@@ -516,8 +670,8 @@ def _bcast(
     y = mgpu.FragmentedArray.splat(
         _ir_constant(y, mlir.dtype_to_ir_type(y_dtype)), ()
     )
-  assert isinstance(x, mgpu.FragmentedArray)
-  assert isinstance(y, mgpu.FragmentedArray)
+  assert isinstance(x, mgpu.FragmentedArray), x
+  assert isinstance(y, mgpu.FragmentedArray), y
   if x_aval.shape != out_aval.shape:
     x = x.broadcast(out_aval.shape)
   if y_aval.shape != out_aval.shape:

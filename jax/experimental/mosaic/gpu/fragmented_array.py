@@ -757,7 +757,7 @@ class FragmentedArray:
         case _:
           raise AssertionError(swizzle)
       stagger_amount = swizzle // 64
-      if (cols_per_tile // 8) % (stagger_amount + 1):
+      if (cols_per_tile // 8) % stagger_amount:
         raise NotImplementedError
     else:
       # We rely on canonicalization to clean up the selects.
