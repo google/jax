@@ -34,6 +34,7 @@ py_library(
     deps = [
         ":core",
         ":pallas_call_registration",
+        ":primitives",
     ],
 )
 
@@ -54,6 +55,7 @@ pytype_strict_library(
     srcs = ["lowering.py"],
     deps = [
         ":core",
+        ":primitives",
         "//jax",
         "//jax:core",
         "//jax:mlir",
@@ -67,10 +69,22 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
+    name = "primitives",
+    srcs = ["primitives.py"],
+    deps = [
+        ":core",
+        "//jax",
+        "//jax:core",
+        "//jax:effects",
+    ],
+)
+
+pytype_strict_library(
     name = "core",
     srcs = ["core.py"],
     deps = [
         "//jax",
+        "//jax:ad_util",
         "//jax/_src/pallas",
     ],
 )

@@ -244,6 +244,13 @@ class FragmentedArray:
   def _pointwise(self, op, *other):
     other_arrs = []
     for o in other:
+      # Splat a possible scalar.
+      if isinstance(o, (float, int)):
+        o = utils.c(o, self.mlir_dtype)
+
+      if isinstance(o, ir.Value):
+        o = FragmentedArray.splat(o, shape=self.shape)
+
       if not isinstance(o, FragmentedArray):
         if not isinstance(o, ir.Value):
           raise NotImplementedError(o)
@@ -266,6 +273,14 @@ class FragmentedArray:
     for idx, reg in np.ndenumerate(self.registers):
       new_regs[idx] = op(reg, *(o.registers[idx] for o in other_arrs))
     return FragmentedArray(_registers=new_regs, _layout=self.layout)
+
+  def __neg__(self):
+    if ir.FloatType.isinstance(self.mlir_dtype):
+      return self._pointwise(arith.negf)
+    elif ir.IntegerType.isinstance(self.mlir_dtype):
+      return self._pointwise(arith.negsi)
+    else:
+      raise NotImplementedError(self.mlir_dtype)
 
   def __add__(self, other):
     if ir.FloatType.isinstance(self.mlir_dtype):
@@ -757,7 +772,7 @@ class FragmentedArray:
         case _:
           raise AssertionError(swizzle)
       stagger_amount = swizzle // 64
-      if (cols_per_tile // 8) % (stagger_amount + 1):
+      if (cols_per_tile // 8) % stagger_amount:
         raise NotImplementedError
     else:
       # We rely on canonicalization to clean up the selects.
