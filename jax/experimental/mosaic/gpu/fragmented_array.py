@@ -267,6 +267,14 @@ class FragmentedArray:
       new_regs[idx] = op(reg, *(o.registers[idx] for o in other_arrs))
     return FragmentedArray(_registers=new_regs, _layout=self.layout)
 
+  def __neg__(self):
+    if ir.FloatType.isinstance(self.mlir_dtype):
+      return self._pointwise(arith.negf)
+    elif ir.IntegerType.isinstance(self.mlir_dtype):
+      return self._pointwise(arith.negsi)
+    else:
+      raise NotImplementedError(self.mlir_dtype)
+
   def __add__(self, other):
     if ir.FloatType.isinstance(self.mlir_dtype):
       return self._pointwise(arith.addf, other)
@@ -757,7 +765,7 @@ class FragmentedArray:
         case _:
           raise AssertionError(swizzle)
       stagger_amount = swizzle // 64
-      if (cols_per_tile // 8) % (stagger_amount + 1):
+      if (cols_per_tile // 8) % stagger_amount:
         raise NotImplementedError
     else:
       # We rely on canonicalization to clean up the selects.

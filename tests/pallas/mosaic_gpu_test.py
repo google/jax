@@ -20,6 +20,7 @@ import jax
 from jax._src import config
 from jax._src import test_util as jtu
 import jax._src.pallas.mosaic_gpu.core as plgpu
+import jax._src.pallas.mosaic_gpu.primitives as plgpu_primitives
 from jax.experimental import pallas as pl
 import jax.numpy as jnp
 import numpy as np
@@ -194,6 +195,45 @@ class PallasCallTest(PallasTest):
         jnp.full([256], 2, dtype=jnp.int32),
     )
 
+  def test_wgmma(self):
+    k = 128
+
+    # The configurateion retains all information related to the
+    # wgmma. Particularly the swizzling and whether the memory order
+    # of the arguments. This information is low level, is unambiguous
+    # given the dtype and swizzle, and needs to be consisten at TMA
+    # and wgmma so we define it once here.
+    wgmma_config = plgpu.WGMMAConfig(jnp.float16, swizzle=min(128, k))
+    lhs_smem = wgmma_config.lhs_smem_config((64, k))
+    rhs_smem = wgmma_config.rhs_smem_config((k, 128))
+    out_smem = wgmma_config.out_smem_config((64, 128))
+
+    def kernel(a_ref, b_ref, o_ref):
+      def body(acc):
+        # Effectful call to the wgmma pipeline. Information like
+        # swizzling is encapsulated in the operands.
+        plgpu_primitives.wgmma(acc, a_ref, b_ref)
+        # Flush the pipeline. An argument of N would allow up to N
+        # wgmma calls in the pipeline.
+        plgpu_primitives.wgmma_wait(0)
+        # Acc is an abstract array reference that we don't want to
+        # dereference before the wgmma pipeline is flished.
+        return acc[...]
+
+      # Create a mutable and scoped accumulator for wgmma.
+      acc_arr = pl.run_scoped(body, wgmma_config.accumulator_config(64, 128))
+      o_ref[...] = acc_arr
+
+    a = np.ones((64, k), jnp.float16)
+    b = np.ones((k, 128), jnp.float16)
+    _blockspec = lambda smem_config: pl.BlockSpec(smem_config.shape, None, memory_space=smem_config.memory_space)
+    res = pl.pallas_call(
+        kernel,
+        in_specs=[_blockspec(lhs_smem), _blockspec(rhs_smem)],
+        out_specs=_blockspec(out_smem),
+        out_shape=jax.ShapeDtypeStruct((64, 128), jnp.float32),
+    )(a, b)
+    np.testing.assert_allclose(res, a @ b)
 
 if __name__ == "__main__":
   absltest.main()
