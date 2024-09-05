@@ -76,10 +76,10 @@ jax::Gehrd<double>::FnType dgehrd_;
 jax::Gehrd<std::complex<float>>::FnType cgehrd_;
 jax::Gehrd<std::complex<double>>::FnType zgehrd_;
 
-jax::Sytrd<float>::FnType ssytrd_;
-jax::Sytrd<double>::FnType dsytrd_;
-jax::Sytrd<std::complex<float>>::FnType chetrd_;
-jax::Sytrd<std::complex<double>>::FnType zhetrd_;
+jax::TridiagonalReduction<ffi::DataType::F32>::FnType ssytrd_;
+jax::TridiagonalReduction<ffi::DataType::F64>::FnType dsytrd_;
+jax::TridiagonalReduction<ffi::DataType::C64>::FnType chetrd_;
+jax::TridiagonalReduction<ffi::DataType::C128>::FnType zhetrd_;
 
 }  // extern "C"
 
@@ -211,6 +211,22 @@ static_assert(
         jax::EigenvalueDecompositionComplex<ffi::DataType::C128>::FnType,
         jax::ComplexGeev<std::complex<double>>::FnType>,
     JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::F32>::FnType,
+                   jax::Sytrd<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::F64>::FnType,
+                   jax::Sytrd<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::C64>::FnType,
+                   jax::Sytrd<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::C128>::FnType,
+                   jax::Sytrd<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
 
 #undef JAX_KERNEL_FNTYPE_MISMATCH_MSG
 
@@ -314,6 +330,11 @@ static auto init = []() -> int {
   AssignKernelFn<EigenvalueDecomposition<ffi::DataType::F64>>(dgeev_);
   AssignKernelFn<EigenvalueDecompositionComplex<ffi::DataType::C64>>(cgeev_);
   AssignKernelFn<EigenvalueDecompositionComplex<ffi::DataType::C128>>(zgeev_);
+
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::F32>>(ssytrd_);
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::F64>>(dsytrd_);
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::C64>>(chetrd_);
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::C128>>(zhetrd_);
 
   return 0;
 }();

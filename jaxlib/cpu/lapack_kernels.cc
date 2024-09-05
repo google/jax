@@ -1688,6 +1688,68 @@ template struct Sytrd<double>;
 template struct Sytrd<std::complex<float>>;
 template struct Sytrd<std::complex<double>>;
 
+// FFI Kernel
+
+template <ffi::DataType dtype>
+ffi::Error TridiagonalReduction<dtype>::Kernel(
+    ffi::Buffer<dtype> x, MatrixParams::UpLo uplo,
+    ffi::ResultBuffer<dtype> x_out,
+    ffi::ResultBuffer<ffi::ToReal(dtype)> diagonal,
+    ffi::ResultBuffer<ffi::ToReal(dtype)> off_diagonal,
+    ffi::ResultBuffer<dtype> tau, ffi::ResultBuffer<LapackIntDtype> info) {
+  FFI_ASSIGN_OR_RETURN((auto [batch_count, x_rows, x_cols]),
+                       SplitBatch2D(x.dimensions()));
+
+  CopyIfDiffBuffer(x, x_out);
+
+  ValueType* x_out_data = x_out->typed_data();
+  RealType* diagonal_data = diagonal->typed_data();
+  RealType* off_diagonal_data = off_diagonal->typed_data();
+  ValueType* tau_data = tau->typed_data();
+  lapack_int* info_data = info->typed_data();
+
+  // Prepare LAPACK workspaces.
+  const auto work_size = GetWorkspaceSize(x_rows, x_cols);
+  auto work_data = AllocateScratchMemory<dtype>(work_size);
+
+  auto uplo_v = static_cast<char>(uplo);
+  FFI_ASSIGN_OR_RETURN(auto x_leading_dim_v,
+                       MaybeCastNoOverflow<lapack_int>(x_rows));
+  FFI_ASSIGN_OR_RETURN(auto work_size_v,
+                       MaybeCastNoOverflow<lapack_int>(work_size));
+  FFI_ASSIGN_OR_RETURN(auto x_order_v, MaybeCastNoOverflow<lapack_int>(x_cols));
+
+  int64_t x_size = x_rows * x_cols;
+  int64_t tau_step = {tau->dimensions().back()};
+  for (int64_t i = 0; i < batch_count; ++i) {
+    fn(&uplo_v, &x_order_v, x_out_data, &x_leading_dim_v, diagonal_data,
+       off_diagonal_data, tau_data, work_data.get(), &work_size_v, info_data);
+    x_out_data += x_size;
+    diagonal_data += x_cols;
+    off_diagonal_data += x_cols - 1;
+    tau_data += tau_step;
+    ++info_data;
+  }
+  return ffi::Error::Success();
+}
+
+template <ffi::DataType dtype>
+int64_t TridiagonalReduction<dtype>::GetWorkspaceSize(lapack_int x_rows,
+                                                      lapack_int x_cols) {
+  ValueType optimal_size = {};
+  lapack_int workspace_query = -1;
+  lapack_int info = 0;
+  char uplo_v = 'L';
+  fn(&uplo_v, &x_cols, nullptr, &x_rows, nullptr, nullptr, nullptr,
+     &optimal_size, &workspace_query, &info);
+  return info == 0 ? static_cast<int64_t>(std::real(optimal_size)) : -1;
+}
+
+template struct TridiagonalReduction<ffi::DataType::F32>;
+template struct TridiagonalReduction<ffi::DataType::F64>;
+template struct TridiagonalReduction<ffi::DataType::C64>;
+template struct TridiagonalReduction<ffi::DataType::C128>;
+
 // FFI Definition Macros (by DataType)
 
 #define JAX_CPU_DEFINE_TRSM(name, data_type)               \
@@ -1811,6 +1873,20 @@ template struct Sytrd<std::complex<double>>;
           .Ret<::xla::ffi::Buffer<data_type>>(/*eigvecs_right*/) \
           .Ret<::xla::ffi::Buffer<LapackIntDtype>>(/*info*/))
 
+#define JAX_CPU_DEFINE_SYTRD_HETRD(name, data_type)                \
+  XLA_FFI_DEFINE_HANDLER_SYMBOL(                                   \
+      name, TridiagonalReduction<data_type>::Kernel,               \
+      ::xla::ffi::Ffi::Bind()                                      \
+          .Arg<::xla::ffi::Buffer<data_type>>(/*x*/)               \
+          .Attr<MatrixParams::UpLo>("uplo")                        \
+          .Ret<::xla::ffi::Buffer<data_type>>(/*x_out*/)           \
+          .Ret<::xla::ffi::Buffer<::xla::ffi::ToReal(data_type)>>( \
+              /*diagonal*/)                                        \
+          .Ret<::xla::ffi::Buffer<::xla::ffi::ToReal(data_type)>>( \
+              /*off_diagonal*/)                                    \
+          .Ret<::xla::ffi::Buffer<data_type>>(/*tau*/)             \
+          .Ret<::xla::ffi::Buffer<LapackIntDtype>>(/*info*/))
+
 // FFI Handlers
 
 JAX_CPU_DEFINE_TRSM(blas_strsm_ffi, ::xla::ffi::DataType::F32);
@@ -1853,6 +1929,11 @@ JAX_CPU_DEFINE_GEEV(lapack_dgeev_ffi, ::xla::ffi::DataType::F64);
 JAX_CPU_DEFINE_GEEV_COMPLEX(lapack_cgeev_ffi, ::xla::ffi::DataType::C64);
 JAX_CPU_DEFINE_GEEV_COMPLEX(lapack_zgeev_ffi, ::xla::ffi::DataType::C128);
 
+JAX_CPU_DEFINE_SYTRD_HETRD(lapack_ssytrd_ffi, ::xla::ffi::DataType::F32);
+JAX_CPU_DEFINE_SYTRD_HETRD(lapack_dsytrd_ffi, ::xla::ffi::DataType::F64);
+JAX_CPU_DEFINE_SYTRD_HETRD(lapack_chetrd_ffi, ::xla::ffi::DataType::C64);
+JAX_CPU_DEFINE_SYTRD_HETRD(lapack_zhetrd_ffi, ::xla::ffi::DataType::C128);
+
 #undef JAX_CPU_DEFINE_TRSM
 #undef JAX_CPU_DEFINE_GETRF
 #undef JAX_CPU_DEFINE_GEQRF
@@ -1864,5 +1945,6 @@ JAX_CPU_DEFINE_GEEV_COMPLEX(lapack_zgeev_ffi, ::xla::ffi::DataType::C128);
 #undef JAX_CPU_DEFINE_HEEVD
 #undef JAX_CPU_DEFINE_GEEV
 #undef JAX_CPU_DEFINE_GEEV_COMPLEX
+#undef JAX_CPU_DEFINE_SYTRD_HETRD
 
 }  // namespace jax

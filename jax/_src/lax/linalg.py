@@ -2612,24 +2612,35 @@ def _tridiagonal_batching_rule(batched_args, batch_dims, *, lower):
   x, = batched_args
   bd, = batch_dims
   x = batching.moveaxis(x, bd, 0)
-  return tridiagonal(x), 0
+  return tridiagonal(x, lower=lower), 0
 
 batching.primitive_batchers[tridiagonal_p] = _tridiagonal_batching_rule
 
-def _tridiagonal_cpu_gpu_hlo(sytrd_impl, ctx, a, *, lower):
+def _tridiagonal_cpu_gpu_hlo(sytrd_impl, ctx, a, *, lower, platform):
   a_aval, = ctx.avals_in
-  a, d, e, taus, info = sytrd_impl(a_aval.dtype, a, lower=lower)
+  cpu_args = []
+  if platform == "cpu":
+    # TODO(b/344892332): Remove the conditional after the compatibility period.
+    ctx_args = (ctx,) if jaxlib_version >= (0, 4, 32) else ()
+    cpu_args.extend(ctx_args)
+  a, d, e, taus, info = sytrd_impl(*cpu_args, a_aval.dtype, a, lower=lower)
   return a, d, e, taus, info
 
 mlir.register_lowering(
-    tridiagonal_p, partial(_tridiagonal_cpu_gpu_hlo, lapack.sytrd_hlo),
-    platform='cpu')
+    tridiagonal_p,
+    partial(_tridiagonal_cpu_gpu_hlo, lapack.sytrd_hlo, platform="cpu"),
+    platform="cpu",
+)
 mlir.register_lowering(
-    tridiagonal_p, partial(_tridiagonal_cpu_gpu_hlo, gpu_solver.cuda_sytrd),
-    platform='cuda')
+    tridiagonal_p,
+    partial(_tridiagonal_cpu_gpu_hlo, gpu_solver.cuda_sytrd, platform="cuda"),
+    platform="cuda",
+)
 mlir.register_lowering(
-    tridiagonal_p, partial(_tridiagonal_cpu_gpu_hlo, gpu_solver.rocm_sytrd),
-    platform='rocm')
+    tridiagonal_p,
+    partial(_tridiagonal_cpu_gpu_hlo, gpu_solver.rocm_sytrd, platform="rocm"),
+    platform="rocm",
+)
 
 # Utilities
 

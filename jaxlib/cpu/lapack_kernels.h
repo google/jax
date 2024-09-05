@@ -597,6 +597,29 @@ struct Sytrd {
   static int64_t Workspace(lapack_int lda, lapack_int n);
 };
 
+// FFI Kernel
+
+template <::xla::ffi::DataType dtype>
+struct TridiagonalReduction {
+  using ValueType = ::xla::ffi::NativeType<dtype>;
+  using RealType = ::xla::ffi::NativeType<::xla::ffi::ToReal(dtype)>;
+  using FnType = void(char* uplo, lapack_int* n, ValueType* a, lapack_int* lda,
+                      RealType* d, RealType* e, ValueType* tau, ValueType* work,
+                      lapack_int* lwork, lapack_int* info);
+
+  inline static FnType* fn = nullptr;
+
+  static ::xla::ffi::Error Kernel(
+      ::xla::ffi::Buffer<dtype> x, MatrixParams::UpLo uplo,
+      ::xla::ffi::ResultBuffer<dtype> x_out,
+      ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> diagonal,
+      ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> off_diagonal,
+      ::xla::ffi::ResultBuffer<dtype> tau,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info);
+
+  static int64_t GetWorkspaceSize(lapack_int x_rows, lapack_int x_cols);
+};
+
 // Declare all the handler symbols
 XLA_FFI_DECLARE_HANDLER_SYMBOL(blas_strsm_ffi);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(blas_dtrsm_ffi);
@@ -630,6 +653,10 @@ XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_sgeev_ffi);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_dgeev_ffi);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_cgeev_ffi);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_zgeev_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_ssytrd_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_dsytrd_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_chetrd_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_zhetrd_ffi);
 
 }  // namespace jax
 

@@ -932,8 +932,9 @@ def gehrd_hlo(dtype, a):
 
 
 # sytrd: Reduction of a symmetric (Hermitian) matrix to tridiagonal form.
-def sytrd_hlo(dtype, a, *, lower):
-  _lapack.initialize()
+def sytrd_hlo(ctx, dtype, a, *, lower):
+  fn_base = "he" if dtype == np.complex64 or dtype == np.complex128 else "sy"
+  fn_base = prepare_lapack_call(fn_base=fn_base + "trd", dtype=dtype)
   a_type = ir.RankedTensorType(a.type)
   dims = a_type.shape
   assert len(dims) >= 2
@@ -941,52 +942,83 @@ def sytrd_hlo(dtype, a, *, lower):
   assert m == n, (m, n)
   batch_dims = tuple(dims[:-2])
   num_bd = len(batch_dims)
-  b = 1
-  for d in batch_dims:
-    b *= d
+  layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
+  i32_type = ir.IntegerType.get_signless(32)
 
-  if dtype == np.float32:
-    fn = "lapack_ssytrd"
-    lwork = _lapack.lapack_ssytrd_workspace(n, n)
-    diag_type = a_type.element_type
-  elif dtype == np.float64:
-    fn = "lapack_dsytrd"
-    lwork = _lapack.lapack_dsytrd_workspace(n, n)
-    diag_type = a_type.element_type
-  elif dtype == np.complex64:
-    fn = "lapack_chetrd"
-    lwork = _lapack.lapack_chetrd_workspace(n, n)
+  if ctx.is_forward_compat():
+    fn = fn_base
+    b = 1
+    for d in batch_dims:
+      b *= d
+
+    if dtype == np.float32:
+      lwork = _lapack.lapack_ssytrd_workspace(n, n)
+      diag_type = a_type.element_type
+    elif dtype == np.float64:
+      lwork = _lapack.lapack_dsytrd_workspace(n, n)
+      diag_type = a_type.element_type
+    elif dtype == np.complex64:
+      lwork = _lapack.lapack_chetrd_workspace(n, n)
+      diag_type = ir.F32Type.get()
+    elif dtype == np.complex128:
+      lwork = _lapack.lapack_zhetrd_workspace(n, n)
+      diag_type = ir.F64Type.get()
+    else:
+      raise NotImplementedError(f"Unsupported dtype {dtype}")
+
+    return custom_call(
+        fn,
+        result_types=[
+          a.type,
+          ir.RankedTensorType.get(batch_dims + (n,), diag_type),
+          ir.RankedTensorType.get(batch_dims + (n - 1,), diag_type),
+          ir.RankedTensorType.get(batch_dims + (n - 1,), a_type.element_type),
+          ir.RankedTensorType.get(batch_dims, i32_type),
+          ir.RankedTensorType.get([lwork], a_type.element_type),
+        ],
+        operands=[hlo_s32(n), hlo_s32(1 if lower else 0), hlo_s32(max(1, n)),
+        hlo_s32(b), hlo_s32(lwork), a],
+        operand_layouts=[[]] * 5 + [layout],
+        result_layouts=[
+          layout,
+          (num_bd,) + tuple(range(num_bd - 1, -1, -1)),
+          (num_bd,) + tuple(range(num_bd - 1, -1, -1)),
+          (num_bd,) + tuple(range(num_bd - 1, -1, -1)),
+          tuple(range(num_bd - 1, -1, -1)),
+          [0],
+        ],
+        operand_output_aliases={5: 0},
+    ).results[:5]
+  fn = fn_base + "_ffi"
+  if dtype == np.float32 or dtype == np.complex64:
     diag_type = ir.F32Type.get()
-  elif dtype == np.complex128:
-    fn = "lapack_zhetrd"
-    lwork = _lapack.lapack_zhetrd_workspace(n, n)
+  elif dtype == np.float64 or dtype == np.complex128:
     diag_type = ir.F64Type.get()
   else:
     raise NotImplementedError(f"Unsupported dtype {dtype}")
 
-  layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
-  i32_type = ir.IntegerType.get_signless(32)
-  out = custom_call(
+  # Returns x_out, on_diag, off_diag, tau, info
+  return custom_call(
       fn,
       result_types=[
-        a.type,
-        ir.RankedTensorType.get(batch_dims + (n,), diag_type),
-        ir.RankedTensorType.get(batch_dims + (n - 1,), diag_type),
-        ir.RankedTensorType.get(batch_dims + (n - 1,), a_type.element_type),
-        ir.RankedTensorType.get(batch_dims, i32_type),
-        ir.RankedTensorType.get([lwork], a_type.element_type),
+          a.type,
+          ir.RankedTensorType.get(batch_dims + (n,), diag_type),
+          ir.RankedTensorType.get(batch_dims + (n - 1,), diag_type),
+          ir.RankedTensorType.get(batch_dims + (n - 1,), a_type.element_type),
+          ir.RankedTensorType.get(batch_dims, i32_type),
       ],
-      operands=[hlo_s32(n), hlo_s32(1 if lower else 0), hlo_s32(max(1, n)),
-       hlo_s32(b), hlo_s32(lwork), a],
-      operand_layouts=[[]] * 5 + [layout],
+      operands=[a],
+      operand_layouts=[layout],
       result_layouts=[
-        layout,
-        (num_bd,) + tuple(range(num_bd - 1, -1, -1)),
-        (num_bd,) + tuple(range(num_bd - 1, -1, -1)),
-        (num_bd,) + tuple(range(num_bd - 1, -1, -1)),
-        tuple(range(num_bd - 1, -1, -1)),
-        [0],
+          layout,
+          tuple(range(num_bd, -1, -1)),
+          tuple(range(num_bd, -1, -1)),
+          tuple(range(num_bd, -1, -1)),
+          tuple(range(num_bd - 1, -1, -1)),
       ],
-      operand_output_aliases={5: 0},
+      operand_output_aliases={0: 0},
+      backend_config={
+          "uplo": _matrix_uplo_attr(lower=lower),
+      },
+      api_version=4,
   ).results
-  return out[:5]

@@ -147,6 +147,10 @@ void GetLapackKernelsFromScipy() {
   AssignKernelFn<Sytrd<double>>(lapack_ptr("dsytrd"));
   AssignKernelFn<Sytrd<std::complex<float>>>(lapack_ptr("chetrd"));
   AssignKernelFn<Sytrd<std::complex<double>>>(lapack_ptr("zhetrd"));
+  AssignKernelFn<TridiagonalReduction<DataType::F32>>(lapack_ptr("ssytrd"));
+  AssignKernelFn<TridiagonalReduction<DataType::F64>>(lapack_ptr("dsytrd"));
+  AssignKernelFn<TridiagonalReduction<DataType::C64>>(lapack_ptr("chetrd"));
+  AssignKernelFn<TridiagonalReduction<DataType::C128>>(lapack_ptr("zhetrd"));
 
   initialized = true;
 }
@@ -253,6 +257,10 @@ nb::dict Registrations() {
   dict["lapack_dgeev_ffi"] = EncapsulateFunction(lapack_dgeev_ffi);
   dict["lapack_cgeev_ffi"] = EncapsulateFunction(lapack_cgeev_ffi);
   dict["lapack_zgeev_ffi"] = EncapsulateFunction(lapack_zgeev_ffi);
+  dict["lapack_ssytrd_ffi"] = EncapsulateFunction(lapack_ssytrd_ffi);
+  dict["lapack_dsytrd_ffi"] = EncapsulateFunction(lapack_dsytrd_ffi);
+  dict["lapack_chetrd_ffi"] = EncapsulateFunction(lapack_chetrd_ffi);
+  dict["lapack_zhetrd_ffi"] = EncapsulateFunction(lapack_zhetrd_ffi);
 
   return dict;
 }

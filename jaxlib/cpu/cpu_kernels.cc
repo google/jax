@@ -149,6 +149,10 @@ JAX_CPU_REGISTER_HANDLER(lapack_sgeev_ffi);
 JAX_CPU_REGISTER_HANDLER(lapack_dgeev_ffi);
 JAX_CPU_REGISTER_HANDLER(lapack_cgeev_ffi);
 JAX_CPU_REGISTER_HANDLER(lapack_zgeev_ffi);
+JAX_CPU_REGISTER_HANDLER(lapack_ssytrd_ffi);
+JAX_CPU_REGISTER_HANDLER(lapack_dsytrd_ffi);
+JAX_CPU_REGISTER_HANDLER(lapack_chetrd_ffi);
+JAX_CPU_REGISTER_HANDLER(lapack_zhetrd_ffi);
 
 #undef JAX_CPU_REGISTER_HANDLER
 
