@@ -137,6 +137,11 @@ void GetLapackKernelsFromScipy() {
   AssignKernelFn<RealGees<double>>(lapack_ptr("dgees"));
   AssignKernelFn<ComplexGees<std::complex<float>>>(lapack_ptr("cgees"));
   AssignKernelFn<ComplexGees<std::complex<double>>>(lapack_ptr("zgees"));
+  AssignKernelFn<SchurDecomposition<DataType::F32>>(lapack_ptr("sgees"));
+  AssignKernelFn<SchurDecomposition<DataType::F64>>(lapack_ptr("dgees"));
+  AssignKernelFn<SchurDecompositionComplex<DataType::C64>>(lapack_ptr("cgees"));
+  AssignKernelFn<SchurDecompositionComplex<DataType::C128>>(
+      lapack_ptr("zgees"));
 
   AssignKernelFn<Gehrd<float>>(lapack_ptr("sgehrd"));
   AssignKernelFn<Gehrd<double>>(lapack_ptr("dgehrd"));
@@ -253,6 +258,10 @@ nb::dict Registrations() {
   dict["lapack_dgeev_ffi"] = EncapsulateFunction(lapack_dgeev_ffi);
   dict["lapack_cgeev_ffi"] = EncapsulateFunction(lapack_cgeev_ffi);
   dict["lapack_zgeev_ffi"] = EncapsulateFunction(lapack_zgeev_ffi);
+  dict["lapack_sgees_ffi"] = EncapsulateFunction(lapack_sgees_ffi);
+  dict["lapack_dgees_ffi"] = EncapsulateFunction(lapack_dgees_ffi);
+  dict["lapack_cgees_ffi"] = EncapsulateFunction(lapack_cgees_ffi);
+  dict["lapack_zgees_ffi"] = EncapsulateFunction(lapack_zgees_ffi);
 
   return dict;
 }
@@ -264,6 +273,7 @@ NB_MODULE(_lapack, m) {
   // Submodules
   auto svd = m.def_submodule("svd");
   auto eig = m.def_submodule("eig");
+  auto schur = m.def_submodule("schur");
   // Enums
   nb::enum_<svd::ComputationMode>(svd, "ComputationMode")
       // kComputeVtOverwriteXPartialU is not implemented
@@ -273,6 +283,14 @@ NB_MODULE(_lapack, m) {
   nb::enum_<eig::ComputationMode>(eig, "ComputationMode")
       .value("kComputeEigenvectors", eig::ComputationMode::kComputeEigenvectors)
       .value("kNoEigenvectors", eig::ComputationMode::kNoEigenvectors);
+  nb::enum_<schur::ComputationMode>(schur, "ComputationMode")
+      .value("kNoComputeSchurVectors",
+             schur::ComputationMode::kNoComputeSchurVectors)
+      .value("kComputeSchurVectors",
+             schur::ComputationMode::kComputeSchurVectors);
+  nb::enum_<schur::Sort>(schur, "Sort")
+      .value("kNoSortEigenvalues", schur::Sort::kNoSortEigenvalues)
+      .value("kSortEigenvalues", schur::Sort::kSortEigenvalues);
 
   // Old-style LAPACK Workspace Size Queries
   m.def("lapack_sgeqrf_workspace", &Geqrf<float>::Workspace, nb::arg("m"),
