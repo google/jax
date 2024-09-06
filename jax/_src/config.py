@@ -1492,6 +1492,7 @@ default_matmul_precision = optional_enum_state(
     update_thread_local_hook=lambda val: \
       update_thread_local_jit_state(default_matmul_precision=val))
 
+
 traceback_filtering = enum_state(
     name = 'jax_traceback_filtering',
     enum_values=["off", "tracebackhide", "remove_frames", "quiet_remove_frames",
@@ -1717,15 +1718,6 @@ def transfer_guard(new_val: str) -> Iterator[None]:
     stack.enter_context(_transfer_guard(new_val))
     yield
 
-
-def _update_debug_log_modules(module_names_str: str | None):
-  logging_config.disable_all_debug_logging()
-  if not module_names_str:
-    return
-  module_names = module_names_str.split(',')
-  for module_name in module_names:
-    logging_config.enable_debug_logging(module_name)
-
 # Don't define a context manager since this isn't threadsafe.
 string_state(
     name='jax_debug_log_modules',
@@ -1733,7 +1725,20 @@ string_state(
     help=('Comma-separated list of module names (e.g. "jax" or '
           '"jax._src.xla_bridge,jax._src.dispatch") to enable debug logging '
           'for.'),
-    update_global_hook=_update_debug_log_modules)
+    update_global_hook=logging_config._update_debug_log_modules)
+
+# Don't define a context manager since this isn't threadsafe.
+optional_enum_state(
+    name='jax_logging_level',
+    enum_values=['NOTSET', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+    default=logging.getLevelName(logging.getLogger("jax").level),
+    help=('Set the correspoding logging level on all jax loggers. Only string'
+          ' values from ["NOTSET", "DEBUG", "INFO", "WARNING", "ERROR",'
+          ' "CRITICAL", "0", "10", "20", "30", "40", "50"] are accepted. If'
+          ' None, the logging level will not be set.'),
+    update_global_hook=lambda logging_level: \
+      logging_config._update_logging_level_global(logging_level=logging_level)
+)
 
 pmap_no_rank_reduction = bool_state(
     name='jax_pmap_no_rank_reduction',
