@@ -5310,9 +5310,6 @@ FailureOr<std::pair<VectorLayout, xla::Array<Value>>> changeOffsets(
   }
 
   if (row_diff != 0) {
-    if (col_diff != 0) {
-      return emitError(loc, "Not implemented: Row and column offset changes");
-    }
     const SmallVector<int64_t> implicit_shape =
         src.implicitShape(vty.getShape());
     if (implicit_shape[implicit_shape.size() - 2] != 1) {
@@ -5400,8 +5397,7 @@ FailureOr<std::pair<VectorLayout, xla::Array<Value>>> changeTiling(
     return emitError(loc, "Not implemented: invalid offsets in tiling target");
   }
   // Handle retiling from (packing, 128) to (8 * packing, 128).
-  if (src.offsets() == LayoutOffsets{0, 0} &&
-      src.tiling() == std::array<int64_t, 2>{packing, 128} &&
+  if (src.tiling() == std::array<int64_t, 2>{packing, 128} &&
       dst_tiling == std::array<int64_t, 2>{8 * packing, 128}) {
     bool replicate_sublanes = try_replicate_rows && packing == 1 &&
                               *(vregs.dimensions().end() - 2) == 1;
@@ -5436,8 +5432,7 @@ FailureOr<std::pair<VectorLayout, xla::Array<Value>>> changeTiling(
   // Handle retiling from (m, 128) to (8, 128) for 32-bit data
   // where m < 8 and m is a power of 2.
   // TODO(b/306692696): Handle any vregs.dimensions().
-  if (bitwidth == 32 && src.offsets() == LayoutOffsets{0, 0} &&
-      target_shape[0] % src.tiling()[0] == 0 &&
+  if (bitwidth == 32 && target_shape[0] % src.tiling()[0] == 0 &&
       src.tiling()[1] == target_shape[1] && dst.tiling() == target_shape &&
       *(vregs.dimensions().end() - 2) == 1) {
     xla::Array<Value> retiled(

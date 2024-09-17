@@ -2552,9 +2552,7 @@ class MiscellaneousTest(PallasBaseTest):
 
     np.testing.assert_array_equal(out, np.reshape(x, (8, 1, 128)))
 
-  @only_passes_in_interpret()
   def test_mixed_strides(self):
-    """b/352841329"""
     x = np.zeros((8, 128), dtype=jnp.float32)
     y = np.zeros((8, 2, 128), dtype=jnp.bfloat16)
 
