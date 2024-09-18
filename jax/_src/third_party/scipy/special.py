@@ -272,8 +272,8 @@ def fresnel(x: ArrayLike) -> tuple[Array, Array]:
     c_large = c_inf
     s_large = s_inf
   else:
-    c_large = 0.5 + 1 / (jnp.pi * x) * sinpi
-    s_large = 0.5 - 1 / (jnp.pi * x) * cospi
+    c_large = 0.5 + 1 / (jnp.pi * x) * sinpi  # type: ignore[assignment]
+    s_large = 0.5 - 1 / (jnp.pi * x) * cospi  # type: ignore[assignment]
 
   # Other x values
   t = jnp.pi * x2

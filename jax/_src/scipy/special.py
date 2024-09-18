@@ -1805,7 +1805,7 @@ def sph_harm(m: Array,
       int, n_max, 'The `n_max` argument of `jnp.scipy.special.sph_harm` must '
       'be statically specified to use `sph_harm` within JAX transformations.')
 
-  return _sph_harm(m, n, theta, phi, n_max)
+  return _sph_harm(m, n, theta, phi, n_max)  # type: ignore[arg-type]
 
 
 # exponential integrals

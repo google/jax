@@ -139,7 +139,7 @@ float0 = dtypes.float0
 
 
 def jit(
-  fun: Callable,
+  fun: Callable[stages._P, stages._OutT],
   in_shardings=sharding_impls.UNSPECIFIED,
   out_shardings=sharding_impls.UNSPECIFIED,
   static_argnums: int | Sequence[int] | None = None,
@@ -151,7 +151,7 @@ def jit(
   backend: str | None = None,
   inline: bool = False,
   abstracted_axes: Any | None = None,
-) -> pjit.JitWrapped:
+) -> pjit.JitWrapped[stages._P, stages._OutT]:
   """Sets up ``fun`` for just-in-time compilation with XLA.
 
   Args:

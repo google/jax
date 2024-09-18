@@ -1649,7 +1649,7 @@ def _lu_solve(lu: Array, permutation: Array, b: Array, trans: int) -> Array:
 def lu_solve(lu: ArrayLike, permutation: ArrayLike, b: ArrayLike,
              trans: int = 0) -> Array:
   """LU solve with broadcasting."""
-  return _lu_solve(lu, permutation, b, trans)
+  return _lu_solve(lu, permutation, b, trans)  # type: ignore[arg-type]
 
 
 # QR decomposition

@@ -22,7 +22,7 @@ import inspect
 import logging
 import operator as op
 import weakref
-from typing import NamedTuple, Any, Union, cast
+from typing import Generic, NamedTuple, Any, Union, cast
 import threading
 import warnings
 
@@ -820,7 +820,7 @@ def _flat_axes_specs(abstracted_axes, *args, **kwargs
   return broadcast_prefix(abstracted_axes, args, ax_leaf)
 
 
-class JitWrapped(stages.Wrapped):
+class JitWrapped(stages.Wrapped[stages._P, stages._OutT], Generic[stages._P, stages._OutT]):
 
   def eval_shape(self, *args, **kwargs):
     """See ``jax.eval_shape``."""
