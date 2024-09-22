@@ -1677,10 +1677,6 @@ tf_impl[lax.sin_p] = tf.math.sin
 tf_impl[lax.sinh_p] = tf.math.sinh
 tf_impl[lax.cos_p] = tf.math.cos
 tf_impl[lax.cosh_p] = tf.math.cosh
-tf_impl_with_avals[lax.acos_p] = _convert_jax_impl(
-    lax_internal.acos_impl, multiple_results=False)
-tf_impl_with_avals[lax.asin_p] = _convert_jax_impl(
-    lax_internal.asin_impl, multiple_results=False)
 tf_impl_with_avals[lax.atan_p] = _convert_jax_impl(
     lax_internal.atan_impl, multiple_results=False)
 
@@ -1706,6 +1702,8 @@ tf_impl[lax.atan2_p] = _atan2
 tf_impl[lax.acosh_p] = tf.math.acosh
 tf_impl[lax.atanh_p] = tf.math.atanh
 tf_impl[lax.asinh_p] = tf.math.asinh
+tf_impl[lax.asin_p] = tf.math.asin
+tf_impl[lax.acos_p] = tf.math.acos
 
 tf_impl[lax.sqrt_p] = tf.math.sqrt
 tf_impl[lax.rsqrt_p] = tf.math.rsqrt
