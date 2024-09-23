@@ -16,7 +16,7 @@
 
 load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
 load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm")
-load("//jaxlib:jax.bzl", "if_windows")
+load("//jaxlib:jax.bzl", "if_windows", "jax_wheel")
 
 licenses(["notice"])  # Apache 2
 
@@ -30,11 +30,11 @@ py_binary(
         "//jaxlib",
         "//jaxlib:README.md",
         "//jaxlib:setup.py",
+        "@xla//xla/ffi/api:api.h",
+        "@xla//xla/ffi/api:c_api.h",
+        "@xla//xla/ffi/api:ffi.h",
         "@xla//xla/python:xla_client.py",
         "@xla//xla/python:xla_extension",
-        "@xla//xla/ffi/api:c_api.h",
-        "@xla//xla/ffi/api:api.h",
-        "@xla//xla/ffi/api:ffi.h",
     ] + if_windows([
         "//jaxlib/mlir/_mlir_libs:jaxlib_mlir_capi.dll",
     ]) + if_cuda([
@@ -44,11 +44,11 @@ py_binary(
         "//jaxlib/rocm:rocm_gpu_support",
     ]),
     deps = [
-      "//jax/tools:build_utils",
-      "@bazel_tools//tools/python/runfiles",
-      "@pypi_build//:pkg",
-      "@pypi_wheel//:pkg",
-      "@pypi_setuptools//:pkg",
+        "//jax/tools:build_utils",
+        "@bazel_tools//tools/python/runfiles",
+        "@pypi_build//:pkg",
+        "@pypi_setuptools//:pkg",
+        "@pypi_wheel//:pkg",
     ],
 )
 
@@ -57,7 +57,7 @@ py_test(
     srcs = ["build_wheel_test.py"],
     data = [":build_wheel"],
     deps = [
-      "@bazel_tools//tools/python/runfiles",
+        "@bazel_tools//tools/python/runfiles",
     ],
 )
 
@@ -102,11 +102,11 @@ py_binary(
         "//jax_plugins/rocm:__init__.py",
     ]),
     deps = [
-      "//jax/tools:build_utils",
-      "@bazel_tools//tools/python/runfiles",
-      "@pypi_build//:pkg",
-      "@pypi_wheel//:pkg",
-      "@pypi_setuptools//:pkg",
+        "//jax/tools:build_utils",
+        "@bazel_tools//tools/python/runfiles",
+        "@pypi_build//:pkg",
+        "@pypi_setuptools//:pkg",
+        "@pypi_wheel//:pkg",
     ],
 )
 
@@ -131,10 +131,28 @@ py_binary(
         "//jax_plugins/rocm:plugin_setup.py",
     ]),
     deps = [
-      "//jax/tools:build_utils",
-      "@bazel_tools//tools/python/runfiles",
-      "@pypi_build//:pkg",
-      "@pypi_wheel//:pkg",
-      "@pypi_setuptools//:pkg",
+        "//jax/tools:build_utils",
+        "@bazel_tools//tools/python/runfiles",
+        "@pypi_build//:pkg",
+        "@pypi_setuptools//:pkg",
+        "@pypi_wheel//:pkg",
     ],
+)
+
+jax_wheel(
+    name = "jaxlib_wheel",
+)
+
+jax_wheel(
+    name = "jax_cuda_plugin_wheel",
+    enable_cuda = True,
+    output_dist = "cuda_plugin",
+    wheel_binary = ":build_gpu_kernels_wheel",
+)
+
+jax_wheel(
+    name = "jax_cuda_pjrt_wheel",
+    enable_cuda = True,
+    output_dist = "cuda_pjrt",
+    wheel_binary = ":build_gpu_plugin_wheel",
 )

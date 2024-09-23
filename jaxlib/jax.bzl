@@ -296,6 +296,59 @@ def jax_generate_backend_suites(backends = []):
         tags = ["-jax_test_%s" % backend for backend in backends] + ["-manual"],
     )
 
+def _jax_wheel_impl(ctx):
+    executable = ctx.executable.wheel_binary
+
+    output = ctx.actions.declare_directory("wheel_house/" + ctx.attr.output_dist)
+    args = ctx.actions.args()
+    args.add("--output_path", output.path)  # required argument
+
+    # Pass the following two values using --define=JAX_CPU={value} --define=JAX_GIT_HASH={value} in
+    # bazel build commands.
+    args.add("--cpu", ctx.var["JAX_CPU"])  # required argument
+    args.add("--jaxlib_git_hash", ctx.var["JAX_GIT_HASH"])  # required argument
+
+    if ctx.attr.enable_cuda:
+        args.add("--enable-cuda", "True")
+        args.add("--platform_version", ctx.attr.cuda_version)
+    if ctx.attr.enable_rocm:
+        args.add("--enable-rocm", "True")
+
+    if ctx.attr.sources_path:
+        args.add("--sources_path", ctx.attr.sources_path)
+    if ctx.attr.skip_gpu_kernels:
+        args.add("--skip-gpu-kernels")
+    if ctx.attr.editable:
+        args.add("--editable")
+
+    args.set_param_file_format("flag_per_line")
+    args.use_param_file("@%s", use_always = False)
+    ctx.actions.run(
+        arguments = [args],
+        outputs = [output],
+        executable = executable,
+    )
+    return [DefaultInfo(files = depset(direct = [output]))]
+
+jax_wheel = rule(
+    attrs = {
+        "wheel_binary": attr.label(
+            default = Label("//jaxlib/tools:build_wheel"),
+            executable = True,
+            cfg = "target",
+        ),
+        "enable_cuda": attr.bool(default = False),
+        "cuda_version": attr.string(default = "12"),
+        "skip_gpu_kernels": attr.bool(default = False),
+        "sources_path": attr.string(),
+        "editable": attr.bool(default = False),
+        "enable_rocm": attr.bool(default = False),
+        "output_dist": attr.string(default = "jaxlib"),
+    },
+    implementation = _jax_wheel_impl,
+    executable = False,  # Cannot be invoked by a bazel run command
+)
+
 jax_test_file_visibility = []
 
 def xla_py_proto_library(*args, **kw):  # buildifier: disable=unused-variable
