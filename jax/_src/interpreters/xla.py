@@ -222,6 +222,8 @@ def primitive_subcomputation(platform: str, axis_env: AxisEnv,
     rule = _backend_specific_translations[platform][prim]
   elif prim in _translations:
     rule = _translations[prim]
+  else:
+    raise NotImplementedError(f"Unsupported primitive: {prim}")
 
   ctx = TranslationContext(builder=c, platform=platform, axis_env=axis_env,
                            name_stack=source_info_util.new_name_stack())

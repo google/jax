@@ -151,7 +151,7 @@ def _bcast(
     x_aval: jax_core.ShapedArray,
     y_aval: jax_core.ShapedArray,
     out_aval: jax_core.ShapedArray,
-) -> ir.Value:
+) -> tuple[ir.Value, ir.Value]:
   if isinstance(x, (np.ndarray, np.number, int, float)):
     x_dtype = x_aval.dtype
     if x_aval.weak_type:

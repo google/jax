@@ -13,11 +13,11 @@
 # limitations under the License.
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Sequence, Set
 import dataclasses
 import functools
 import itertools as it
-from typing import TypeVar, Any, Union
+from typing import TypeVar, Any, Protocol, Union
 
 import numpy as np
 
@@ -558,8 +558,24 @@ ad.primitive_jvps[check_p] = check_jvp_rule
 
 ## checkify rules
 
-ErrorCheckRule = Callable  # (Error, FrozenSet[ErrorCategory], *in_vals, **params) -> (Any, Error)
+class ErrorCheckRule(Protocol):
+  def __call__(
+      self,
+      err: Error,
+      enabled_errors: Set[ErrorCategory],
+      *in_vals: core.Value,
+      **params: Any,
+  ) -> tuple[Error, Sequence[core.Value] | core.Value]:
+    ...
+
 error_checks: dict[core.Primitive, ErrorCheckRule] = {}
+
+def register_error_check(prim: core.Primitive) -> Callable[[Any], None]:
+  # Note that the type of ``f`` should be ``ErrorCheckRule``, but this
+  # does not allow unpacking ``in_vals`` and ``params`` in rule signatures.
+  def wrapper(f):
+    error_checks[prim] = f
+  return wrapper
 
 
 def get_traceback():
@@ -605,6 +621,7 @@ for _prim in nan_primitives:
   error_checks[_prim] = functools.partial(nan_error_check, _prim)
 
 
+@register_error_check(lax.dynamic_slice_p)
 def dynamic_slice_error_check(error, enabled_errors, operand, *start_indices, slice_sizes):
   out = lax.dynamic_slice_p.bind(operand, *start_indices, slice_sizes=slice_sizes)
 
@@ -619,8 +636,8 @@ def dynamic_slice_error_check(error, enabled_errors, operand, *start_indices, sl
   payload = oob_payload(oob_mask, start_indices, range(operand.ndim), operand.shape)
   error = assert_func(error, jnp.any(oob_mask), OOBError(get_traceback(), "dynamic_slice", operand.shape, payload))
   return error, out
-error_checks[lax.dynamic_slice_p] = dynamic_slice_error_check
 
+@register_error_check(lax.dynamic_update_slice_p)
 def dynamic_update_slice_error_check(error, enabled_errors, operand, update, *start_indices):
   out = lax.dynamic_update_slice_p.bind(operand, update, *start_indices)
 
@@ -635,8 +652,8 @@ def dynamic_update_slice_error_check(error, enabled_errors, operand, update, *st
   payload = oob_payload(oob_mask, start_indices, range(operand.ndim), operand.shape)
   error = assert_func(error, jnp.any(oob_mask), OOBError(get_traceback(), "dynamic_update_slice", operand.shape, payload))
   return error, out
-error_checks[lax.dynamic_update_slice_p] = dynamic_update_slice_error_check
 
+@register_error_check(lax.gather_p)
 def gather_error_check(error, enabled_errors, operand, start_indices, *,
                        dimension_numbers, slice_sizes, unique_indices,
                        indices_are_sorted, mode, fill_value):
@@ -661,15 +678,14 @@ def gather_error_check(error, enabled_errors, operand, start_indices, *,
   payload = oob_payload(oob_mask, start_indices, dnums.start_index_map, operand.shape)
   error = assert_func(error, jnp.any(oob_mask), OOBError(get_traceback(), "gather", operand.shape, payload))
   return error, out
-error_checks[lax.gather_p] = gather_error_check
 
+@register_error_check(lax.div_p)
 def div_error_check(error, enabled_errors, x, y):
   """Checks for division by zero and NaN."""
   if DivisionByZeroError in enabled_errors:
     any_zero = jnp.any(jnp.equal(y, 0))
     error = assert_func(error, any_zero, DivisionByZeroError(get_traceback()))
   return nan_error_check(lax.div_p, error, enabled_errors, x, y)
-error_checks[lax.div_p] = div_error_check
 
 def oob_payload(oob_mask, indices, dims_map, operand_shape):
   # Get first OOB index, axis and axis size so it can be added to the error msg.
@@ -751,6 +767,7 @@ def jaxpr_to_checkify_jaxpr(
   out_tree, error_effects = metadata()
   return checked_jaxpr, out_tree, error_effects
 
+@register_error_check(lax.cond_p)
 def cond_error_check(error: Error, enabled_errors, index, *ops, branches):
   # Get the error-effects out of all branches so the cond can be called with
   # a merged error with all these effects.
@@ -781,8 +798,8 @@ def cond_error_check(error: Error, enabled_errors, index, *ops, branches):
     err, _ = tree_unflatten(tr, err_and_outs)
     merged_metadata = {**merged_metadata, **err._metadata}
   return err0._replace(_metadata=merged_metadata), out
-error_checks[lax.cond_p] = cond_error_check
 
+@register_error_check(lax.scan_p)
 def scan_error_check(error, enabled_errors, *in_flat, reverse, length, jaxpr,
                      num_consts, num_carry, linear, unroll, _split_transpose):
 
@@ -814,8 +831,6 @@ def scan_error_check(error, enabled_errors, *in_flat, reverse, length, jaxpr,
       linear=new_linear, unroll=unroll, _split_transpose=_split_transpose)
   err, out = tree_unflatten(out_tree, err_and_out)
   return err, out
-
-error_checks[lax.scan_p] = scan_error_check
 
 def checkify_while_body_jaxpr(
     cond_jaxpr: core.ClosedJaxpr, body_jaxpr: core.ClosedJaxpr,
@@ -850,6 +865,7 @@ def ignore_error_output_jaxpr(jaxpr, num_error_vals: int):
   new_jaxpr = jaxpr.replace(outvars=jaxpr.outvars[num_error_vals:])
   return core.ClosedJaxpr(new_jaxpr, consts)
 
+@register_error_check(lax.while_p)
 def while_loop_error_check(error, enabled_errors, *in_flat, cond_nconsts,
                            cond_jaxpr, body_nconsts, body_jaxpr):
   if cond_jaxpr.out_avals[0].shape:
@@ -891,8 +907,8 @@ def while_loop_error_check(error, enabled_errors, *in_flat, cond_nconsts,
   # body_out_tree will have all the metadata of cond because it executes a cond!
   error, out = tree_unflatten(body_out_tree, all_out_vals)
   return error, out
-error_checks[lax.while_p] = while_loop_error_check
 
+@register_error_check(pjit.pjit_p)
 def pjit_error_check(error, enabled_errors, *vals_in, jaxpr,
                      in_shardings, out_shardings,
                      in_layouts, out_layouts,
@@ -929,8 +945,8 @@ def pjit_error_check(error, enabled_errors, *vals_in, jaxpr,
       keep_unused=keep_unused,
   )
   return tree_unflatten(out_tree, err_and_out)
-error_checks[pjit.pjit_p] = pjit_error_check
 
+@register_error_check(custom_derivatives.custom_jvp_call_p)
 def custom_jvp_call_rule(in_err, enabled_errors, *in_vals, num_consts,
                          jvp_jaxpr_thunk, call_jaxpr, **params):
   # The types to have in mind are:
@@ -961,7 +977,6 @@ def custom_jvp_call_rule(in_err, enabled_errors, *in_vals, num_consts,
     # forward input error to output
     out_err = jtu.tree_unflatten(err_tree, err_vals)
   return out_err, out_vals
-error_checks[custom_derivatives.custom_jvp_call_p] = custom_jvp_call_rule
 
 # Compared to custom_derivatives.lift_jvp, we're handling the extra inputs and
 # outputs that checkify adds (just forwarding the error data's primal and
@@ -989,6 +1004,7 @@ def lift_jvp(num_errs, num_consts, jvp_jaxpr_thunk):
     return [*primal_errs, *out_primals, *tangent_errs, *out_tangents]
   return jvp
 
+@register_error_check(custom_derivatives.custom_vjp_call_jaxpr_p)
 def custom_vjp_call_jaxpr_rule(in_err, enabled_errors, *in_vals, fun_jaxpr,
                                fwd_jaxpr_thunk, num_consts, bwd, out_trees,
                                symbolic_zeros):
@@ -1021,9 +1037,8 @@ def custom_vjp_call_jaxpr_rule(in_err, enabled_errors, *in_vals, fun_jaxpr,
   else:
     out_err, out_vals = in_err, all_outs
   return out_err, out_vals
-error_checks[custom_derivatives.custom_vjp_call_jaxpr_p] = custom_vjp_call_jaxpr_rule
 
-
+@register_error_check(check_p)
 def check_discharge_rule(error, enabled_errors, *args, err_tree, debug):
   del debug
   new_error = tree_unflatten(err_tree, args)
@@ -1050,7 +1065,6 @@ def check_discharge_rule(error, enabled_errors, *args, err_tree, debug):
   # breaking API change so leaving for a follow-up.
   # check_error(recharged_error)
   return discharged_error, []
-error_checks[check_p] = check_discharge_rule
 
 
 ## checkify public api

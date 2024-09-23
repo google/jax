@@ -30,6 +30,8 @@ if IS_COLAB_ENABLED:
   from IPython import display
   # pytype: enable=import-error
   # pylint: enable=g-import-not-at-top
+else:
+  output = display = None
 
 
 class DOMElement(metaclass=abc.ABCMeta):
@@ -87,6 +89,7 @@ class DynamicDiv(DynamicDOMElement):
   def append(self, child: DOMElement):
     if not self._rendered:
       self.render()
+    assert output is not None
     with output.use_tags([self.tag]):
       with output.redirect_to_element(f"#{self.tag}"):
         child.render()
@@ -97,6 +100,7 @@ class DynamicDiv(DynamicDOMElement):
     self.render()
 
   def clear(self):
+    assert output is not None
     output.clear(output_tags=[self.tag])
     self._rendered = False
 

@@ -987,6 +987,7 @@ def checkify_pallas_kernel_body_jaxpr(
         body_jaxpr, enabled_errors, err_tree, *flat_err_and_in_vals)
   return checked_jaxpr, out_tree, error_effects
 
+@checkify.register_error_check(pallas_call_p)
 def pallas_call_checkify_rule(error: checkify.Error,
                               enabled_errors,
                               *args: jax_core.Value,
@@ -1134,7 +1135,6 @@ def pallas_call_checkify_rule(error: checkify.Error,
   errors = [err_val[0, 0] for err_val in errors]
   new_error, _ = jax.tree.unflatten(error_out_tree, errors)
   return new_error, results
-checkify.error_checks[pallas_call_p] = pallas_call_checkify_rule
 
 @weakref_lru_cache
 def _trace_kernel_to_jaxpr(fun: Callable,

@@ -20,7 +20,7 @@ from collections.abc import Callable, Generator, Iterable, Sequence
 from contextlib import ExitStack, contextmanager
 import datetime
 import functools
-from functools import partial
+from functools import cached_property, partial
 import inspect
 import logging
 import math
@@ -1408,18 +1408,6 @@ def create_mesh(mesh_shape, axis_names, iota_order=False):
   else:
     return jax.make_mesh(mesh_shape, axis_names)
 
-class _cached_property:
-  null = object()
-
-  def __init__(self, method):
-    self._method = method
-    self._value = self.null
-
-  def __get__(self, obj, cls):
-    if self._value is self.null:
-      self._value = self._method(obj)
-    return self._value
-
 
 class _LazyDtypes:
   """A class that unifies lists of supported dtypes.
@@ -1427,64 +1415,64 @@ class _LazyDtypes:
   These could be module-level constants, but device_under_test() is not always
   known at import time, so we need to define these lists lazily.
   """
-  def supported(self, dtypes):
+  def supported(self, dtypes: Iterable[np.dtype]) -> list[np.dtype]:
     supported = supported_dtypes()
-    return type(dtypes)(d for d in dtypes if d in supported)
+    return [d for d in dtypes if d in supported]
 
-  @_cached_property
+  @cached_property
   def custom_floats(self):
     return [np.dtype(t) for t in [
       _dtypes.bfloat16, _dtypes.float8_e4m3b11fnuz,
       _dtypes.float8_e4m3fn, _dtypes.float8_e4m3fnuz,
       _dtypes.float8_e5m2, _dtypes.float8_e5m2fnuz]]
 
-  @_cached_property
+  @cached_property
   def floating(self):
     return self.supported([np.float32, np.float64])
 
-  @_cached_property
+  @cached_property
   def all_floating(self):
     return self.supported([_dtypes.bfloat16, np.float16, np.float32, np.float64])
 
-  @_cached_property
+  @cached_property
   def integer(self):
     return self.supported([np.int32, np.int64])
 
-  @_cached_property
+  @cached_property
   def all_integer(self):
     return self.supported([
         _dtypes.int4, np.int8, np.int16, np.int32, np.int64])
 
-  @_cached_property
+  @cached_property
   def unsigned(self):
     return self.supported([np.uint32, np.uint64])
 
-  @_cached_property
+  @cached_property
   def all_unsigned(self):
     return self.supported([
         _dtypes.uint4, np.uint8, np.uint16, np.uint32, np.uint64])
 
-  @_cached_property
+  @cached_property
   def complex(self):
     return self.supported([np.complex64, np.complex128])
 
-  @_cached_property
+  @cached_property
   def boolean(self):
     return self.supported([np.bool_])
 
-  @_cached_property
+  @cached_property
   def inexact(self):
     return self.floating + self.complex
 
-  @_cached_property
+  @cached_property
   def all_inexact(self):
     return self.all_floating + self.complex
 
-  @_cached_property
+  @cached_property
   def numeric(self):
     return self.floating + self.integer + self.unsigned + self.complex
 
-  @_cached_property
+  @cached_property
   def all(self):
     return (self.all_floating + self.all_integer + self.all_unsigned +
             self.complex + self.boolean)

@@ -747,7 +747,7 @@ def _wrap_main_func(
     orig_main_name = ir.StringAttr(symbol_table.insert(orig_main)).value
 
     def is_token(typ, attrs):
-      return (typ == mlir.token_type())
+      return typ == mlir.token_type()
 
     orig_input_types = orig_main.type.inputs  # type: ignore
     arg_attrs = list(ir.ArrayAttr(orig_main.arg_attrs))  # type: ignore

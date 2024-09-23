@@ -44,7 +44,7 @@ import os
 from functools import partial
 from typing import Any, NamedTuple, Union
 
-from absl import testing
+from absl.testing import parameterized as absl_parameterized
 import numpy as np
 
 import jax
@@ -401,7 +401,7 @@ def parameterized(harnesses: Iterable[Harness],
   if not cases:
     # We filtered out all the harnesses.
     return jtu.skip_on_devices(jtu.device_under_test())
-  return testing.parameterized.named_parameters(*cases)
+  return absl_parameterized.named_parameters(*cases)
 
 
 ###############################################################################
@@ -1760,10 +1760,11 @@ def _make_fft_harness(name,
 
 # FFT, IFFT, RFFT, IRFFT
 for fft_type in list(map(xla_client.FftType, [0, 1, 2, 3])):
+  shape = (14, 15, 16, 17)
+
   # Validate dtypes per FFT type
   for dtype in (jtu.dtypes.floating
                 if fft_type == xla_client.FftType.RFFT else jtu.dtypes.complex):
-    shape = (14, 15, 16, 17)
     if fft_type != xla_client.FftType.IRFFT:
       fft_lengths_list = [ (shape[-1],) ]
     else:

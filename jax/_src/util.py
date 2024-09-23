@@ -69,18 +69,18 @@ if TYPE_CHECKING:
   # to that used for builtins.map in python/typeshed. This supports
   # checking input types for the callable with up to three arguments.
   @overload
-  def safe_map(f: Callable[[T1], T], __arg1: Iterable[T1]) -> list[T]: ...
+  def safe_map(__f: Callable[[T1], T], __arg1: Iterable[T1]) -> list[T]: ...
 
   @overload
-  def safe_map(f: Callable[[T1, T2], T], __arg1: Iterable[T1], __arg2: Iterable[T2]) -> list[T]: ...
+  def safe_map(__f: Callable[[T1, T2], T], __arg1: Iterable[T1], __arg2: Iterable[T2]) -> list[T]: ...
 
   @overload
-  def safe_map(f: Callable[[T1, T2, T3], T], __arg1: Iterable[T1], __arg2: Iterable[T2], __arg3: Iterable[T3]) -> list[T]: ...
+  def safe_map(__f: Callable[[T1, T2, T3], T], __arg1: Iterable[T1], __arg2: Iterable[T2], __arg3: Iterable[T3]) -> list[T]: ...
 
   @overload
-  def safe_map(f: Callable[..., T], __arg1: Iterable[Any], __arg2: Iterable[Any], __arg3: Iterable[Any], __arg4: Iterable[Any], *args) -> list[T]: ...
+  def safe_map(__f: Callable[..., T], __arg1: Iterable[Any], __arg2: Iterable[Any], __arg3: Iterable[Any], __arg4: Iterable[Any], *args) -> list[T]: ...
 
-  def safe_map(f, *args):
+  def safe_map(f, /, *args):
     args = list(map(list, args))
     n = len(args[0])
     for arg in args[1:]:
@@ -203,7 +203,7 @@ def unflatten(xs: Iterable[T], ns: Sequence[int]) -> list[list[T]]:
   return unflattened
 
 
-def curry(f):
+def curry(f: Callable[..., T]) -> Callable[..., Callable[..., T]]:
   """Curries arguments of f, returning a function on any remaining arguments.
 
   For example:
@@ -375,10 +375,10 @@ class WrapKwArgs:
 def wrap_name(name, transform_name):
   return transform_name + '(' + name + ')'
 
-def fun_name(fun: Callable):
+def fun_name(fun: object):
   return getattr(fun, "__name__", "<unnamed function>")
 
-def fun_qual_name(fun: Callable):
+def fun_qual_name(fun: object):
   return getattr(fun, "__qualname__",
                  getattr(fun, "__name__", "<unnamed function>"))
 
@@ -520,10 +520,10 @@ class HashablePartial:
 def maybe_named_axis(axis, if_pos, if_named):
   try:
     pos = operator.index(axis)
-    named = False
   except TypeError:
-    named = True
-  return if_named(axis) if named else if_pos(pos)
+    return if_named(axis)
+  else:
+    return if_pos(pos)
 
 def distributed_debug_log(*pairs):
   """Format and log `pairs` if config.jax_distributed_debug is enabled.

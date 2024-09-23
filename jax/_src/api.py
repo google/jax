@@ -1706,16 +1706,16 @@ def _jvp(fun: lu.WrappedFun, primals, tangents, has_aux=False):
                        f"Got primal shape {np.shape(p)} and tangent shape as {np.shape(t)}")
 
   if not has_aux:
-    flat_fun, out_tree = flatten_fun_nokwargs(fun, tree_def)
+    flat_fun, out_tree_fun = flatten_fun_nokwargs(fun, tree_def)
     out_primals, out_tangents = ad.jvp(flat_fun).call_wrapped(ps_flat, ts_flat)
-    out_tree = out_tree()
+    out_tree = out_tree_fun()
     return (tree_unflatten(out_tree, out_primals),
             tree_unflatten(out_tree, out_tangents))
   else:
-    flat_fun, out_aux_trees = flatten_fun_nokwargs2(fun, tree_def)
+    flat_fun, out_aux_trees_fun = flatten_fun_nokwargs2(fun, tree_def)
     jvp_fun, aux = ad.jvp(flat_fun, has_aux=True)
     out_primals, out_tangents = jvp_fun.call_wrapped(ps_flat, ts_flat)
-    out_tree, aux_tree = out_aux_trees()
+    out_tree, aux_tree = out_aux_trees_fun()
     return (tree_unflatten(out_tree, out_primals),
             tree_unflatten(out_tree, out_tangents),
             tree_unflatten(aux_tree, aux()))
@@ -1801,15 +1801,15 @@ def linearize(fun: Callable, *primals, has_aux: bool = False
   f = lu.wrap_init(fun)
   primals_flat, in_tree = tree_flatten(primals)
   if has_aux:
-    jaxtree_fun, out_tree = flatten_fun_nokwargs2(f, in_tree)
+    jaxtree_fun, out_tree_fun = flatten_fun_nokwargs2(f, in_tree)
   else:
-    jaxtree_fun, out_tree = flatten_fun_nokwargs(f, in_tree)
+    jaxtree_fun, out_tree_fun = flatten_fun_nokwargs(f, in_tree)
   out_primals, out_pvals, jaxpr, consts, *maybe_aux = ad.linearize(
       jaxtree_fun, *primals_flat, has_aux=has_aux)
   if has_aux:
-    out_tree, aux_tree = out_tree()
+    out_tree, aux_tree = out_tree_fun()
   else:
-    out_tree = out_tree()
+    out_tree = out_tree_fun()
   out_primal_py = tree_unflatten(out_tree, out_primals)
   primal_avals = list(map(core.get_aval, primals_flat))
   # Ensure that lifted_jvp is a PyTree
@@ -1952,13 +1952,13 @@ def _vjp(fun: lu.WrappedFun, *primals, has_aux=False):
   primals_flat, in_tree = tree_flatten(primals)
   for arg in primals_flat: dispatch.check_arg(arg)
   if not has_aux:
-    flat_fun, out_tree = flatten_fun_nokwargs(fun, in_tree)
+    flat_fun, out_tree_fun = flatten_fun_nokwargs(fun, in_tree)
     out_primals, vjp = ad.vjp(flat_fun, primals_flat)
-    out_tree = out_tree()
+    out_tree = out_tree_fun()
   else:
-    flat_fun, out_aux_trees = flatten_fun_nokwargs2(fun, in_tree)
+    flat_fun, out_aux_trees_fun = flatten_fun_nokwargs2(fun, in_tree)
     out_primals, vjp, aux = ad.vjp(flat_fun, primals_flat, has_aux=True)
-    out_tree, aux_tree = out_aux_trees()
+    out_tree, aux_tree = out_aux_trees_fun()
   out_primal_avals = map(shaped_abstractify, out_primals)
   out_primal_py = tree_unflatten(out_tree, out_primals)
   vjp_py = Partial(partial(_vjp_pullback_wrapper, fun.__name__,

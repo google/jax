@@ -28,11 +28,14 @@ from jax._src.debugger import cli_debugger
 # pytype: disable=import-error
 if colab_lib.IS_COLAB_ENABLED:
   from google.colab import output
+else:
+  output = None
 try:
   import pygments
-  IS_PYGMENTS_ENABLED = True
+  import pygments.lexers
+  import pygments.formatters
 except ImportError:
-  IS_PYGMENTS_ENABLED = False
+  pygments = None
 # pytype: enable=import-error
 # pylint: enable=g-import-not-at-top
 
@@ -60,11 +63,12 @@ class CodeViewer(colab_lib.DynamicDOMElement):
     self._view.update(elem)
 
   def _highlight_code(self, code: str, highlights, linenostart: int):
+    assert output is not None
     is_dark_mode = output.eval_js(
         'document.documentElement.matches("[theme=dark]");')
     code_style = "monokai" if is_dark_mode else "default"
     hl_color = "#4e56b7" if is_dark_mode else "#fff7c1"
-    if IS_PYGMENTS_ENABLED:
+    if pygments:
       lexer = pygments.lexers.get_lexer_by_name("python")
       formatter = pygments.formatters.HtmlFormatter(
           full=False,
@@ -77,7 +81,7 @@ class CodeViewer(colab_lib.DynamicDOMElement):
       css_ = formatter.get_style_defs()
       code = pygments.highlight(code, lexer, formatter)
     else:
-      return "";
+      return ""
     return code, css_
 
   def update_code(self, code_, highlights, *, linenostart: int = 1):
@@ -102,6 +106,7 @@ class CodeViewer(colab_lib.DynamicDOMElement):
       percent_scroll = 0.
     self.update(code_div)
     # Scroll to where the line is
+    assert output is not None
     output.eval_js("""
     console.log("{id}")
     var elem = document.getElementById("{id}")
@@ -136,18 +141,16 @@ class FramePreview(colab_lib.DynamicDOMElement):
     self.frame = frame
     lineno = self.frame.lineno or None
     filename = self.frame.filename.strip()
-    if inspect.getmodulename(filename):
-      if filename not in self._file_cache:
-        try:
-          with open(filename) as fp:
-            self._file_cache[filename] = fp.read()
-          source = self._file_cache[filename]
-          highlight = lineno
-          linenostart = 1
-        except FileNotFoundError:
-          source = "\n".join(frame.source)
-          highlight = min(frame.offset + 1, len(frame.source) - 1)
-          linenostart = lineno - frame.offset
+    if inspect.getmodulename(filename) and filename not in self._file_cache:
+      try:
+        with open(filename) as fp:
+          self._file_cache[filename] = fp.read()
+      except FileNotFoundError:
+        pass
+    if filename in self._file_cache:
+      source = self._file_cache[filename]
+      highlight = lineno
+      linenostart = 1
     else:
       source = "\n".join(frame.source)
       highlight = min(frame.offset + 1, len(frame.source) - 1)
@@ -209,6 +212,7 @@ class DebuggerView(colab_lib.DynamicDOMElement):
     raise NotImplementedError()
 
   def readline(self):
+    assert output is not None
     with output.use_tags(["stdin"]):
       user_input = input() + "\n"
     output.clear(output_tags=["stdin"])
