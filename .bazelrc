@@ -89,23 +89,21 @@ build:win_clang --compiler=clang-cl
 #   acceptable, because the workaround is "remove the nvidia-..." pip packages.
 # The list of CUDA pip packages that JAX depends on are present in setup.py.
 build:cuda --linkopt=-Wl,--disable-new-dtags
-
-build:cuda_clang --@local_config_cuda//:cuda_compiler=clang
-build:cuda_clang --action_env=CLANG_CUDA_COMPILER_PATH="/usr/lib/llvm-18/bin/clang"
+build:cuda --@local_config_cuda//:cuda_compiler=clang
+build:cuda --action_env=CLANG_CUDA_COMPILER_PATH="/usr/lib/llvm-18/bin/clang"
 # Disable clang extention that rejects type definitions within offsetof.
 # This was added in clang-16 by https://reviews.llvm.org/D133574.
 # Can be removed once upb is updated, since a type definition is used within
 # offset of in the current version of ubp.
 # See https://github.com/protocolbuffers/upb/blob/9effcbcb27f0a665f9f345030188c0b291e32482/upb/upb.c#L183.
-build:cuda_clang --copt=-Wno-gnu-offsetof-extensions
+build:cuda --copt=-Wno-gnu-offsetof-extensions
 # Disable clang extention that rejects unknown arguments.
-build:cuda_clang --copt=-Qunused-arguments
+build:cuda --copt=-Qunused-arguments
 
 # Build with nvcc for CUDA and clang for host
-build:nvcc_clang --config=cuda
-build:nvcc_clang --config=cuda_clang
-build:nvcc_clang --action_env=TF_NVCC_CLANG="1"
-build:nvcc_clang --@local_config_cuda//:cuda_compiler=nvcc
+build:cuda_nvcc --config=cuda
+build:cuda_nvcc --action_env=TF_NVCC_CLANG="1"
+build:cuda_nvcc --@local_config_cuda//:cuda_compiler=nvcc
 
 build:rocm --crosstool_top=@local_config_rocm//crosstool:toolchain
 build:rocm --define=using_rocm=true --define=using_rocm_hipcc=true
@@ -200,7 +198,7 @@ build:rbe_linux --host_linkopt=-lm
 # Use the GPU toolchain until the CPU one is ready.
 # https://github.com/bazelbuild/bazel/issues/13623
 build:rbe_cpu_linux_base --config=rbe_linux
-build:rbe_cpu_linux_base --config=cuda_clang
+build:rbe_cpu_linux_base --config=cuda
 build:rbe_cpu_linux_base --host_crosstool_top="@local_config_cuda//crosstool:toolchain"
 build:rbe_cpu_linux_base --crosstool_top="@local_config_cuda//crosstool:toolchain"
 build:rbe_cpu_linux_base --extra_toolchains="@local_config_cuda//crosstool:toolchain-linux-x86_64"
@@ -223,7 +221,7 @@ build:rbe_linux_cuda_base --config=cuda
 build:rbe_linux_cuda_base --repo_env=REMOTE_GPU_TESTING=1
 
 build:rbe_linux_cuda12.3_nvcc_base --config=rbe_linux_cuda_base
-build:rbe_linux_cuda12.3_nvcc_base --config=nvcc_clang
+build:rbe_linux_cuda12.3_nvcc_base --config=cuda_nvcc
 build:rbe_linux_cuda12.3_nvcc_base --repo_env=HERMETIC_CUDA_VERSION="12.3.2"
 build:rbe_linux_cuda12.3_nvcc_base --repo_env=HERMETIC_CUDNN_VERSION="9.1.1"
 build:rbe_linux_cuda12.3_nvcc_base --host_crosstool_top="@local_config_cuda//crosstool:toolchain"
