@@ -280,7 +280,10 @@ def write_bazelrc(*, remote_build,
         f.write("build --config=native_arch_posix\n")
 
     if enable_mkl_dnn:
-      f.write("build --config=mkl_open_source_only\n")
+      if wheel_cpu == "aarch64":
+         f.write("build --config=mkl_aarch64_threadpool\n")
+      else:
+         f.write("build --config=mkl_open_source_only\n")
     if enable_cuda:
       f.write("build --config=cuda\n")
       if not enable_nccl:

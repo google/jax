@@ -57,6 +57,16 @@ build:native_arch_posix --host_copt=-march=native
 
 build:mkl_open_source_only --define=tensorflow_mkldnn_contraction_kernel=1
 
+# Config setting to build oneDNN with Compute Library for the Arm Architecture (ACL).
+build:mkl_aarch64 --define=build_with_mkl_aarch64=true
+build:mkl_aarch64 --define=build_with_openmp=true
+build:mkl_aarch64 --define=build_with_acl=true
+build:mkl_aarch64 -c opt
+
+# Config setting to build oneDNN with Compute Library for the Arm Architecture (ACL).
+build:mkl_aarch64_threadpool --define=build_with_mkl_aarch64=true
+build:mkl_aarch64_threadpool -c opt
+
 build:cuda --repo_env TF_NEED_CUDA=1
 build:cuda --repo_env TF_NCCL_USE_STUB=1
 # "sm" means we emit only cubin, which is forward compatible within a GPU generation.
