@@ -3410,3 +3410,45 @@ def clean_up_dead_vars(eqn: JaxprEqn, env: dict[Var, Any],
 # Used in shard_map for converting avals
 shard_aval_handlers = {}  # type: ignore
 unshard_aval_handlers = {}  # type: ignore
+
+# ----------------- external APIs for querying tracing context -----------------
+
+# Comparable object for checking whether JAX's trace state has changed.
+class OpaqueTraceState:
+  def __init__(self, trace_info, convention):
+    self._trace_info = trace_info
+    self._convention = convention
+
+  def __eq__(self, other):
+    if isinstance(other, OpaqueTraceState):
+      if self._convention in ["nnx", "flax"]:
+        return self._trace_info is other._trace_info
+      elif self._convention == "haiku":
+        return self._trace_info == other._trace_info
+      else:
+        raise Exception(f"unrecognized convention: {self._convention}")
+
+
+# Each library has its own opinion about what the important fragment of jax's
+# internal state is. TODO: reconcile the differences and remove the flag.
+def get_opaque_trace_state(convention="flax"):
+  if convention == "flax":
+    trace_info = thread_local_state.trace_state.trace_stack.stack[-1]
+  elif convention == "haiku":
+    trace_stack = thread_local_state.trace_state.trace_stack.stack
+    top_type = trace_stack[0].trace_type
+    level = trace_stack[-1].level
+    sublevel = cur_sublevel()
+    trace_info =  (top_type, level, sublevel)
+  elif convention == "nnx":
+    trace_info = thread_local_state.trace_state.trace_stack.dynamic
+  else:
+    raise Exception(f"unrecognized convention: {convention}")
+
+  return OpaqueTraceState(trace_info, convention)
+
+def nonempty_axis_env() -> bool:
+  return bool(thread_local_state.trace_state.axis_env)
+
+def unsafe_am_i_under_a_jit() -> bool:
+  return 'DynamicJaxprTrace' in str(thread_local_state.trace_state.trace_stack)
