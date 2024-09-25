@@ -185,7 +185,7 @@ def _custom_partitioning_partition(arg_shapes, arg_shardings, result_shape,
         % (repr(closed_jaxpr.out_avals), repr(tiled_results))
     )
   axis_context = sharding_impls.SPMDAxisContext(mesh)
-  with core.extend_axis_env_nd(mesh.shape.items()):
+  with core.extend_axis_env(mesh.shape.items()):
     module = mlir.build_mlir_module_helper(
         closed_jaxpr,
         name="tmp_xla_computation",

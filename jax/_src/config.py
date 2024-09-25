@@ -858,7 +858,7 @@ class _ThreadLocalExtraJitContext(NamedTuple):
   The initialization, which uses both config.py and core.py is done using
   `_update_thread_local_jit_state` in core.py to prevent circular imports.
   """
-  dynamic_trace_state: Any | None = None
+  trace_state: Any | None = None
   axis_env_state: Hashable = ()
   mesh_context_manager: Hashable = ()
   compute_on_context_manager: Hashable = ()

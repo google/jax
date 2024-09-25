@@ -66,8 +66,8 @@ def program_id(axis: int) -> jax.Array:
   """
   return program_id_p.bind(axis=axis)
 
-@program_id_p.def_custom_bind
-def program_id_bind(*, axis: int):
+def program_id_bind_with_trace(trace, _, params):
+  axis = params.pop("axis")
   grid_env = pallas_core.current_grid_env()
   if grid_env:
     return grid_env[axis].index
@@ -75,7 +75,9 @@ def program_id_bind(*, axis: int):
   # Query the size of the axis to make sure it's a valid axis (and error
   # otherwise).
   _ = frame.size(axis)
-  return jax_core.Primitive.bind(program_id_p, axis=axis)
+  return jax_core.Primitive.bind_with_trace(program_id_p, trace, (), dict(axis=axis))
+# TODO(dougalm): figure out how put the grid_env contest on the relevant trace
+program_id_p.def_bind_with_trace(program_id_bind_with_trace)
 
 @program_id_p.def_abstract_eval
 def _program_id_abstract_eval(**_):
@@ -87,8 +89,8 @@ def num_programs(axis: int) -> int | jax.Array:
   """Returns the size of the grid along the given axis."""
   return num_programs_p.bind(axis=axis)
 
-@num_programs_p.def_custom_bind
-def _num_programs_bind(*, axis: int):
+def _num_programs_bind_with_trace(trace, _, params):
+  axis = params.pop("axis")
   # We might be using a local grid env
   grid_env = pallas_core.current_grid_env()
   if grid_env:
@@ -97,8 +99,9 @@ def _num_programs_bind(*, axis: int):
   frame = pallas_core.axis_frame()
   size = frame.size(axis)
   if size is pallas_core.dynamic_grid_dim:
-    return jax_core.Primitive.bind(num_programs_p, axis=axis)
+    return jax_core.Primitive.bind_with_trace(num_programs_p, trace, (), dict(axis=axis))
   return size
+num_programs_p.def_bind_with_trace(_num_programs_bind_with_trace)
 
 @num_programs_p.def_abstract_eval
 def _num_programs_abstract_eval(**_):

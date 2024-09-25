@@ -952,7 +952,7 @@ def shard_map_error_check(
 
   if not isinstance(jaxpr, core.ClosedJaxpr):
     jaxpr = core.ClosedJaxpr(jaxpr, ())
-  with core.extend_axis_env_nd(mesh.shape.items()):
+  with core.extend_axis_env(mesh.shape.items()):
     # jaxpr to checked_jaxpr
     checked_jaxpr, out_tree, _ = jaxpr_to_checkify_jaxpr(
         jaxpr, enabled_errors, err_tree, *in_avals
@@ -966,7 +966,7 @@ def shard_map_error_check(
     errs = [lax.expand_dims(e, [0]) for e in errs]
     return *errs, *outs
 
-  with core.extend_axis_env_nd(mesh.shape.items()):
+  with core.extend_axis_env(mesh.shape.items()):
     jaxpr, _, consts, () = pe.trace_to_jaxpr_dynamic(
         expand_errors_leading_dim, checked_jaxpr.in_avals
     )

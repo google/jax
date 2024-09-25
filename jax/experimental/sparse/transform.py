@@ -276,16 +276,6 @@ def spvalues_to_avals(
 # ------------------------------------------------------------------------------
 # Implementation of sparsify() using tracers.
 
-def popattr(obj: Any, name: str) -> Any:
-  assert hasattr(obj, name)
-  val = getattr(obj, name)
-  delattr(obj, name)
-  return val
-
-def setnewattr(obj: Any, name: str, val: Any):
-  assert not hasattr(obj, name)
-  setattr(obj, name, val)
-
 class SparseTracer(core.Tracer):
   def __init__(self, trace: core.Trace, *, spvalue):
     self._spvalue = spvalue
@@ -293,9 +283,9 @@ class SparseTracer(core.Tracer):
 
   @property
   def spenv(self):
-    if not hasattr(self._trace.main, 'spenv'):
-      raise RuntimeError("Internal: main does not have spenv defined.")
-    return self._trace.main.spenv
+    if not hasattr(self._trace, 'spenv'):
+      raise RuntimeError("Internal: trace does not have spenv defined.")
+    return self._trace.spenv
 
   @property
   def aval(self):
@@ -305,71 +295,70 @@ class SparseTracer(core.Tracer):
     return self
 
 class SparseTrace(core.Trace):
-  def pure(self, val: Any):
-    if not hasattr(self.main, 'spenv'):
-      raise RuntimeError("Internal: main does not have spenv defined.")
-    spvalue, = arrays_to_spvalues(self.main.spenv, [val])
-    return SparseTracer(self, spvalue=spvalue)
 
-  def lift(self, val: core.Tracer):
-    if not hasattr(self.main, 'spenv'):
-      raise RuntimeError("Internal: main does not have spenv defined.")
-    spvalue, = arrays_to_spvalues(self.main.spenv, [val])
-    return SparseTracer(self, spvalue=spvalue)
+  def __init__(self, parent_trace, tag, spenv):
+    self.parent_trace = parent_trace
+    self.tag = tag
+    self.spenv = spenv
 
-  def sublift(self, val: SparseTracer):
-    return SparseTracer(val._trace, spvalue=val._spvalue)
+  def to_sparse_tracer(self, val):
+    if isinstance(val, SparseTracer) and self.tag is val._trace.tag:
+      return val
+    else:
+      with core.set_current_trace(self.parent_trace):
+        spvalue, = arrays_to_spvalues(self.spenv, [val])
+      return SparseTracer(self, spvalue=spvalue)
 
   def process_primitive(self, primitive, tracers, params):
-    spenv = popattr(self.main, 'spenv')
+    tracers = [self.to_sparse_tracer(t) for t in tracers]
     spvalues = [t._spvalue for t in tracers]
     if any(spvalue.is_sparse() for spvalue in spvalues):
       if primitive not in sparse_rules_bcoo:
         _raise_unimplemented_primitive(primitive)
-      out_spvalues = sparse_rules_bcoo[primitive](spenv, *(t._spvalue for t in tracers), **params)
+      with core.set_current_trace(self.parent_trace):
+        out_spvalues = sparse_rules_bcoo[primitive](self.spenv, *(t._spvalue for t in tracers), **params)
     else:
-      out_bufs = primitive.bind(*(spenv.data(spvalue) for spvalue in spvalues), **params)
-      out_spvalues = arrays_to_spvalues(spenv, out_bufs if primitive.multiple_results else [out_bufs])
-    setnewattr(self.main, 'spenv', spenv)
+      out_bufs = primitive.bind_with_trace(self.parent_trace, tuple(self.spenv.data(spvalue) for spvalue in spvalues), params)
+      out_spvalues = arrays_to_spvalues(self.spenv, out_bufs if primitive.multiple_results else [out_bufs])
     out_tracers = tuple(SparseTracer(self, spvalue=spvalue) for spvalue in out_spvalues)
     return out_tracers if primitive.multiple_results else out_tracers[0]
 
   def process_call(self, call_primitive, f: lu.WrappedFun, tracers, params):
-    spenv = popattr(self.main, 'spenv')
+    assert False
     spvalues = tuple(t._spvalue for t in tracers)
-    in_bufs = spenv._buffers
+    in_bufs = self.spenv._buffers
     fun, out_spvalues = sparsify_subtrace(f, self.main, spvalues)
     if any(params['donated_invars']):
       raise NotImplementedError("sparsify does not support donated_invars")
     params = dict(params, donated_invars=tuple(False for buf in in_bufs))
     bufs_out = call_primitive.bind(fun, *in_bufs, **params)
-    setnewattr(self.main, 'spenv', SparsifyEnv(bufs_out))
     return [SparseTracer(self, spvalue=spvalue) for spvalue in out_spvalues()]
 
   def process_custom_jvp_call(self, primitive, fun, jvp, tracers, *, symbolic_zeros):
     # TODO(jakevdp): handle the jvp here
     del primitive, jvp, symbolic_zeros
-    return fun.call_wrapped(*tracers)
+    with core.set_current_trace(self):
+      return fun.call_wrapped(*tracers)
 
 @lu.transformation_with_aux
-def sparsify_subtrace(main, spvalues, *bufs):
-  setnewattr(main, 'spenv', SparsifyEnv(bufs))
-  trace = main.with_cur_sublevel()
-  in_tracers = [SparseTracer(trace, spvalue=spvalue) for spvalue in spvalues]
-  outs = yield in_tracers, {}
-  out_traces = [trace.full_raise(out) for out in outs]
-  buffers = popattr(main, 'spenv')._buffers
-  yield buffers, [out._spvalue for out in out_traces]
+def sparsify_subtrace(tag, spenv, spvalues, *bufs):
+  with core.take_current_trace() as parent:
+    trace = SparseTrace(parent, tag, spenv)
+    with core.set_current_trace(trace):
+      in_tracers = [SparseTracer(trace, spvalue=spvalue) for spvalue in spvalues]
+      outs = yield in_tracers, {}
+      out_traces = [trace.to_sparse_tracer(out) for out in outs]
+      buffers = spenv._buffers
+    yield buffers, [out._spvalue for out in out_traces]
 
 def sparsify_fun(wrapped_fun, args: list[ArrayOrSparse]):
-  with core.new_main(SparseTrace) as main:
-    spenv = SparsifyEnv()
-    spvalues = arrays_to_spvalues(spenv, args)
-    in_bufs = spenv._buffers
-    fun, out_spvalues = sparsify_subtrace(wrapped_fun, main, spvalues)
-    out_bufs = fun.call_wrapped(*in_bufs)
-    spenv = SparsifyEnv(out_bufs)
-    del main
+  tag = core.TraceTag()
+  spenv = SparsifyEnv()
+  spvalues = arrays_to_spvalues(spenv, args)
+  in_bufs = spenv._buffers
+  fun, out_spvalues = sparsify_subtrace(wrapped_fun, tag, spenv, spvalues)
+  out_bufs = fun.call_wrapped(*in_bufs)
+  spenv = SparsifyEnv(out_bufs)
   return spvalues_to_arrays(spenv, out_spvalues())
 
 def _sparsify_with_tracer(fun):

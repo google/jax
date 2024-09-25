@@ -715,7 +715,7 @@ class GridMapping:
     if self.grid_names is None:
       axis_env_ctx = contextlib.nullcontext()
     else:
-      axis_env_ctx = jax_core.extend_axis_env_nd(
+      axis_env_ctx = jax_core.extend_axis_env(
           zip(self.grid_names, self.grid)
       )
     with tracing_grid_env(self.grid, self.vmapped_dims), axis_env_ctx:
