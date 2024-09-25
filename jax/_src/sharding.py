@@ -99,15 +99,19 @@ class SdyDimSharding:
 class SdyArraySharding:
   mesh_name: str
   dimension_shardings: Sequence[SdyDimSharding]
+  per_value: bool = False
 
   def build(self) -> sdy.TensorShardingAttr:
     """Builds the attribute.
 
     NOTE: An MLIR context is required as a context manager.
     """
-    return sdy.TensorShardingAttr.get(
+    sharding = sdy.TensorShardingAttr.get(
         self.mesh_name,
         [dim_sharding.build() for dim_sharding in self.dimension_shardings])
+
+    return (sdy.TensorShardingPerValueAttr.get([sharding])
+            if self.per_value else sharding)
 
 
 @use_cpp_class(xc.Sharding)
@@ -165,7 +169,9 @@ class Sharding:
   def _to_xla_hlo_sharding(self, num_dimensions: int) -> xc.HloSharding:
     raise NotImplementedError('Subclasses should implement this method.')
 
-  def _to_sdy_sharding(self, num_dimensions: int) -> SdyArraySharding:
+  def _to_sdy_sharding(
+      self, num_dimensions: int,
+      per_value: bool = False) -> SdyArraySharding:
     raise NotImplementedError('Subclasses should implement this method.')
 
   #############################################################################

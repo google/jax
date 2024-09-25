@@ -1346,6 +1346,11 @@ jax_multiplatform_test(
 jax_multiplatform_test(
     name = "shard_map_test",
     srcs = ["shard_map_test.py"],
+    enable_configs = [
+        "gpu_2gpu_shardy",
+        "tpu_df_2x2_shardy",
+        "tpu_pf_2x2_shardy",
+    ],
     shard_count = {
         "cpu": 50,
         "gpu": 10,

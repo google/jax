@@ -2083,7 +2083,8 @@ def call_lowering(fn_name, name_stack, call_jaxpr, backend,
                   ctx: ModuleContext, avals_in,
                   avals_out, tokens_in, *args,
                   dim_var_values: Sequence[ir.Value],
-                  arg_names=None, result_names=None):
+                  arg_names=None, result_names=None,
+                  manual_axes=None):
   del avals_in
   if isinstance(call_jaxpr, core.Jaxpr):
     call_jaxpr = pe.close_jaxpr(call_jaxpr)
@@ -2100,10 +2101,14 @@ def call_lowering(fn_name, name_stack, call_jaxpr, backend,
   call = func_dialect.CallOp(flat_output_types,
                              ir.FlatSymbolRefAttr.get(symbol_name),
                              flatten_ir_values(args))
+  if manual_axes:
+    call.attributes["xla.sdy.manual_axes"] = ir.ArrayAttr.get(
+        [ir.StringAttr.get(i) for i in manual_axes])
   out_nodes = unflatten_ir_values_like_types(call.results, output_types)
   tokens, out_nodes = util.split_list(out_nodes, [len(effects)])
   tokens_out = tokens_in.update_tokens(TokenSet(zip(effects, tokens)))
   return out_nodes, tokens_out
+
 
 def core_call_lowering(ctx: LoweringRuleContext,
                        *args, name, backend=None, call_jaxpr):

@@ -659,7 +659,8 @@ def _shard_map_lowering(ctx, *in_nodes, jaxpr, mesh, in_names, out_names,
         "shmap_body", ctx.name_stack, jaxpr, None, sub_ctx, in_avals_,
         out_avals_, ctx.tokens_in, *in_nodes_, dim_var_values=ctx.dim_var_values,
         arg_names=map(_pspec_mhlo_attrs, in_names, in_avals_),
-        result_names=map(_pspec_mhlo_attrs, out_names, out_avals_))
+        result_names=map(_pspec_mhlo_attrs, out_names, out_avals_),
+        manual_axes=sub_ctx.axis_context.manual_axes)
   ctx.set_tokens_out(tokens_out)
   return map(partial(_xla_unshard, ctx, mesh, auto), out_names, out_avals_,
              ctx.avals_out, out_nodes_)
@@ -679,17 +680,24 @@ def _xla_shard(ctx: mlir.LoweringRuleContext, mesh, auto, names,
                aval_in, aval_out, x):
   if prod([size for n, size in mesh.shape.items() if n not in auto]) == 1:
     return x
-  manual_proto = pxla.manual_proto(aval_in, frozenset(mesh.axis_names) - auto, mesh)
+  manual_sharding = pxla.manual_proto(
+      aval_in, frozenset(mesh.axis_names) - auto, mesh)
   axes = {name: i for i, ns in names.items() for name in ns}
   ns = _make_scoped_manual_sharding(ctx, mesh, axes)
   if dtypes.issubdtype(aval_in.dtype, dtypes.extended):
     ns = sharding_impls.physical_sharding(aval_in, ns)
     aval_in = core.physical_aval(aval_in)
-  shard_proto = ns._to_xla_hlo_sharding(aval_in.ndim).to_proto()
+  if config.use_shardy_partitioner.value:
+    sharding = ns._to_sdy_sharding(aval_in.ndim)
+    manual_sharding = NamedSharding(mesh, P())._to_sdy_sharding(
+        aval_in.ndim, per_value=True)
+  else:
+    sharding = ns._to_xla_hlo_sharding(aval_in.ndim).to_proto()
   unspecified = set(range(aval_in.ndim)) if auto else set()
-  sx = mlir.wrap_with_sharding_op(ctx, x, aval_in, shard_proto,
-                                  unspecified_dims=unspecified)
-  return mlir.wrap_with_full_to_shard_op(ctx, sx, aval_out, manual_proto, unspecified)
+  sx = mlir.wrap_with_sharding_op(
+      ctx, x, aval_in, sharding, unspecified_dims=unspecified)
+  return mlir.wrap_with_full_to_shard_op(
+      ctx, sx, aval_out, manual_sharding, unspecified)
 
 def _xla_unshard(ctx: mlir.LoweringRuleContext, mesh, auto, names,
                  aval_in, aval_out, x):
@@ -701,11 +709,20 @@ def _xla_unshard(ctx: mlir.LoweringRuleContext, mesh, auto, names,
     ns = sharding_impls.physical_sharding(aval_out, ns)
     aval_out = core.physical_aval(aval_out)
   unspecified = set(range(aval_out.ndim)) if auto else set()
-  manual_proto = pxla.manual_proto(aval_in, frozenset(mesh.axis_names) - auto, mesh)
-  sx = mlir.wrap_with_sharding_op(ctx, x, aval_in, manual_proto, unspecified_dims=unspecified)
-  shard_proto = ns._to_xla_hlo_sharding(aval_out.ndim).to_proto()
-  return mlir.wrap_with_shard_to_full_op(ctx, sx, aval_out, shard_proto,
-                                         unspecified)
+  if config.use_shardy_partitioner.value:
+    manual_sharding = NamedSharding(mesh, P())._to_sdy_sharding(aval_out.ndim)
+  else:
+    manual_sharding = pxla.manual_proto(
+        aval_in, frozenset(mesh.axis_names) - auto, mesh)
+  sx = mlir.wrap_with_sharding_op(
+      ctx, x, aval_in, manual_sharding, unspecified_dims=unspecified)
+  if config.use_shardy_partitioner.value:
+    sharding = ns._to_sdy_sharding(aval_out.ndim, per_value=True)
+  else:
+    sharding = ns._to_xla_hlo_sharding(aval_out.ndim).to_proto()
+  return mlir.wrap_with_shard_to_full_op(
+      ctx, sx, aval_out, sharding, unspecified
+  )
 
 def _pspec_mhlo_attrs(names: AxisNames, aval: core.AbstractValue) -> str:
   if isinstance(aval, core.ShapedArray):

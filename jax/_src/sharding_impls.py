@@ -310,7 +310,9 @@ class NamedSharding(sharding.Sharding):
   def _to_xla_hlo_sharding(self, num_dimensions: int) -> xc.HloSharding:
     return named_sharding_to_xla_hlo_sharding(self, num_dimensions)
 
-  def _to_sdy_sharding(self, num_dimensions: int) -> sharding.SdyArraySharding:
+  def _to_sdy_sharding(
+      self, num_dimensions: int,
+      per_value: bool = False) -> sharding.SdyArraySharding:
     dim_shardings = [sharding.SdyDimSharding(axes=[], is_closed=True)
                      for _ in range(num_dimensions)]
     for i, dim_spec in enumerate(self._parsed_pspec):
@@ -321,7 +323,7 @@ class NamedSharding(sharding.Sharding):
         pass
       else:
         dim_shardings[i].axes = dim_spec
-    return sharding.SdyArraySharding('mesh', dim_shardings)
+    return sharding.SdyArraySharding('mesh', dim_shardings, per_value)
 
 
 @util.cache(max_size=128, trace_context_in_key=False)
@@ -395,11 +397,14 @@ class SingleDeviceSharding(sharding.Sharding):
   def _to_xla_hlo_sharding(self, num_dimensions: int) -> xc.HloSharding:
     return get_replicated_hlo_sharding()
 
-  def _to_sdy_sharding(self, num_dimensions: int) -> sharding.SdyArraySharding:
+  def _to_sdy_sharding(
+      self, num_dimensions: int,
+      per_value: bool = False) -> sharding.SdyArraySharding:
     return sharding.SdyArraySharding(
         'mesh',
         [sharding.SdyDimSharding(axes=[], is_closed=True)
-         for _ in range(num_dimensions)])
+         for _ in range(num_dimensions)],
+        per_value)
 
   @property
   def is_fully_replicated(self) -> bool:
@@ -537,7 +542,9 @@ class PmapSharding(sharding.Sharding):
   def _to_xla_hlo_sharding(self, num_dimensions: int) -> xc.HloSharding:
     raise NotImplementedError("pmap doesn't use OpSharding.")
 
-  def _to_sdy_sharding(self, num_dimensions: int) -> sharding.SdyArraySharding:
+  def _to_sdy_sharding(
+      self, num_dimensions: int,
+      per_value: bool = False) -> sharding.SdyArraySharding:
     raise NotImplementedError("pmap doesn't use SdyArraySharding.")
 
   @functools.cached_property
@@ -743,7 +750,9 @@ class PositionalSharding(sharding.Sharding):
   def _to_xla_hlo_sharding(self, num_dimensions: int) -> xc.HloSharding:
     return _positional_sharding_to_xla_hlo_sharding(self, num_dimensions)
 
-  def _to_sdy_sharding(self, num_dimensions: int) -> sharding.SdyArraySharding:
+  def _to_sdy_sharding(
+      self, num_dimensions: int,
+      per_value: bool = False) -> sharding.SdyArraySharding:
     raise NotImplementedError(
         "PositionalSharding can't be converted to an SdyArraySharding.")
 
@@ -860,7 +869,9 @@ class GSPMDSharding(sharding.Sharding):
   def _to_xla_hlo_sharding(self, num_dimensions: int) -> xc.HloSharding:
     return self._hlo_sharding
 
-  def _to_sdy_sharding(self, num_dimensions: int) -> sharding.SdyArraySharding:
+  def _to_sdy_sharding(
+      self, num_dimensions: int,
+      per_value: bool = False) -> sharding.SdyArraySharding:
     raise NotImplementedError(
         "GSPMDSharding can't be converted to SdyArraySharding.")
 

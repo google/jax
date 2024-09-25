@@ -848,6 +848,11 @@ class ShardMapTest(jtu.JaxTestCase):
   @parameterized.parameters([True, False])
   @jtu.run_on_devices('cpu', 'gpu', 'tpu')
   def test_debug_print_jit(self, jit):
+    if config.use_shardy_partitioner.value:
+      self.skipTest(
+          "TODO(b/364547005): debug printing/host callbacks isn't "
+          'working in Shardy yet.'
+      )
     mesh = Mesh(jax.devices(), ('i',))
 
     @partial(shard_map, mesh=mesh, in_specs=P('i'), out_specs=P('i'))
@@ -1759,10 +1764,13 @@ class ShardMapTest(jtu.JaxTestCase):
 
     v = jnp.arange(32.).reshape(4, 8)
     v = jax.device_put(v, jax.sharding.NamedSharding(mesh, P('i', 'j')))
-    self.assertIn(
-        'sharding={devices=[1,1,2,2]<=[4] last_tile_dims={manual, replicated}}',
-        f.lower(v).as_text('hlo'),
-    )
+    if config.use_shardy_partitioner.value:
+      # Shardy take the inverse of the auto axes - so just `i`.
+      self.assertIn('xla.sdy.manual_axes = ["i"]', f.lower(v).as_text())
+    else:
+      self.assertIn(
+          'sharding={devices=[1,1,2,2]<=[4] last_tile_dims={manual, replicated}}',
+          f.lower(v).as_text('hlo'))
     self.assertAllClose(v*v, f(v), check_dtypes=False)
 
   def test_sharded_prng_with_abstract_mesh(self):
@@ -1909,6 +1917,9 @@ class ShardMapTest(jtu.JaxTestCase):
     self.assertAllClose(jax.jit(f)(), jnp.zeros((2,)))
 
   def test_partial_auto_of_pjit_different_mesh(self):
+    if config.use_shardy_partitioner.value:
+      self.skipTest('TODO(b/355263220): JAX+Shardy lowering for multiple '
+                    'meshes is currently unsupported.')
     mesh = jtu.create_mesh((2, 2), ('i', 'j'))
     mesh2 = jax.sharding.Mesh(mesh.devices, ('k', 'l'))
 
