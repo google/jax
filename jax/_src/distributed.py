@@ -42,6 +42,7 @@ class State:
                  local_device_ids: int | Sequence[int] | None = None,
                  cluster_detection_method: str | None = None,
                  initialization_timeout: int = 300,
+                 use_compression: bool = False,
                  coordinator_bind_address: str | None = None):
     coordinator_address = (coordinator_address or
                            os.environ.get('JAX_COORDINATOR_ADDRESS'))
@@ -115,7 +116,8 @@ class State:
       raise RuntimeError('distributed.initialize should only be called once.')
 
     self.client = xla_extension.get_distributed_runtime_client(
-        coordinator_address, process_id, init_timeout=initialization_timeout)
+        coordinator_address, process_id, init_timeout=initialization_timeout,
+        use_compression=use_compression)
     logger.info('Connecting to JAX distributed service on %s', coordinator_address)
     self.client.connect()
 
@@ -148,6 +150,7 @@ def initialize(coordinator_address: str | None = None,
                local_device_ids: int | Sequence[int] | None = None,
                cluster_detection_method: str | None = None,
                initialization_timeout: int = 300,
+               use_compression: bool = False,
                coordinator_bind_address: str | None = None):
   """Initializes the JAX distributed system.
 
@@ -201,6 +204,7 @@ def initialize(coordinator_address: str | None = None,
     initialization_timeout: Time period (in seconds) for which connection will
       be retried. If the initialization takes more than the timeout specified,
       the initialization will error. Defaults to 300 secs i.e. 5 mins.
+    use_compression: Whether to compress communication with the coordinator service.
     coordinator_bind_address: the address and port to which the coordinator service
       on process `0` should bind. If this is not specified, the default is to bind to
       all available addresses on the same port as ``coordinator_address``. On systems
@@ -230,7 +234,8 @@ def initialize(coordinator_address: str | None = None,
                         "any JAX computations are executed.")
   global_state.initialize(coordinator_address, num_processes, process_id,
                           local_device_ids, cluster_detection_method,
-                          initialization_timeout, coordinator_bind_address)
+                          initialization_timeout, use_compression,
+                          coordinator_bind_address)
 
 
 def shutdown():
