@@ -659,6 +659,28 @@ LogicalResult ShuffledStoreOp::canonicalize(ShuffledStoreOp op,
   }
   return success();
 }
+
+LogicalResult ConcatenateOp::verify() {
+  auto dimension = getDimension();
+  if (getOperands().size() < 2) {
+    return emitOpError("Expected at least 2 operands for concatenate op.");
+  }
+  auto first_shape = getOperand(0).getType().cast<VectorType>().getShape();
+  for (int i = 0; i < getNumOperands(); ++i) {
+    auto operand = getOperand(i);
+    auto vty = cast<VectorType>(operand.getType());
+    auto shape = vty.getShape();
+    for (int dim = 0; dim < shape.size(); ++dim) {
+      if (dim != dimension && shape[dim] != first_shape[dim]) {
+        return emitOpError(
+            "Not implemented: Expected all operands to have "
+            "the same shape outside of the concat dim");
+      }
+    }
+  }
+  return success();
+}
+
 }  // namespace tpu
 }  // namespace mlir
 

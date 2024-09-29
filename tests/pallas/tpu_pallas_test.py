@@ -2279,9 +2279,7 @@ def only_passes_in_interpret(unless_generation: int | None = None):
 class MiscellaneousTest(PallasBaseTest):
   """Tests for reported bugs. Only pass in interpret mode unless fixed."""
 
-  @only_passes_in_interpret()
   def test_float32_stack(self):
-    """b/347761105"""
     x = np.arange(128, dtype=jnp.float32).reshape(1, 128)
     y = x + 128
 

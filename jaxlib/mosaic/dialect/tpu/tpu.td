@@ -374,6 +374,27 @@ def TPU_DynamicGatherOp : TPU_Op<"dynamic_gather", [Pure]> {
   }];
 }
 
+
+def TPU_DotDimensionNumbersAttr : TPU_Attr<"DotDimensionNumbers", "dot_dimension_numbers"> {
+  let parameters = (ins
+    ArrayRefParameter<"int64_t", "">:$lhs_contracting_dims,
+    ArrayRefParameter<"int64_t", "">:$rhs_contracting_dims,
+    ArrayRefParameter<"int64_t", "">:$lhs_non_contracting_dims,
+    ArrayRefParameter<"int64_t", "">:$rhs_non_contracting_dims,
+    // The contract is a flattend structure, wherein, each element is half of a
+    // pair of indices. The first element is always 0 (lhs) or 1 (rhs) and the 
+    // second index is the index from the lhs or rhs. 
+    ArrayRefParameter<"int64_t", "">:$output_dim_order,
+    OptionalArrayRefParameter<"int64_t", "">:$lhs_batch_dims,
+    OptionalArrayRefParameter<"int64_t", "">:$rhs_batch_dims
+    );
+    let assemblyFormat = "`<` `[` $lhs_contracting_dims `]` `,` `[` $rhs_contracting_dims `]` `,` "
+                     "`[` $lhs_non_contracting_dims `]` `,` `[` $rhs_non_contracting_dims `]` `,` "
+                     "`[` $output_dim_order `]` `,` "
+                     "`[` (`]`):($lhs_batch_dims^ `]`)? `,` "
+                     "`[` (`]`):($rhs_batch_dims^ `]`)? `>`";
+}
+
 // TODO(apaszke): Add a verifier for this op
 // TODO(apaszke): Think hard about precision
 def TPU_MatmulOp : TPU_Op<"matmul", [Pure]> {
@@ -381,9 +402,13 @@ def TPU_MatmulOp : TPU_Op<"matmul", [Pure]> {
     AnyVector:$lhs,
     AnyVector:$rhs,
     AnyVector:$acc,
+    // These flags are to be deprecated - if dimension_numbers are defined,
+    // these flags are ignored. 
     DefaultValuedAttr<BoolAttr, "false">:$transpose_lhs,
     DefaultValuedAttr<BoolAttr, "false">:$transpose_rhs,
-    OptionalAttr<TPU_ContractPrecisionEnum>:$precision
+    OptionalAttr<TPU_ContractPrecisionEnum>:$precision,
+    // NOTE: User-level optional, once canonicalized, always present.
+    OptionalAttr<TPU_DotDimensionNumbersAttr>:$dimension_numbers
   );
   let results = (outs AnyVector:$result);
   let assemblyFormat = [{
@@ -401,6 +426,7 @@ def TPU_ConcatenateOp : TPU_Op<"concatenate", [Pure]> {
   let assemblyFormat = [{
     $sources `in` $dimension attr-dict `:` type($sources) `->` type($output)
   }];
+  let hasVerifier = 1;
 }
 
 def TPU_BitcastOp : TPU_Op<"bitcast", [Pure]> {
