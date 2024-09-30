@@ -1888,14 +1888,18 @@ class APITest(jtu.JaxTestCase):
     jax.device_put(CustomNode([0.1]))
 
   def test_vmap_inconsistent_sizes_constructs_proper_error_message(self):
-    def f(x1, x2, g):
-      return g(x1, x2)
+    def f(x1, x2, a3):
+      return jnp.add(x1, x2, a3)
 
     with self.assertRaisesRegex(
-        ValueError,
-        "vmap got inconsistent sizes for array axes to be mapped:"
+      ValueError,
+      "vmap got inconsistent sizes for array axes to be mapped:\n"
+      r"  \* most axes \(2 of them\) had size 2, e.g. axis 0 of argument x1 of type float32\[2\];\n"
+      r"  \* one axis had size 1: axis 0 of kwargs\['a3'\] of type float32\[1\]",
     ):
-      jax.vmap(f, (0, 0, None))(jnp.ones(2), jnp.ones(3), jnp.add)
+      # previously this test would fail when kwargs were passed in a different order
+      # that what's in the function signature.
+      jax.vmap(f)(jnp.ones(2), a3=jnp.ones(1), x2=jnp.ones(2))
 
   def test_device_get_scalar(self):
     x = np.arange(12.).reshape((3, 4)).astype("float32")
