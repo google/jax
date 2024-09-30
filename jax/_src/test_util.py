@@ -51,6 +51,7 @@ from jax._src import stages
 from jax._src import xla_bridge
 from jax._src.cloud_tpu_init import running_in_cloud_tpu_vm
 from jax._src.interpreters import mlir
+from jax._src.interpreters import batching
 from jax._src.interpreters import pxla
 from jax._src.lib import xla_client as xc
 from jax._src.numpy.util import promote_dtypes, promote_dtypes_inexact

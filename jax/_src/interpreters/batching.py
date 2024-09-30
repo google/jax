@@ -45,6 +45,51 @@ zip, unsafe_zip = safe_zip, zip
 
 # Jumbles
 
+
+def jumble(
+    x, sizes: list[core.ShapedArray | Any], axes: tuple[int | Any]
+) -> Jumble:
+  """A masking-like operation that converts a dense array, x,
+
+  into a Jumble across given axes.
+
+  The relationship between size and axes is a little nuanced.
+
+  Consider a case of i:3 => j:4 => f32[...]. In the event that we pass 2 top
+  level sizes [i32[3], i32[4]], the resulting Jumble will be f32[m.i, n.j],
+  however, if we pass a single 2d sizes i32[3, 4] the resulting Jumble will be
+  f32[k.i.j]. TODO(mvoz): Only the first case is supported ATM
+
+  This operation is destructive in the way that masking is.
+  """
+  if len(sizes) != len(axes):
+    raise NotImplementedError('NYI - len sizes must match len axes')
+
+  x_shape = x.shape
+
+  # Note - we could make this an arg later?
+  batch_dim = 0
+  batch_len = x_shape[batch_dim]
+  axis_sizes = set()
+  ragged_axes = []
+  for size, axis in zip(sizes, axes):
+    axis_size = x_shape[axis]
+    if len(size) != batch_len:
+      raise ValueError(
+          f'Batch axis 0 length {batch_len} does not match ragged size {size}'
+      )
+    ragged_sizes = jax.lax.convert_element_type(
+        size,
+        core.bint(axis_size),
+    )
+    axis_sizes.add(len(size))
+    if len(axis_sizes) > 1:
+      raise ValueError('Not supported - varied ndim in ragged sizes')
+    ragged_axes.append((axis, ragged_sizes))
+
+  return _jumble_result(axis_sizes.pop(), batch_dim, ragged_axes, x)
+
+
 # i:(Fin 3) => f32[[3, 1, 4].i]
 @dataclasses.dataclass(frozen=True)
 class JumbleTy:
@@ -54,6 +99,7 @@ class JumbleTy:
   def __repr__(self) -> str:
     return f'Var{id(self.binder)}:{self.length} => {self.elt_ty}'
   replace = dataclasses.replace
+
 
 # [3, 1, 4].i
 @dataclasses.dataclass(frozen=True)
@@ -70,6 +116,46 @@ class IndexedAxisSize:
 class Jumble:
   aval: JumbleTy
   data: Array
+
+  def to_dense(self, *, masking_value: Any=0):
+    import jax.numpy as jnp
+
+    def create_masked_arr(lengths):
+      masked_arrays = []
+
+      ragged_axes = sum(isinstance(l, core.DArray) for l in lengths)
+      if ragged_axes > 1:
+        raise NotImplementedError("Multiaxis raggedness / nested jumble NYI")
+
+      for i, length in enumerate(lengths):
+        if isinstance(length, core.DArray):
+          # ragged axis here
+          for batch_idx, per_batch_ragged_size in enumerate(length.data):
+            original_data = self.data[batch_idx]
+
+            mask_shape = [1] * original_data.ndim
+            mask_shape[i] = original_data.shape[i]
+
+            mask_indices = jnp.arange(original_data.shape[i]).reshape(mask_shape)
+            mask_condition = mask_indices >= per_batch_ragged_size
+
+            masked_array = jnp.where(mask_condition, masking_value, original_data)
+
+            masked_arrays.append(masked_array)
+
+      return jnp.array(masked_arrays)
+
+    lengths = []
+    for d in self.aval.elt_ty.shape:
+        if isinstance(d, IndexedAxisSize):
+            lengths.append(d.lengths)
+        else:
+            lengths.append(d)
+
+    return create_masked_arr(lengths)
+    
+    
+    
 
 # To vmap over a jumble, one must specify the axis as JumbleAxis.
 class JumbleAxis: pass
@@ -88,6 +174,17 @@ def _jumble_flatten(jumble):
   elt_ty = jumble.aval.elt_ty.update(shape=tuple(new_shape))
   aval = jumble.aval.replace(elt_ty=elt_ty)
   return (lengths, jumble.data), aval
+
+
+def _ragged_axis_parts(dim: RaggedAxis) -> tuple[int, int, int]:
+  stacked_axis = dim.stacked_axis
+  ragged_axes = dim.ragged_axes
+  if len(ragged_axes) != 1:
+    raise ValueError('Multiple ragged axes not yet implemented.')
+  ragged_axis_dim = ragged_axes[0][0]
+  ragged_axis_length = ragged_axes[0][1]
+  return stacked_axis, ragged_axis_dim, ragged_axis_length
+
 
 def _jumble_unflatten(aval, x):
   lengths, data = x
@@ -135,6 +232,7 @@ class RaggedAxis:
       return ax
     new_axes = tuple((move_axis(ax), sizes) for ax, sizes in self.ragged_axes)
     return RaggedAxis(dst, new_axes)
+
 
 def transpose_ragged_axes(dim: RaggedAxis, perm: tuple[int, ...]) -> RaggedAxis:
   new_ragged_axes = []
@@ -254,6 +352,10 @@ def to_elt(trace: Trace, get_idx: GetIdx, x: Vmappable, spec: MapSpec) -> Elt:
   else:
     # TODO(mvoz): This is a terrible place to fall into if you pass
     # a non jumble type in, make it clearer what went wrong.
+    # batch_axis = make_batch_axis(x.data.ndim, 0, [(d+1, ias.lengths)])
+    # return BatchTracer(trace, x.data, batch_axis)
+    # TODO(mvoz): it can be anything! dont land with this 0 hack
+    return BatchTracer(trace, x, 0)
     assert False, f'Unexpected type in ELT? {type(x)}'
 
 to_elt_handlers: dict[type, ToEltHandler] = {}
@@ -314,6 +416,40 @@ def flatten_fun_for_vmap(in_tree, *args_flat):
   py_args, py_kwargs = tree_unflatten(in_tree, args_flat)
   ans = yield py_args, py_kwargs
   yield tree_flatten(ans, is_leaf=is_vmappable)
+
+# Propagate ragged masking rules from invars to outvars
+# rule([params], [raggedness_per_invar], outvars) ->
+#   [raggedness_per_invar, raggedness_per_outvar]
+RaggedMaskingRule = Callable[
+    [list[Any], list[Any], list[Any]], tuple[list[Any], list[Any]]
+]
+
+ragged_prop_rules: dict[core.Primitive, RaggedMaskingRule] = {}
+
+
+def ragged_mask_elementwise_rule(eqn_params, invar_raggedness, outvars):
+  # TODO(mvoz): A util for getting the ragged representations
+  first_invar_raggedness = invar_raggedness[0]
+  for other_invar_raggedness in invar_raggedness[1:]:
+    assert (
+        other_invar_raggedness == first_invar_raggedness
+    ), f'{other_invar_raggedness} != {first_invar_raggedness}'
+
+  outvar_raggedness = [first_invar_raggedness] * len(outvars)
+  return invar_raggedness, outvar_raggedness
+
+
+def ragged_mask_no_op_rule(eqn_params, invar_raggedness, outvars):
+  return invar_raggedness, [None] * len(outvars)
+
+
+def ragged_mask_transfer_identity(
+    eqn_params, invar_raggedness, outvar_raggedness
+):
+  assert len(invar_raggedness) == 1, invar_raggedness
+  outvar_raggedness = invar_raggedness
+  return invar_raggedness, outvar_raggedness
+
 
 ### tracer
 

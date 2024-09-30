@@ -2019,6 +2019,7 @@ def _pjit_batcher(spmd_axis_name, axis_size, axis_name, main_type,
 
 batching.spmd_axis_primitive_batchers[pjit_p] = _pjit_batcher
 batching.axis_primitive_batchers[pjit_p] = partial(_pjit_batcher, None)
+batching.ragged_prop_rules[pjit_p] = batching.ragged_mask_no_op_rule
 
 def _pjit_batcher_for_sharding(
     s: sharding.Sharding | UnspecifiedValue,

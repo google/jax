@@ -1496,6 +1496,44 @@ class JumbleTest(jtu.JaxTestCase):
       xs = jax.vmap(lambda n: jax.lax.iota('int32', n).sum())(ins)
       self.assertAllClose(xs, jnp.array([3, 0, 6]), check_dtypes=False)
 
+  @parameterized.parameters((True,), (False,))
+  def test_dense_to_jumble(self, disable_jit):
+    with jax.disable_jit(disable_jit):
+      dest_shape = [3, 5, 8]
+
+      lengths = jnp.array([3, 1, 4])
+
+      sizes = jax.lax.convert_element_type(
+          lengths,
+          core.bint(dest_shape[1]),
+      )
+
+      jumble_ref = jax.vmap(
+          lambda n: jnp.ones((n, dest_shape[2])), out_axes=batching.jumble_axis
+      )(sizes)
+
+      dense = jnp.ones(dest_shape)
+      jumbled = batching.jumble(dense, (lengths,), (1,))
+
+    # TODO(mvoz): Better self.assertAllClose/Equal utils?
+    self.assertAllClose(jumble_ref.aval.length, jumbled.aval.length)
+    self.assertAllClose(jumble_ref.data, jumbled.data)
+
+  @parameterized.parameters((True,), (False,))
+  def test_jumble_to_dense(self, disable_jit):
+    with jax.disable_jit(disable_jit):
+      lengths = jnp.array([3, 1, 4])
+
+      dense = jnp.ones([3, 5, 8])
+      jumbled = batching.jumble(dense, (lengths,), (1,))
+      dense_from_jumble = jumbled.to_dense(masking_value=15.0)
+
+      self.assertEqual(dense.shape, dense_from_jumble.shape)
+      for idx, batch in enumerate(dense_from_jumble):
+        count_1 = jnp.sum(batch == 1.0)
+        self.assertEqual(count_1, 8 * lengths[idx])
+
+
   def test_jumble_escapes(self):
     ins = lax.convert_element_type(jnp.array([3, 1, 4]), core.bint(5))
     xs = jax.vmap(jax.jit(lambda n: jax.lax.iota('int32', n)),
