@@ -62,6 +62,7 @@ Random Samplers
     rademacher
     randint
     rayleigh
+    roberts_sequence
     t
     triangular
     truncated_normal
