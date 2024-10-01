@@ -33,7 +33,7 @@ from jax._src import effects
 from jax._src import linear_util as lu
 from jax._src import source_info_util
 from jax._src import util
-from jax._src.state.discharge import register_discharge_rule, discharge_state
+from jax._src.state.discharge import register_partial_discharge_rule, discharge_state
 from jax._src.state.types import AbstractRef, RefEffect
 from jax._src.core import ConcreteArray, raise_to_shaped, replace_jaxpr_effects
 from jax._src.interpreters import ad
@@ -854,19 +854,21 @@ def _cond_lowering(ctx, index, *args, branches):
 
 mlir.register_lowering(cond_p, _cond_lowering)
 
-@register_discharge_rule(cond_p)
-def _cond_state_discharge_rule(in_avals, out_avals, *args, branches):
+@register_partial_discharge_rule(cond_p)
+def _cond_state_discharge_rule(in_avals, out_avals, index, *args, branches, should_discharge):
   discharged_branches = tuple(
-      core.ClosedJaxpr(discharge_state(branch.jaxpr, ())[0], ())
+      core.ClosedJaxpr(
+          discharge_state(branch.jaxpr, (),
+                          should_discharge=should_discharge[1:])[0], ())
       for branch in branches)
-  out_vals = cond_p.bind(*args, branches=discharged_branches)
+  out_vals = cond_p.bind(index, *args, branches=discharged_branches)
   out_vals, out_ref_vals = util.split_list(
       out_vals, [len(out_avals)])
   ref_val_iter = iter(out_ref_vals)
   new_invals = []
-  for aval in in_avals:
-    new_invals.append(
-        next(ref_val_iter) if isinstance(aval, AbstractRef) else None)
+  for should, aval in zip(should_discharge, in_avals):
+    discharged_inval = isinstance(aval, AbstractRef) and should
+    new_invals.append(next(ref_val_iter) if discharged_inval else None)
   return new_invals, out_vals
 
 

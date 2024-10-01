@@ -97,10 +97,35 @@ class DischargeRule(Protocol):
 
 _discharge_rules: dict[core.Primitive, DischargeRule] = {}
 
+class PartialDischargeRule(Protocol):
+  """A partial discharge rule.
+
+  Exactly like a discharge rule only it accepts a `should_discharge`
+  argument that indicates which inputs should be discharged and the
+  return value returns a tuple of which the first element is the new
+  inputs or none but only the ones that correspond to `True` entries
+  in `should_charge`.
+  """
+
+
+  def __call__(self, in_avals: Sequence[core.AbstractValue],
+      out_avals: Sequence[core.AbstractValue], *args: Any,
+      should_discharge=list[bool],
+      **params: Any) -> tuple[Sequence[Any | None], Sequence[Any]]:
+    ...
+
+_partial_discharge_rules: dict[core.Primitive, PartialDischargeRule] = {}
+
 def register_discharge_rule(prim: core.Primitive):
   def register(f: DischargeRule):
     _discharge_rules[prim] = f
   return register
+
+def register_partial_discharge_rule(prim: core.Primitive):
+  def register(f: DischargeRule):
+    _partial_discharge_rules[prim] = f
+  return register
+
 
 def _eval_jaxpr_discharge_state(
     jaxpr: core.Jaxpr, should_discharge: Sequence[bool], consts: Sequence[Any],
@@ -116,21 +141,35 @@ def _eval_jaxpr_discharge_state(
                        if d and isinstance(v.aval, AbstractRef)}
 
   for eqn in jaxpr.eqns:
+    should_discharge_arg = [id(v.aval) in refs_to_discharge for v in eqn.invars]
     if eqn.primitive is core.mutable_array_p:
       [invar], [outvar] = eqn.invars, eqn.outvars
       ans = env.read(invar)
       refs_to_discharge.add(id(outvar.aval))
-    elif (any(id(v.aval) in refs_to_discharge for v in eqn.invars)
-         or core.internal_mutable_array_effect in eqn.effects ):
-      if eqn.primitive not in _discharge_rules:
+    elif (any(should_discharge_arg)
+          or core.internal_mutable_array_effect in eqn.effects
+      ):
+      if eqn.primitive in _partial_discharge_rules:
+        rule = partial(_partial_discharge_rules[eqn.primitive], should_discharge=should_discharge_arg)  # type: ignore
+      elif eqn.primitive in _discharge_rules:
+        should_discharge_arg = [True] * len(eqn.invars)
+        rule = _discharge_rules[eqn.primitive]  # type: ignore
+      else:
         raise NotImplementedError("No state discharge rule implemented for "
             f"primitive: {eqn.primitive}")
       invals = map(env.read, eqn.invars)
       in_avals = [v.aval for v in eqn.invars]
       out_avals = [v.aval for v in eqn.outvars]
-      new_invals, ans = _discharge_rules[eqn.primitive](
+      new_invals, ans = rule(
           in_avals, out_avals, *invals, **eqn.params)
-      for new_inval, invar in zip(new_invals, eqn.invars):
+      for invar, should, new_inval in zip(eqn.invars, should_discharge_arg, new_invals):
+        if not should:
+          if new_inval is not None:
+            raise ValueError(
+                f"Did not ask for inval to be discharged but it was. ({invar=},"
+                f" {new_inval=})"
+            )
+          continue
         if new_inval is not None:
           env.write(invar, new_inval)  # type: ignore[arg-type]
     else:

@@ -1139,7 +1139,7 @@ def _scan_typecheck(bind_time, *in_atoms, reverse, length, num_consts,
 
 def _scan_state_discharge_rule(in_avals, out_avals, *args, jaxpr, num_consts,
                                num_carry, linear, unroll, reverse, length,
-                               _split_transpose):
+                               _split_transpose, should_discharge):
   # We're shuffling parameters between three signatures for the scan body:
   #   jaxpr      : (n_consts, n_carry, n_xs) -> (n_carry, n_ys)
   #   discharged : (n_consts, n_carry, n_xs) -> (n_carry, n_ys, n_ref_consts, n_ref_xs)
@@ -1158,14 +1158,18 @@ def _scan_state_discharge_rule(in_avals, out_avals, *args, jaxpr, num_consts,
   n_ys = len(out_avals) - n_carry
   consts_avals, carry_avals, xs_avals = split_list_checked(in_avals,
     [n_consts, n_carry, n_xs])
-  is_ref_const = [isinstance(a, state.AbstractRef) for a in consts_avals]
-  assert not  any(isinstance(a, state.AbstractRef) for a in carry_avals)
-  is_ref_xs    = [isinstance(a, state.AbstractRef) for a in xs_avals]
+  consts_should_discharge, carry_should_discharge, xs_should_discharge = split_list_checked(should_discharge,
+    [n_consts, n_carry, n_xs])
+
+  is_ref_const = [s and isinstance(a, state.AbstractRef) for s, a in zip(consts_should_discharge, consts_avals)]
+  assert not any(isinstance(a, state.AbstractRef) for a in carry_avals)
+  assert not any(carry_should_discharge)
+  is_ref_xs = [s and isinstance(a, state.AbstractRef) for s, a in zip(xs_should_discharge, xs_avals)]
   n_ref_consts = sum(is_ref_const)
   n_val_consts = n_consts - n_ref_consts
   n_ref_xs = sum(is_ref_xs)
   n_val_xs = n_xs - n_ref_xs
-  discharged_jaxpr, discharged_consts = state_discharge.discharge_state(jaxpr, ())
+  discharged_jaxpr, discharged_consts = state_discharge.discharge_state(jaxpr, (), should_discharge=should_discharge)
   if discharged_consts:
     raise NotImplementedError("Discharged jaxpr has consts. If you see this, "
                               "please open an issue at "
@@ -1189,8 +1193,8 @@ def _scan_state_discharge_rule(in_avals, out_avals, *args, jaxpr, num_consts,
   args_for_wrapped = arrange_jaxpr_args_for_wrapped(args)
   linear_for_wrapped = arrange_jaxpr_args_for_wrapped(linear)
   avals_for_wrapped = arrange_jaxpr_args_for_wrapped(in_avals)
-  avals_for_wrapped_no_refs = [aval.inner_aval if isinstance(aval, state.AbstractRef) else aval
-                               for aval in avals_for_wrapped]
+  avals_for_wrapped_no_refs = [aval.inner_aval if should and isinstance(aval, state.AbstractRef) else aval
+                               for should, aval in zip(should_discharge, avals_for_wrapped)]
   new_jaxpr, _, (), () = pe.trace_to_jaxpr_dynamic(lu.wrap_init(wrapped), avals_for_wrapped_no_refs)
   all_out = scan_p.bind(*args_for_wrapped,
                         jaxpr=core.ClosedJaxpr(new_jaxpr, ()),
@@ -1234,7 +1238,7 @@ core.custom_typechecks[scan_p] = partial(_scan_typecheck, False)
 pe.partial_eval_jaxpr_custom_rules[scan_p] = _scan_partial_eval_custom
 pe.padding_rules[scan_p] = _scan_padding_rule
 pe.dce_rules[scan_p] = _scan_dce_rule
-state_discharge.register_discharge_rule(scan_p)(_scan_state_discharge_rule)
+state_discharge.register_partial_discharge_rule(scan_p)(_scan_state_discharge_rule)
 
 def _propagate_mem_kind_scan(*xm, reverse, length, num_consts, num_carry, jaxpr,
                              linear, unroll, _split_transpose):
