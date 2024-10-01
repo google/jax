@@ -26,6 +26,7 @@ import jax
 from jax import lax
 from jax import tree_util
 from jax._src import ad_util
+from jax._src import checkify
 from jax._src import core as jax_core
 from jax._src import custom_derivatives
 from jax._src import debugging
@@ -2948,6 +2949,37 @@ def random_wrap_lowering(ctx, key_data, *, impl):
 
 lowering_rules[prng.random_wrap_p] = random_wrap_lowering
 
+def _checkify_lowering_rule(
+    ctx: LoweringRuleContext, *err_args, err_tree, debug):
+  if debug:
+    return []
+  if not tpu_core.runtime_assert_enabled():
+    return []
+  assert ctx.lowering_context.ir_context.allow_unregistered_dialects, (
+    "allow_unregistered_dialects must be set to True for "
+    "runtime assert check.")
+  error = jax.tree.unflatten(err_tree, err_args)
+  assert len(error._pred) == 1
+  assert len(error._metadata) == 1
+  assert len(error._payload) == 1
+  pred = list(error._pred.items())[0][1]
+  metadata = list(error._metadata.items())[0]
+  payload = list(error._payload.items())[0][1]
+  exception_tree = metadata[1]
+  exception = jax.tree.unflatten(exception_tree, payload)
+  assert isinstance(exception, checkify.FailedCheckError)
+
+  # check_p has an inverted predicate compared to assert,
+  # so we need to compute not(pred) here.
+  out_scalar_type = _dtype_to_ir_type(jnp.dtype('bool'))
+  minus_one = ir_constant(-1, out_scalar_type)
+  not_pred = arith.XOrIOp(pred, minus_one).result
+  attrs = {"msg": ir.StringAttr.get(exception.fmt_string)}
+  ir.Operation.create("cf.assert",
+                      operands=(not_pred,),
+                      attributes=attrs)
+  return []
+lowering_rules[checkify.check_p] = _checkify_lowering_rule
 
 # Lowering for shard_map
 
