@@ -13,3 +13,7 @@ find_package(nanobind CONFIG REQUIRED)
 nanobind_add_module(_rms_norm NB_STATIC "src/jax_ffi_example/rms_norm.cc")
 target_include_directories(_rms_norm PUBLIC ${XLA_DIR})
 install(TARGETS _rms_norm LIBRARY DESTINATION ${SKBUILD_PROJECT_NAME})
+
+nanobind_add_module(_counter NB_STATIC "src/jax_ffi_example/counter.cc")
+target_include_directories(_counter PUBLIC ${XLA_DIR})
+install(TARGETS _counter LIBRARY DESTINATION ${SKBUILD_PROJECT_NAME})
