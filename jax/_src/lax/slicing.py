@@ -1153,6 +1153,9 @@ def _slice_batching_rule(batched_args, batch_dims, *, start_indices,
 slice_p = standard_primitive(_slice_shape_rule, _input_dtype, 'slice')
 ad.deflinear2(slice_p, _slice_transpose_rule)
 batching.primitive_batchers[slice_p] = _slice_batching_rule
+# TODO(mvoz): A better slice rule for ragged prop, enforcing boundaries
+# or supporting nested jumbles. NYI.
+batching.ragged_prop_rules[slice_p] = batching.ragged_mask_no_op_rule
 
 # Override the standard impl to defer to dynamic_slice whenever possible.
 # This lets us reuse the same program for many applications of slicing for as
