@@ -811,14 +811,93 @@ def _convert_block_spec_to_block_mapping(
 ) -> BlockMapping:
   if block_spec is no_block_spec:
     block_spec = BlockSpec(None, None)
-  return block_spec.to_block_mapping(
-      origin,
-      array_aval,
-      index_map_avals=index_map_avals,
-      index_map_tree=index_map_tree,
-      grid=grid,
-      mapped_dims=mapped_dims,
+  if block_spec.index_map is None:
+    index_map_func = lambda *args: (0,) * len(array_aval.shape)
+  else:
+    index_map_func = block_spec.index_map
+  if block_spec.block_shape is None:
+    block_shape = array_aval.shape
+  else:
+    block_shape = block_spec.block_shape
+    if len(array_aval.shape) != len(block_shape):
+      raise ValueError(
+          f"Block shape for {origin} (= {block_shape}) "
+          "must have the same number of dimensions as the "
+          f"array shape {array_aval.shape}."
+      )
+
+  unmapped_block_shape = tuple(s for s in block_shape if s is not None)
+  block_array_aval = array_aval.update(shape=unmapped_block_shape)
+  if isinstance(array_aval, jax_core.DShapedArray):
+    # Get the "max" shape for the ragged array.
+    block_array_aval = jax_core.ShapedArray(
+        block_array_aval.shape,
+        block_array_aval.dtype,
+        block_array_aval.weak_type,
+    )
+  block_aval = AbstractMemoryRef(block_array_aval, block_spec.memory_space)
+
+  if not jax_core.is_constant_shape(block_aval.shape):
+    raise ValueError(
+        "shape polymorphism for Pallas does not support "
+        "dynamically-shaped blocks. "
+        f"Block spec for {origin} has block_shape: {block_aval.shape}"
+    )
+
+  flat_index_map_fun, index_map_out_tree_thunk = api_util.flatten_fun(
+      lu.wrap_init(index_map_func), index_map_tree
   )
+  debug = pe.debug_info(
+      index_map_func,
+      index_map_tree,
+      index_map_out_tree_thunk,
+      False,
+      "pallas_call index_map",
+  )
+  index_map_src_info = NameAndSrcInfo.from_pallas_call(
+      None, debug.func_src_info
+  )
+  with tracing_grid_env(grid, mapped_dims):
+    jaxpr, out_avals, consts, () = pe.trace_to_jaxpr_dynamic(
+        flat_index_map_fun, index_map_avals, debug_info=debug
+    )
+  mapped_block_shape = tuple(mapped if s is None else s for s in block_shape)
+  if len(out_avals) != len(block_shape):
+    raise ValueError(
+        f"Index map function {index_map_src_info} for "
+        f"{origin} must return "
+        f"{len(block_shape)} values to match {block_shape=}. "
+        f"Currently returning {len(out_avals)} values."
+    )
+  for i, ov in enumerate(out_avals):
+    if ov.shape or ov.dtype not in [jnp.int32, jnp.int64]:
+      raise ValueError(
+          f"Index map function {index_map_src_info} for "
+          f"{origin} must return integer scalars. Output[{i}] has type "
+          f"{ov}."
+      )
+
+  if consts:
+    raise ValueError(
+        f"Index map function {index_map_src_info} for "
+        f"{origin} must not capture constants: {consts}"
+    )
+
+  array_aval_shape = _max_shape_from_aval(array_aval)
+
+  mapping = BlockMapping(
+      block_shape=mapped_block_shape,
+      block_aval=block_aval,
+      index_map_jaxpr=jax_core.ClosedJaxpr(jaxpr, consts),
+      index_map_src_info=index_map_src_info,
+      indexing_mode=block_spec.indexing_mode,
+      array_shape_dtype=jax.ShapeDtypeStruct(
+          array_aval_shape, array_aval.dtype
+      ),
+      origin=origin,
+  )
+  mapping.check_invariants()
+  return mapping
 
 index_map_grid_aval = jax_core.ShapedArray((), jnp.int32)
 

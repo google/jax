@@ -89,6 +89,17 @@ def _jumble_flatten(jumble):
   aval = jumble.aval.replace(elt_ty=elt_ty)
   return (lengths, jumble.data), aval
 
+
+def _ragged_axis_parts(dim: RaggedAxis) -> tuple[int, int, int]:
+  stacked_axis = dim.stacked_axis
+  ragged_axes = dim.ragged_axes
+  if len(ragged_axes) != 1:
+    raise ValueError('Multiple ragged axes not yet implemented.')
+  ragged_axis_dim = ragged_axes[0][0]
+  ragged_axis_length = ragged_axes[0][1]
+  return stacked_axis, ragged_axis_dim, ragged_axis_length
+
+
 def _jumble_unflatten(aval, x):
   lengths, data = x
   new_shape = [d.replace(lengths=lengths[d.lengths - 1])
@@ -135,6 +146,7 @@ class RaggedAxis:
       return ax
     new_axes = tuple((move_axis(ax), sizes) for ax, sizes in self.ragged_axes)
     return RaggedAxis(dst, new_axes)
+
 
 def transpose_ragged_axes(dim: RaggedAxis, perm: tuple[int, ...]) -> RaggedAxis:
   new_ragged_axes = []
@@ -254,6 +266,13 @@ def to_elt(trace: Trace, get_idx: GetIdx, x: Vmappable, spec: MapSpec) -> Elt:
   else:
     # TODO(mvoz): This is a terrible place to fall into if you pass
     # a non jumble type in, make it clearer what went wrong.
+    # batch_axis = make_batch_axis(x.data.ndim, 0, [(d+1, ias.lengths)])
+    # return BatchTracer(trace, x.data, batch_axis)
+    print('X?', x.aval)
+    # print("X elt?", x.aval.elt_ty)
+    # print("X shape?", x.shape)
+    # TODO(mvoz): it can be anything! dont land with this 0 hack
+    return BatchTracer(trace, x, 0)
     assert False, f'Unexpected type in ELT? {type(x)}'
 
 to_elt_handlers: dict[type, ToEltHandler] = {}
@@ -314,6 +333,40 @@ def flatten_fun_for_vmap(in_tree, *args_flat):
   py_args, py_kwargs = tree_unflatten(in_tree, args_flat)
   ans = yield py_args, py_kwargs
   yield tree_flatten(ans, is_leaf=is_vmappable)
+
+# Propagate ragged masking rules from invars to outvars
+# rule([params], [raggedness_per_invar], outvars) ->
+#   [raggedness_per_invar, raggedness_per_outvar]
+RaggedMaskingRule = Callable[
+    [list[Any], list[Any], list[Any]], tuple[list[Any], list[Any]]
+]
+
+ragged_prop_rules: dict[core.Primitive, RaggedMaskingRule] = {}
+
+
+def ragged_mask_elementwise_rule(eqn_params, invar_raggedness, outvars):
+  # TODO(mvoz): A util for getting the ragged representations
+  first_invar_raggedness = invar_raggedness[0]
+  for other_invar_raggedness in invar_raggedness[1:]:
+    assert (
+        other_invar_raggedness == first_invar_raggedness
+    ), f'{other_invar_raggedness} != {first_invar_raggedness}'
+
+  outvar_raggedness = [first_invar_raggedness] * len(outvars)
+  return invar_raggedness, outvar_raggedness
+
+
+def ragged_mask_no_op_rule(eqn_params, invar_raggedness, outvars):
+  return invar_raggedness, [None] * len(outvars)
+
+
+def ragged_mask_transfer_identity(
+    eqn_params, invar_raggedness, outvar_raggedness
+):
+  assert len(invar_raggedness) == 1, invar_raggedness
+  outvar_raggedness = invar_raggedness
+  return invar_raggedness, outvar_raggedness
+
 
 ### tracer
 
