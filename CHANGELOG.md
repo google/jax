@@ -27,6 +27,7 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
       that directly accesses shards accordingly. The rank of the per-shard-shape
       now matches that of the global shape which is the same behavior as jit.
       This avoids costly reshapes when passing results from pmap into jit.
+  * Added {func}`jax.random.roberts_sequence`.
 
 * Deprecations
   * In {func}`jax.numpy.trim_zeros`, non-arraylike arguments or arraylike

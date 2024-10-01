@@ -242,6 +242,7 @@ from jax._src.random import (
   randint as randint,
   random_gamma_p as random_gamma_p,
   rayleigh as rayleigh,
+  roberts_sequence as roberts_sequence,
   split as split,
   t as t,
   triangular as triangular,
