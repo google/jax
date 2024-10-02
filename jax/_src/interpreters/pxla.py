@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import enum
-from contextlib import contextmanager
 import collections
 from collections import namedtuple
 from collections.abc import Callable, Sequence, Iterable
@@ -374,21 +373,22 @@ def _emap_impl(fun: lu.WrappedFun, *args,
 
   emap_info = EmapInfo(backend, devices)
   shard_axes = [{} if in_axis is None else {axis_name: in_axis} for in_axis in in_axes]
-  with core.new_base_main(MapTrace, emap_info=emap_info) as main:
-    with core.new_sublevel(), core.extend_axis_env(axis_name, axis_size, main):
-      t = main.with_cur_sublevel()
-      tracers = [MapTracer(t, arg, s) for arg, s in zip(args, shard_axes)]
+  trace = MapTrace(axis_name, emap_info)
+  with core.extend_axis_env_nd([(axis_name, axis_size)]):
+    tracers = [MapTracer(trace, arg, s) for arg, s in zip(args, shard_axes)]
+    with core.set_current_trace(trace):
       ans = fun.call_wrapped(*tracers)
-      out_tracers = map(t.full_raise, ans)
-      outvals, out_axes_src = unzip2((t.val, t.shard_axes) for t in out_tracers)
-    del main
+
+    out_tracers = map(trace.to_map_tracer, ans)
+    outvals, out_axes_src = unzip2((t.val, t.shard_axes) for t in out_tracers)
+
   out_axes = out_axes_thunk()
 
   platform = xb.get_backend(backend).platform
   donate_argnums = (1,) if platform in {"cuda", "rocm", "tpu"} else ()
   new_outvals = []
   for out_axis_src, out_axis, outval in zip(out_axes_src, out_axes, outvals):
-    with jax.disable_jit(False):
+    with jax.disable_jit(False), core.set_current_trace(core.EvalTrace()):
       donate_argnums_ = donate_argnums
       if isinstance(outval, array.ArrayImpl):
         # We don't want to donate if it's already sharded.
@@ -441,26 +441,28 @@ FakePrimitive = namedtuple("FakePrimitive", ["multiple_results", "bind"])
 
 class MapTrace(core.Trace):
 
-  def __init__(self, *args, emap_info):
-    super().__init__(*args)
+  def __init__(self, axis_name, emap_info):
     self.emap_info = emap_info
+    self.axis_name = axis_name
 
-  def pure(self, val):
-    return MapTracer(self, val, {})
-
-  def sublift(self, tracer):
-    return MapTracer(self, tracer.val, tracer.shard_axes)
+  def to_map_tracer(self, val):
+    if isinstance(val, MapTracer):
+      return val
+    else:
+      return MapTracer(self, val, {})
 
   def process_primitive(self, primitive, tracers, params):
-    info = self.main.payload["emap_info"]
+    if primitive is jax._src.lax.parallel.axis_index_p:
+      return self.process_axis_index(**params)
+    tracers = map(self.to_map_tracer, tracers)
     vals, shard_axes = unzip2([(t.val, t.shard_axes) for t in tracers])
-    names = tuple(f.name for f in core.thread_local_state.trace_state.axis_env
-                  if f.main_trace is self.main)
+    info = self.emap_info
+    names = core.get_axis_env().axis_names()
     all_axes = tuple(_map_schedule(map(s.get, names)) for s in shard_axes)  # pytype: disable=wrong-arg-types  # always-use-return-annotations
     f = HashableFunction(lambda *args: primitive.bind(*args, **params),
                          (primitive, tuple(params.items())))
-    f_mapped, out_shard_axes = _multi_pmap(f, info, names, all_axes)
-    with core.eval_context(), jax.disable_jit(False):
+    f_mapped, out_shard_axes = _multi_pmap(f, self.emap_info, names, all_axes)
+    with core.eval_context(), core.pop_axis_name(self.axis_name), jax.disable_jit(False):
       outvals = f_mapped(*vals)
     if primitive.multiple_results:
       return [MapTracer(self, val, out_shard_axes) for val in outvals]
@@ -484,14 +486,12 @@ class MapTrace(core.Trace):
     shard_axes = [{axis_name: _annot_to_flat(np.ndim(v), s.values(), ax), **s}
                   if ax is not None else s
                   for v, ax, s in zip(vals, in_axes, shard_axes)]
-    # TODO(mattjj): use _emap_subtrace here?
-    with core.new_sublevel(), core.extend_axis_env(axis_name, axis_size, self.main):
-      t = self.main.with_cur_sublevel()
-      in_tracers = map(partial(MapTracer, t), vals, shard_axes)
-      ans = fun.call_wrapped(*in_tracers)
-      out_tracers = map(t.full_raise, ans)
+    in_tracers = map(partial(MapTracer, self), vals, shard_axes)
+    with core.extend_axis_env_nd([(axis_name, axis_size)]):
+      with core.set_current_trace(self):
+        ans = fun.call_wrapped(*in_tracers)
+      out_tracers = map(self.to_map_tracer, ans)
       out, outaxes = unzip2((t.val, t.shard_axes) for t in out_tracers)
-      del t, in_tracers, ans, out_tracers
     out, outaxes = unzip2(_match_annot(axis_name, axis_size, v, s, dst)
                            for v, s, dst in zip(out, outaxes, out_axes_thunk()))
     return map(partial(MapTracer, self), out, outaxes)
@@ -502,11 +502,8 @@ class MapTrace(core.Trace):
              "Please open an issue at https://github.com/jax-ml/jax/issues !")
       raise NotImplementedError(msg)
     del prim, jvp, symbolic_zeros  # always base main, can drop jvp
-    in_vals, in_axes = unzip2((t.val, t.shard_axes) for t in tracers)
-    fun, out_axes = _emap_subtrace(fun, self.main, in_axes)
-    with core.new_sublevel():
-      out_vals = fun.call_wrapped(*in_vals)
-    return map(partial(MapTracer, self), out_vals, out_axes())
+    with core.set_current_trace(self):
+      return fun.call_wrapped(*tracers)
 
   def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers,
                               out_trees, symbolic_zeros):
@@ -515,31 +512,18 @@ class MapTrace(core.Trace):
              "Please open an issue at https://github.com/jax-ml/jax/issues !")
       raise NotImplementedError(msg)
     del primitive, fwd, bwd, out_trees, symbolic_zeros  # always base main, drop vjp
-    in_vals, in_axes = unzip2((t.val, t.shard_axes) for t in tracers)
-    fun, out_axes = _emap_subtrace(fun, self.main, in_axes)
-    with core.new_sublevel():
-      out_vals = fun.call_wrapped(*in_vals)
-    return map(partial(MapTracer, self), out_vals, out_axes())
+    with core.set_current_trace(self):
+      return fun.call_wrapped(*tracers)
 
-  def process_axis_index(self, frame):
+  def process_axis_index(self, axis_name):
     bind = HashableFunction(
-        lambda _: jax.lax.axis_index(frame.name),
-        (jax.lax.axis_index, frame.name))
+        lambda _: jax.lax.axis_index(axis_name),
+        (jax.lax.axis_index, axis_name))
     fake_primitive = FakePrimitive(multiple_results=False, bind=bind)
     with core.eval_context():
-      range = jax.lax.iota(np.int32, frame.size)
-    dummy_tracer = MapTracer(self, range, {frame.name: 0})
+      range = jax.lax.iota(np.int32, core.get_axis_env().axis_size(axis_name))
+    dummy_tracer = MapTracer(self, range, {axis_name: 0})
     return self.process_primitive(fake_primitive, (dummy_tracer,), {})
-
-@lu.transformation_with_aux
-def _emap_subtrace(main, in_axes, *in_vals):
-  t = main.with_cur_sublevel()
-  in_tracers = map(partial(MapTracer, t), in_vals, in_axes)
-  ans = yield in_tracers, {}
-  out_tracers = map(t.full_raise, ans)
-  out_vals, out_axes = unzip2((t.val, t.shard_axes) for t in out_tracers)
-  del t, in_tracers, ans, out_tracers
-  yield out_vals, out_axes
 
 def _annot_to_flat(ndim: int, mapped_axes: Iterable[int],
                  annotation: int | None) -> int | None:
@@ -706,12 +690,11 @@ def stage_parallel_callable(
     fun = _change_argument_ranks(fun, pci.in_axes, pci.out_axes_thunk)
   else:
     fun = orig_fun
-  with core.extend_axis_env(pci.axis_name, pci.global_axis_size, None):
-    with dispatch.log_elapsed_time(
-        "Finished tracing + transforming {fun_name} for pmap in {elapsed_time:.9f} sec",
-        fun_name=fun.__name__, event=dispatch.JAXPR_TRACE_EVENT):
-      jaxpr, out_sharded_avals, consts = pe.trace_to_jaxpr_final(
-          fun, sharded_avals, pe.debug_info_final(fun, "pmap"))
+  with dispatch.log_elapsed_time(
+      "Finished tracing + transforming {fun_name} for pmap in {elapsed_time} sec",
+      fun_name=fun.__name__, event=dispatch.JAXPR_TRACE_EVENT):
+    jaxpr, out_sharded_avals, consts, _ = pe.trace_to_jaxpr_dynamic(
+        fun, sharded_avals, pe.debug_info_final(fun, "pmap"))
   jaxpr = api_util.jaxpr_debug_info(jaxpr, orig_fun.debug_info)
   jaxpr = dispatch.apply_outfeed_rewriter(jaxpr)
 
@@ -748,7 +731,8 @@ def get_pmap_jaxpr(
   pci = ParallelCallableInfo(
       name, backend, axis_name, axis_size, global_axis_size, devices,
       in_axes, out_axes_thunk, avals)
-  jaxpr, consts, replicas, shards = stage_parallel_callable(pci, fun)
+  with core.extend_axis_env_nd([(axis_name, axis_size)]):
+    jaxpr, consts, replicas, shards = stage_parallel_callable(pci, fun)
   jaxpr = core.remove_named_axis_effects(jaxpr, {axis_name})
   closed_jaxpr = core.ClosedJaxpr(jaxpr, consts)
   return closed_jaxpr, backend, replicas, shards, pci
@@ -847,7 +831,7 @@ def lower_parallel_callable(
                                           backend.platform)
   module_name = f"pmap_{fun.__name__}"
   platforms = lowering_platforms or (backend.platform,)
-  with maybe_extend_axis_env(axis_name, global_axis_size, None):
+  with core.extend_axis_env_nd([(axis_name, global_axis_size)]):
     ordered_effects = list(
         effects.ordered_effects.filter_in(closed_jaxpr.effects))
     if ordered_effects:
@@ -1343,7 +1327,7 @@ def _pmap_partial_eval_custom_res_maker(params_known, aval):
 def _pmap_dce_rule(used_outputs, eqn):
   # just like pe.dce_jaxpr_call_rule, except handles in_axes / out_axes
   axis_name = eqn.params["axis_name"]
-  with maybe_extend_axis_env(axis_name, eqn.params["global_axis_size"], None):
+  with core.extend_axis_env_nd([(axis_name, eqn.params["global_axis_size"])]):
     new_jaxpr, used_inputs = pe.dce_jaxpr(eqn.params['call_jaxpr'], used_outputs)
   _, donated_invars = partition_list(used_inputs, eqn.params['donated_invars'])
   _, in_axes = partition_list(used_inputs, eqn.params['in_axes'])
@@ -1401,21 +1385,6 @@ ad.call_param_updaters[xla_pmap_p] = xla_call_jvp_update_params
 ad.call_transpose_param_updaters[xla_pmap_p] = _xla_call_transpose_update_params
 
 ad.primitive_transposes[xla_pmap_p] = partial(ad.map_transpose, xla_pmap_p)
-
-def _pmap_axis_subst(params, subst, traverse):
-  if 'call_jaxpr' not in params:
-    return params
-  if not traverse:
-    return params
-  def shadowed_subst(name):
-    return (name,) if name in params['axis_name'] else subst(name)
-  with maybe_extend_axis_env(params['axis_name'],
-                             params['global_axis_size'], None):
-    new_jaxpr = core.subst_axis_names_jaxpr(params['call_jaxpr'],
-                                            shadowed_subst)
-  return dict(params, call_jaxpr=new_jaxpr)
-core.axis_substitution_rules[xla_pmap_p] = _pmap_axis_subst
-
 
 def _unravel_index_hlo(axis_env):
   div = mlir.ir_constant(
@@ -1501,7 +1470,7 @@ def _hlo_unshard(ctx: mlir.LoweringRuleContext, aval, axis_env, out_axis, x):
   else:
     raise TypeError(aval)
 
-def _extend_axis_env(env: sharding_impls.AxisEnv, name, size: int):
+def _extend_axis_env_nd(env: sharding_impls.AxisEnv, name, size: int):
   return sharding_impls.AxisEnv(env.nreps, env.names + (name,),
                                 env.sizes + (size,))
 
@@ -1516,7 +1485,7 @@ def _pmap_lowering(ctx, *in_nodes, axis_name,
   # translation rule just because the extra tuple stuff is a pain.
   if ctx.module_context.axis_env.names and devices is not None:
     raise ValueError("Nested pmap with explicit devices argument.")
-  new_env = _extend_axis_env(ctx.module_context.axis_env, axis_name,
+  new_env = _extend_axis_env_nd(ctx.module_context.axis_env, axis_name,
                              global_axis_size)
   # Shard the in_nodes that are mapped
   in_avals = [v.aval for v in call_jaxpr.invars]
@@ -1525,7 +1494,7 @@ def _pmap_lowering(ctx, *in_nodes, axis_name,
     if in_axis is not None else in_node
     for aval, in_node, in_axis in zip(in_avals, in_nodes, in_axes))
 
-  with maybe_extend_axis_env(axis_name, global_axis_size, None):
+  with core.extend_axis_env_nd([(axis_name, global_axis_size)]):
     sub_ctx = ctx.module_context.replace(
         axis_context=sharding_impls.ReplicaAxisContext(new_env))
     sharded_outs, _ = mlir.jaxpr_subcomp(
@@ -3183,9 +3152,3 @@ def get_array_mapping(pspec: PartitionSpec) -> ArrayMappingOrAutoOrUnspecified:
   parsed_pspec = sharding_impls.prepare_axis_resources(
       pspec, "pspec to array_mapping")
   return _get_array_mapping(parsed_pspec)
-
-
-@contextmanager
-def maybe_extend_axis_env(*args, **kwargs):
-  with core.extend_axis_env(*args, **kwargs):
-    yield

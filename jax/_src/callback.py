@@ -265,7 +265,8 @@ def pure_callback_lowering(
     ctx, *args, callback: _FlatCallback, sharding: SingleDeviceSharding | None, **params
 ):
   def _callback(*flat_args):
-    return tuple(
+    with core.concrete_eval():
+      return tuple(
         pure_callback_impl(
             *flat_args,
             callback=callback,
@@ -534,7 +535,8 @@ batching.primitive_batchers[io_callback_p] = io_callback_batching_rule
 
 def io_callback_lowering(ctx, *args, callback, sharding, ordered, **params):
   def _callback(*flat_args):
-    return tuple(
+    with core.concrete_eval():
+      return tuple(
         io_callback_impl(
             *flat_args,
             callback=callback,
@@ -616,7 +618,6 @@ def io_callback(
   flat_shape_dtypes, out_tree = tree_util.tree_flatten(result_shape_dtypes)
   flat_result_avals = map(lambda x: core.ShapedArray(x.shape, x.dtype),
                           flat_shape_dtypes)
-  flat_args = map(core.raise_as_much_as_possible, flat_args)
   out_flat = io_callback_p.bind(
       *flat_args,
       callback=_FlatCallback(callback, in_tree),

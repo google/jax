@@ -38,7 +38,8 @@ add_any_p = add_jaxvals_p
 
 @add_jaxvals_p.def_impl
 def add_impl(x, y):
-  return raw_jaxval_adders[type(x)](x, y)
+  with core.set_current_trace(core.EvalTrace()):
+    return raw_jaxval_adders[type(x)](x, y )
 raw_jaxval_adders = {}  # type: ignore
 
 @add_jaxvals_p.def_abstract_eval

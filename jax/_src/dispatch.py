@@ -87,7 +87,8 @@ def apply_primitive(prim, *args, **params):
   # triggering the disable jit path instead of messing around with it here.
   prev = lib.jax_jit.swap_thread_local_state_disable_jit(False)
   try:
-    outs = fun(*args)
+    with core.set_current_trace(core.EvalTrace()):
+      outs = fun(*args)
   finally:
     lib.jax_jit.swap_thread_local_state_disable_jit(prev)
   return outs

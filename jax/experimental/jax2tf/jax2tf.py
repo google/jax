@@ -385,7 +385,7 @@ def convert(fun_jax: Callable,
       # It is Ok to nest convert when we are inside a call_tf
       raise ValueError(
           "convert must be used outside all JAX transformations." +
-          f"Trace state: {core.thread_local_state.trace_state.trace_stack}")
+          f"Trace state: {core.trace_ctx}")
 
     global _has_registered_tf_source_path
     if not _has_registered_tf_source_path:
@@ -830,15 +830,11 @@ def _interpret_fun_jax(
     extra_name_stack: str | None,
     fresh_constant_cache: bool = False,
 ) -> tuple[tuple[TfVal, ...], tuple[core.ShapedArray, ...]]:
-  with core.new_base_main(TensorFlowTrace) as main:
-    subtrace_fun = _interpret_subtrace(lu.wrap_init(fun_jax), main, args_avals)
-    with _extended_name_stack(extra_name_stack):
-      with core.new_sublevel():
-        out_vals: Sequence[tuple[TfVal, core.ShapedArray]] = \
-            _call_wrapped_with_new_constant_cache(subtrace_fun, args_tf,
-                                                  fresh_constant_cache=fresh_constant_cache)
-      del main
-
+  subtrace_fun = _interpret_subtrace(lu.wrap_init(fun_jax), args_avals)
+  with _extended_name_stack(extra_name_stack):
+    out_vals: Sequence[tuple[TfVal, core.ShapedArray]] = \
+        _call_wrapped_with_new_constant_cache(subtrace_fun, args_tf,
+                                                fresh_constant_cache=fresh_constant_cache)
   return util.unzip2(out_vals)
 
 
@@ -1022,16 +1018,16 @@ def _convert_jax_impl(impl_jax: Callable, *,
 
 
 @lu.transformation
-def _interpret_subtrace(main: core.MainTrace,
-                        in_avals: Sequence[core.ShapedArray],
+def _interpret_subtrace(in_avals: Sequence[core.ShapedArray],
                         *in_vals: TfVal):
-  trace = TensorFlowTrace(main, core.cur_sublevel())
+  trace = TensorFlowTrace()
   in_tracers = tuple(
       TensorFlowTracer(trace, val, aval)
       for val, aval in zip(in_vals, in_avals))
-  outs = yield in_tracers, {}  # type: Sequence[TfVal]
+  with core.set_current_trace(trace):
+    outs = yield in_tracers, {}  # type: Sequence[TfVal]
   out_tracers: Iterable[TensorFlowTracer] = (
-      map(trace.full_raise, outs))
+      map(trace.to_tf_tracer, outs))
   out_vals_with_avals: Sequence[tuple[TfVal, core.ShapedArray]] = (
       tuple((t.val, t.aval) for t in out_tracers))
   yield out_vals_with_avals
@@ -1307,11 +1303,11 @@ class TensorFlowTrace(core.Trace):
   those will introduce their own MainTrace, and any operations involving those
   will be done on those traces, i.e., not a concern for TFT.
   """
-  def pure(self, val: TfVal) -> TensorFlowTracer:
+  def to_tf_tracer(self, val: TfVal) -> TensorFlowTracer:
     """Lifts a non-Tracer into the TensorFlowTracer.
-
-    This function may be called by way of trace.full_raise.
     """
+    if isinstance(val, TensorFlowTracer):
+      return val
     if hasattr(val, "__jax_array__"):
       val = val.__jax_array__()
       if isinstance(val, TensorFlowTracer):
@@ -1321,20 +1317,10 @@ class TensorFlowTrace(core.Trace):
         self, tf_val, core.ShapedArray(np.shape(val), jax_dtype,
                                        weak_type=dtypes.is_weakly_typed(val)))
 
-  def lift(self, val: core.Tracer) -> TensorFlowTracer:
-    # This would be called when we need to raise a tracer from a lower-level
-    # main into the TensorFlowTrace. Since the TensorFlowTrace is never nested
-    # inside another transform, there are no lower-level main traces.
-    assert False
-
-  def sublift(self, val: TensorFlowTracer) -> TensorFlowTracer:
-    # This is called when we need to raise a tracer from the same main,
-    # but a lower sublevel. This could come from a nested jit.
-    return TensorFlowTracer(self, val.val, val._aval)
-
   def process_primitive(self, primitive: core.Primitive,
                         tracers: Sequence[TensorFlowTracer],
                         params) -> TensorFlowTracer:
+    tracers = map(self.to_tf_tracer, tracers)
     impl, impl_needs_avals = self.get_primitive_impl(primitive)
     args_avals: Sequence[core.ShapedArray] = tuple(t.aval for t in tracers)
     # This is a bit conservative, doing abstract_eval even in op-by-op execution
@@ -1412,36 +1398,14 @@ class TensorFlowTrace(core.Trace):
     assert call_primitive.multiple_results
     vals: Sequence[TfVal] = [t.val for t in tracers]
     avals: Sequence[core.ShapedArray] = tuple(t.aval for t in tracers)
-    interpreted_fun = _interpret_subtrace(fun, self.main, avals)
+    interpreted_fun = _interpret_subtrace(fun, avals)
     extra_name_stack = None
     with _extended_name_stack(extra_name_stack):
-      with core.new_sublevel():
-        vals_out = interpreted_fun.call_wrapped(*vals)
+      vals_out = interpreted_fun.call_wrapped(*vals)
     return [TensorFlowTracer(self, v, a) for v, a in vals_out]
-
-  def post_process_call(self, call_primitive: core.Primitive,
-                        out_tracers: Sequence[TensorFlowTracer], params):
-    # We encountered a call primitive whose result (out_tracers) include
-    # TensorFlowTracer that were not passed through its arguments (captured from
-    # the environment).
-    vals = tuple(t.val for t in out_tracers)
-    main = self.main
-
-    def todo(vals: Sequence[TfVal]):
-      # TODO: is name_stack correct?
-      trace = TensorFlowTrace(main, core.cur_sublevel())
-      return [
-          TensorFlowTracer(trace, v, out_tracer.aval)
-          for v, out_tracer in zip(vals, out_tracers)
-      ]
-
-    return vals, todo
 
   def process_map(self, map_primitive, f, tracers, params):
     raise NotImplementedError("process_map")
-
-  def post_process_map(self, map_primitive, out_tracers, params):
-    raise NotImplementedError("post_process_map")
 
   def process_custom_jvp_call(self, prim, fun, jvp, tracers, *, symbolic_zeros):
     # Drop the custom differentiation rule and act like a call primitive. This
@@ -1450,9 +1414,6 @@ class TensorFlowTrace(core.Trace):
     del jvp, symbolic_zeros  # Unused.
     return self.process_call(core.call_p, fun, tracers, {})
 
-  def post_process_custom_jvp_call(self, out_tracers, _):
-    assert False  # unreachable assuming jax2tf runs with clean trace state
-
   def process_custom_vjp_call(self, prim, fun, fwd, bwd, tracers, out_trees,
                               symbolic_zeros):
     # Drop the custom differentiation rule and act like a call primitive. This
@@ -1460,12 +1421,6 @@ class TensorFlowTrace(core.Trace):
     # there are no more JAX differentiation transformations to be applied.
     del fwd, bwd, out_trees, symbolic_zeros  # Unused.
     return self.process_call(core.call_p, fun, tracers, {})
-
-  def post_process_custom_vjp_call(self, out_tracers, _):
-    assert False  # unreachable assuming jax2tf runs with clean trace state
-
-  def post_process_custom_vjp_call_fwd(self, *_, **__):
-    assert False  # unreachable assuming jax2tf runs with clean trace state
 
   def get_primitive_impl(self, p: core.Primitive) -> tuple[Callable, bool]:
     # Returns the primitive implementation and whether the implementation

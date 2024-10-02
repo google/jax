@@ -64,14 +64,12 @@ data must be immutable, because it will be stored in function memoization tables
 from __future__ import annotations
 
 from collections.abc import Callable
-from functools import partial
 from typing import Any, NamedTuple
 import weakref
 
 from jax._src import config
 from jax._src import core
 from jax._src import traceback_util
-from jax._src.tree_util import tree_map
 from jax._src.util import curry, cache_clearing_funs
 
 
@@ -337,13 +335,8 @@ def cache(call: Callable, *, explain: Callable | None = None):
 
   def memoized_fun(fun: WrappedFun, *args):
     cache = fun_caches.setdefault(fun.f, new_cache := {})  # type: ignore
-    if config.check_tracer_leaks.value:
-      key = (_copy_main_traces(fun.transforms), fun.params, fun.in_type, args,
-             config.enable_x64.value, config.default_device.value,
-             config.trace_context())
-    else:
-      key = (fun.transforms, fun.params, fun.in_type, args, config.enable_x64.value,
-             config.default_device.value, config.trace_context())
+    key = (fun.transforms, fun.params, fun.in_type, args, config.enable_x64.value,
+           config.default_device.value, config.trace_context())
     result = cache.get(key, None)
     if result is not None:
       ans, stores = result
@@ -363,17 +356,6 @@ def cache(call: Callable, *, explain: Callable | None = None):
   memoized_fun.evict_function = _evict_function  # type: ignore
   cache_clearing_funs.add(memoized_fun.cache_clear)
   return memoized_fun
-
-
-def _copy_main_trace(x):
-  if isinstance(x, core.MainTrace):
-    return core.MainTrace(x.level, x.trace_type, **x.payload)
-  else:
-    return x
-
-_copy_main_traces = partial(tree_map, _copy_main_trace)
-
-
 
 @transformation
 def hashable_partial(*args):

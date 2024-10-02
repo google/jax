@@ -34,7 +34,7 @@ from typing import (Any, Literal, NamedTuple, TypeVar, overload,
 import weakref
 
 import numpy as np
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager
 
 from jax._src import linear_util as lu
 from jax._src import stages
@@ -989,10 +989,10 @@ def vmap(fun: F,
     axis_size_ = (axis_size if axis_size is not None else
                   _mapped_axis_size(fun, in_tree, args_flat, in_axes_flat, "vmap"))
     try:
+      axis_data = batching.AxisData(axis_name, axis_size_, spmd_axis_name)
       out_flat = batching.batch(
-          flat_fun, axis_name, axis_size_, in_axes_flat,
-          lambda: flatten_axes("vmap out_axes", out_tree(), out_axes),
-          spmd_axis_name=spmd_axis_name
+          flat_fun, axis_data, in_axes_flat,
+          lambda: flatten_axes("vmap out_axes", out_tree(), out_axes)
       ).call_wrapped(*args_flat)
     except batching.SpecMatchError as e:
       out_axes_flat = flatten_axes("vmap out_axes", out_tree(), out_axes)
@@ -1538,16 +1538,13 @@ def _cpp_pmap(
         is_explicit_global_axis_size=p.is_explicit_global_axis_size,
     )
 
-    map_bind_continuation, top_trace, fun_, tracers, params = (
-        core.map_bind_with_continuation(pxla.xla_pmap_p, p.flat_fun,
-                                        *p.flat_args, **params))
     execute: Callable | None = None
-    if isinstance(top_trace, core.EvalTrace):
-      execute = pxla.xla_pmap_impl_lazy(fun_, *tracers, **params)
-      out = map_bind_continuation(execute(*tracers))
-    else:
-      out = map_bind_continuation(
-          pxla.xla_pmap_p.process(top_trace, fun_, tracers, params))
+    with core.take_current_trace() as trace:
+      if isinstance(trace, core.EvalTrace):
+        execute = pxla.xla_pmap_impl_lazy(p.flat_fun, *p.flat_args, **params)
+        out = execute(*p.flat_args)
+      else:
+        out = pxla.xla_pmap_p.bind_with_trace(trace, (p.flat_fun, *p.flat_args), params)
 
     out_tree, out_flat = p.out_tree, out
     out_pytree_def = out_tree()
@@ -1794,7 +1791,7 @@ def linearize(fun: Callable, *primals, has_aux: bool = False
   >>> def f(x): return 3. * jnp.sin(x) + jnp.cos(x / 2.)
   ...
   >>> jax.jvp(f, (2.,), (3.,))
-  (Array(3.26819, dtype=float32, weak_type=True), Array(-5.00753, dtype=float32, weak_type=True))
+  (Array(3.2681944, dtype=float32, weak_type=True), Array(-5.007528, dtype=float32, weak_type=True))
   >>> y, f_jvp = jax.linearize(f, 2.)
   >>> print(y)
   3.2681944
@@ -2152,11 +2149,8 @@ def make_jaxpr(
   @wraps(fun)
   @api_boundary
   def make_jaxpr_f(*args, **kwargs):
-    with ExitStack() as stack:
-      for axis_name, size in axis_env or []:
-        stack.enter_context(core.extend_axis_env(axis_name, size, None))
-      traced = jit(fun, static_argnums=static_argnums,
-                   abstracted_axes=abstracted_axes).trace(*args, **kwargs)
+    traced = jit(fun, static_argnums=static_argnums,
+                 abstracted_axes=abstracted_axes).trace(*args, **kwargs)
     # `jit` converts tracers in consts to args but that breaks the semantics of
     # `make_jaxpr`. Hence convert the tracers in args back to consts in jaxpr.
     if traced._num_consts:
