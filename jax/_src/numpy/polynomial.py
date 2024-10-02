@@ -272,15 +272,14 @@ def polyfit(x: ArrayLike, y: ArrayLike, deg: int, rcond: float | None = None,
     Vbase = linalg.inv(dot(lhs.T, lhs))
     Vbase /= outer(scale, scale)
     if cov == "unscaled":
-      fac = 1
+      fac = array([1.0])
     else:
       if len(x_arr) <= order:
         raise ValueError("the number of data points must exceed order "
                             "to scale the covariance matrix")
       fac = resids / (len(x_arr) - order)
     if y_arr.ndim == 1:
-      fac = fac[0] #making np.array() of shape (1,) to int
-      return c, Vbase * fac
+      return c, Vbase * fac[0]
     else:
       return c, Vbase[:, :, np.newaxis] * fac
   else:
