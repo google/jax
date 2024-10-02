@@ -907,7 +907,7 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     tol = jtu.tolerance(dtype, tol_spec)
     _w = lambda a: abs(a) if w else None
     rhs_shape = shape + (num_rhs,) if num_rhs > 1 else shape
-    args_maker = lambda: [rng(shape, dtype), rng(rhs_shape, dtype), rng(rhs_shape, dtype)]
+    args_maker = lambda: [rng(shape, dtype), rng(rhs_shape, dtype), rng(shape, dtype)]
     jnp_fun = lambda x, y, a: jnp.polyfit(x, y, deg=deg, rcond=rcond, full=full, w=_w(a), cov=cov)
     np_fun = jtu.ignore_warning(
       message="Polyfit may be poorly conditioned*")(lambda x, y, a: np.polyfit(x, y, deg=deg, rcond=rcond, full=full, w=_w(a), cov=cov))
