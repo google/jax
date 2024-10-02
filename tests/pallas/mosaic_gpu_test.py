@@ -537,13 +537,11 @@ class PallasCallTest(PallasTest):
       assert b_ref.shape == (tile_k, tile_n)
       assert o_ref.shape == acc_ref.shape == (tile_m, tile_n)
       plgpu.wgmma(acc_ref, a_ref, b_ref)
-      plgpu.wgmma_wait(0)  # TODO(apaszke): Delay the pipeline to avoid memory races
-      # TODO(apaszke): Only store in the last step. It doesn't work because we
-      # don't have partial discharge for control flow.
-      # is_last_step = pl.program_id(2) == grid_k - 1
-      # @pl.when(is_last_step)
-      # def _epilogue():
-      o_ref[...] = acc_ref[...].astype(dtype)
+      is_last_step = pl.program_id(2) == grid_k - 1
+      @pl.when(is_last_step)
+      def _epilogue():
+        o_ref[...] = acc_ref[...].astype(dtype)
+      plgpu.wgmma_wait(1)  # We don't await the last WGMMA, hence delay_release=1
 
     key1, key2 = jax.random.split(jax.random.key(42), 2)
     a = jax.random.uniform(key1, shape=(m, k), dtype=dtype)
@@ -577,6 +575,8 @@ class PallasCallTest(PallasTest):
         compiler_params=plgpu.GPUCompilerParams(
             dimension_semantics=["parallel", "parallel", "sequential"],
             max_concurrent_steps=2,
+            delay_release=1,
+            loop_peel=(0, 1),  # Peel the last step.
         ),
     )(a, b)
     np.testing.assert_allclose(res, a @ b, rtol=1e-3)

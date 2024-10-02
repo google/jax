@@ -1114,6 +1114,25 @@ class StateControlFlowTest(jtu.JaxTestCase):
     expected_false = 2.
     self.assertAllClose(out_false, expected_false)
 
+  def test_cond_readonly_refs(self):
+    def f(pred):
+      def body(refs):
+        x_ref, y_ref, z_ref = refs
+        def true_fun():
+          y_ref[()] = x_ref[()]
+        def false_fun():
+          y_ref[()] = x_ref[()] + z_ref[()]
+        lax.cond(pred, true_fun, false_fun)
+      return run_state(body)((1., 0., 2.))
+    jaxpr = jax.make_jaxpr(f)(True).jaxpr
+    [run_state_eqn] = jaxpr.eqns
+    *_, cond_eqn = discharge_state(run_state_eqn.params["jaxpr"], ())[0].eqns
+    self.assertIs(cond_eqn.primitive, lax.cond_p)
+    self.assertLen(cond_eqn.invars, 4)  # pred + 3x ref values
+    self.assertLen(cond_eqn.outvars, 1)  # only the updated ref value
+    self.assertAllClose(jax.jit(f)(True), (1., 1., 2.))
+    self.assertAllClose(jax.jit(f)(False), (1., 3., 2.))
+
   def test_simple_cond_using_multiple_refs_with_interleaved_consts(self):
     def f(pred):
       def body(refs):

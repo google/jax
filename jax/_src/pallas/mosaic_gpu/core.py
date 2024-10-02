@@ -39,17 +39,24 @@ class GPUCompilerParams(pallas_core.CompilerParams):
   Attributes:
     approx_math: If True, the compiler is allowed to use approximate
       implementations of some math operations, e.g. ``exp``. Defaults to False.
-    dimension_semantics: A list of dimension semantics for each grid
-      dimension of the kernel. Either "parallel" for dimensions that can
-      execute in any order, or "sequential" for dimensions that must be
-      executed sequentially.
+    dimension_semantics: A list of dimension semantics for each grid dimension
+      of the kernel. Either "parallel" for dimensions that can execute in any
+      order, or "sequential" for dimensions that must be executed sequentially.
     max_concurrent_steps: The maximum number of sequential stages that are
       active concurrently. Defaults to 1.
+    delay_release: The number of steps to wait before reusing the input/output
+      references. Defaults to 0, and must be strictly smaller than
+      max_concurrent_steps. Generally, you'll want to set it to 1 if you don't
+      await the WGMMA in the body.
+    loop_peel: The number of steps to peel (from the beginning or end) off the
+      sequential loop.
   """
   PLATFORM: ClassVar[str] = "mosaic_gpu"
   approx_math: bool = False
   dimension_semantics: Sequence[Literal["parallel", "sequential"]] | None = None
   max_concurrent_steps: int = 1
+  delay_release: int = 0
+  loop_peel: tuple[int, int] = (0, 0)
 
 
 class GPUMemorySpace(enum.Enum):

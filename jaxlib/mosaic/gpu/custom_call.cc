@@ -117,6 +117,7 @@ mlir::FailureOr<mlir::OpPassManager> GetPassPipeline(
     mosaic::gpu::registerGpuLaunchLoweringPass();
     mosaic::gpu::registerConvertGpuToLLVMPass();
     mosaic::gpu::registerByvalInsertionPass();
+    mosaic::gpu::registerLoopPeelingPass();
     return true;
   }();
   (void)register_once;
@@ -124,6 +125,7 @@ mlir::FailureOr<mlir::OpPassManager> GetPassPipeline(
       R"(
       builtin.module(
         canonicalize,
+        mosaic-loop-peeling,
         gpu-launch-sink-index-computations,
         convert-nvgpu-to-nvvm,
         gpu-kernel-outlining{data-layout-str=},

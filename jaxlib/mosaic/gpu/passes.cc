@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 
 #include "jaxlib/mosaic/gpu/passes.h"
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -21,11 +22,16 @@ limitations under the License.
 #include "llvm/include/llvm/ADT/StringRef.h"
 #include "mlir/include/mlir/Conversion/GPUCommon/GPUCommonPass.h"
 #include "mlir/include/mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/include/mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/include/mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/include/mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/include/mlir/IR/AffineExpr.h"
 #include "mlir/include/mlir/IR/BuiltinAttributes.h"
 #include "mlir/include/mlir/IR/BuiltinOps.h"
+#include "mlir/include/mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/include/mlir/IR/SymbolTable.h"
+#include "mlir/include/mlir/IR/Visitors.h"
 #include "mlir/include/mlir/Pass/PassRegistry.h"
 #include "mlir/include/mlir/Support/LLVM.h"
 #include "mlir/include/mlir/Transforms/DialectConversion.h"
@@ -117,6 +123,51 @@ class ByvalInsertionPass
   }
 };
 
+class LoopPeelingPass
+    : public mosaic::gpu::Pass<LoopPeelingPass, mlir::ModuleOp> {
+ public:
+  using mosaic::gpu::Pass<LoopPeelingPass, mlir::ModuleOp>::Pass;
+  static constexpr llvm::StringLiteral kArgumentName = "mosaic-loop-peeling";
+  static constexpr llvm::StringLiteral kPassName = "LoopPeelingPass";
+
+  void runOnOperation() override {
+    auto peel_front_attr = getOperation()->getAttrOfType<mlir::IntegerAttr>(
+        "mosaic_gpu.loop_peel_front");
+    int64_t peel_front = peel_front_attr ? peel_front_attr.getInt() : 0;
+    auto peel_end_attr = getOperation()->getAttrOfType<mlir::IntegerAttr>(
+        "mosaic_gpu.loop_peel_end");
+    int64_t peel_end = peel_end_attr ? peel_end_attr.getInt() : 0;
+    if (peel_front < 0 || peel_end < 0) {
+      getOperation().emitError("negative loop peel count");
+      signalPassFailure();
+      return;
+    }
+    if (peel_front != 0) {
+      getOperation().emitError("front loop peeling is not supported yet");
+      signalPassFailure();
+      return;
+    }
+    if (peel_end == 0) {
+      return;
+    }
+    getOperation().walk<mlir::WalkOrder::PreOrder>([&](mlir::scf::ForOp op) {
+      mlir::ImplicitLocOpBuilder b(op.getLoc(), op);
+      mlir::Value split_point = b.create<mlir::arith::SubIOp>(
+          op.getUpperBound(),
+          b.create<mlir::arith::MulIOp>(
+              op.getStep(), b.create<mlir::arith::ConstantIndexOp>(peel_end)));
+      b.setInsertionPointAfter(op);
+      auto last_step =
+          mlir::cast<mlir::scf::ForOp>(b.clone(*op.getOperation()));
+      op.getUpperBoundMutable().assign(split_point);
+      last_step.getLowerBoundMutable().assign(split_point);
+      op.getResults().replaceAllUsesWith(last_step->getResults());
+      last_step.getInitArgsMutable().assign(op->getResults());
+      return mlir::WalkResult::skip();
+    });
+  }
+};
+
 }  // namespace
 
 void registerConvertGpuToLLVMPass() {
@@ -128,6 +179,12 @@ void registerConvertGpuToLLVMPass() {
 void registerByvalInsertionPass() {
   ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
     return std::make_unique<ByvalInsertionPass>();
+  });
+}
+
+void registerLoopPeelingPass() {
+  ::mlir::registerPass([]() -> std::unique_ptr<::mlir::Pass> {
+    return std::make_unique<LoopPeelingPass>();
   });
 }
 

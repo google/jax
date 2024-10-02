@@ -244,6 +244,8 @@ def lower_jaxpr_to_module(
   params = compiler_params.get("mosaic_gpu", {})
   approx_math = params.get("approx_math", False)
   max_concurrent_steps = params.get("max_concurrent_steps", 1)
+  delay_release = params.get("delay_release", 0)
+  loop_peel = params.get("loop_peel", (0, 0))
   dimension_semantics = params.get("dimension_semantics")
   if dimension_semantics is None:
     dimension_semantics = ["parallel"] * len(grid_mapping.grid)
@@ -255,6 +257,11 @@ def lower_jaxpr_to_module(
   sequential_axes = tuple(
       i for i, s in enumerate(dimension_semantics) if s == "sequential"
   )
+  if max_concurrent_steps <= delay_release:
+    raise ValueError(
+        "max_concurrent_steps must be greater than delay_release, but"
+        f" {max_concurrent_steps=}, {delay_release=}"
+    )
 
   grid = [d for i, d in enumerate(grid_mapping.grid) if i not in sequential_axes]
   if len(grid) < 3:
@@ -281,7 +288,9 @@ def lower_jaxpr_to_module(
 
   # Shrink ``max_concurrent_steps`` if the total number of steps is lower to
   # reduce the size of the allocated buffers below.
-  max_concurrent_steps = min(max_concurrent_steps, num_steps)
+  if max_concurrent_steps > num_steps:
+    max_concurrent_steps = num_steps
+    delay_release = 0  # No need to delay anything
 
   in_in_smem, out_in_smem = util.split_list(
       [
@@ -524,7 +533,9 @@ def lower_jaxpr_to_module(
         barriers[slot].wait()
       # We need to make sure the output copy is complete before the kernel starts
       # writing to the output window.
-      launch_ctx.await_async_copy(max_concurrent_steps - 1, await_read_only=True)
+      launch_ctx.await_async_copy(
+          max_concurrent_steps - (1 + delay_release), await_read_only=True
+      )
 
       args = [
           mgpu.memref_slice(buffers_smem[idx], slot)
@@ -559,15 +570,21 @@ def lower_jaxpr_to_module(
             else last_offset  # Only store if the output can depend on the step.
         )
 
-      next_step = arith_dialect.addi(step, _as_index(max_concurrent_steps))
-      next_step_in_bounds = arith_dialect.cmpi(
-          arith_dialect.CmpIPredicate.ult, next_step, _as_index(num_steps)
+      del slot  # Just to make sure we don't accidentally use it.
+      fetch_step = arith_dialect.addi(
+          step, _as_index(max_concurrent_steps - delay_release)
       )
-      next_slot = slot  # (x + y) % y == x % y
-      with mgpu.when(next_step_in_bounds):
-        barriers[slot].arrive_expect_tx(in_transfer_bytes, predicate=is_memory_thread)
+      fetch_step_in_bounds = arith_dialect.cmpi(
+          arith_dialect.CmpIPredicate.ult, fetch_step, _as_index(num_steps)
+      )
+      not_initial_step = arith_dialect.cmpi(
+          arith_dialect.CmpIPredicate.uge, step, _as_index(delay_release)
+      )
+      fetch_slot = arith_dialect.remui(fetch_step, _as_index(max_concurrent_steps))
+      with mgpu.when(arith_dialect.andi(fetch_step_in_bounds, not_initial_step)):
+        barriers[fetch_slot].arrive_expect_tx(in_transfer_bytes, predicate=is_memory_thread)
         for idx in range(grid_mapping.num_inputs):
-          fetch(idx, next_step, next_slot)
+          fetch(idx, fetch_step, fetch_slot)
 
       return list(new_accs), new_store_offsets
 
@@ -629,6 +646,13 @@ def lower_jaxpr_to_module(
           ),
       ),
       module_name=name_and_src_info.name,
+  )
+  i32 = ir.IntegerType.get_signless(32)
+  module.operation.attributes["mosaic_gpu.loop_peel_front"] = ir.IntegerAttr.get(
+      i32, loop_peel[0]
+  )
+  module.operation.attributes["mosaic_gpu.loop_peel_end"] = ir.IntegerAttr.get(
+      i32, loop_peel[1]
   )
 
   return LoweringResult(module, grid, out_structs_smem)
