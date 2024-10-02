@@ -15,6 +15,7 @@
 from absl.testing import absltest, parameterized
 from unittest import SkipTest
 from jax._src import test_util as jtu
+from jax._src.lib import cuda_versions
 import jax
 import jax.numpy as jnp
 from jax._src.cudnn import cudnn_fusion
@@ -26,8 +27,9 @@ jax.config.parse_flags_with_absl()
 class CudnnFusionTest(jtu.JaxTestCase):
   def setUp(self):
     if (not jtu.test_device_matches(["cuda"]) or
-        not jtu.is_cuda_compute_capability_at_least("9.0")):
-      self.skipTest("Only works on >= sm90 GPUs")
+        not jtu.is_cuda_compute_capability_at_least("8.0") or
+        cuda_versions.cudnn_get_version() < 9110):
+      self.skipTest("Only works on >= sm80 GPUs with cuDNN 9.1.1+")
     super().setUp()
 
   @parameterized.parameters(["", "pmap"])
