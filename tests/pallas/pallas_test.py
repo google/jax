@@ -58,6 +58,17 @@ def smem_on_tpu():
     return None
 
 
+def mask_ref(ref, value):
+  x = ref[...]
+  actual_size = pl._actual_size(ref)
+  combined_mask = jnp.ones_like(x, dtype=bool)
+  for dim, size in enumerate(actual_size):
+    iota = jax.lax.broadcasted_iota(jnp.int32, x.shape, dim)
+    combined_mask = combined_mask & (iota < size)
+
+  return jnp.where(combined_mask, x, value)
+
+
 intx = dtypes.canonicalize_dtype(jnp.int64)
 floatx = dtypes.canonicalize_dtype(jnp.float64)
 
@@ -677,6 +688,37 @@ class PallasCallTest(PallasBaseTest):
     x = jnp.array(0., dtype=jnp.float32)
     self.assertEqual(f(x), 2.)
     self.assertEqual(trace_count, 1)
+
+  def test_pallas_call_actual_size_primitive(self):
+    if not jtu.test_device_matches(["tpu"]):
+      self.skipTest("TPU only test")
+
+    def reduce_sum_kernel(x_ref, y_ref, o_ref):
+      @pl.when(pl.program_id(0) == 0)
+      def _():
+        o_ref[...] = jnp.zeros_like(o_ref[...])
+
+      x_ref[...] = mask_ref(x_ref, 0)
+      y_ref[...] = mask_ref(y_ref, 0)
+      o_ref[...] += jnp.sum(x_ref[...] + y_ref[...], axis=0)
+
+    def reduce_sum(x, y):
+      return pl.pallas_call(
+          reduce_sum_kernel,
+          in_specs=[
+              pl.BlockSpec((8, 8, 128), lambda i, j, k: (i, j, k)),
+              pl.BlockSpec((8, 8, 128), lambda i, j, k: (i, j, k)),
+          ],
+          out_specs=pl.BlockSpec((8, 128), lambda i, j, k: (j, k)),
+          out_shape=jax.ShapeDtypeStruct((8, 128), dtype=jnp.float32),
+          grid=(2, 1, 1),
+          interpret=False,
+      )(x, y)
+
+    x = jnp.ones((9, 8, 128))
+    y = jnp.ones((9, 8, 128))
+    res = reduce_sum(x, y)
+    self.assertAllClose(res, 18 * jnp.ones((8, 128)))
 
 
 class PallasCallInterpretTest(PallasCallTest):

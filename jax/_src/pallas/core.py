@@ -23,7 +23,7 @@ import enum
 import functools
 import itertools
 import threading
-from typing import Any, ClassVar, Hashable, Protocol, Union, runtime_checkable
+from typing import Any, ClassVar, Hashable, Optional, Protocol, Union, runtime_checkable
 import warnings
 
 import jax
@@ -275,6 +275,7 @@ jax_core.raise_to_shaped_mappings[AbstractMemoryRef] = _ref_raise_to_shaped
 class PallasGridContext:
   grid: GridMappingGrid
   mapped_dims: tuple[int, ...]
+  args_block_shapes: tuple[tuple[int, int]]
 
   def size(self, axis: int) -> int | DynamicGridDim:
     valid_grid = tuple(self.grid)
@@ -467,7 +468,7 @@ class BlockSpec:
     index_map_src_info = NameAndSrcInfo.from_pallas_call(
         None, debug.func_src_info
     )
-    with tracing_grid_env(grid, mapped_dims):
+    with tracing_grid_env(grid, mapped_dims, None):
       jaxpr, out_avals, consts, () = pe.trace_to_jaxpr_dynamic(
           flat_index_map_fun, index_map_avals, debug_info=debug
       )
@@ -617,11 +618,19 @@ class BlockMapping:
 
 
 @contextlib.contextmanager
-def tracing_grid_env(grid: GridMappingGrid, mapped_dims: tuple[int, ...]):
+def tracing_grid_env(
+    grid: GridMappingGrid,
+    mapped_dims: tuple[int, ...],
+    # optional - atm, indexing grids do not take the kernel
+    # jaxpr shapes.
+    args_block_shapes: Optional[tuple[tuple[int]]],
+):
   assert all(i is dynamic_grid_dim or isinstance(i, int) for i in grid)
   old_grid_context = _pallas_tracing_env.grid_context
   try:
-    _pallas_tracing_env.grid_context = PallasGridContext(grid, mapped_dims)
+    _pallas_tracing_env.grid_context = PallasGridContext(
+        grid, mapped_dims, args_block_shapes
+    )
     yield
   finally:
     _pallas_tracing_env.grid_context = old_grid_context
@@ -660,6 +669,7 @@ class GridMapping:
   num_inputs: int
   num_outputs: int
   num_scratch_operands: int
+  args_block_shapes: tuple[tuple[int]]
   get_grid_indices: Callable | None = None
   local_grid_env: Callable | None = None
 
@@ -730,7 +740,9 @@ class GridMapping:
       axis_env_ctx = jax_core.extend_axis_env_nd(
           zip(self.grid_names, self.grid)
       )
-    with tracing_grid_env(self.grid, self.vmapped_dims), axis_env_ctx:
+    with tracing_grid_env(
+        self.grid, self.vmapped_dims, self.args_block_shapes
+    ), axis_env_ctx:
       yield
 
   @property
@@ -832,6 +844,7 @@ def _convert_block_spec_to_block_mapping(
       mapped_dims=mapped_dims,
   )
 
+
 index_map_grid_aval = jax_core.ShapedArray((), jnp.int32)
 
 
@@ -907,6 +920,7 @@ def get_grid_mapping(
     out_origins: Sequence[OriginStr],
 ) -> tuple[tuple[jax_core.AbstractValue, ...],
            GridMapping]:
+
   assert all(i is None or isinstance(i, int) for i in grid_spec.grid)
   grid_mapping_grid = tuple(
       dynamic_grid_dim if d is None else d for d in grid_spec.grid
@@ -914,6 +928,12 @@ def get_grid_mapping(
   # The inputs for the index maps
   index_map_avals = (
       (index_map_grid_aval,) * len(grid_spec.grid))
+
+  input_aval_shapes = tuple(
+      aval.shape if isinstance(aval, jax_core.ShapedArray) else None
+      for aval in in_avals
+  )
+
   index_map_tree = tree_util.tree_structure((index_map_avals, {}))
 
   num_scalar_prefetch: int = getattr(grid_spec, "num_scalar_prefetch", 0)
@@ -994,6 +1014,22 @@ def get_grid_mapping(
       out_origins,
       out_avals,
   )
+  in_ref_avals = [bm.ref_aval for bm in in_block_mappings]
+  in_ref_avals_ids = [id(bm.ref_aval) for bm in in_block_mappings]
+  # Note(mvoz): This should be a dict, really, but we hash GridMapping
+  # due to how it gets passed to a jitted fn, so, it cant be without
+  # more sweat. As this tuple is order of inputs, linear search on it later
+  # is fine.
+  args_block_shapes = tuple(
+      zip(
+          in_ref_avals_ids,
+          input_aval_shapes[num_flat_scalar_prefetch:],
+          [
+              spec.block_shape if spec is not no_block_spec else None
+              for spec in flat_in_specs
+          ],
+      )
+  )
   grid_mapping = GridMapping(
       grid=grid_mapping_grid,  # type: ignore[arg-type]
       grid_names=grid_spec.grid_names,
@@ -1005,9 +1041,10 @@ def get_grid_mapping(
       num_inputs=len(flat_in_specs),
       num_outputs=len(flat_out_specs),
       num_scratch_operands=num_flat_scratch_operands,
+      args_block_shapes=args_block_shapes,
   )
   grid_mapping.check_invariants()
-  in_ref_avals = [bm.ref_aval for bm in in_block_mappings]
+
   jaxpr_in_ref_avals = tree_util.tree_unflatten(in_tree, in_ref_avals)
   jaxpr_in_avals = (*jaxpr_scalar_ref_avals,
                     *jaxpr_in_ref_avals)

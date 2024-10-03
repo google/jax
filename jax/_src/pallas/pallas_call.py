@@ -919,7 +919,11 @@ def _pallas_call_batching_rule(
         # Important! This allows us to trace the inner kernel with the correct
         # grid to preserve user program_id semantics. Ex: program_id(0) will
         # always be analogous to program_id(1) in the outer kernel.
-        with pallas_core.tracing_grid_env(grid_mapping.grid, ()):
+        with pallas_core.tracing_grid_env(
+            grid_mapping.grid,
+            (),
+            grid_mapping.args_block_shapes,
+        ):
           jax_core.eval_jaxpr(jaxpr, (), *args, **kwargs)
 
       if debug_zero_fill_counterfactual:
@@ -935,7 +939,12 @@ def _pallas_call_batching_rule(
     )
     # Important! This allows us to trace the outer kernel with the correct grid
     # to enable accessing the batch program_id.
-    with pallas_core.tracing_grid_env(batched_grid_mapping.grid, ()):
+    with pallas_core.tracing_grid_env(
+        batched_grid_mapping.grid,
+        (),
+        batched_grid_mapping.args_block_shapes,
+    ):
+
       kernel_src_info: pallas_core.SrcInfoStr = "<Wrapped outer kernel>"
 
       jaxpr, consts = _trace_kernel_to_jaxpr(
@@ -988,7 +997,9 @@ def checkify_pallas_kernel_body_jaxpr(
   err_vals = map(checkify.get_shaped_aval, err_vals)
   flat_err_and_in_vals = [*err_vals, *body_jaxpr.in_avals]
 
-  with pallas_core.tracing_grid_env(grid_mapping.grid, ()):
+  with pallas_core.tracing_grid_env(
+      grid_mapping.grid, (), grid_mapping.args_block_shapes
+  ):
     checked_jaxpr, out_tree, error_effects = checkify.jaxpr_to_checkify_jaxpr(
         body_jaxpr, enabled_errors, err_tree, *flat_err_and_in_vals)
   return checked_jaxpr, out_tree, error_effects
@@ -1035,7 +1046,9 @@ def pallas_call_checkify_rule(error: checkify.Error,
   checkify_in_avals = [*shaped_err_avals,
                        *shaped_input_avals]
   closed_kernel_jaxpr = pe.close_jaxpr(jaxpr)
-  with pallas_core.tracing_grid_env(grid_mapping.grid, ()):
+  with pallas_core.tracing_grid_env(
+      grid_mapping.grid, (), grid_mapping.args_block_shapes
+  ):
     checked_jaxpr, error_out_tree, _ = checkify.jaxpr_to_checkify_jaxpr(
         closed_kernel_jaxpr, enabled_errors, err_in_tree, *checkify_in_avals)
 
@@ -1094,7 +1107,9 @@ def pallas_call_checkify_rule(error: checkify.Error,
       lu.wrap_init(checked_kernel_fn), jaxpr_in_tree)
   debug = pe.debug_info(
     checked_kernel_fn, jaxpr_in_tree, out_tree_thunk, False, "checkify_pallas")
-  with pallas_core.tracing_grid_env(grid_mapping.grid, ()):
+  with pallas_core.tracing_grid_env(
+      grid_mapping.grid, (), grid_mapping.args_block_shapes
+  ):
     final_jaxpr, _, _, () = pe.trace_to_jaxpr_dynamic(
         wrapped_kernel_with_err, jaxpr_flat_avals, debug)
 
