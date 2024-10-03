@@ -208,6 +208,40 @@ def _uses_arguments(cjaxpr: jax_core.ClosedJaxpr) -> list[bool]:
   return pe.dce_jaxpr(jaxpr, used_outputs=[True] * len(jaxpr.outvars))[1]
 
 
+def _check_block_mappings(
+    block_mappings: Sequence[pallas_core.BlockMapping],
+    name_and_src_info: pallas_core.NameAndSrcInfo,
+) -> None:
+  def err_details(bm: pallas_core.BlockMapping) -> str:
+    return (
+        f"Block spec for {bm.origin} in pallas_call {name_and_src_info}"
+        f" has block shape {bm.block_shape}, array shape"
+        f" {bm.array_shape_dtype.shape},"
+        f" and index_map returning {bm.index_map_jaxpr.jaxpr.outvars} in"
+        f" memory space {bm.transformed_block_aval.memory_space}."
+        " See details at"
+        " https://jax.readthedocs.io/en/latest/pallas/grid_blockspec.html#pallas-blockspec."
+    )
+
+  for bm in block_mappings:
+    if (
+        bm.transformed_block_aval.memory_space == gpu_core.GMEM
+        and not bm.has_trivial_window()
+    ):
+      raise NotImplementedError(
+          "Mosaic GPU lowering currently requires blocks in GMEM memory space "
+          "to have same block shape as the array shape "
+          "and a trivial index_map (returning all 0s).\n\n"
+          + err_details(bm)
+      )
+
+    if not isinstance(bm.indexing_mode, pallas_core.Blocked):
+      raise NotImplementedError(
+          "Only Blocked indexing mode is supported in Mosaic GPU lowering.\n\n"
+          + err_details(bm)
+      )
+
+
 def lower_jaxpr_to_module(
     grid_mapping: pallas_core.GridMapping,
     jaxpr: jax_core.Jaxpr,
@@ -216,8 +250,6 @@ def lower_jaxpr_to_module(
     cost_estimate: pallas_core.CostEstimate | None,
 ) -> LoweringResult:
   del cost_estimate  # Unused.
-
-  block_mappings = grid_mapping.block_mappings
 
   assert len(jaxpr.outvars) == 0
   assert not grid_mapping.vmapped_dims
@@ -233,12 +265,9 @@ def lower_jaxpr_to_module(
     raise NotImplementedError(
         "Scalar prefetch not supported in Mosaic GPU lowering."
     )
-  if not all(
-      isinstance(bm.indexing_mode, pallas_core.Blocked) for bm in block_mappings
-  ):
-    raise NotImplementedError(
-        "Only Blocked indexing mode is supported in Mosaic GPU lowering."
-    )
+
+  block_mappings = grid_mapping.block_mappings
+  _check_block_mappings(block_mappings, name_and_src_info)
 
   block = (128, 1, 1)
   params = compiler_params.get("mosaic_gpu", {})
@@ -757,12 +786,16 @@ def _handle_indexing(
 def _ndindexer_indices(indexer: indexing.NDIndexer) -> tuple[gpu_core.Index, ...]:
   indices = []
   for idx in indexer.indices:
-    if isinstance(idx, indexing.Slice):
-      if idx.is_dynamic_start or idx.is_dynamic_size:
-        raise NotImplementedError(f"Unsupported slice: {idx}")
-      indices.append(slice(idx.start, idx.start + idx.size, idx.stride))
-    else:
+    if not isinstance(idx, indexing.Slice):
       indices.append(_as_index(idx))
+    elif not idx.is_dynamic_start and not idx.is_dynamic_size:
+      indices.append(slice(idx.start, idx.start + idx.size, idx.stride))
+    elif idx.stride == 1:
+      indices.append(
+          mgpu.DynamicSlice(_as_index(idx.start), _as_index(idx.size))
+      )
+    else:
+      raise NotImplementedError(f"Unsupported slice: {idx}")
   return tuple(indices)
 
 

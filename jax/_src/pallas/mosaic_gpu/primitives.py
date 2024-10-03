@@ -60,6 +60,7 @@ def _copy_smem_to_gmem_lowering(
   copy_params = _extract_copy_params(
       dst_transforms_treedef.unflatten(flat_dst_transforms)
   )
+  mgpu.warpgroup_barrier()
   ctx.launch_ctx.async_copy(src_ref=src, dst_ref=dst, **copy_params)
   return ()
 
@@ -158,7 +159,9 @@ def _copy_gmem_to_smem_lowering(
       barrier_transforms_treedef.unflatten(flat_barrier_transforms)
   )
   if barrier_indexer is not None:
-    barrier = barrier.__getitem__(*barrier_indexer.indices)
+    barrier = barrier.__getitem__(
+        *map(lowering._as_index, barrier_indexer.indices)
+    )
   ctx.launch_ctx.async_copy(
       src_ref=src, dst_ref=dst, barrier=barrier, **copy_params
   )
@@ -237,6 +240,7 @@ def _extract_barrier_indexer(transforms) -> indexing.NDIndexer | None:
 class WaitEffect(jax_core.Effect):
   ...
 
+effects.control_flow_allowed_effects.add_type(WaitEffect)
 
 _wait_effect = WaitEffect()
 
@@ -262,7 +266,7 @@ def _wait_barrier_lowering(
   transforms = transforms_treedef.unflatten(flat_transforms)
   indexer = _extract_barrier_indexer(transforms)
   if indexer is not None:
-    barrier = barrier.__getitem__(*indexer.indices)
+    barrier = barrier.__getitem__(*map(lowering._as_index, indexer.indices))
   barrier.wait()
   return ()
 

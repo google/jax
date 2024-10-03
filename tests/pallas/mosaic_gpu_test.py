@@ -708,5 +708,75 @@ class PallasCallTest(PallasTest):
     np.testing.assert_array_equal(f(x), expected)
 
 
+class PipelineTest(PallasTest):
+
+  def test_manual(self, max_concurrent_steps=2, num_steps=4):
+
+    def kernel(x_gmem, o_gmem, barrier, *smem_refs):
+      if not smem_refs:
+        return pl.run_scoped(
+            functools.partial(kernel, x_gmem, o_gmem, barrier),
+            plgpu.SMEM((max_concurrent_steps, 32, 16), jnp.float32),
+            plgpu.SMEM((max_concurrent_steps, 32, 16), jnp.float32),
+        )
+
+      x_smem, o_smem = smem_refs
+      gmem_slice = pl.ds(pl.program_id(0) * 32, 32)
+
+      def body(step, _):
+        slot = step % max_concurrent_steps
+
+        # Wait for the current GMEM->SMEM copy to complete.
+        plgpu.wait_barrier(barrier.at[slot])
+        # Wait for the previous output SMEM->GMEM copy to complete.
+        plgpu.wait_smem_to_gmem(max_concurrent_steps - 1)
+
+        o_smem[...] = x_smem[...] + 1.0
+
+        plgpu.copy_smem_to_gmem(
+            o_smem.at[slot], o_gmem.at[gmem_slice, pl.ds(step * 16, 16)]
+        )
+
+        next_step = step + max_concurrent_steps
+        next_slot = slot  # (x + y) % y == x % y
+        jax.lax.cond(
+            next_step < num_steps,
+            lambda: plgpu.copy_gmem_to_smem(
+                x_gmem.at[gmem_slice, pl.ds(next_step * 16, 16)],
+                x_smem.at[next_slot],
+                barrier=barrier.at[next_slot],
+            ),
+            lambda: None,
+        )
+        return ()
+
+      # Initialize the pipeline.
+      for slot in range(min(max_concurrent_steps, num_steps)):
+        plgpu.copy_gmem_to_smem(
+            x_gmem.at[gmem_slice, pl.ds(slot * 16, 16)],
+            x_smem.at[slot],
+            barrier=barrier.at[slot],
+        )
+
+      jax.lax.fori_loop(0, num_steps, body, ())
+
+      # Finalize the pipeline.
+      plgpu.wait_smem_to_gmem(0)
+
+    x = jnp.arange(32 * 4 * 64).reshape(32 * 4, 64).astype(jnp.float32)
+    kernel_fn = pl.pallas_call(
+        kernel,
+        in_specs=[pl.BlockSpec(memory_space=plgpu.GMEM)],
+        out_specs=pl.BlockSpec(memory_space=plgpu.GMEM),
+        out_shape=jax.ShapeDtypeStruct(x.shape, x.dtype),
+        scratch_shapes=[
+            # TODO(slebedev): Allow requesting barriers in ``run_scoped``.
+            plgpu.Barrier(1, num_barriers=max_concurrent_steps),
+        ],
+        grid=(4, 1),
+    )
+    np.testing.assert_array_equal(kernel_fn(x), x + 1.0)
+
+
 if __name__ == "__main__":
   absltest.main()
