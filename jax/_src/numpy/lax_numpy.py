@@ -482,8 +482,49 @@ def issubdtype(arg1: DTypeLike, arg2: DTypeLike) -> bool:
   """
   return dtypes.issubdtype(arg1, arg2)
 
-@util.implements(np.isscalar)
 def isscalar(element: Any) -> bool:
+  """Check if an element is a scalar.
+
+  JAX implementation of :func:`numpy.isscalar`.
+
+  This function checks if the input is considered a scalar in JAX.
+  It differs slightly from the behavior of NumPy's ``numpy.isscalar`` function.
+
+  - In NumPy, a scalar is a single value (like a number or string),
+    but zero-dimensional arrays (arrays with no dimensions) are
+    not treated as scalars. NumPy has separate types for scalars and
+    zero-dimensional arrays.  Therefore, NumPy's ``np.isscalar``
+    will only return ``True`` for plain Python scalars.
+
+  - In JAX, scalars are represented by zero-dimensional arrays. If a
+    zero-dimensional JAX array holds a basic Python value (like a
+    number or boolean), JAX treats it just like the value itself.
+    This means both ``1.0`` and ``jnp.array(1.0)`` are considered
+    scalars by ``jnp.isscalar``.
+
+  Args:
+    element: the input element to check. Can be any data type.
+
+  Returns:
+    bool: ``True`` if the input is considered a scalar in JAX, ``False`` otherwise.
+
+  See Also:
+    - :func:`jax.numpy.ndim`: Return the number of dimensions of an array.
+
+  Examples:
+    >>> jnp.isscalar(1.1)
+    True
+    >>> jnp.isscalar(jnp.array(1.1))
+    True
+    >>> jnp.isscalar(jnp.float32(1.1))
+    False
+    >>> jnp.isscalar(jnp.array([1.1]))
+    False
+    >>> jnp.isscalar(False)
+    True
+    >>> jnp.isscalar('jax')
+    True
+  """
   if hasattr(element, '__jax_array__'):
     element = element.__jax_array__()
   return dtypes.is_python_scalar(element) or np.isscalar(element)
