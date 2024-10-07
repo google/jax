@@ -64,6 +64,13 @@ custom_float_dtypes = [np.dtype(dtypes.bfloat16)]
 fp8_dtypes = [np.dtype(dtypes.float8_e4m3b11fnuz), np.dtype(dtypes.float8_e4m3fn),
               np.dtype(dtypes.float8_e4m3fnuz), np.dtype(dtypes.float8_e5m2),
               np.dtype(dtypes.float8_e5m2fnuz)]
+# TODO: Remove lib.version check once minimum_jaxlib_version is 0.4.35+
+# TODO: Remove "cpu" check once xla::GetDefaultStablehloVersion() is 1.7.0+
+if jtu.device_under_test() == "cpu" and jax._src.lib.version >= (0, 4, 35):
+  if dtypes.float8_e3m4 is not None:
+    fp8_dtypes += [np.dtype(dtypes.float8_e3m4)]
+  if dtypes.float8_e4m3 is not None:
+    fp8_dtypes += [np.dtype(dtypes.float8_e4m3)]
 float_dtypes += fp8_dtypes
 custom_float_dtypes += fp8_dtypes
 

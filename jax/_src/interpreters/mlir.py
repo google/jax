@@ -186,13 +186,13 @@ _dtype_to_ir_type : dict[np.dtype, Callable[[], ir.Type]] = {
 
 if dtypes.int2 is not None:
   assert dtypes.uint2 is not None
-  _dtype_to_ir_type[np.dtype(dtypes.int2)] = partial(
-      ir.IntegerType.get_signless, 2
-  )
-  _dtype_to_ir_type[np.dtype(dtypes.uint2)] = partial(
-      ir.IntegerType.get_unsigned, 2
-  )
+  _dtype_to_ir_type[np.dtype(dtypes.int2)] = partial(ir.IntegerType.get_signless, 2)
+  _dtype_to_ir_type[np.dtype(dtypes.uint2)] = partial(ir.IntegerType.get_unsigned, 2)
 
+if dtypes.float8_e3m4 is not None:
+  _dtype_to_ir_type[np.dtype(dtypes.float8_e3m4)] = ir.Float8E3M4Type.get
+if dtypes.float8_e4m3 is not None:
+  _dtype_to_ir_type[np.dtype(dtypes.float8_e4m3)] = ir.Float8E4M3Type.get
 
 def dtype_to_ir_type(dtype: core.bint | np.dtype | np.generic) -> ir.Type:
   if isinstance(dtype, core.bint):

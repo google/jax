@@ -90,12 +90,17 @@ class ExtendedDType(StrictABC):
 
 
 # fp8 support
+# TODO: remove Optional when minimum ml_dtypes version >= 0.5.0
+float8_e3m4: type[np.generic] | None = None
+float8_e4m3: type[np.generic] | None = None
 float8_e4m3b11fnuz: type[np.generic] = ml_dtypes.float8_e4m3b11fnuz
 float8_e4m3fn: type[np.generic] = ml_dtypes.float8_e4m3fn
 float8_e4m3fnuz: type[np.generic] = ml_dtypes.float8_e4m3fnuz
 float8_e5m2: type[np.generic] = ml_dtypes.float8_e5m2
 float8_e5m2fnuz: type[np.generic] = ml_dtypes.float8_e5m2fnuz
 
+_float8_e3m4_dtype: np.dtype | None = None
+_float8_e4m3_dtype: np.dtype | None = None
 _float8_e4m3b11fnuz_dtype: np.dtype = np.dtype(float8_e4m3b11fnuz)
 _float8_e4m3fn_dtype: np.dtype = np.dtype(float8_e4m3fn)
 _float8_e4m3fnuz_dtype: np.dtype = np.dtype(float8_e4m3fnuz)
@@ -136,6 +141,20 @@ _float8_dtypes = [
     _float8_e5m2_dtype,
     _float8_e5m2fnuz_dtype,
 ]
+
+# TODO: remove the if statements below when minimum ml_dtypes version >= 0.5.0
+if hasattr(ml_dtypes, "float8_e4m3"):
+  float8_e4m3 = ml_dtypes.float8_e4m3
+  _float8_e4m3_dtype = np.dtype(float8_e4m3)
+  _custom_float_scalar_types.insert(0, float8_e4m3)  # type: ignore[arg-type]
+  _custom_float_dtypes.insert(0, _float8_e4m3_dtype)
+  _float8_dtypes.insert(0, _float8_e4m3_dtype)
+if hasattr(ml_dtypes, "float8_e3m4"):
+  float8_e3m4 = ml_dtypes.float8_e3m4
+  _float8_e3m4_dtype = np.dtype(float8_e3m4)
+  _custom_float_scalar_types.insert(0, float8_e3m4)  # type: ignore[arg-type]
+  _custom_float_dtypes.insert(0, _float8_e3m4_dtype)
+  _float8_dtypes.insert(0, _float8_e3m4_dtype)
 
 # 2-bit integer support
 int2: type[np.generic] | None = None
