@@ -297,6 +297,19 @@ class MemRefTest(TestCase):
     )(x)
     np.testing.assert_array_equal(y, x.reshape(out_ty.shape))
 
+  def test_reshape(self):
+    inp_shape = (10, 10)
+    out_shape = (2, 50)
+    def kernel(ctx, inp, out, _):
+      copy(memref_reshape(inp, out_shape), out)
+
+    x = np.arange(math.prod(inp_shape), dtype=jnp.float32).reshape(*inp_shape)
+    out_ty = jax.ShapeDtypeStruct(out_shape, jnp.float32)
+    y = mgpu.as_gpu_kernel(
+        kernel, (1, 1, 1), (128, 1, 1), x, out_ty, ()
+    )(x)
+    np.testing.assert_array_equal(y, x.reshape(*out_shape))
+
   @parameterized.named_parameters([
       ("packed", (4, 4, 4), (16, 4, 1), 1, 2, False),
       ("strided_end", (4, 4, 4, 4), (256, 64, 16, 4), 1, 2, False),

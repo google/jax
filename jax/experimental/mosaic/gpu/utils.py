@@ -20,7 +20,7 @@ import dataclasses
 import enum
 import functools
 import math
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import jax
 from jax import numpy as jnp
@@ -357,6 +357,81 @@ def _is_contiguous_shape_slice(
       return False
 
   return True
+
+
+def _reshape(ref: ir.Value, sh0: list[int], sh1: list[int], off0: int=0, off1: int=0):
+  # Skip the equal prefix
+  for d0, d1 in zip(sh0[off0:], sh1[off1:]):
+    if d0 != d1:
+      break
+    off0 += 1
+    off1 += 1
+
+  # If we are done stop
+  if off0 >= len(sh0) and off1 >= len(sh1):
+    return ref
+
+  # Suffixes of 1s are special
+  if off1 >= len(sh1):
+    assert all(i == 1 for i in sh0[off0:]), (sh0[off0:], off0)
+    ref = memref_fold(ref, off0 - 1, len(sh0) - off0 + 1)
+    sh0[off0 - 1:] = sh0[off0 - 1]
+    print(f"fold({sh0[off0-1:]} -> {sh0[off0-1]})")
+    return ref
+
+  if off0 >= len(sh0):
+    assert all(i == 1 for i in sh1[off1:]), (sh1[off1:], off1)
+    ref = memref_unfold(ref, off0 - 1, sh1[off1 - 1:])
+    sh0[off0 - 1] = sh1[off1-1:]
+    print(f"unfold({sh0[off0-1]} -> {sh1[off1-1:]})")
+    return ref
+
+  to0 = off0
+  to1 = off1
+
+  while True:
+    p0 = math.prod(sh0[off0:to0+1])
+    p1 = math.prod(sh1[off1:to1+1])
+    if p0 == p1:
+      to0 += 1
+      to1 += 1
+      while to0 < len(sh0) and sh0[to0] == 1:
+        to0 += 1
+      while to1 < len(sh1) and sh1[to1] == 1:
+        to1 += 1
+
+      if len(sh0[off0:to0]) > 1:
+        ref = memref_fold(ref, off0, to0 - off0)
+        sh0[off0:to0] = [p0]
+        print(f"fold({sh0[off0:to0]} -> {p0})")
+      if len(sh1[off1:to1]) > 1:
+        ref = memref_unfold(ref, off0, sh1[off1:to1])
+        sh0[off0] = sh1[off1:to1]
+        print(f"unfold({p0} -> {sh1[off1:to1]})")
+
+      break
+    elif p0 < p1:
+      to0 += 1
+    else:
+      to1 += 1
+
+  return _reshape(ref, sh0, sh1, to0, to1)
+
+
+def memref_reshape(ref: ir.Value, shape: tuple[int, ...]) -> ir.Value:
+  """Reshape by means of folding and unfolding.
+
+  The use of memref fold/unfold may avoid some possible issues with
+  strided memrefs.
+  """
+
+  ref_ty = ir.MemRefType(ref.type)
+  if math.prod(ref_ty.shape) != math.prod(shape):
+    raise ValueError("Cannot reshape to a different size")
+  if not all(dim > 0 for dim in shape):
+    raise ValueError(f"Invalid shape {shape}")
+
+  return _reshape(ref, list(ref_ty.shape), list(shape))
 
 
 def memref_fold(ref: ir.Value, dim, fold_rank) -> ir.Value:
