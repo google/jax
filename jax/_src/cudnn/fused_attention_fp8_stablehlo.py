@@ -215,13 +215,13 @@ def create_dot_product_attention_fp8_backend_config(batch,
   return backend_config
 
 def check_is_flash_attention(
-    query, key, layout, cudnn_version, is_training):
+    query, key, layout:int, cudnn_version, is_training):
   # check if minimum cudnn version requirement is satisfied
   if cudnn_version < 9010:
     raise RuntimeError(
       "JAX requires cuDNN >= 9.1.0 to use flash cross attention.")
   
-  if layout == AttentionLayout.BNTH:
+  if layout == AttentionLayout.BNTH.value:
     _, _, T, H = query.shape
     _, _, S, _ = key.shape
   else:
