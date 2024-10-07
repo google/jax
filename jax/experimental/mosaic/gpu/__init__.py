@@ -47,6 +47,7 @@ from .utils import (
     fori,
     memref_fold,
     memref_slice,
+    memref_reshape,
     memref_transpose,
     memref_unfold,
     memref_unsqueeze,
