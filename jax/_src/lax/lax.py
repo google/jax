@@ -2735,9 +2735,9 @@ def _div_transpose_rule(cotangent, x, y):
   else:
     return [_unbroadcast(x.aval, div(cotangent, y)), None]
 div_p = standard_naryop([_num, _num], 'div')
-ad.defjvp(div_p,
-          lambda g, x, y: div(g, y),
-          lambda g, x, y: mul(mul(neg(g), x), integer_pow(y, -2)))
+ad.defjvp2(div_p,
+           lambda g, ans, x, y: div(g, y),
+           lambda g, ans, x, y: mul(neg(g), div(ans, y)))
 ad.primitive_transposes[div_p] = _div_transpose_rule
 mlir.register_lowering(div_p, partial(_nary_lower_hlo, hlo.divide))
 
