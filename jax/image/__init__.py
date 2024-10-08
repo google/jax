@@ -28,3 +28,7 @@ from jax._src.image.scale import (
   ResizeMethod as ResizeMethod,
   scale_and_translate as scale_and_translate,
 )
+
+from jax._src.image.unfold import (
+  unfold as unfold,
+)
