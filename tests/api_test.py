@@ -5358,6 +5358,71 @@ class RematTest(jtu.JaxTestCase):
     with assertEvals(2):
       vjp(v)
 
+  @jtu.skip_on_devices('gpu', 'tpu')
+  def test_map_primitive_replication(self):
+    # Create a hypothetical "lazy" vmap primitive
+    dummy_vmap_prim = core.MapPrimitive("dummy_vmap")
+
+    def dummy_vmap(f):
+      f = lu.wrap_init(f)
+
+      # Not writing an eval rule for the test, so just jitting the body
+      @jax.jit
+      def body(arg):
+        args, in_tree = tree_util.tree_flatten(([arg], {}))
+        flat_fun, out_tree = api_util.flatten_fun(f, in_tree)
+        flat_result = dummy_vmap_prim.bind(
+          flat_fun,
+          args[0],
+          in_axes=(0, ),
+          out_axes=(0, ),
+          axis_size=8,
+          out_axes_thunk=lambda: (0, ),
+          axis_name=core.no_axis_name,
+          global_axis_size=8,
+          name="dummy_vmap_body",
+          __replicas=1)
+
+        return tree_util.tree_unflatten(out_tree(), flat_result)
+      return body
+
+    # This dummy lazy vmap uses the batching jaxpr transformation as the
+    # lowering rule
+    def dummy_vmap_lowering_rule(ctx, *args, in_axes, out_axes, axis_size,
+                                 call_jaxpr, **kwargs):
+      body_jaxpr, _ = batching.batch_jaxpr_axes(
+        pe.close_jaxpr(call_jaxpr),
+        axis_size,
+        in_axes,
+        out_axes,
+        core.no_axis_name,
+        core.no_axis_name,
+        batching.BatchTrace)
+      
+      outs, _ = mlir.jaxpr_subcomp(
+        ctx.module_context,
+        body_jaxpr.jaxpr,
+        mlir.TokenSet(), [],
+        *map(mlir.wrap_singleton_ir_values, args),
+        dim_var_values=[])
+
+      return outs
+    mlir.register_lowering(dummy_vmap_prim, dummy_vmap_lowering_rule)
+
+    # The function to "vmap"
+    def increment(x):
+      return x + 1
+
+    f = jax.vmap(increment)
+    g = dummy_vmap(increment)
+
+    x = jnp.arange(64).reshape(8, 8)
+    y = f(x)
+    z = g(x)
+
+    self.assertEqual(y.devices(), z.devices())
+    self.assertAllClose(y, z)
+
   @parameterized.named_parameters(
       {"testcase_name": f"{suffix}", "remat": remat}
       for suffix, remat in [

@@ -305,6 +305,11 @@ def jaxpr_replicas(jaxpr: core.Jaxpr) -> int:
 # TODO(mattjj): this function assumes that only pmap has a parameter named
 # axis_size, and that it corresponds to cross-replica mapping
 def _eqn_replicas(eqn: core.JaxprEqn) -> int:
+  # An optional override for the number of replicas required by the primitive.
+  replicas = eqn.params.get('__replicas')
+  if replicas:
+    return replicas
+
   call_jaxpr = eqn.params.get("call_jaxpr")
   if call_jaxpr:
     return eqn.params.get('axis_size', 1) * jaxpr_replicas(call_jaxpr)
