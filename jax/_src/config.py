@@ -1725,7 +1725,7 @@ string_state(
     help=('Comma-separated list of module names (e.g. "jax" or '
           '"jax._src.xla_bridge,jax._src.dispatch") to enable debug logging '
           'for.'),
-    update_global_hook=logging_config._update_debug_log_modules)
+    update_global_hook=logging_config.update_debug_log_modules)
 
 # Don't define a context manager since this isn't threadsafe.
 optional_enum_state(
@@ -1737,7 +1737,7 @@ optional_enum_state(
           ' "CRITICAL", "0", "10", "20", "30", "40", "50"] are accepted. If'
           ' None, the logging level will not be set.'),
     update_global_hook=lambda logging_level: \
-      logging_config._update_logging_level_global(logging_level=logging_level)
+      logging_config.update_logging_level_global(logging_level=logging_level)
 )
 
 pmap_no_rank_reduction = bool_state(

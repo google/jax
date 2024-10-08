@@ -16,11 +16,13 @@ import logging
 import os
 import sys
 
+# Example log message:
+# DEBUG:2023-06-07 00:14:40,280:jax._src.xla_bridge:590: Initializing backend 'cpu'
 logging_formatter = logging.Formatter(
     "{levelname}:{asctime}:{name}:{lineno}: {message}", style='{')
 
 _logging_level_handler_set: dict[str, tuple[logging.Handler, int]] = {}
-
+_default_TF_CPP_MIN_LOG_LEVEL = os.environ.get("TF_CPP_MIN_LOG_LEVEL", "1")
 
 _nameToLevel = {
     'CRITICAL': logging.CRITICAL,
@@ -33,20 +35,10 @@ _nameToLevel = {
     'NOTSET': logging.NOTSET,
 }
 def _getLevelNamesMapping():
-  return _nameToLevel.copy()
+  return _nameToLevel
 
 
-def _update_logging_level_global(logging_level: str | None) -> None:
-  # remove previous handlers
-  for logger_name, (handler, level) in _logging_level_handler_set.items():
-    logger = logging.getLogger(logger_name)
-    logger.removeHandler(handler)
-    logger.setLevel(level)
-  _logging_level_handler_set.clear()
-
-  if logging_level is None:
-    return
-
+def _logging_level_to_int(logging_level: str):
   # attempt to convert the logging level to integer
   try:
     # logging level is a string representation of an integer
@@ -54,11 +46,43 @@ def _update_logging_level_global(logging_level: str | None) -> None:
   except ValueError:
     # logging level is a name string
     logging_level_num = _getLevelNamesMapping()[logging_level]
+  return logging_level_num
 
-  # configure the CPP logging level 0 - debug, 1 - info, 2 - warning, 3 - error
-  cpp_log_level = min(max(0, (logging_level_num // 10) - 1), 3)
-  os.environ["TF_CPP_MIN_LOG_LEVEL"] = str(cpp_log_level)
+_tf_cpp_map = {
+    'CRITICAL': 3,
+    'FATAL': 3,
+    'ERROR': 3,
+    'WARN': 2,
+    'WARNING': 2,
+    'INFO': 1,
+    'DEBUG': 0,
+}
 
+def _set_TF_CPP_MIN_LOG_LEVEL(logging_level: str | None = None):
+  os.environ["TF_CPP_MIN_LOG_LEVEL"] = _default_TF_CPP_MIN_LOG_LEVEL
+
+  # set cpp runtime logging level if the level is anything but NOTSET
+  if logging_level is not None and logging_level != "NOTSET":
+    if logging_level not in _tf_cpp_map:
+      raise ValueError(f"Attempting to set log level \"{logging_level}\" which"
+                       f" isn't one of the supported:"
+                       f" {list(_tf_cpp_map.keys())}.")
+    # config the CPP logging level 0 - debug, 1 - info, 2 - warning, 3 - error
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = str(_tf_cpp_map[logging_level])
+
+def update_logging_level_global(logging_level: str | None) -> None:
+  # remove previous handlers
+  for logger_name, (handler, level) in _logging_level_handler_set.items():
+    logger = logging.getLogger(logger_name)
+    logger.removeHandler(handler)
+    logger.setLevel(level)
+  _logging_level_handler_set.clear()
+  _set_TF_CPP_MIN_LOG_LEVEL(logging_level)
+
+  if logging_level is None:
+    return
+
+  logging_level_num = _logging_level_to_int(logging_level)
   handler = logging.StreamHandler()
   handler.setLevel(logging_level_num)
   handler.setFormatter(logging_formatter)
@@ -75,8 +99,6 @@ def _update_logging_level_global(logging_level: str | None) -> None:
 
 _debug_handler = logging.StreamHandler(sys.stderr)
 _debug_handler.setLevel(logging.DEBUG)
-# Example log message:
-# DEBUG:2023-06-07 00:14:40,280:jax._src.xla_bridge:590: Initializing backend 'cpu'
 _debug_handler.setFormatter(logging_formatter)
 
 _debug_enabled_loggers = []
@@ -108,7 +130,7 @@ def _disable_all_debug_logging():
     logger.setLevel(prev_level)
   _debug_enabled_loggers.clear()
 
-def _update_debug_log_modules(module_names_str: str | None):
+def update_debug_log_modules(module_names_str: str | None):
   _disable_all_debug_logging()
   if not module_names_str:
     return

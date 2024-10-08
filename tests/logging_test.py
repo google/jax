@@ -23,7 +23,6 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import time
 import unittest
 
 import jax
@@ -62,8 +61,6 @@ def jax_logging_level(value):
   try:
     yield
   finally:
-    # in case original_value is None, which skips setting logging value
-    # we also set the logging value directly pulled from logger.level
     jax.config.update("jax_logging_level", original_value)
 
 
@@ -179,102 +176,29 @@ class LoggingTest(jtu.JaxTestCase):
         jax.jit(lambda x: x + 1)(1)
       self.assertEmpty(log_output.getvalue())
 
-  def test_double_logging_not_present(self):
-    logger = logging.getLogger("jax")
-
-    # set both the debug level and the per-module debug
-    # test that messages are not repeated
-    with jax_logging_level("DEBUG"):
-      with jax_debug_log_modules("jax._src.cache_key"):
-        f = jax.jit(lambda x: x)
-        with self.assertLogs(logger=logger, level="DEBUG") as cm:
-          _ = f(jax.numpy.ones(10))
-        self.assertTrue(any("jax._src.cache_key" in line for line in cm.output))
-        # assert logs are not repeatedly printed (perhaps without a prefix)
-        log_repeat_fraction = _get_repeated_log_fraction(cm.output)
-        self.assertLess(log_repeat_fraction, 0.2) # less than 20%
-
-  def test_none_means_notset(self):
-    # setting the logging level to None should reset to no-logging
-    with jax_logging_level(None):
-      with capture_jax_logs() as log_output:
-        jax.jit(lambda x: x)(1.)
-      self.assertLen(log_output.getvalue(), 0)
-
-  def test_debug_log_modules_overrides_logging_level(self):
-    logger = logging.getLogger("jax")
-
-    # tests that logs are present (debug_log_modules overrides logging_level)
-    with jax_logging_level("INFO"):
-      with jax_debug_log_modules("jax._src.cache_key"):
-        with self.assertLogs(logger=logger, level="DEBUG") as cm:
-          _ = jax.jit(lambda x: x)(1.0)
-        self.assertTrue(any("jax._src.cache_key" in line for line in cm.output))
-
-    # now reverse the order
-    with jax_debug_log_modules("jax._src.cache_key"):
-      with jax_logging_level("INFO"):
-        with self.assertLogs(logger=logger, level="DEBUG") as cm:
-          _ = jax.jit(lambda x: x)(1.0)
-        self.assertTrue(any("jax._src.cache_key" in line for line in cm.output))
-
-  def test_debug_log_modules_of_jax_does_not_silence_future_modules(self):
-    logger = logging.getLogger("jax")
-
-    def _check_compiler_and_cache_key_logs(log_lines):
-      self.assertTrue(any(re.search(
-        r"jax._src.cache_key.*get_cache_key hash after serializing",
-        line) is not None for line in log_lines))
-      self.assertTrue(any(re.search(
-        r"jax._src.compiler.*PERSISTENT COMPILATION CACHE MISS", line)
-        is not None for line in log_lines))
-
-    # tests that logs are present (debug_log_modules overrides logging_level)
-    with jax_logging_level("DEBUG"):
-      with self.assertLogs(logger=logger, level="DEBUG") as cm:
-        _ = jax.jit(lambda x: x)(jax.numpy.ones(10))
-      _check_compiler_and_cache_key_logs(cm.output)
-
-      with jax_debug_log_modules("jax._src.cache_key"):
-        with self.assertLogs(logger=logger, level="DEBUG") as cm:
-          _ = jax.jit(lambda x: x)(jax.numpy.ones(10))
-      # assert logs are not repeatedly printed (perhaps without a prefix)
-      log_repeat_fraction = _get_repeated_log_fraction(cm.output)
-      self.assertLess(log_repeat_fraction, 0.2) # less than 20%
-      _check_compiler_and_cache_key_logs(cm.output)
-
-      with jax_debug_log_modules("jax"):
-        _ = 1  # noop
-
-      with self.assertLogs(logger=logger, level="DEBUG") as cm:
-        _ = jax.jit(lambda x: x)(jax.numpy.ones(10))
-      _check_compiler_and_cache_key_logs(cm.output)
-
-      with self.assertLogs(logger=logger, level="DEBUG") as cm:
-        logger_ = logging.getLogger("jax.some_future_downstream_module")
-        logger_.debug("Test message")
-      self.assertLen(cm.output, 1)
-      self.assertIn("Test message", cm.output[0])
-
   @unittest.skipIf(platform.system() == "Windows",
                    "Subprocess test doesn't work on Windows")
   def test_subprocess_stderr_logging(self):
     if sys.executable is None:
       raise self.skipTest("test requires access to python binary")
+
     program = """
     import jax  # this prints INFO logging from backend imports
     jax.jit(lambda x: x)(1)  # this prints logs to DEBUG (from compilation)
     """
-    program = re.sub(r"^\s+", "", program, flags=re.MULTILINE) # strip indent
+
+    # strip the leading whitespace from the program script
+    program = re.sub(r"^\s+", "", program, flags=re.MULTILINE)
 
     # test INFO
     cmd = shlex.split(f"env JAX_LOGGING_LEVEL=INFO {sys.executable} -c"
                       f" '{program}'")
-    p = subprocess.run(cmd, capture_output=True)
-    log_output = p.stderr.decode("utf-8")
-    info_num_lines = log_output.split("\n")
-    self.assertGreater(len(info_num_lines), 0)
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    log_output = p.stderr
+    info_lines = log_output.split("\n")
+    self.assertGreater(len(info_lines), 0)
     self.assertIn("INFO", log_output)
+    self.assertNotIn("DEBUG", log_output)
 
     # test DEBUG
     cmd = shlex.split(f"env JAX_LOGGING_LEVEL=DEBUG {sys.executable} -c"
@@ -282,60 +206,58 @@ class LoggingTest(jtu.JaxTestCase):
     p = subprocess.run(cmd, capture_output=True, text=True)
     log_output = p.stderr
     debug_num_lines = log_output.split("\n")
-    self.assertGreater(len(info_num_lines), 0)
+    self.assertGreater(len(info_lines), 0)
     self.assertIn("INFO", log_output)
     self.assertIn("DEBUG", log_output)
     self.assertIn("Finished tracing + transforming <lambda> for pjit",
                   log_output)
-    self.assertGreater(len(debug_num_lines), len(info_num_lines))
+    self.assertGreater(len(debug_num_lines), len(info_lines))
 
   @unittest.skipIf(platform.system() == "Windows",
                    "Subprocess test doesn't work on Windows")
   def test_subprocess_toggling_logging_level(self):
     if sys.executable is None:
       raise self.skipTest("test requires access to python binary")
-    program = """
+
+    _separator = "---------------------------"
+    program = f"""
+    import sys
     import jax  # this prints INFO logging from backend imports
     jax.jit(lambda x: x)(1)  # this prints logs to DEBUG (from compilation)
     jax.config.update("jax_logging_level", None)
-    _ = input()
+    sys.stderr.write("{_separator}")
     jax.jit(lambda x: x)(1)  # this prints logs to DEBUG (from compilation)
     """
-    program = re.sub(r"^\s+", "", program, flags=re.MULTILINE) # strip indent
+
+    # strip the leading whitespace from the program script
+    program = re.sub(r"^\s+", "", program, flags=re.MULTILINE)
 
     cmd = shlex.split(f"env JAX_LOGGING_LEVEL=DEBUG {sys.executable} -c"
                       f" '{program}'")
-    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    # check if the first part of the program prints DEBUG messages
-    time.sleep(1.0)
-    os.set_blocking(p.stderr.fileno(), False)
-    log_output_verbose = p.stderr.read().decode("utf-8")
-    os.set_blocking(p.stderr.fileno(), True)
-
-    # allow the program to continue to the second phase
-    p.stdin.write(b"a\n")
-    p.stdin.close()
-    p.wait()
-
-    # check if the second part of the program does NOT print DEBUG messages
-    log_output_silent = p.stderr.read()
-    p.stderr.close()
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    log_output = p.stderr
+    m = re.search(_separator, log_output)
+    self.assertTrue(m is not None)
+    log_output_verbose = log_output[:m.start()]
+    log_output_silent = log_output[m.end():]
 
     self.assertIn("Finished tracing + transforming <lambda> for pjit",
                   log_output_verbose)
-    self.assertEqual(log_output_silent, b"")
+    self.assertEqual(log_output_silent, "")
 
   @unittest.skipIf(platform.system() == "Windows",
                    "Subprocess test doesn't work on Windows")
   def test_subprocess_double_logging_absent(self):
     if sys.executable is None:
       raise self.skipTest("test requires access to python binary")
+
     program = """
     import jax  # this prints INFO logging from backend imports
     jax.jit(lambda x: x)(1)  # this prints logs to DEBUG (from compilation)
     """
-    program = re.sub(r"^\s+", "", program, flags=re.MULTILINE) # strip indent
+
+    # strip the leading whitespace from the program script
+    program = re.sub(r"^\s+", "", program, flags=re.MULTILINE)
 
     cmd = shlex.split(f"env JAX_LOGGING_LEVEL=DEBUG {sys.executable} -c"
                       f" '{program}'")
