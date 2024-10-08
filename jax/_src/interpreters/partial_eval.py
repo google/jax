@@ -1018,6 +1018,9 @@ def _partial_eval_jaxpr_nounits(jaxpr, in_unknowns, instantiate):
     in_pvals = [PartialVal.unknown(next(unknown_avals)) if uk
                 else PartialVal.known(next(known_vals_in)) for uk in in_unknowns]
     assert next(known_vals_in, None) is next(unknown_avals, None) is None
+    # TODO(sharadmv,mattjj): this might silently DCE effects downstream of
+    # unknown values. We probably shouldn't do this and at the very least, we
+    # should raise an error to alert the user that this is happening.
     jaxpr_unknown_, out_pvals, residuals = trace_to_jaxpr_nounits(
         f, in_pvals, instantiate=instantiate)
     jaxpr_unknown = convert_constvars_jaxpr(jaxpr_unknown_)
