@@ -306,6 +306,11 @@ pip uninstall tensorflow tf-nightly tensorboard tb-nightly
 pip install tensorflow
 ```
 
+#### Only profiles CPU computation
+**This is probably due to the following a warning: `tensorflow.profiler.XSpace exceeded maximum protobuf size of 2GB`**
+
+You can trace a smaller amount of data to reduce the protobuf size in a number of ways. For example, reduce the number of iterations, the amount of computation between start and stop.
+
 ## Nsight
 
 NVIDIA's `Nsight` tools can be used to trace and profile JAX code on GPU. For
