@@ -710,6 +710,54 @@ def _scatter_add_rule(primals_in, series_in, *, update_jaxpr, update_consts,
   return primal_out, series_out
 jet_rules[lax.scatter_add_p] = _scatter_add_rule
 
+def poly_mul(f, g):
+  '''Multiply polynomials, truncating to larger degree'''
+  f, g = (f, g) if len(f) >= len(g) else (g, f)  # ensure f has larger degree
+  k = len(f)
+  out = [jnp.zeros_like(f[0]) for i in range(k)]
+  # naive convolution
+  for i in range(k):
+    g_lim = np.minimum(len(g), k-i)
+    for j in range(g_lim):
+      out[i+j] += f[i]*g[j]
+  return out
+
+def poly_compose(g, f):
+  '''Polynomial composition via Horner's method (recursive)'''
+  if not(g):
+    return [jnp.zeros_like(f[0]) for term in f]
+  res = poly_mul(f, poly_compose(g[1:], f))
+  return [g[0] + res[0]] + res[1:]
+
+def _series_to_taylor(f):
+  # Add zero term and scale with factorials
+  return [jnp.zeros_like(f[0])] + [term/fact(i+1) for i, term in enumerate(f)]
+
+def _taylor_to_series(f):
+  # Unscale and remove constant term
+  return [term*fact(i+1) for i, term in enumerate(f[1:])]
+
+def _compose_taylor(g, f):
+  # g and f are sequences of derivatives
+  # convert to Taylor polynomials and compose
+  g = _series_to_taylor(g)
+  f = _series_to_taylor(f)
+  h = poly_compose(g, f)
+  return(_taylor_to_series(h))
+
+def _faa_di_bruno_rule(fun, local_deriv_fun, primals_in, series_in):
+  x, = primals_in
+  series, = series_in
+  primals_out = fun(x)
+  series_local = local_deriv_fun(x, len(series))
+  series_out = _compose_taylor(series_local, series)if series else []
+  return primals_out, series_out
+
+_lgamma_local_derivs = lambda x, k: [jax.scipy.special.polygamma(n, x) for n in range(k)]
+jet_rules[lax.lgamma_p] = partial(_faa_di_bruno_rule, lax.lgamma, _lgamma_local_derivs)
+
+_digamma_local_derivs = lambda x, k: [jax.scipy.special.polygamma(n, x) for n in range(1, k+1)]
+jet_rules[lax.digamma_p] = partial(_faa_di_bruno_rule, lax.digamma, _digamma_local_derivs)
 
 @weakref_lru_cache
 def _jet_jaxpr(
