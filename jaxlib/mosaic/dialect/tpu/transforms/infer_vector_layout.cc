@@ -141,14 +141,13 @@ class VectorLayoutInferer {
       // TODO: b/342235360 - This check is temporary while we increase and test
       // support for offsets outside of the first tile. When support is more
       // broad, any op without support should check it within their own rule.
-      if (!isa<vector::BroadcastOp, vector::ExtractStridedSliceOp>(any_op)) {
+      if (!isa<vector::BroadcastOp, vector::ExtractStridedSliceOp,
+               tpu::BitcastOp>(any_op)) {
         const SmallVector<Layout> layouts_in = getLayoutFromOperands(&any_op);
         for (const Layout &layout : layouts_in) {
           if (layout && layout->offsets()[1].has_value() &&
-              layout->offsets()[1].value() > layout->tiling()[1]) {
-            return any_op.emitOpError(
-                "Not implemented: Inferring from input offsets outside of the "
-                "first tile");
+              layout->offsets()[1].value() >= layout->tiling()[1]) {
+            reset_lane_offset_to_zero_ = true;
           }
         }
       }
@@ -349,6 +348,7 @@ class VectorLayoutInferer {
       }
       CHECK(any_op.getNumResults() == 0 || any_op.hasAttr("out_layout"));
       CHECK(any_op.getNumOperands() == 0 || any_op.hasAttr("in_layout"));
+      reset_lane_offset_to_zero_ = false;
     }
     return match_terminator(block.getTerminator());
   }
@@ -938,17 +938,24 @@ class VectorLayoutInferer {
     auto out_ty = cast<VectorType>(op.getOutput().getType());
     auto in_bitwidth = in_ty.getElementTypeBitWidth();
     auto out_bitwidth = out_ty.getElementTypeBitWidth();
-    auto src_layout = getLayout(op.getInput());
-    LayoutOffsets src_offsets = src_layout->offsets();
-    auto implicit_dim = src_layout->implicit_dim();
-    if (src_offsets[0].value_or(0) * in_bitwidth % out_bitwidth != 0) {
-      // Force offset to zero if the input offset on the second minor dimension
-      // is not a multiple of the ratio of output and input bitwidth.
-      src_offsets[0] = 0;
-    } else if (!src_offsets[0].has_value() && in_bitwidth > out_bitwidth) {
-      // We can't preserve replicated offset for decreasing bitwidth.
-      src_offsets[0] = 0;
+    auto in_layout = getLayout(op.getInput());
+    TPU_CHECK_OP(in_layout.has_value(), "Expected input vector layout")
+
+    auto in_tiling = in_layout->tiling();
+    // If the input sublane tiling is not bitcastable to output, we set native
+    // tiling for both input and output. For example, when the tiling is
+    // (1, 128 * packing).
+    if ((in_tiling[0] * in_bitwidth) % out_bitwidth != 0) {
+      // TODO(jevinjiang): we may preserve (replicated) offset based on the
+      // increased/decreased sublane tiling.
+      setLayout(op,
+                VectorLayout(in_bitwidth, {0, 0}, nativeTiling(in_bitwidth),
+                             ImplicitDim::kNone),
+                VectorLayout(out_bitwidth, {0, 0}, nativeTiling(out_bitwidth),
+                             ImplicitDim::kNone));
+      return success();
     }
+    auto implicit_dim = in_layout->implicit_dim();
     // Force implicit dim to None if the bitwidth changes. Because we expect 2nd
     // minor dim size ratio matches the bitwidth ratio in input and output.
     if (in_bitwidth != out_bitwidth) {
@@ -959,20 +966,26 @@ class VectorLayoutInferer {
       }
       implicit_dim = ImplicitDim::kNone;
     }
-    // TODO(b/348485035): Instead of forcing to native tiling, bitcast should
-    // keep the input tiling and infer bitcastable tiling for output. For
-    // example, it is valid to bitcast vector<8x128xi32> with tile (1, 128) to
-    // vector<8x128xbf16> with tile (2, 128).
+    auto in_offsets = in_layout->offsets();
+    // We can't preserve replicated offset for decreasing bitwidth.
+    if (!in_offsets[0].has_value() && in_bitwidth > out_bitwidth) {
+      in_offsets[0] = 0;
+    }
+    // Force offset to zero if the input offset on the second minor
+    // dimension is not a multiple of the ratio of output and input
+    // bitwidth.
+    if ((in_offsets[0].value_or(0) * in_bitwidth) % out_bitwidth != 0) {
+      in_offsets[0] = 0;
+    }
+    auto out_offsets = in_offsets;
+    auto out_tiling = in_tiling;
+    if (in_offsets[0].has_value()) {
+      out_offsets[0] = in_offsets[0].value() * in_bitwidth / out_bitwidth;
+    }
+    out_tiling[0] = in_tiling[0] * in_bitwidth / out_bitwidth;
     setLayout(
-        op,
-        VectorLayout(in_bitwidth, src_offsets, nativeTiling(in_bitwidth),
-                     implicit_dim),
-        VectorLayout(out_bitwidth,
-                     {src_offsets[0].has_value()
-                          ? src_offsets[0].value() * in_bitwidth / out_bitwidth
-                          : src_offsets[0],
-                      src_offsets[1]},
-                     nativeTiling(out_bitwidth), implicit_dim));
+        op, VectorLayout(in_bitwidth, in_offsets, in_tiling, implicit_dim),
+        VectorLayout(out_bitwidth, out_offsets, out_tiling, implicit_dim));
     return success();
   }
 
@@ -1940,7 +1953,14 @@ class VectorLayoutInferer {
     auto result_index = op_result.getResultNumber();
     auto out_attrs = op->getAttrOfType<ArrayAttr>("out_layout").getValue();
     CHECK(out_attrs.size() > result_index);
-    return cast<VectorLayoutAttr>(out_attrs[result_index]).getLayout();
+    auto layout = cast<VectorLayoutAttr>(out_attrs[result_index]).getLayout();
+    if (reset_lane_offset_to_zero_ && layout->offsets()[1].has_value() &&
+        layout->offsets()[1].value() >= layout->tiling()[1]) {
+      // Force the out-of-first-tile offset to be zero.
+      layout = VectorLayout(layout->bitwidth(), {layout->offsets()[0], 0},
+                            layout->tiling(), layout->implicit_dim());
+    }
+    return layout;
   }
 
   SmallVector<Layout, 4> getLayoutFromOperands(Operation *op) {
@@ -2023,6 +2043,10 @@ class VectorLayoutInferer {
 
   std::array<int64_t, 2> target_shape_;
   std::array<int64_t, 2> default_tiling_;
+
+  // TODO(b/342235360): Deprecate reset_lane_offset_to_zero_ once we fully
+  // remove the restriction that offsets must fall within the first tile.
+  bool reset_lane_offset_to_zero_ = false;
 
   // Address alignment requirement, counted in 32-bit increments.
   static constexpr int64_t kVmemAlignment32 = 128;

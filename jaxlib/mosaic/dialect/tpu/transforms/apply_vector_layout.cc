@@ -6208,7 +6208,7 @@ LogicalResult applyLayoutOp(RewriteContext &ctx, Operation &op) {
   // support for offsets outside of the first tile. When support is more broad,
   // any op without support should check it within their own rule.
   if (!isa<vector::BroadcastOp, vector::ExtractStridedSliceOp,
-           vector::ShapeCastOp>(op)) {
+           vector::ShapeCastOp, tpu::BitcastOp>(op)) {
     for (const Layout &layout : layouts_in) {
       if (layout && layout->offsets()[1].has_value() &&
           layout->offsets()[1].value() >= layout->tiling()[1]) {
