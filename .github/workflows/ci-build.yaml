@@ -215,7 +215,7 @@ jobs:
     name: FFI example
     runs-on: linux-x86-g2-48-l4-4gpu
     container:
-      image: index.docker.io/tensorflow/build:sha256-a5ef42192a06fb8cf074e41c70f1a45d98b935c0d9a8324bc44b027b97c52dee  # latest-python3.12
+      image: index.docker.io/tensorflow/build:latest-python3.12
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871  # v4.2.1
