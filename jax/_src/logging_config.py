@@ -51,14 +51,16 @@ def _logging_level_to_int(logging_level: str):
 _tf_cpp_map = {
     'CRITICAL': 3,
     'FATAL': 3,
-    'ERROR': 3,
-    'WARN': 2,
-    'WARNING': 2,
-    'INFO': 1,
+    'ERROR': 2,
+    'WARN': 1,
+    'WARNING': 1,
+    'INFO': 0,
     'DEBUG': 0,
 }
 
 def _set_TF_CPP_MIN_LOG_LEVEL(logging_level: str | None = None):
+  # resetting to user-default TF_CPP_MIN_LOG_LEVEL
+  # this is typically "1", but if the user overrode it, it can be != "1"
   os.environ["TF_CPP_MIN_LOG_LEVEL"] = _default_TF_CPP_MIN_LOG_LEVEL
 
   # set cpp runtime logging level if the level is anything but NOTSET

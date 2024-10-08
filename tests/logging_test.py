@@ -112,7 +112,7 @@ class LoggingTest(jtu.JaxTestCase):
     """))
       python = sys.executable
       assert "python" in python
-      env_variables = {"TF_CPP_MIN_LOG_LEVEL": "1"}
+      env_variables = {}
       if os.getenv("ASAN_OPTIONS"):
         env_variables["ASAN_OPTIONS"] = os.getenv("ASAN_OPTIONS")
       if os.getenv("PYTHONPATH"):
@@ -209,8 +209,6 @@ class LoggingTest(jtu.JaxTestCase):
     self.assertGreater(len(info_lines), 0)
     self.assertIn("INFO", log_output)
     self.assertIn("DEBUG", log_output)
-    self.assertIn("Finished tracing + transforming <lambda> for pjit",
-                  log_output)
     self.assertGreater(len(debug_num_lines), len(info_lines))
 
   @unittest.skipIf(platform.system() == "Windows",
@@ -267,7 +265,42 @@ class LoggingTest(jtu.JaxTestCase):
     log_lines = log_output.strip().split("\n")
     self.assertLess(_get_repeated_log_fraction(log_lines), 0.2)
 
-  # extra subprocess tests for doubled logging in JAX_DEBUG_MODULES
+  @unittest.skipIf(platform.system() == "Windows",
+                   "Subprocess test doesn't work on Windows")
+  def test_subprocess_cpp_logging_level(self):
+    if sys.executable is None:
+      raise self.skipTest("test requires access to python binary")
+
+    program = f"""
+    import sys
+    import jax  # this prints INFO logging from backend imports
+    jax.distributed.initialize("127.0.0.1:12345", num_processes=1, process_id=0)
+    """
+
+    # strip the leading whitespace from the program script
+    program = re.sub(r"^\s+", "", program, flags=re.MULTILINE)
+
+    # verbose logging: DEBUG, VERBOSE
+    cmd = shlex.split(f"env JAX_LOGGING_LEVEL=DEBUG {sys.executable} -c"
+                      f" '{program}'")
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    self.assertIn("Initializing CoordinationService", p.stderr)
+
+    cmd = shlex.split(f"env JAX_LOGGING_LEVEL=INFO {sys.executable} -c"
+                      f" '{program}'")
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    self.assertIn("Initializing CoordinationService", p.stderr)
+
+    # verbose logging: WARNING, None
+    cmd = shlex.split(f"env JAX_LOGGING_LEVEL=WARNING {sys.executable} -c"
+                      f" '{program}'")
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    self.assertNotIn("Initializing CoordinationService", p.stderr)
+
+    cmd = shlex.split(f"{sys.executable} -c"
+                      f" '{program}'")
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    self.assertNotIn("Initializing CoordinationService", p.stderr)
 
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())
