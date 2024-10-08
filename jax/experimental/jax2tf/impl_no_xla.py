@@ -1068,7 +1068,7 @@ def _gather_with_batch_dims(args: GatherArgs):
   # which we then transpose to permute the axes in the proper way.
   # Note that if the batch_dims are contiguous this won't change the output.
   temp = tf.reshape(results, shape=mask_output_shape)
-  return tf.transpose(temp, perm=tf.math.invert_permutation(dim_mask))
+  return tf.transpose(temp, perm=_invert_permutation(dim_mask))
 
 def _gather(operand, start_indices, *, dimension_numbers,
             slice_sizes: core.Shape, indices_are_sorted, unique_indices, mode,
