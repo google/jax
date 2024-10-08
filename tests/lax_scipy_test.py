@@ -447,7 +447,7 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
     if jtu.is_device_tpu(6, "e"):
       self.skipTest("TODO(b/364258243): fails on TPU v6e")
     n_max = l_max
-    shape = (num_z,)
+    shape = (1,)
     rng = jtu.rand_int(self.rng(), -l_max, l_max + 1)
 
     lsp_special_fn = partial(lsp_special.sph_harm, n_max=n_max)
