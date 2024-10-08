@@ -406,17 +406,7 @@ def all_to_all(x, axis_name, split_axis, concat_axis, *, axis_index_groups=None,
   """
   axis_index_groups = _canonicalize_axis_index_groups(axis_index_groups)
   def bind(x, split_axis=split_axis, concat_axis=concat_axis):
-    group_size = psum(1, axis_name, axis_index_groups=axis_index_groups)
-    if tiled:
-      if x.shape[split_axis] % group_size != 0:
-        raise ValueError(f"The size of all_to_all split_axis ({x.shape[split_axis]}) "
-                         f"has to be divisible by the size of the named axis "
-                         f"{axis_name} ({group_size})")
-    else:
-      if group_size != x.shape[split_axis]:
-        msg = ("all_to_all requires the size of the mapped axis axis_name to "
-               "equal x.shape[split_axis], but they are {} and {} respectively.")
-        raise ValueError(msg.format(group_size, x.shape[split_axis]))
+    if not tiled:
       if split_axis < concat_axis:
         concat_axis += 1  # concat_axis gives a position _after_ split_axis is removed
         x = lax.expand_dims(x, (concat_axis,))  # insert the new axis
