@@ -2392,7 +2392,8 @@ def infer_lambda_input_type(
     axes_specs: Sequence[AbstractedAxesSpec] | None,
     args: Sequence[Any]
   ) -> InputType:
-  ndims = [getattr(get_aval(x), 'ndim', 0) for x in args]
+  in_avals = [x if isinstance(x, AbstractValue) else get_aval(x) for x in args]
+  ndims = [getattr(x, 'ndim', 0) for x in in_avals]
   partial_specs = _canonicalize_specs(ndims, axes_specs)
   specs = _complete_specs(args, partial_specs)
   idxs, implicit_types = _collect_implicit(args, specs)
@@ -2440,7 +2441,8 @@ def _complete_specs(
       id(d): name for name, d in sizes.items() if isinstance(d, Tracer)}
   specs: list[dict[int, AbstractedAxisName]] = []
   for x, spec in zip(args, partial_specs):
-    if isinstance(get_aval(x), DShapedArray):
+    aval = x if isinstance(x, AbstractValue) else get_aval(x)
+    if isinstance(aval, DShapedArray):
       spec = dict(spec)
       for i, d in enumerate(x.shape):
         if isinstance(d, Tracer):
@@ -2490,7 +2492,7 @@ def _arg_type(
     spec: dict[int, AbstractedAxisName]
   ) -> AbstractValue:
   # Produce an AbstractValue by substituting DBIdxs for AbstractedAxisNames.
-  aval = get_aval(x)  # aval.shape could contain Tracers
+  aval = x if isinstance(x, AbstractValue) else get_aval(x)  # aval.shape could contain Tracers
   if not spec: return core.raise_to_shaped(aval)
   shape: list[int | DBIdx] = [idxs[spec[i]] if i in spec else d
                                     for i, d in enumerate(aval.shape)]
