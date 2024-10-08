@@ -213,14 +213,12 @@ jobs:
 
   ffi:
     name: FFI example
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: linux-x86-g2-48-l4-4gpu
+    container:
+      image: index.docker.io/tensorflow/build:sha256-a5ef42192a06fb8cf074e41c70f1a45d98b935c0d9a8324bc44b027b97c52dee  # latest-python3.12
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871  # v4.2.1
-    - name: Set up Python 3.11
-      uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3  # v5.2.0
-      with:
-        python-version: 3.11
     - name: Get pip cache dir
       id: pip-cache
       run: |
@@ -232,7 +230,7 @@ jobs:
         path: ${{ steps.pip-cache.outputs.dir }}
         key: ${{ runner.os }}-pip-ffi-examples-${{ hashFiles('**/setup.py', '**/requirements.txt', '**/test-requirements.txt', 'examples/**/pyproject.toml') }}
     - name: Install JAX
-      run: pip install .
+      run: pip install .[cuda12]
     - name: Build and install example project
       run: python -m pip install -v ./examples/ffi[test]
       env:
@@ -241,6 +239,10 @@ jobs:
         # a different toolchain. GCC is the default compiler on the
         # 'ubuntu-latest' runner, but we still set this explicitly just to be
         # clear.
-        CMAKE_ARGS: -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
-    - name: Run tests
+        CMAKE_ARGS: -DCMAKE_CXX_COMPILER=g++ -DJAX_FFI_EXAMPLE_ENABLE_CUDA=ON
+    - name: Run CPU tests
+      run: python -m pytest examples/ffi/tests
+      env:
+        JAX_PLATFORM_NAME: cpu
+    - name: Run GPU tests
       run: python -m pytest examples/ffi/tests
