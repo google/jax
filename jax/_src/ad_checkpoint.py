@@ -90,6 +90,10 @@ def offload_dot_with_no_batch_dims(offload_src, offload_dst):
 
 name_p = core.Primitive('name')
 
+def is_name_primitive(p: core.Primitive) -> bool:
+  """Checks whether a given primitive is a checkpoint name."""
+  return p is name_p 
+
 def save_anything_except_these_names(*names_not_to_save):
   """Save any values (not just named ones) excluding the names given."""
   names_not_to_save = frozenset(names_not_to_save)
