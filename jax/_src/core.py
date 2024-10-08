@@ -211,6 +211,18 @@ class ClosedJaxpr:
     self._consts = list(consts)
 
   @property
+  def constvars(self):
+    return self.jaxpr.constvars
+
+  @property
+  def invars(self):
+    return self.jaxpr.invars
+
+  @property
+  def outvars(self):
+    return self.jaxpr.outvars
+
+  @property
   def in_avals(self):
     return [v.aval for v in self.jaxpr.invars]
 
