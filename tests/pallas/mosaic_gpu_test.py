@@ -72,6 +72,21 @@ class PallasCallTest(PallasTest):
     y = jnp.flip(x).reshape(1, 256)
     np.testing.assert_array_equal(kernel(x, y), x + y[0])
 
+  def test_reshape(self):
+    shape1, shape2 = (128,), (2, 16, 4)
+    @functools.partial(
+        pl.pallas_call,
+        out_shape=jax.ShapeDtypeStruct(shape2, jnp.float32),
+    )
+    def kernel(x_ref, out_ref):
+      x_ref_reshaped = plgpu.reshape_ref(x_ref, shape2)
+      self.assertEqual(x_ref.shape, shape1)
+      self.assertEqual(x_ref_reshaped.shape, shape2)
+      out_ref[...] = x_ref_reshaped[...]
+
+    x = jnp.arange(math.prod(shape1)).astype(jnp.float32)
+    np.testing.assert_array_equal(kernel(x), x.reshape(shape2))
+
   def test_add_xy(self):
     @functools.partial(
         pl.pallas_call,

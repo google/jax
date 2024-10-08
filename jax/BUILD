@@ -686,6 +686,7 @@ pytype_strict_library(
         ":mosaic_gpu_users",
     ],
     deps = [
+        ":mosaic_gpu",
         "//jax/_src/pallas/mosaic_gpu:core",
         "//jax/_src/pallas/mosaic_gpu:pallas_call_registration",  # build_cleaner: keep
         "//jax/_src/pallas/mosaic_gpu:primitives",

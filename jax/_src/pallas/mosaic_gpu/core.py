@@ -18,13 +18,15 @@ import abc
 from collections.abc import Sequence
 import dataclasses
 import enum
+import itertools
+import math
 from typing import Any, ClassVar, Literal
 
 from jax._src import core as jax_core
 from jax._src import dtypes
 from jax._src import tree_util
 from jax._src.pallas import core as pallas_core
-from jax._src.state.types import Transform
+from jax._src.state.types import Transform, TransformedRef
 import jax.experimental.mosaic.gpu as mgpu
 import jax.numpy as jnp
 from jaxlib.mlir import ir
@@ -346,12 +348,16 @@ class WGMMAAccumulatorRef:
     )
 
 
-def _is_trivial_index(idx):
-  _is_deref1 = lambda i: i is Ellipsis or i == slice(None)
+def _is_trivial_index(idx, shape):
+  _slices = lambda d: [
+      slice(b, e, s)
+      for b, e, s in itertools.product([0, None], [d, None], [1, None])
+  ]
   if isinstance(idx, tuple):
-    return all(_is_deref1(i) for i in idx)
+    return all(i in _slices(d) for d, i in zip(shape, idx))
 
-  return _is_deref1(idx)
+  return idx is Ellipsis or (len(shape) == 1 and idx in _slices(shape[0]))
+
 
 class WGMMAAbstractAccumulatorRef(AbstractMemoryRef):
   __slots__ = ["inner_aval", "memory_space"]
@@ -372,7 +378,7 @@ class WGMMAAbstractAccumulatorRef(AbstractMemoryRef):
     from jax._src.pallas.mosaic_gpu.primitives import wgmma_accumulator_deref  # pytype: disable=import-error
     arr = wgmma_accumulator_deref(tracer)
 
-    if not _is_trivial_index(idx):
+    if not _is_trivial_index(idx, tracer.shape):
       arr = arr[idx]
 
     return arr
@@ -387,3 +393,43 @@ def _as_accum(ref) -> WGMMAAbstractAccumulatorRef:
 def _ref_raise_to_shaped(ref_aval, weak_type):
   return _as_accum(jax_core.raise_to_shaped_mappings[AbstractMemoryRef](ref_aval, weak_type))
 jax_core.raise_to_shaped_mappings[WGMMAAbstractAccumulatorRef] = _ref_raise_to_shaped
+
+
+@tree_util.register_pytree_node_class
+@dataclasses.dataclass(frozen=True)
+class ReshapeRef(Transform):
+  shape: tuple[int, ...]
+
+  def transform_shape(self, shape):
+
+    if shape is not None and math.prod(shape) != math.prod(self.shape):
+      raise ValueError(
+          f"ReshapeRef must preserve the number of elements, but got {shape} ->"
+          f" {self.shape}"
+      )
+
+    return self.shape
+
+  def untransform_index(self, idxs: tuple[slice, ...]) -> tuple[slice, ...]:
+    if not _is_trivial_index(idxs, self.shape):
+      raise NotImplementedError(
+          "A reference has been reshaped and then sliced, which is not"
+          " supported."
+      )
+
+    return idxs
+
+  def tree_flatten(self):
+    return (), (self.shape,)
+
+  @classmethod
+  def tree_unflatten(cls, metadata, arrays):
+    assert not arrays
+    return cls(*metadata)
+
+
+def reshape_ref(ref, shape) -> TransformedRef:
+  if isinstance(ref, TransformedRef):
+    return dataclasses.replace(ref, transforms=(*ref.transforms, ReshapeRef(shape)))
+  else:
+    return TransformedRef(ref, (ReshapeRef(shape),))

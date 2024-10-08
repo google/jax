@@ -20,7 +20,7 @@ import dataclasses
 import enum
 import functools
 import math
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import jax
 from jax import numpy as jnp
@@ -357,6 +357,80 @@ def _is_contiguous_shape_slice(
       return False
 
   return True
+
+
+def _reshape(ref: ir.Value, sh0: list[int], sh1: list[int]):
+  """Reshapes using only "parallel" folds/unfolds.
+
+  This function uses folds/unfolds that are "parallel" in that they
+  only act on original dimensions, i.e. they won't fold into an
+  intermediate dimension that they will then unfold.
+  """
+
+  i0, i1 = 0, 0
+  def fold_until(shape, off , target)  -> tuple[int, int]:
+    assert shape[off] < target
+    dim = 1
+    for to in range(off, len(shape)):
+      dim *= shape[to]
+      if dim == target:
+        return to + 1, dim
+      if dim > target:
+        break
+
+    # TODO(cperivol): Implement dependent fold-unfolds for subsections
+    # of the shape eg (..., 4,5,5, ...) -> (..., 10,10, ...) could be
+    # supported without touching any other dimensions.
+    raise NotImplementedError(f"Can't reshape {sh0} to {sh1} but composing independent folds/unfolds.")
+
+  while i0 < len(sh0) and i1 < len(sh1):
+    if sh0[i0] > sh1[i1]:
+      # How many dimensions following i1 should we unfold i0 into.
+      idx, _ = fold_until(sh1, i1, sh0[i0])
+      ref = memref_unfold(ref, i0, sh1[i1:idx])
+      sh0[i0:i0+1] = sh1[i1:idx]
+      i0 += idx - i1
+      i1 = idx
+    elif sh0[i0] < sh1[i1]:
+      # How many dimensions after i0 should we fold to make dim at i1.
+      idx, dim = fold_until(sh0, i0, sh1[i1])
+      sh0[i0:idx] = [dim]
+      ref = memref_fold(ref, i0, idx - i0)
+      i0 += 1
+      i1 += 1
+    else:
+      i0 += 1
+      i1 += 1
+
+  # Fold the trailing ones
+  if i0 < len(sh0):
+    assert i1 == len(sh1)
+    ref = memref_fold(ref, i0 - 1, len(sh0) - i0 + 1)
+
+  if i1 < len(sh1):
+    assert i0 == len(sh0)
+    ref = memref_unfold(ref, i0 - 1, len(sh0) - i0)
+
+  return ref
+
+
+def memref_reshape(ref: ir.Value, shape: tuple[int, ...]) -> ir.Value:
+  """Reshape by means of folding and unfolding.
+
+  The use of memref fold/unfold may avoid some possible issues with
+  strided memrefs.
+  """
+
+  ref_ty = ir.MemRefType(ref.type)
+  if math.prod(ref_ty.shape) != math.prod(shape):
+    raise ValueError("Cannot reshape to a different size")
+  if not all(dim > 0 for dim in shape):
+    raise ValueError(
+        "Shapes must havbe only positive dimensions (no -1 or 0 dimensions"
+        f" allowed) {shape}"
+    )
+
+  return _reshape(ref, list(ref_ty.shape), list(shape))
 
 
 def memref_fold(ref: ir.Value, dim, fold_rank) -> ir.Value:

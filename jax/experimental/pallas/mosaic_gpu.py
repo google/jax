@@ -24,12 +24,15 @@ from jax._src.pallas.mosaic_gpu.core import GPUMemorySpace
 from jax._src.pallas.mosaic_gpu.core import TilingTransform
 from jax._src.pallas.mosaic_gpu.core import TransposeTransform
 from jax._src.pallas.mosaic_gpu.core import WGMMAAccumulatorRef as ACC
+from jax._src.pallas.mosaic_gpu.core import reshape_ref
 from jax._src.pallas.mosaic_gpu.primitives import copy_gmem_to_smem
 from jax._src.pallas.mosaic_gpu.primitives import copy_smem_to_gmem
 from jax._src.pallas.mosaic_gpu.primitives import wait_barrier
 from jax._src.pallas.mosaic_gpu.primitives import wait_smem_to_gmem
 from jax._src.pallas.mosaic_gpu.primitives import wgmma
 from jax._src.pallas.mosaic_gpu.primitives import wgmma_wait
+
+from jax.experimental.mosaic.gpu.utils import tile_shape
 
 GMEM = GPUMemorySpace.GMEM
 SMEM = GPUMemorySpace.SMEM
