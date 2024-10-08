@@ -271,7 +271,7 @@ class LoggingTest(jtu.JaxTestCase):
     if sys.executable is None:
       raise self.skipTest("test requires access to python binary")
 
-    program = f"""
+    program = """
     import sys
     import jax  # this prints INFO logging from backend imports
     jax.distributed.initialize("127.0.0.1:12345", num_processes=1, process_id=0)
