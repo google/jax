@@ -244,6 +244,7 @@ class custom_jvp(Generic[ReturnValue]):
     jvp_name    = getattr(self.jvp, '__name__', str(self.jvp))
     args = resolve_kwargs(self.fun, args, kwargs)
     if self.nondiff_argnums:
+      for i in self.nondiff_argnums: _check_for_tracers('jvp', args[i])
       nondiff_argnums = set(self.nondiff_argnums)
       args = tuple(_stop_gradient(x) if i in nondiff_argnums else x
                    for i, x in enumerate(args))
@@ -624,7 +625,7 @@ class custom_vjp(Generic[ReturnValue]):
       return custom_vjp_by_custom_transpose(self.fun, self.fwd, self.bwd)(*args)
     else:
       if self.nondiff_argnums:
-        for i in self.nondiff_argnums: _check_for_tracers(args[i])
+        for i in self.nondiff_argnums: _check_for_tracers('vjp', args[i])
         nondiff_argnums = set(self.nondiff_argnums)
         dyn_argnums = [i for i in range(len(args)) if i not in nondiff_argnums]
         f_, dyn_args = argnums_partial(lu.wrap_init(self.fun), dyn_argnums,
@@ -672,13 +673,13 @@ def custom_vjp_primal_tree_values(tree):
     return leaf.value
   return tree_map(value, tree)
 
-def _check_for_tracers(x):
+def _check_for_tracers(name, x):
   for leaf in tree_leaves(x):
     if isinstance(leaf, core.Tracer):
-      msg = ("Found a JAX Tracer object passed as an argument to a custom_vjp "
+      msg = (f"Found a JAX Tracer object passed as an argument to a custom_{name} "
             "function in a position indicated by nondiff_argnums as "
             "non-differentiable. Tracers cannot be passed as non-differentiable "
-            "arguments to custom_vjp functions; instead, nondiff_argnums should "
+            f"arguments to custom_{name} functions; instead, nondiff_argnums should "
             "only be used for arguments that can't be or contain JAX tracers, "
             "e.g. function-valued arguments. In particular, array-valued "
             "arguments should typically not be indicated as nondiff_argnums.")
