@@ -17,7 +17,7 @@ import collections
 from collections.abc import Callable, Iterable, Sequence
 import dataclasses
 from functools import partial
-from typing import Any, Union
+from typing import Any, Union, TypeAlias
 
 import numpy as np
 
@@ -318,7 +318,7 @@ def flatten_fun_for_vmap(in_tree, *args_flat):
 ### tracer
 
 # TODO(mattjj): use a special sentinel type rather than None
-NotMapped = type(None)
+NotMapped: TypeAlias = type(None)
 not_mapped = None
 
 
