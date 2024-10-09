@@ -1998,14 +1998,9 @@ def ravel_multi_index(multi_index: Sequence[ArrayLike], dims: Sequence[int],
     (Array([0, 0, 1], dtype=int32), Array([0, 2, 1], dtype=int32))
   """
   assert len(multi_index) == len(dims), f"len(multi_index)={len(multi_index)} != len(dims)={len(dims)}"
-  dims = tuple(core.concrete_or_error(operator.index, d, "in `dims` argument of ravel_multi_index().") for d in dims)
   util.check_arraylike("ravel_multi_index", *multi_index)
   multi_index_arr = [asarray(i) for i in multi_index]
   for index in multi_index_arr:
-    if mode == 'raise':
-      core.concrete_or_error(array, index,
-        "The error occurred because ravel_multi_index was jit-compiled"
-        " with mode='raise'. Use mode='wrap' or mode='clip' instead.")
     if not issubdtype(_dtype(index), integer):
       raise TypeError("only int indices permitted")
   if mode == "raise":
@@ -2018,17 +2013,21 @@ def ravel_multi_index(multi_index: Sequence[ArrayLike], dims: Sequence[int],
   else:
     raise ValueError(f"invalid mode={mode!r}. Expected 'raise', 'wrap', or 'clip'")
 
+  strides = (1,)
   if order == "F":
-    strides = np.cumprod((1,) + dims[:-1])
+    for dim in dims[:-1]:
+      strides += (strides[-1] * dim,)
   elif order == "C":
-    strides = np.cumprod((1,) + dims[1:][::-1])[::-1]
+    for dim in dims[1:][::-1]:
+      strides += (strides[-1] * dim,)
+    strides = strides[::-1]
   else:
     raise ValueError(f"invalid order={order!r}. Expected 'C' or 'F'")
 
   result = array(0, dtype=(multi_index_arr[0].dtype if multi_index_arr
                            else dtypes.canonicalize_dtype(int_)))
   for i, s in zip(multi_index_arr, strides):
-    result = result + i * int(s)
+    result = result + i * s
   return result
 
 
