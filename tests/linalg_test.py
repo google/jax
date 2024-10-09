@@ -360,16 +360,16 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     w, v = jnp.linalg.eigh(np.tril(a) if lower else np.triu(a),
                            UPLO=uplo, symmetrize_input=False)
     w = w.astype(v.dtype)
-    tol = 2 * n * eps
+    tol = n * eps
     self.assertAllClose(
         np.eye(n, dtype=v.dtype),
-        np.matmul(np.conj(T(v)), v),
+        np.matmul(v.conj().T, v),
         atol=tol,
         rtol=tol,
     )
 
     with jax.numpy_rank_promotion('allow'):
-      tol = 100 * eps
+      tol = 50 * eps
       self.assertLessEqual(
           np.linalg.norm(np.matmul(a, v) - w * v), tol * np.linalg.norm(a)
       )
@@ -387,7 +387,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     if dtype == np.complex64:
       double_type = np.complex128
     w_np = np.linalg.eigvalsh(a.astype(double_type))
-    tol = 8 * eps
+    tol = 4 * eps
     self.assertAllClose(
         w_np.astype(w.dtype), w, atol=tol * np.linalg.norm(a), rtol=tol
     )
@@ -418,11 +418,11 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     self.assertEqual(v.shape, (n, k))
     self.assertEqual(w.shape, (k,))
     with jax.numpy_rank_promotion("allow"):
-      tol = 200 * eps
+      tol = 50 * eps
       self.assertLessEqual(
           np.linalg.norm(np.matmul(a, v) - w * v), tol * np.linalg.norm(a)
       )
-    tol = 3 * n * eps
+    tol = n * eps
     self.assertAllClose(
         np.eye(k, dtype=v.dtype),
         np.matmul(np.conj(T(v)), v),
@@ -443,7 +443,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     w_np = np.linalg.eigvalsh(a.astype(double_type))[
         subset_by_index[0] : subset_by_index[1]
     ]
-    tol = 20 * eps
+    tol = 10 * eps
     self.assertAllClose(
         w_np.astype(w.dtype), w, atol=tol * np.linalg.norm(a), rtol=tol
     )
@@ -831,7 +831,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
       max_backward_error = np.amax(backward_error)
       return max_backward_error
 
-    tol = 100 * jnp.finfo(dtype).eps
+    tol = 80 * jnp.finfo(dtype).eps
     reconstruction_tol = 2 * tol
     unitariness_tol = 3 * tol
 
