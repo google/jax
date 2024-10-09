@@ -340,7 +340,14 @@ def tree_map(f: Callable[..., Any],
              is_leaf: Callable[[Any], bool] | None = None) -> Any:
   """Alias of :func:`jax.tree.map`."""
   leaves, treedef = tree_flatten(tree, is_leaf)
-  all_leaves = [leaves] + [treedef.flatten_up_to(r) for r in rest]
+  all_leaves = [leaves]
+  try:
+    for r in rest:
+      leaves.append(treedef.flatten_up_to(r))
+  except ValueError:
+    e = next(_prefix_error((), tree, r, is_leaf), None)
+    if e: raise e('tree') from None
+    else: raise
   return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
 
 
@@ -1193,11 +1200,17 @@ def tree_map_with_path(f: Callable[..., Any],
     - :func:`jax.tree_util.tree_flatten_with_path`
     - :func:`jax.tree_util.tree_leaves_with_path`
   """
-
   keypath_leaves, treedef = tree_flatten_with_path(tree, is_leaf)
-  keypath_leaves = list(zip(*keypath_leaves))
-  all_keypath_leaves = keypath_leaves + [treedef.flatten_up_to(r) for r in rest]
-  return treedef.unflatten(f(*xs) for xs in zip(*all_keypath_leaves))
+  keypaths, leaves = unzip2(keypath_leaves)
+  all_leaves = [leaves]
+  try:
+    for r in rest:
+      all_leaves.append(treedef.flatten_up_to(r))
+  except ValueError:
+    e = next(_prefix_error((), tree, r, is_leaf), None)
+    if e: raise e('tree') from None
+    else: raise
+  return treedef.unflatten(f(k, *xs) for k, *xs in zip(keypaths, *all_leaves))
 
 
 def _child_keys(pytree: Any) -> KeyPath:
@@ -1256,6 +1269,23 @@ def _prefix_error(
           f"{ty.__name__} of length {len(prefix_tree)}, but the full pytree "
           f"has a subtree of the same type but of length {len(full_tree)}."
           .format(name=name))
+      return  # don't look for more errors in this subtree
+  elif isinstance(prefix_tree, dict):
+    if set(prefix_tree) != set(full_tree):
+      if diff := (set(prefix_tree) - set(full_tree)):
+        yield lambda name: ValueError(
+            f"pytree structure error: different dict key sets at key path\n"
+            f"    {{name}}{keystr(key_path)}\n"
+            f"At that key path, the prefix pytree {{name}} has keys which do "
+            "not appear in the full pytree, namely:\n"
+            f"    {' '.join(diff)}".format(name=name))
+      if diff := (set(full_tree) - set(prefix_tree)):
+        yield lambda name: ValueError(
+            f"pytree structure error: different dict key sets at key path\n"
+            f"    {{name}}{keystr(key_path)}\n"
+            f"At that key path, the prefix pytree {{name}} is missing keys "
+            "which appear in the full pytree, namely:\n"
+            f"    {' '.join(diff)}".format(name=name))
       return  # don't look for more errors in this subtree
   else:
     # Next we handle the general case of checking child keys.
