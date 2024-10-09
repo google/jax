@@ -375,8 +375,8 @@ FailureOr<std::pair<Value, SmallVector<int64_t>>> sliceRef(
 
   // MemRefSliceOp only allows tile-aligned slices. We pad the shape up
   // accordingly with the padding. We don't include the static tiled indices
-  // in the slice when they can be arbitrary. But we do include dynamic tiled
-  // indices under the condition that they are divisible by the tile size.
+  // in the slice when they can be arbitrary. But we do include the part of the
+  // dynamic tiled indices that determines the tile.
   SmallVector<int64_t> pad_slice_shape(slice_shape);
   TPU_ASSERT_LE_LOC(builder.getLoc(), tiling.size(), slice_shape.size());
   for (int i = 1; i <= tiling.size(); ++i) {
@@ -392,7 +392,9 @@ FailureOr<std::pair<Value, SmallVector<int64_t>>> sliceRef(
 
   Value c0 = nullptr;
   SmallVector<int64_t> indices_within_slice(indices.size() - tiling.size(), 0);
-  for (auto tiled_idx : indices.take_back(tiling.size())) {
+  for (int64_t i = 0; i < tiling.size(); ++i) {
+    const int64_t dim = indices.size() - tiling.size() + i;
+    Value tiled_idx = indices[dim];
     if (auto cst = getIntConst(tiled_idx, /*silent=*/true); succeeded(cst)) {
       indices_within_slice.push_back(*cst);
       if (!c0) {
@@ -401,14 +403,29 @@ FailureOr<std::pair<Value, SmallVector<int64_t>>> sliceRef(
       }
       slice_base_indices.push_back(c0);
     } else {
-      indices_within_slice.push_back(0);
-      // TODO: Check divisibility!
-      slice_base_indices.push_back(
-          builder.create<arith::IndexCastOp>(i32, tiled_idx));
+      const std::optional<int64_t> offset =
+          getKnownModulo(tiled_idx, tiling[i]);
+      if (!offset) {
+        return builder.emitError(
+                   "Trying to slice a memref, but, for dimension ")
+               << dim << ", the index modulo tiling (" << tiling[i]
+               << ") could not be statically deduced";
+      }
+      indices_within_slice.push_back(*offset);
+      tiled_idx = builder.create<arith::IndexCastOp>(i32, tiled_idx);
+      if (*offset != 0) {
+        // The inserted div+mul are expected to be optimized out, since after
+        // lowering they feed into a div (also by tiling).
+        // TODO(b/352788531): This is not yet the case
+        auto t_const = builder.create<arith::ConstantOp>(
+            i32, builder.getI32IntegerAttr(tiling[i]));
+        tiled_idx = builder.create<arith::MulIOp>(
+            builder.create<arith::DivUIOp>(tiled_idx, t_const), t_const);
+      }
+      slice_base_indices.push_back(tiled_idx);
     }
   }
 
-  // TODO(apaszke): Allow tile-aligned dynamic slicing on tiled dimensions.
   Value sliced_ref = builder.create<tpu::MemRefSliceOp>(
       MemRefType::get(pad_slice_shape, ref_ty.getElementType(),
                       ref_ty.getLayout(), ref_ty.getMemorySpace()),
@@ -2895,13 +2912,12 @@ LogicalResult vector_load_rule(RewriteContext &ctx, Operation &op,
   }
   // TODO(apaszke): Check that loads are from vmem!
 
-  bool can_support_unaligned_dynamic_index = false;
-  bool must_support_unaligned_dynamic_index = false;
+  bool can_support_arbitrary_dynamic_index = false;
+  bool must_support_arbitrary_dynamic_index = false;
   if (load_op.getIndices().size() > 1) {
     auto second_minor_idx = load_op.getIndices().take_back(2)[0];
-    if (failed(getIntConst(second_minor_idx, /*silent=*/true)) &&
-        !isGuaranteedDivisible(second_minor_idx, memref_tiling[0])) {
-      must_support_unaligned_dynamic_index = true;
+    if (!getKnownModulo(second_minor_idx, memref_tiling[0]).has_value()) {
+      must_support_arbitrary_dynamic_index = true;
     }
   }
   const SmallVector<int64_t> implicit_shape =
@@ -2915,7 +2931,7 @@ LogicalResult vector_load_rule(RewriteContext &ctx, Operation &op,
     // Loading a single row on the 2nd minor dim into the (1, 128) layout. We
     // can use sublane striding to perform the relayout as part of the load.
     sublane_stride = memref_tiling[0];
-    can_support_unaligned_dynamic_index = true;
+    can_support_arbitrary_dynamic_index = true;
   } else {
     // Otherwise, if the memref has a short last dimension and is contiguous
     // all the tiled layouts become equivalent, so we can handle unaligned
@@ -2927,7 +2943,7 @@ LogicalResult vector_load_rule(RewriteContext &ctx, Operation &op,
     auto tile_strides = mem_layout.getTileStrides();
     if (memref_ty.getShape().back() == ctx.target_shape[1] &&
         tile_strides.take_back(2) == ArrayRef<int64_t>{1, 1}) {
-      can_support_unaligned_dynamic_index = true;
+      can_support_arbitrary_dynamic_index = true;
     }
   }
 
@@ -2942,10 +2958,11 @@ LogicalResult vector_load_rule(RewriteContext &ctx, Operation &op,
   Value base_addr = load_op.getBase();
   SmallVector<Value, 4> base_indices = load_op.getIndices();
 
-  if (must_support_unaligned_dynamic_index) {
-    if (!can_support_unaligned_dynamic_index) {
+  if (must_support_arbitrary_dynamic_index) {
+    if (!can_support_arbitrary_dynamic_index) {
       return op.emitOpError(
-          "Not implemented: dynamic load with unaligned indices");
+                 "Not implemented: Failed to deduce 2nd minor index modulo ")
+             << memref_tiling[0] << " and cannot handle.";
     }
   } else {
     // Convert dynamic load to dynamic slice + static load. This saves us a
@@ -4074,13 +4091,12 @@ LogicalResult vector_store_rule(RewriteContext &ctx, Operation &op,
     }
   }
 
-  bool can_support_unaligned_dynamic_index = false;
-  bool must_support_unaligned_dynamic_index = false;
+  bool can_support_arbitrary_dynamic_index = false;
+  bool must_support_arbitrary_dynamic_index = false;
   if (store_op.getIndices().size() > 1) {
     auto second_minor_idx = store_op.getIndices().take_back(2)[0];
-    if (failed(getIntConst(second_minor_idx, /*silent=*/true)) &&
-        !isGuaranteedDivisible(second_minor_idx, memref_tiling[0])) {
-      must_support_unaligned_dynamic_index = true;
+    if (!getKnownModulo(second_minor_idx, memref_tiling[0]).has_value()) {
+      must_support_arbitrary_dynamic_index = true;
     }
   }
   int64_t sublane_stride = 1;
@@ -4092,7 +4108,7 @@ LogicalResult vector_store_rule(RewriteContext &ctx, Operation &op,
     // The stride of store should be the number of sublanes in memref tile when
     // store a single sublane.
     sublane_stride = memref_tiling[0];
-    can_support_unaligned_dynamic_index = true;
+    can_support_arbitrary_dynamic_index = true;
   } else {
     // Otherwise, if the memref has a short last dimension and is contiguous
     // all the tiled layouts become equivalent, so we can handle unaligned
@@ -4104,7 +4120,7 @@ LogicalResult vector_store_rule(RewriteContext &ctx, Operation &op,
     auto tile_strides = mem_layout.getTileStrides();
     if (memref_ty.getShape().back() == ctx.target_shape[1] &&
         tile_strides.take_back(2) == ArrayRef<int64_t>{1, 1}) {
-      can_support_unaligned_dynamic_index = true;
+      can_support_arbitrary_dynamic_index = true;
     }
   }
 
@@ -4119,8 +4135,8 @@ LogicalResult vector_store_rule(RewriteContext &ctx, Operation &op,
   Value base_addr = store_op.getBase();
   SmallVector<Value, 4> base_indices = store_op.getIndices();
 
-  if (must_support_unaligned_dynamic_index) {
-    if (!can_support_unaligned_dynamic_index) {
+  if (must_support_arbitrary_dynamic_index) {
+    if (!can_support_arbitrary_dynamic_index) {
       return op.emitOpError(
           "Not implemented: dynamic store with unaligned indices");
     }

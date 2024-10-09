@@ -19,6 +19,7 @@ limitations under the License.
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -99,7 +100,13 @@ LogicalResult specializeMemorySpace(TypedValue<MemRefType> value,
 // vector ops. This functions inverts the layout erasure applied to the value.
 MemRefType getMemRefType(Value value);
 
-bool isGuaranteedDivisible(Value value, int64_t divisor, int64_t fuel = 8);
+constexpr int64_t kDefaultFuel = 8;
+// Returns statically-known `value` % `divisor` if it can deduce it, otherwise
+// returns nullopt. Note that the result may be negative.
+//
+// The `fuel` parameter limits how far we will search for.
+std::optional<int64_t> getKnownModulo(Value value, int64_t divisor,
+                                      int64_t fuel = kDefaultFuel);
 
 #define GEN_PASS_REGISTRATION
 #include "jaxlib/mosaic/dialect/tpu/tpu_passes.h.inc"

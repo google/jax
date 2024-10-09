@@ -51,6 +51,7 @@ limitations under the License.
 #include "mlir/include/mlir/IR/Visitors.h"
 #include "jaxlib/mosaic/dialect/tpu/layout.h"
 #include "jaxlib/mosaic/dialect/tpu/tpu_dialect.h"
+#include "jaxlib/mosaic/dialect/tpu/util.h"
 #include "xla/layout.h"
 
 namespace mlir::tpu {
@@ -94,13 +95,15 @@ TiledLayoutAttr getMemRefLayout(Value ref) {
   return cast<TiledLayoutAttr>(cast<MemRefType>(ref.getType()).getLayout());
 }
 
-LogicalResult verifyDivisibleIndex(Value tiled_index, int64_t tiling, int dim,
-                                   Operation *op) {
-  if (!isGuaranteedDivisible(tiled_index, tiling)) {
-    return op->emitOpError("cannot statically prove that index in dimension ")
-           << dim << " is a multiple of " << tiling;
+FailureOr<int64_t> getIndexOffset(Value tiled_index, int64_t tiling, int dim,
+                                  Operation *op) {
+  if (std::optional<int64_t> offset = getKnownModulo(tiled_index, tiling)) {
+    return *offset;
   }
-  return success();
+  return op->emitOpError(
+             "Cannot statically determine the value of index "
+             "in dimension ")
+         << dim << " modulo " << tiling;
 }
 
 // TODO(apaszke): Test that this pass fills in NoLayout for all operations that
@@ -1169,16 +1172,8 @@ class VectorLayoutInferer {
                             int64_t tiling_dim) -> LogicalResult {
       int dim = rank - tiling.size() + tiling_dim;
       Value tiled_index = op.getIndices()[dim];
-      if (auto cst_op = tiled_index.getDefiningOp<arith::ConstantOp>()) {
-        offset =
-            cast<IntegerAttr>(cst_op.getValue()).getInt() % tiling[tiling_dim];
-        return success();
-      }
-      if (failed(
-              verifyDivisibleIndex(tiled_index, tiling[tiling_dim], dim, op))) {
-        return failure();
-      }
-      offset = 0;
+      FAILUREOR_ASSIGN_OR_RETURN(
+          offset, getIndexOffset(tiled_index, tiling[tiling_dim], dim, op));
       return success();
     };
 
@@ -1495,16 +1490,8 @@ class VectorLayoutInferer {
                             int64_t tiling_dim) -> LogicalResult {
       int dim = rank - tiling.size() + tiling_dim;
       Value tiled_index = op.getIndices()[dim];
-      if (auto cst_op = tiled_index.getDefiningOp<arith::ConstantOp>()) {
-        offset =
-            cast<IntegerAttr>(cst_op.getValue()).getInt() % tiling[tiling_dim];
-        return success();
-      }
-      if (failed(
-              verifyDivisibleIndex(tiled_index, tiling[tiling_dim], dim, op))) {
-        return failure();
-      }
-      offset = 0;
+      FAILUREOR_ASSIGN_OR_RETURN(
+          offset, getIndexOffset(tiled_index, tiling[tiling_dim], dim, op));
       return success();
     };
 
