@@ -2150,13 +2150,20 @@ def _cmp_lowering_rule(prim, ctx: LoweringRuleContext, x, y):
 
   # Handle bool comparisons by casting to int32.
   if jnp.issubdtype(dtype, jnp.bool_):
-    bool_cast_to = _dtype_to_ir_type(jnp.dtype("int32"))
-    true_ = ir_constant(1, mlir_type=bool_cast_to)
-    false_ = ir_constant(0, mlir_type=bool_cast_to)
-
-    x = arith.SelectOp(x, true_, false_)
-    y = arith.SelectOp(y, true_, false_)
-    dtype = jnp.dtype("int32")
+    return lower_fun(
+        lambda x, y: {
+            lax.eq_p: lambda x, y: x == y,
+            lax.ne_p: lambda x, y: x != y,
+            lax.lt_p: lambda x, y: x < y,
+            lax.le_p: lambda x, y: x <= y,
+            lax.gt_p: lambda x, y: x > y,
+            lax.ge_p: lambda x, y: x >= y,
+        }[prim](
+            jnp.where(x, 1, 0),
+            jnp.where(y, 1, 0),
+        ),
+        multiple_results=False,
+    )(ctx, x, y)
 
   if jnp.issubdtype(dtype, jnp.integer):
     is_uint = jnp.issubdtype(dtype, jnp.unsignedinteger)
