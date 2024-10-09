@@ -1,0 +1,47 @@
+# Copyright 2024 The JAX Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+# Inherit default JAXCI environment variables.
+source ci/envs/default
+
+# Enable jax-cuda-plugin build
+export JAXCI_BUILD_PLUGIN="1"
+
+# Enable wheel audit to check for manylinux compliance.
+export JAXCI_RUN_AUDITWHEEL="1"
+
+os=$(uname -s | awk '{print tolower($0)}')
+arch=$(uname -m)
+
+# Linux x86 specifc settings
+if [[ $os == "linux" ]] && [[ $arch == "x86_64" ]]; then
+  # Note Python version of the container does not matter for Bazel builds and
+  # Bazel tests. JAX supports hermetic Python and thus the actual Python version
+  # of the artifact is controlled by the value set in `HERMETIC_PYTHON_VERSION`.
+  export JAXCI_DOCKER_IMAGE="us-central1-docker.pkg.dev/tensorflow-sigs/tensorflow/build:670606426-python3.12"
+fi
+
+# Linux Aarch64 specifc settings
+if [[ $os == "linux" ]] && [[ $arch == "aarch64" ]]; then
+  export JAXCI_DOCKER_IMAGE="us-central1-docker.pkg.dev/tensorflow-sigs/tensorflow/build-arm64:tf-2-18-multi-python"
+fi
+
+# When building artifacts for running tests, we need to disable x64 mode and
+# clone XLA at HEAD.
+if [[ $JAXCI_SETUP_TEST_ENVIRONMENT == 1 ]]; then
+  # Disable x64 mode
+  export JAX_ENABLE_X64=0
+  # Clone XLA at HEAD.
+  export JAXCI_CLONE_MAIN_XLA=1
+fi

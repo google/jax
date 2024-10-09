@@ -1,0 +1,115 @@
+# Copyright 2024 The JAX Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+# This file contains all the default values for the environment variables
+# used in the JAX CI scripts.
+#
+# The default values are set here. Other build specifc envs such as those in the
+# "build_artifacts" and "run_tests" directory source this file and override the
+# default values depening on the build type.
+
+# This is expected to be the root of the JAX git repository.
+export JAXCI_JAX_GIT_DIR=$(pwd)
+
+# Controls the version of Hermetic Python to use. Use system default if not
+# set.
+export JAXCI_HERMETIC_PYTHON_VERSION=${JAXCI_HERMETIC_PYTHON_VERSION:-$(python3 -V | awk '{print $2}' | awk -F. '{print $1"."$2}')}
+
+# Controls the location where the artifacts are stored.
+export JAXCI_OUTPUT_DIR="$(pwd)/dist"
+
+# Release tag to use for the build.
+export JAXCI_RELEASE_TAG="${JAXCI_RELEASE_TAG:-}"
+
+# #############################################################################
+# Artifact build specific environment variables.
+# #############################################################################
+
+# The build CLI can be run in either "ci" or "local" mode. This is used to
+# determine which .bazelrc configs to pass to Bazel. CI mode uses JAX's custom
+# toolchain and local mode uses the default Bazel toolchain.
+export JAXCI_CLI_BUILD_MODE=ci
+
+# If set to 1, the build CLI will use RBE to build the artifacts. Available for
+# Linux x86 and Windows. RBE requires authentication to JAX's GCP project so
+# only CI builds and Googlers can use RBE.
+export JAXCI_BUILD_ARTIFACT_WITH_RBE=${JAXCI_BUILD_ARTIFACT_WITH_RBE:-0}
+
+# Environment variables that control which artifact to build. Used by
+# `build_artifacts.sh`
+export JAXCI_BUILD_JAX=0
+export JAXCI_BUILD_JAXLIB=0
+export JAXCI_BUILD_PLUGIN=0
+export JAXCI_BUILD_PJRT=0
+export JAXCI_RUN_AUDITWHEEL=0
+
+# #############################################################################
+# Docker specific environment variables.
+# #############################################################################
+
+# Docker specifc environment variables. Used by `run_docker_container.sh`
+export JAXCI_RUN_DOCKER_CONTAINER=${JAXCI_RUN_DOCKER_CONTAINER:-1}
+export JAXCI_DOCKER_WORK_DIR="/jax"
+export JAXCI_DOCKER_IMAGE=""
+export JAXCI_DOCKER_ARGS=""
+
+# #############################################################################
+# Test specific environment variables.
+# #############################################################################
+
+# Used by envs inside ci/build_artifacts. When set to 1, we disable x64 mode
+# and clone XLA at HEAD.
+export JAXCI_SETUP_TEST_ENVIRONMENT=${JAXCI_SETUP_TEST_ENVIRONMENT:-0}
+
+# Set when running tests locally where we need the wheels to be installed on
+# the system.
+export JAXCI_INSTALL_WHEELS_LOCALLY=0
+
+# JAXCI_PYTHON is used to install the wheels locally. It needs to match the
+# version of the hermetic Python used by Bazel.
+export JAXCI_PYTHON=python${JAXCI_HERMETIC_PYTHON_VERSION}
+
+# Bazel test environment variables.
+export JAXCI_RUN_BAZEL_TEST_CPU=0
+export JAXCI_RUN_BAZEL_TEST_GPU_LOCAL=0
+export JAXCI_RUN_BAZEL_TEST_GPU_RBE=0
+
+# Pytest environment variables.
+export JAXCI_RUN_PYTEST_CPU=0
+export JAXCI_RUN_PYTEST_GPU=0
+export JAXCI_RUN_PYTEST_TPU=0
+export JAXCI_TPU_CORES=""
+
+# If set to 1, the script will clone the main XLA repository at HEAD, set its
+# path in JAXCI_XLA_GIT_DIR and use it to build the artifacts or run the tests.
+export JAXCI_CLONE_MAIN_XLA=${JAXCI_CLONE_MAIN_XLA:-0}
+
+# Enable this globally across all builds.
+export JAX_SKIP_SLOW_TESTS=true
+
+# #############################################################################
+# Variables that can be overridden by the user.
+# #############################################################################
+# Set JAXCI_XLA_GIT_DIR to the root of the XLA git repository if you want to
+# use a local copy of XLA instead of the pinned version in the WORKSPACE.
+export JAXCI_XLA_GIT_DIR=${JAXCI_XLA_GIT_DIR:-}
+
+# Set JAXCI_XLA_COMMIT to the commit to use for the XLA repository. Requires
+# the path to the local copy of XLA to be set in JAXCI_XLA_GIT_DIR.
+export JAXCI_XLA_COMMIT=${JAXCI_XLA_COMMIT:-}
+
+# When running tests locally, JAX artifacts are built with CUDA 12.3 and then
+# tested with a Docker image with CUDA 12.3 and CUDA 12.1. By default, we set
+# the CUDA version of the Docker image to 12.3.
+export JAXCI_DOCKER_CUDA_VERSION=${JAXCI_DOCKER_CUDA_VERSION:-12.3}
