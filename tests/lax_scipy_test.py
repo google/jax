@@ -353,8 +353,9 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
     l_max=[3, 4, 6, 32],
     shape=[(2,), (3,), (4,), (64,)],
     dtype=float_dtypes,
+    disable_jit=[False, True],
   )
-  def testNormalizedLpmnValues(self, l_max, shape, dtype):
+  def testNormalizedLpmnValues(self, l_max, shape, dtype, disable_jit):
     rng = jtu.rand_uniform(self.rng(), low=-0.2, high=0.9)
     args_maker = lambda: [rng(shape, dtype)]
 
@@ -377,9 +378,14 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
           a_normalized[m, l] = c2 * a[m, l]
       return a_normalized.astype(z.dtype)
 
-    self._CheckAgainstNumpy(scipy_fun, lax_fun, args_maker,
-                            rtol=1e-5, atol=1e-5, check_dtypes=False)
-    self._CompileAndCheck(lax_fun, args_maker, rtol=1E-6, atol=1E-6)
+    with jax.debug_nans(True):
+      with jax.disable_jit(disable=disable_jit):
+        # dtype promotion needed because nonzero() fails otherwise.
+        promotion = 'standard' if disable_jit else 'strict'
+        with jax.numpy_dtype_promotion(promotion):
+              self._CheckAgainstNumpy(scipy_fun, lax_fun, args_maker,
+                                      rtol=1e-5, atol=1e-5, check_dtypes=False)
+      self._CompileAndCheck(lax_fun, args_maker, rtol=1E-6, atol=1E-6)
 
   @jax.numpy_dtype_promotion('standard')  # This test explicitly exercises dtype promotion
   def testSphHarmAccuracy(self):
