@@ -1884,6 +1884,10 @@ LogicalResult tpu_matmul_rule(RewriteContext &ctx, Operation &op,
   // second dim to be a multiple of mxu_size.
   auto mxu_contracting_size = ctx.mxu_shape[0];
   auto mxu_noncontracting_size = ctx.mxu_shape[1];
+  if (lhs.getType().getElementType().isSignlessInteger(4) &&
+      rhs.getType().getElementType().isSignlessInteger(4)) {
+    mxu_contracting_size *= 2;
+  }
   auto rhs_row_size = mxu_contracting_size;
   auto rhs_col_size = mxu_noncontracting_size;
   if (transpose_rhs) {
