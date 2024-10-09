@@ -19,6 +19,7 @@ from .core import (
     ClusterBarrier,
     LaunchContext,
     MemRefTransform,
+    ReshapeTransform,
     TMABarrier,
     TileTransform,
     TransposeTransform,
