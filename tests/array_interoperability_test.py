@@ -62,6 +62,9 @@ nonempty_nonscalar_array_shapes += [(3, 1), (1, 4), (2, 1, 4)]
 nonempty_array_shapes = [()] + nonempty_nonscalar_array_shapes
 all_shapes = nonempty_array_shapes + empty_array_shapes
 
+def _is_64bit(dtype):
+  return dtype in [jnp.int64, jnp.uint64, jnp.float64, jnp.complex128]
+
 class DLPackTest(jtu.JaxTestCase):
   def setUp(self):
     super().setUp()
@@ -147,8 +150,7 @@ class DLPackTest(jtu.JaxTestCase):
   @jtu.ignore_warning(message="Calling from_dlpack with a DLPack tensor",
                       category=DeprecationWarning)
   def testTensorFlowToJax(self, shape, dtype):
-    if (not config.enable_x64.value and
-        dtype in [jnp.int64, jnp.uint64, jnp.float64]):
+    if (not config.enable_x64.value and _is_64bit(dtype)):
       raise self.skipTest("x64 types are disabled by jax_enable_x64")
     if (jtu.test_device_matches(["gpu"]) and
         not tf.config.list_physical_devices("GPU")):
@@ -171,8 +173,7 @@ class DLPackTest(jtu.JaxTestCase):
   )
   @unittest.skipIf(not tf, "Test requires TensorFlow")
   def testJaxToTensorFlow(self, shape, dtype):
-    if (not config.enable_x64.value and
-        dtype in [jnp.int64, jnp.uint64, jnp.float64]):
+    if (not config.enable_x64.value and _is_64bit(dtype)):
       self.skipTest("x64 types are disabled by jax_enable_x64")
     if (jtu.test_device_matches(["gpu"]) and
         not tf.config.list_physical_devices("GPU")):
@@ -203,6 +204,8 @@ class DLPackTest(jtu.JaxTestCase):
     copy=[False, True],
   )
   def testNumpyToJax(self, shape, dtype, copy):
+    if (not config.enable_x64.value and _is_64bit(dtype)):
+      self.skipTest("x64 types are disabled by jax_enable_x64")
     rng = jtu.rand_default(self.rng())
     x_np = rng(shape, dtype)
     device = jax.devices()[0]
@@ -222,6 +225,8 @@ class DLPackTest(jtu.JaxTestCase):
   )
   @jtu.run_on_devices("cpu") # NumPy only accepts cpu DLPacks
   def testJaxToNumpy(self, shape, dtype):
+    if (not config.enable_x64.value and _is_64bit(dtype)):
+      self.skipTest("x64 types are disabled by jax_enable_x64")
     rng = jtu.rand_default(self.rng())
     x_jax = jnp.array(rng(shape, dtype))
     x_np = np.from_dlpack(x_jax)
