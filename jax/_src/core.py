@@ -3223,7 +3223,7 @@ def pp_vars(vs: Sequence[Any], context: JaxprPpContext,
     ))
 
 def pp_kv_pair(k:str, v: Any, context: JaxprPpContext, settings: JaxprPpSettings) -> pp.Doc:
-  if type(v) is tuple and all(isinstance(j, (Jaxpr, ClosedJaxpr)) for j in v):
+  if isinstance(v, Iterable) and all(isinstance(j, (Jaxpr, ClosedJaxpr)) for j in v):
     pp_v = pp_jaxprs(v, context, settings)
   elif isinstance(v, Jaxpr):
     pp_v = pp_jaxpr(v, context, settings)
