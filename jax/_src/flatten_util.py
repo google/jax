@@ -12,10 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Any, Callable, TypeVar
 import warnings
 
 import numpy as np
 
+import jax
 from jax import lax
 import jax.numpy as jnp
 
@@ -25,8 +27,9 @@ from jax._src.util import safe_zip, unzip2, HashablePartial
 
 zip = safe_zip
 
+T = TypeVar('T')
 
-def ravel_pytree(pytree):
+def ravel_pytree(pytree: T) -> tuple[jax.Array, Callable[[jax.Array], T]]:
   """Ravel (flatten) a pytree of arrays down to a 1D array.
 
   Args:
@@ -44,6 +47,23 @@ def ravel_pytree(pytree):
   For details on dtype promotion, see
   https://jax.readthedocs.io/en/latest/type_promotion.html.
 
+  Unlike ``jax.tree_util.tree_flatten``, this function flattens all the way down
+  to a single 1D ``jax.Array`` representing the flattened and concatenated values of
+  all leaves. That is, it flattens not just the pytree structure but also the
+  ``jax.Array`` leaves themselves. In contrast, ``jax.tree_util.tree_flatten`` only
+  flattens away the tree structure, returning a list of ``jax.Array``s (and a
+  ``PyTreeDef`` rather than an unflattener callable).
+
+  For example:
+
+  >>> import jax.numpy as jnp
+  >>> from jax.flatten_util import ravel_pytree
+  >>> x = [jnp.arange(3.), {'a': jnp.arange(4), 'b': 5}]
+  >>> x_flat, unflattener = ravel_pytree(x)
+  >>> print(x_flat)
+  Array([0., 1., 2., 0., 1., 2., 3., 5.], dtype=float32)
+  >>> unflattener(x_flat)
+  [Array([0., 1., 2.], dtype=float32), {'a': Array([0, 1, 2, 3], dtype=int32), 'b': Array(5, dtype=int32)}]
   """
   leaves, treedef = tree_flatten(pytree)
   flat, unravel_list = _ravel_list(leaves)
