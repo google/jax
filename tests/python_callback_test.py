@@ -30,6 +30,7 @@ from jax._src import test_util as jtu
 from jax._src import util
 from jax.experimental import io_callback
 from jax.experimental import pjit
+from jax.experimental.custom_partitioning import custom_partitioning
 from jax.experimental.shard_map import shard_map
 import jax.numpy as jnp
 from jax.sharding import Mesh
@@ -1293,6 +1294,57 @@ class IOCallbackTest(jtu.JaxTestCase):
       self.assertLen(shard, 2)
       np.testing.assert_array_equal(shard[0] + 1, shard[1])
 
+  def test_io_callback_in_custom_partitioning(self):
+    self.skipTest(
+      "TODO: Fixes callback lifetime when used in custom partitioning.")
+
+    if jtu.is_cloud_tpu():
+      raise self.skipTest("Custom partitioning is not supported on libtpu.")
+    
+    mesh = Mesh(np.array(jax.devices()), axis_names=('x',))
+    spec = jax.sharding.PartitionSpec('x')
+    s = jax.sharding.NamedSharding(mesh, spec)
+
+    _collected = []
+    def func(x):
+      nonlocal _collected
+      _collected.append(x)
+
+    def _partition(mesh, arg_shapes, result_shape):
+      del result_shape
+      arg_sharding = arg_shapes[0].sharding
+  
+      def lower_fn(x):
+        io_callback(func, None, x)
+        return x
+
+      return mesh, lower_fn, arg_sharding, (arg_sharding,)
+
+    def _infer_sharding_from_operands(mesh, arg_shapes, result_shape):
+      del mesh, result_shape
+      return arg_shapes[0].sharding
+
+    @custom_partitioning
+    def collect_shard(x):
+      return x
+    
+    collect_shard.def_partition(
+      infer_sharding_from_operands=_infer_sharding_from_operands,
+      partition=_partition,
+    )
+
+    def f(x):
+      x = collect_shard(x ** 2)
+      return 2 * x
+    
+    inp = np.arange(2 * jax.local_device_count())
+    jitted_f = jax.jit(f, in_shardings=s, out_shardings=s)
+    self.assertIn("custom-call", jitted_f.lower(inp).compile().as_text())
+
+    jitted_f(inp)  # Don't crash.
+    jax.effects_barrier()
+    self.assertAllClose(np.array(_collected).flatten(), inp ** 2)
+ 
   def test_batching_with_side_effects(self):
     # https://github.com/jax-ml/jax/issues/20628#issuecomment-2050800195
     x_lst = []
