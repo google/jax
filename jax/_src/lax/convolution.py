@@ -135,7 +135,7 @@ def conv_general_dilated(
   elif isinstance(padding, str) and not len(lhs_dilation) == lhs_dilation.count(1):
     raise ValueError(
         "String padding is not implemented for transposed convolution "
-        "using this op. Please either exactly specify the required padding or "
+        "using this op. Please either specify the required padding exactly or "
         "use conv_transpose.")
   if rhs_dilation is None:
     rhs_dilation = (1,) * (rhs.ndim - 2)
