@@ -616,7 +616,6 @@ def io_callback(
   flat_shape_dtypes, out_tree = tree_util.tree_flatten(result_shape_dtypes)
   flat_result_avals = map(lambda x: core.ShapedArray(x.shape, x.dtype),
                           flat_shape_dtypes)
-  flat_args = map(core.raise_as_much_as_possible, flat_args)
   out_flat = io_callback_p.bind(
       *flat_args,
       callback=_FlatCallback(callback, in_tree),

@@ -1091,6 +1091,15 @@ class IOCallbackTest(jtu.JaxTestCase):
         ValueError, "Cannot `vmap` ordered IO callback"):
       jax.vmap(f)(jnp.arange(4))
 
+  def test_can_use_io_callback_in_jvp_if_data_independent(self):
+    def f(x):
+      io_callback(lambda x: x,
+                  jax.ShapeDtypeStruct((), jnp.float32),
+                  np.float32(42.))
+      return 2. * x
+    res = jax.jvp(f, (0.,), (1.,))
+    self.assertAllClose(res, (0., 2.))
+
   def test_cannot_use_io_callback_in_jvp(self):
     def f(x):
       return io_callback(lambda x: x, jax.ShapeDtypeStruct((), jnp.float32), x)
