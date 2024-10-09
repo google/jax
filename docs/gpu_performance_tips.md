@@ -31,8 +31,8 @@ code examples:
 
 The existence and exact behavior of XLA flags may be `jaxlib`-version dependent.
 
-As of `jaxlib==0.4.18` (released [Oct 6
-2023](https://pypi.org/project/jaxlib/#history)), setting these XLA flags can
+As of `jaxlib==0.4.31` (released [July 29
+2024](https://pypi.org/project/jaxlib/#history)), setting these XLA flags can
 improve performance. Some are related to communication between GPUs, and so are
 only relevant when running computations on multiple devices, while others are
 related to code generation on each device.
@@ -45,8 +45,7 @@ example, we can add this to the top of a Python file:
 import os
 os.environ['XLA_FLAGS'] = (
     '--xla_gpu_enable_triton_softmax_fusion=true '
-    '--xla_gpu_triton_gemm_any=True '
-    '--xla_gpu_enable_async_collectives=true '
+    '--xla_gpu_triton_gemm_any=true '
     '--xla_gpu_enable_latency_hiding_scheduler=true '
     '--xla_gpu_enable_highest_priority_async_stream=true '
 )
