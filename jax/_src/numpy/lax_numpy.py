@@ -5034,13 +5034,11 @@ def array(object: Any, dtype: DTypeLike | None = None, copy: bool = True,
     # Keep the output uncommitted.
     return jax.device_put(object)
 
-  # For Python scalar literals, call coerce_to_array to catch any overflow
-  # errors. We don't use dtypes.is_python_scalar because we don't want this
-  # triggering for traced values. We do this here because it matters whether or
-  # not dtype is None. We don't assign the result because we want the raw object
-  # to be used for type inference below.
-  if isinstance(object, (bool, int, float, complex)):
-    _ = dtypes.coerce_to_array(object, dtype)
+  # Check for integer overflows. We avoid isinstance(object, int)
+  # because we don't want to perform this check for numpy.int64.
+  # TODO(jakevdp): check overflows for numpy scalars?
+  if dtype is None and type(object) is int:
+    _ = dtypes._scalar_type_to_dtype(int, object, check_integer_overflow=True)
   elif not isinstance(object, Array):
     # Check if object supports any of the data exchange protocols
     # (except dlpack, see data-apis/array-api#301). If it does,

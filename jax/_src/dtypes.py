@@ -284,7 +284,8 @@ def scalar_type_of(x: Any) -> type:
     raise TypeError(f"Invalid scalar value {x}")
 
 
-def _scalar_type_to_dtype(typ: type, value: Any = None) -> DType:
+def _scalar_type_to_dtype(typ: type, value: Any = None,
+                          check_integer_overflow: bool = True) -> DType:
   """Return the numpy dtype for the given scalar type.
 
   Raises
@@ -308,21 +309,11 @@ def _scalar_type_to_dtype(typ: type, value: Any = None) -> DType:
   OverflowError: Python int 9223372036854775808 too large to convert to int32
   """
   dtype = canonicalize_dtype(python_scalar_dtypes[typ])
-  if typ is int and value is not None:
+  if check_integer_overflow and typ is int and value is not None:
     if value < np.iinfo(dtype).min or value > np.iinfo(dtype).max:
       raise OverflowError(f"Python int {value} too large to convert to {dtype}")
   return dtype
 
-
-def coerce_to_array(x: Any, dtype: DTypeLike | None = None) -> np.ndarray:
-  """Coerces a scalar or NumPy array to an np.array.
-
-  Handles Python scalar type promotion according to JAX's rules, not NumPy's
-  rules.
-  """
-  if dtype is None and type(x) in python_scalar_dtypes:
-    dtype = _scalar_type_to_dtype(type(x), x)
-  return np.asarray(x, dtype)
 
 iinfo = ml_dtypes.iinfo
 finfo = ml_dtypes.finfo
