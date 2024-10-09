@@ -3332,9 +3332,12 @@ def round(a: ArrayLike, decimals: int = 0, out: None = None) -> Array:
   dtype = _dtype(a)
   if issubdtype(dtype, integer):
     if decimals < 0:
-      raise NotImplementedError(
-        "integer np.round not implemented for decimals < 0")
-    return asarray(a)  # no-op on integer types
+      a = lax.convert_element_type(a, dtypes.canonicalize_dtype(float_))
+      factor = _lax_const(a, 10 ** decimals)
+      a = lax.div(lax.round(lax.mul(a, factor),
+                            lax.RoundingMethod.TO_NEAREST_EVEN), factor)
+      a = lax.convert_element_type(a, dtype)
+    return asarray(a)  # no-op on integer types if decimals >= 0
 
   def _round_float(x: ArrayLike) -> Array:
     if decimals == 0:

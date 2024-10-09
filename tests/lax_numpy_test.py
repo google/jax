@@ -1013,8 +1013,6 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
   )
   def testRoundStaticDecimals(self, shape, dtype, decimals):
     rng = jtu.rand_default(self.rng())
-    if jnp.issubdtype(dtype, np.integer) and decimals < 0:
-      self.skipTest("Integer rounding with decimals < 0 not implemented")
     np_fun = lambda x: np.round(x, decimals=decimals)
     jnp_fun = lambda x: jnp.round(x, decimals=decimals)
     args_maker = lambda: [rng(shape, dtype)]
