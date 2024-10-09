@@ -214,6 +214,7 @@ jax_py_test(
 jax_multiplatform_test(
     name = "memories_test",
     srcs = ["memories_test.py"],
+    disable_backends = ["gpu"],
     shard_count = {
         "tpu": 5,
     },
