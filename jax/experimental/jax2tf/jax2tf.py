@@ -3182,7 +3182,7 @@ def _top_k(operand: TfVal, k: int) -> tuple[TfVal, TfVal]:
   # Some types originally incompatible with tf.math.top_k can be promoted
   # to a compatible type without loss of precision.
   def promote_tf_dtype(tf_dtype):
-    if tf_dtype in [tf.bool, tf.uint8, tf.uint16]:
+    if tf_dtype in [tf.bool, tf.uint16]:
       return tf.uint32
     if tf_dtype in [tf.int8, tf.int16]:
       return tf.int32
