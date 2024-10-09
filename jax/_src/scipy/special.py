@@ -1746,7 +1746,7 @@ def _sph_harm(m: Array,
   cos_colatitude = jnp.cos(phi)
 
   legendre = _gen_associated_legendre(n_max, cos_colatitude, True)
-  legendre_val = legendre.at[abs(m), n, jnp.arange(len(n))].get(mode="clip")
+  legendre_val = legendre.at[abs(m), n, jnp.arange(len(phi))].get(mode="clip")
 
   angle = abs(m) * theta
   vandermonde = lax.complex(jnp.cos(angle), jnp.sin(angle))
@@ -1795,6 +1795,8 @@ def sph_harm(m: Array,
   Returns:
     A 1D array containing the spherical harmonics at (m, n, theta, phi).
   """
+
+  lax.broadcast_shapes(jnp.shape(m), jnp.shape(n), jnp.shape(theta), jnp.shape(phi))
 
   if jnp.isscalar(phi):
     phi = jnp.array([phi])
