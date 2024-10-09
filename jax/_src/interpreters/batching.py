@@ -317,9 +317,8 @@ def flatten_fun_for_vmap(in_tree, *args_flat):
 
 ### tracer
 
-# TODO(mattjj): use a special sentinel type rather than None
-NotMapped = type(None)
-not_mapped = None
+class NotMapped: ...
+not_mapped = NotMapped()
 
 
 class BatchTracer(Tracer):
