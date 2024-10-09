@@ -1155,7 +1155,7 @@ def _partial_eval_jaxpr_custom_cached(
       map(partial(write, True, True), eqn.outvars)
     else:
       known_eqns.append(eqn)
-      # If it's an effectful primitive, we always to run and avoid staging it.
+      # If it's an effectful primitive, we always run and avoid staging it.
       policy = ensure_enum(saveable(
           eqn.primitive, *[x.aval for x in eqn.invars], **eqn.params))
       if has_effects(eqn.effects) or isinstance(policy, SaveableType):

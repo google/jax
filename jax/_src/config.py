@@ -1757,3 +1757,8 @@ use_shardy_partitioner = bool_state(
         use_shardy_partitioner=val
     ),
 )
+
+rbg_remat_unsafe = define_bool_state(
+    name='jax_rbg_remat_unsafe',
+    default=False,
+    help=('Allows unsafe combination of jax.remat and rbg / unsafe_rbg PRNGs.'))

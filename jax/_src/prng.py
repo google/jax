@@ -41,6 +41,7 @@ from jax._src.dtypes import float0
 from jax._src.interpreters import ad
 from jax._src.interpreters import batching
 from jax._src.interpreters import mlir
+from jax._src.interpreters import partial_eval as pe
 from jax._src.interpreters import pxla
 from jax._src.interpreters import xla
 from jax._src.lax import lax as lax_internal
@@ -665,6 +666,23 @@ def random_bits_lowering(ctx, keys, *, bit_width, shape):
   return out
 
 mlir.register_lowering(random_bits_p, random_bits_lowering)
+
+def random_bits_partial_eval(policy, unks_in, inst_in, eqn):
+  key_ty, = (v.aval for v in eqn.invars)
+  policy_result = pe.ensure_enum(policy(random_bits_p, key_ty, **eqn.params))
+  is_rbg = key_ty.dtype._impl in (rbg_prng_impl, unsafe_rbg_prng_impl)
+  if (is_rbg and isinstance(policy_result, pe.RecomputeType) and
+      not config.rbg_remat_unsafe.value):
+    msg = ("Using jax.remat to rematerialize (rather than save) the output "
+           "of an rbg or unsafe_rbg random value is dangerous with the XLA "
+           "flag xla_tpu_spmd_rng_bit_generator_unsafe=True, and could result "
+           "in different rematerialized random values (e.g. different values "
+           "on the backward pass than the forward pass). Set the config "
+           "option jax.config.update('rbg_remat_unsafe', True)` to bypass this "
+           "exception. See https://github.com/google/jax/issues/21046"
+    raise Exception(msg)
+  return eqn_known, eqn_staged, unks_out, inst_out, new_vars
+pe.partial_eval_jaxpr_custom_rules[random_bits_p] = random_bits_partial_eval
 
 
 # The following wrap/unwrap primitives are at least a stopgap for
