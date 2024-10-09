@@ -251,6 +251,12 @@ class custom_jvp(Generic[ReturnValue]):
       f_, dyn_args = argnums_partial(lu.wrap_init(self.fun), diff_argnums, args,
                                      require_static_args_hashable=False)
       static_args = [args[i] for i in self.nondiff_argnums]
+      for argnum, static_arg in zip(self.nondiff_argnums, static_args):
+        assert_static = partial(core.concrete_or_error, None,
+            context=(f"This tracer was passed as argument number {argnum} to"
+                      f" the function {primal_name}. A static argument is expected"
+                      " because in custom_jvp it is marked as a nondiff_argnum."))
+        tree_map(assert_static, static_arg)
       jvp = _add_args(lu.wrap_init(self.jvp), static_args)
     else:
       f_, dyn_args = lu.wrap_init(self.fun), args
@@ -630,6 +636,12 @@ class custom_vjp(Generic[ReturnValue]):
         f_, dyn_args = argnums_partial(lu.wrap_init(self.fun), dyn_argnums,
                                        args, require_static_args_hashable=False)
         static_args = [args[i] for i in self.nondiff_argnums]
+        for argnum, static_arg in zip(self.nondiff_argnums, static_args):
+          assert_static = partial(core.concrete_or_error, None,
+              context=(f"This tracer was passed as argument number {argnum} to"
+                      f" the function {primal_name}. A static argument is expected"
+                      " because in custom_vjp it is marked as a nondiff_argnum."))
+          tree_map(assert_static, static_arg)
         fwd_, _ = argnums_partial(lu.wrap_init(fwd), dyn_argnums, args,
                                  require_static_args_hashable=False)
         bwd = _add_args(lu.wrap_init(self.bwd), static_args)
