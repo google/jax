@@ -1,0 +1,440 @@
+# #############################################################################
+# All default build options below. These apply to all build commands.
+# #############################################################################
+# Make Bazel print out all options from rc files.
+build --announce_rc
+
+# Required by OpenXLA
+# https://github.com/openxla/xla/issues/1323
+build --nocheck_visibility
+
+# By default, execute all actions locally.
+build --spawn_strategy=local
+
+# Enable host OS specific configs. For instance, "build:linux" will be used
+# automatically when building on Linux.
+build --enable_platform_specific_config
+
+build --experimental_cc_shared_library
+
+# Disable enabled-by-default TensorFlow features that we don't care about.
+build --define=no_gcp_support=true
+
+# Do not use C-Ares when building gRPC.
+build --define=grpc_no_ares=true
+
+build --define=tsl_link_protobuf=true
+
+# Enable optimization.
+build -c opt
+
+# Suppress all warning messages.
+build --output_filter=DONT_MATCH_ANYTHING
+
+build --copt=-DMLIR_PYTHON_PACKAGE_PREFIX=jaxlib.mlir.
+
+build --verbose_failures=true
+
+# #############################################################################
+# Platform Specific configs below. These are automatically picked up by Bazel
+# depending on the platform that is running the build. If you would like to
+# disable this behavior, pass in `--noenable_platform_specific_config`
+# #############################################################################
+build:linux --config=posix
+build:linux --copt=-Wno-unknown-warning-option
+
+# Workaround for gcc 10+ warnings related to upb.
+# See https://github.com/tensorflow/tensorflow/issues/39467
+build:linux --copt=-Wno-stringop-truncation
+build:linux --copt=-Wno-array-parameter
+
+build:macos --config=posix
+build:macos --apple_platform_type=macos
+
+# Windows has a relatively short command line limit, which JAX has begun to hit.
+# See https://docs.bazel.build/versions/main/windows.html
+build:windows --features=compiler_param_file
+build:windows --features=archive_param_file
+
+# Tensorflow uses M_* math constants that only get defined by MSVC headers if
+# _USE_MATH_DEFINES is defined.
+build:windows --copt=/D_USE_MATH_DEFINES
+build:windows --host_copt=/D_USE_MATH_DEFINES
+# Make sure to include as little of windows.h as possible
+build:windows --copt=-DWIN32_LEAN_AND_MEAN
+build:windows --host_copt=-DWIN32_LEAN_AND_MEAN
+build:windows --copt=-DNOGDI
+build:windows --host_copt=-DNOGDI
+# https://devblogs.microsoft.com/cppblog/announcing-full-support-for-a-c-c-conformant-preprocessor-in-msvc/
+# otherwise, there will be some compiling error due to preprocessing.
+build:windows --copt=/Zc:preprocessor
+build:windows --cxxopt=/std:c++17
+build:windows --host_cxxopt=/std:c++17
+# Generate PDB files, to generate useful PDBs, in opt compilation_mode
+# --copt /Z7 is needed.
+build:windows --linkopt=/DEBUG
+build:windows --host_linkopt=/DEBUG
+build:windows --linkopt=/OPT:REF
+build:windows --host_linkopt=/OPT:REF
+build:windows --linkopt=/OPT:ICF
+build:windows --host_linkopt=/OPT:ICF
+build:windows --incompatible_strict_action_env=true
+
+# #############################################################################
+# Feature-specific configurations. These are used by the Local and CI configs
+# below depending on the type of build. E.g. `local_linux_x86_64` inherits the
+# Linux x86 configs such as `avx_linux` and `mkl_open_source_only`,
+# `local_cuda_base` inherits `cuda` and `build_cuda_with_nvcc`, etc.
+# #############################################################################
+build:nonccl --define=no_nccl_support=true
+
+build:posix --copt=-fvisibility=hidden
+build:posix --copt=-Wno-sign-compare
+build:posix --cxxopt=-std=c++17
+build:posix --host_cxxopt=-std=c++17
+
+build:avx_posix --copt=-mavx
+build:avx_posix --host_copt=-mavx
+
+build:native_arch_posix --copt=-march=native
+build:native_arch_posix --host_copt=-march=native
+
+build:avx_linux --copt=-mavx
+build:avx_linux --host_copt=-mavx
+
+build:avx_windows --copt=/arch:AVX
+
+build:mkl_open_source_only --define=tensorflow_mkldnn_contraction_kernel=1
+
+# Disable clang extention that rejects type definitions within offsetof.
+# This was added in clang-16 by https://reviews.llvm.org/D133574.
+# Can be removed once upb is updated, since a type definition is used within
+# offset of in the current version of ubp.
+# See https://github.com/protocolbuffers/upb/blob/9effcbcb27f0a665f9f345030188c0b291e32482/upb/upb.c#L183.
+build:clang --copt=-Wno-gnu-offsetof-extensions
+# Disable clang extention that rejects unknown arguments.
+build:clang --copt=-Qunused-arguments
+
+# Configs for CUDA
+build:cuda --repo_env TF_NEED_CUDA=1
+build:cuda --repo_env TF_NCCL_USE_STUB=1
+# "sm" means we emit only cubin, which is forward compatible within a GPU generation.
+# "compute" means we emit both cubin and PTX, which is larger but also forward compatible to future GPU generations.
+build:cuda --repo_env HERMETIC_CUDA_COMPUTE_CAPABILITIES="sm_50,sm_60,sm_70,sm_80,compute_90"
+build:cuda --crosstool_top=@local_config_cuda//crosstool:toolchain
+build:cuda --@local_config_cuda//:enable_cuda
+build:cuda --@xla//xla/python:jax_cuda_pip_rpaths=true
+
+# Default hermetic CUDA and CUDNN versions.
+build:cuda --repo_env=HERMETIC_CUDA_VERSION="12.3.2"
+build:cuda --repo_env=HERMETIC_CUDNN_VERSION="9.1.1"
+
+# This flag is needed to include CUDA libraries for bazel tests.
+test:cuda --@local_config_cuda//cuda:include_cuda_libs=true
+
+# Force the linker to set RPATH, not RUNPATH. When resolving dynamic libraries,
+# ld.so prefers in order: RPATH, LD_LIBRARY_PATH, RUNPATH. JAX sets RPATH to
+# point to the $ORIGIN-relative location of the pip-installed NVIDIA CUDA
+# packages.
+# This has pros and cons:
+# * pro: we'll ignore other CUDA installations, which has frequently confused
+#   users in the past. By setting RPATH, we'll always use the NVIDIA pip
+#   packages if they are installed.
+# * con: the user cannot override the CUDA installation location
+#   via LD_LIBRARY_PATH, if the nvidia-... pip packages are installed. This is
+#   acceptable, because the workaround is "remove the nvidia-..." pip packages.
+# The list of CUDA pip packages that JAX depends on are present in setup.py.
+build:cuda --linkopt=-Wl,--disable-new-dtags
+
+# Build CUDA and other C++ targets with Clang
+build:build_cuda_with_clang --@local_config_cuda//:cuda_compiler=clang
+
+# Build CUDA with NVCC and other C++ targets with Clang
+build:build_cuda_with_nvcc --action_env=TF_NVCC_CLANG="1"
+build:build_cuda_with_nvcc --@local_config_cuda//:cuda_compiler=nvcc
+
+# Requires MSVC and LLVM to be installed
+build:win_clang --extra_toolchains=@local_config_cc//:cc-toolchain-x64_windows-clang-cl
+build:win_clang --extra_execution_platforms=//jax/tools/toolchains:x64_windows-clang-cl
+build:win_clang --compiler=clang-cl
+
+# Configs for building ROCM
+build:rocm --crosstool_top=@local_config_rocm//crosstool:toolchain
+build:rocm --define=using_rocm=true --define=using_rocm_hipcc=true
+build:rocm --repo_env TF_NEED_ROCM=1
+build:rocm --action_env TF_ROCM_AMDGPU_TARGETS="gfx900,gfx906,gfx908,gfx90a,gfx1030"
+
+# #############################################################################
+# Cache options below.
+# #############################################################################
+# Public read-only cache for macOS builds. The "oct2023" in the URL is just the
+# date when the bucket was created and can be disregarded. It still contains the
+# latest cache that is being used.
+build:macos_cache --remote_cache="https://storage.googleapis.com/tensorflow-macos-bazel-cache/oct2023" --remote_upload_local_results=false
+# Cache pushes are limited to Jax's CI system.
+build:macos_cache_push --config=macos_cache --remote_upload_local_results=true --google_default_credentials
+
+# #############################################################################
+# Local Build config options below. Use these configs to build JAX locally.
+# #############################################################################
+# Set base CUDA configs. These are inherited by the Linux x86 and Linux Aarch64
+# CUDA configs.
+build:local_cuda_base --config=cuda
+
+# JAX uses NVCC to build CUDA targets. If you would like to build CUDA targets
+# with Clang, change this to `--config=build_cuda_with_clang`
+build:local_cuda_base --config=build_cuda_with_nvcc
+
+# Linux x86 Local configs
+build:local_linux_x86_64 --config=avx_linux
+build:local_linux_x86_64 --config=avx_posix
+build:local_linux_x86_64 --config=mkl_open_source_only
+
+build:local_linux_x86_64_cuda --config=local_linux_x86_64
+build:local_linux_x86_64_cuda --config=local_cuda_base
+
+# Linux Aarch64 Local configs
+# No custom config for Linux Aarch64. If building for CPU, run
+# `bazel build|test //path/to:target`. If building for CUDA, run
+# `bazel build|test --config=local_cuda_base //path/to:target`.
+build:local_linux_aarch64_cuda --config=local_cuda_base
+
+# Mac x86 Local configs
+# For Mac x86, we target compatibility with macOS 10.14.
+build:local_darwin_x86_64 --macos_minimum_os=10.14
+# Read-only cache to boost build times.
+build:local_darwin_x86_64 --config=macos_cache
+
+# Mac Arm64 CI configs
+# For Mac Arm64, we target compatibility with macOS 12.
+build:local_darwin_arm64 --macos_minimum_os=12.0
+# Read-only cache to boost build times.
+build:local_darwin_arm64 --config=macos_cache_push
+
+# Windows x86 Local configs
+build:local_windows_amd64 --config=avx_windows
+
+# #############################################################################
+# CI Build config options below.
+# JAX uses these configs in CI builds for building artifacts and when running
+# Bazel tests.
+#
+# These configs are pretty much the same as the local build configs above. The
+# difference is that, in CI, we build with Clang for and pass in a custom
+# non-hermetic toolchain to ensure manylinux compliance for Linux builds and
+# for using RBE on Windows. Because the toolchain is non-hermetic, it requires
+# specific versions of the compiler and other tools to be present on the system
+# in specific locations, which is why the Linux and Windows builds are run in a
+# Docker container.
+# #############################################################################
+
+# Linux x86 CI configs
+# Inherit the local Linux x86 configs.
+build:ci_linux_x86_64 --config=local_linux_x86_64
+
+# CI builds use Clang as the default compiler so we inherit Clang
+# specific configs
+build:ci_linux_x86_64 --config=clang
+
+# TODO(b/356695103): We do not have a CPU only toolchain so we use the CUDA
+# toolchain for both CPU and GPU builds.
+build:ci_linux_x86_64 --host_crosstool_top="@local_config_cuda//crosstool:toolchain"
+build:ci_linux_x86_64 --crosstool_top="@local_config_cuda//crosstool:toolchain"
+build:ci_linux_x86_64 --extra_toolchains="@local_config_cuda//crosstool:toolchain-linux-x86_64"
+build:ci_linux_x86_64 --repo_env=TF_SYSROOT="/dt9"
+
+# Clang path needs to be set for remote toolchain to be configured correctly.
+build:ci_linux_x86_64 --action_env=CLANG_CUDA_COMPILER_PATH="/usr/lib/llvm-18/bin/clang"
+
+# The toolchain in `--config=cuda` needs to be read before the toolchain in
+# `--config=ci_linux_x86_64`. Otherwise, we run into issues with manylinux
+# compliance.
+build:ci_linux_x86_64_cuda --config=local_cuda_base
+build:ci_linux_x86_64_cuda --config=ci_linux_x86_64
+
+# Linux Aarch64 CI configs
+build:ci_linux_aarch64_base --config=clang
+build:ci_linux_aarch64_base --action_env=TF_SYSROOT="/dt10"
+
+build:ci_linux_aarch64 --config=ci_linux_aarch64_base
+build:ci_linux_aarch64 --host_crosstool_top="@ml2014_clang_aarch64_config_aarch64//crosstool:toolchain"
+build:ci_linux_aarch64 --crosstool_top="@ml2014_clang_aarch64_config_aarch64//crosstool:toolchain"
+
+# CUDA configs for Linux Aarch64 do not pass in the crosstool top flag from
+# above because the Aarch64 toolchain rule does not support building with NVCC.
+# Instead, we use `@local_config_cuda//crosstool:toolchain` from --config=cuda
+# and set `CLANG_CUDA_COMPILER_PATH` to define the toolchain so that we can
+# use Clang for the C++ targets and NVCC to build CUDA targets.
+build:ci_linux_aarch64_cuda --config=ci_linux_aarch64_base
+build:ci_linux_aarch64_cuda --config=local_cuda_base
+build:ci_linux_aarch64_cuda --action_env=CLANG_CUDA_COMPILER_PATH="/usr/lib/llvm-18/bin/clang"
+
+# Mac x86 CI configs
+build:ci_darwin_x86_64 --config=local_darwin_x86_64
+# Mac CI builds read and push cache to/from GCS bucket.
+build:ci_darwin_x86_64 --config=macos_cache_push
+
+# Mac Arm64 CI configs
+build:ci_darwin_arm64 --config=local_darwin_arm64
+# CI builds read and push cache to/from GCS bucket.
+build:ci_darwin_arm64 --config=macos_cache_push
+
+# Windows x86 CI configs
+build:ci_windows_amd64 --config=local_windows_amd64
+build:ci_windows_amd64 --config=clang
+# Set the toolchains
+build:ci_windows_amd64 --crosstool_top="@xla//tools/toolchains/win/20240424:toolchain"
+build:ci_windows_amd64 --extra_toolchains="@xla//tools/toolchains/win/20240424:cc-toolchain-x64_windows-clang-cl"
+build:ci_windows_amd64 --compiler=clang-cl
+build:ci_windows_amd64 --linkopt=/FORCE:MULTIPLE
+build:ci_windows_amd64 --host_linkopt=/FORCE:MULTIPLE
+
+# #############################################################################
+# RBE config options below. These inherit the CI configs above and set the
+# remote execution backend and authentication options required to run builds
+# with RBE. Linux x86 and Windows builds use RBE.
+# #############################################################################
+# Flag to enable remote config
+common --experimental_repo_remote_exec
+
+# Allow creation of resultstore URLs for any bazel invocation
+build:resultstore --google_default_credentials
+build:resultstore --bes_backend=buildeventservice.googleapis.com
+build:resultstore --bes_instance_name="tensorflow-testing"
+build:resultstore --bes_results_url="https://source.cloud.google.com/results/invocations"
+build:resultstore --bes_timeout=600s
+
+build:rbe --config=resultstore
+build:rbe --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+build:rbe --define=EXECUTOR=remote
+build:rbe --flaky_test_attempts=3
+build:rbe --jobs=200
+build:rbe --remote_executor=grpcs://remotebuildexecution.googleapis.com
+build:rbe --remote_timeout=3600
+build:rbe --spawn_strategy=remote,worker,standalone,local
+# Attempt to minimize the amount of data transfer between bazel and the remote
+# workers:
+build:rbe --remote_download_toplevel
+test:rbe --test_env=USER=anon
+
+# RBE configs for Linux x86
+# Set the remote worker pool
+common:rbe_linux_x86_64_base --remote_instance_name=projects/tensorflow-testing/instances/default_instance
+
+build:rbe_linux_x86_64_base --config=rbe
+build:rbe_linux_x86_64_base --action_env=PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin"
+build:rbe_linux_x86_64_base --linkopt=-lrt
+build:rbe_linux_x86_64_base --host_linkopt=-lrt
+build:rbe_linux_x86_64_base --linkopt=-lm
+build:rbe_linux_x86_64_base --host_linkopt=-lm
+
+# Set the host, execution, and target platform
+build:rbe_linux_x86_64_base --host_platform="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn9.1_config_platform//:platform"
+build:rbe_linux_x86_64_base --extra_execution_platforms="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn9.1_config_platform//:platform"
+build:rbe_linux_x86_64_base --platforms="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn9.1_config_platform//:platform"
+
+# Python config is the same across all containers because the binary is the same
+build:rbe_linux_x86_64_base --repo_env=TF_PYTHON_CONFIG_REPO="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn9.1_config_python"
+
+build:rbe_linux_x86_64 --config=rbe_linux_x86_64_base
+build:rbe_linux_x86_64 --config=ci_linux_x86_64
+
+build:rbe_linux_x86_64_cuda --config=rbe_linux_x86_64_base
+build:rbe_linux_x86_64_cuda --config=ci_linux_x86_64_cuda
+build:rbe_linux_x86_64_cuda --repo_env=REMOTE_GPU_TESTING=1
+
+# RBE configs for Windows
+# Set the remote worker pool
+common:rbe_windows_amd64 --remote_instance_name=projects/tensorflow-testing/instances/windows
+
+build:rbe_windows_amd64 --config=rbe
+
+# Set the host, execution, and target platform
+build:rbe_windows_amd64 --host_platform="@xla//tools/toolchains/win:x64_windows-clang-cl"
+build:rbe_windows_amd64 --extra_execution_platforms="@xla//tools/toolchains/win:x64_windows-clang-cl"
+build:rbe_windows_amd64 --platforms="@xla//tools/toolchains/win:x64_windows-clang-cl"
+
+build:rbe_windows_amd64 --shell_executable=C:\\tools\\msys64\\usr\\bin\\bash.exe
+build:rbe_windows_amd64 --enable_runfiles
+build:rbe_windows_amd64 --define=override_eigen_strong_inline=true
+
+# Don't build the python zip archive in the RBE build.
+build:rbe_windows_amd64 --nobuild_python_zip
+
+build:rbe_windows_amd64 --config=ci_windows_amd64
+
+# #############################################################################
+# Cross-compile config options below. Native RBE support does not exist for
+# Linux Aarch64 and Mac x86. So, we use the cross-compile toolchain to build
+# targets for Linux Aarch64 and Mac x86 on the Linux x86 RBE pool.
+# #############################################################################
+# Set execution platform to Linux x86
+# Note: Lot of the "host_" flags such as "host_cpu" and "host_crosstool_top"
+# flags seem to be actually used to specify the execution platform details. It
+# seems it is this way because these flags are old and predate the distinction
+# between host and execution platform.
+build:cross_compile_base --host_cpu=k8
+build:cross_compile_base --host_crosstool_top=@xla//tools/toolchains/cross_compile/cc:cross_compile_toolchain_suite
+build:cross_compile_base --extra_execution_platforms=@xla//tools/toolchains/cross_compile/config:linux_x86_64
+
+# Linux Aarch64
+build:cross_compile_linux_aarch64 --config=cross_compile_base
+
+# Set the target CPU to Aarch64
+build:cross_compile_linux_aarch64 --platforms=@xla//tools/toolchains/cross_compile/config:linux_aarch64
+build:cross_compile_linux_aarch64 --cpu=aarch64
+build:cross_compile_linux_aarch64 --crosstool_top=@xla//tools/toolchains/cross_compile/cc:cross_compile_toolchain_suite
+
+build:rbe_cross_compile_base --config=rbe
+build:rbe_cross_compile_base --remote_instance_name=projects/tensorflow-testing/instances/default_instance
+
+# RBE cross-compile configs for Linux Aarch64
+build:rbe_cross_compile_linux_aarch64 --config=cross_compile_linux_aarch64
+build:rbe_cross_compile_linux_aarch64 --config=rbe_cross_compile_base
+
+# Mac x86
+build:cross_compile_darwin_x86_64 --config=cross_compile_base
+build:cross_compile_darwin_x86_64 --config=nonccl
+# Target Catalina (10.15) as the minimum supported OS
+build:cross_compile_darwin_x86_64 --action_env  MACOSX_DEPLOYMENT_TARGET=10.15
+
+# Set the target CPU to Darwin x86
+build:cross_compile_darwin_x86_64 --platforms=@xla//tools/toolchains/cross_compile/config:darwin_x86_64
+build:cross_compile_darwin_x86_64 --cpu=darwin
+build:cross_compile_darwin_x86_64 --crosstool_top=@xla//tools/toolchains/cross_compile/cc:cross_compile_toolchain_suite
+# When RBE cross-compiling for macOS, we need to explicitly register the
+# toolchain. Otherwise, oddly, RBE complains that a "docker container must be
+# specified".
+build:cross_compile_darwin_x86_64 --extra_toolchains=@xla//tools/toolchains/cross_compile/config:macos-x86-cross-compile-cc-toolchain
+# Map --platforms=darwin_x86_64 to --cpu=darwin and vice-versa to make selects()
+# and transistions that use these flags work. The flag --platform_mappings needs
+# to be set to a file that exists relative to the package path roots.
+build:cross_compile_darwin_x86_64 --platform_mappings=platform_mappings
+
+# RBE cross-compile configs for Darwin x86
+build:rbe_cross_compile_darwin_x86_64 --config=cross_compile_darwin_x86_64
+build:rbe_cross_compile_darwin_x86_64 --config=rbe_cross_compile_base
+
+#############################################################################
+# Some configs to make getting some forms of debug builds. In general, the
+# codebase is only regularly built with optimizations. Use 'debug_symbols' to
+# just get symbols for the parts of XLA/PJRT that jaxlib uses.
+# Or try 'debug' to get a build with assertions enabled and minimal
+# optimizations.
+# Include these in a local .bazelrc.user file as:
+#   build --config=debug_symbols
+# Or:
+#   build --config=debug
+#
+# Additional files can be opted in for debug symbols by adding patterns
+# to a per_file_copt similar to below.
+#############################################################################
+
+build:debug_symbols --strip=never --per_file_copt="xla/pjrt|xla/python@-g3"
+build:debug --config debug_symbols -c fastbuild
+
+# Load `.jax_configure.bazelrc` file written by build.py
+try-import %workspace%/.jax_configure.bazelrc
+
+# Load rc file with user-specific options.
+try-import %workspace%/.bazelrc.user
