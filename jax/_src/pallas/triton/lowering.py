@@ -2067,6 +2067,13 @@ def _dot(
   # Ideally, replace all allow_tf32 usages with InputPrecision directly.
   input_precision = tt_dialect.InputPrecision.IEEE
   if allow_tf32:
+    ASM: tt_dialect.constexpr = "cvt.rna.tf32.f32 $0, $1;"
+    x = tt_dialect.elementwise_inline_asm([x_type], ASM, "=r, r",
+        pure=True, packed_element=1, args=[x],
+    )
+    y = tt_dialect.elementwise_inline_asm([y_type], ASM, "=r, r",
+        pure=True, packed_element=1, args=[y],
+    )
     input_precision = tt_dialect.InputPrecision.TF32
 
   return tt_dialect.dot(
