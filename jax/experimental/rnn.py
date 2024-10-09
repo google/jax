@@ -167,13 +167,27 @@ def get_num_params_in_lstm(input_size: int, hidden_size: int, num_layers: int,
 
 
 def init_lstm_weight(rng: PRNGKeyArray, input_size: int, hidden_size: int,
-                     num_layers: int, bidirectional: bool):
-  """Random initialize LSTM weights from U(-k, k), k=sqrt(1/hidden_size)."""
+                     num_layers: int, bidirectional: bool,
+                     forget_gate_bias: float | None = None):
+  """Randomly initialize LSTM weights from U(-k, k), k=sqrt(1/hidden_size).
+
+  Optionally, the forget gate biases can be set to a specific value (see Gers
+  et al., 1999, "Learning to forget: continual prediction with LSTM").
+  """
   param_count = get_num_params_in_lstm(input_size, hidden_size, num_layers,
                                        bidirectional)
   k = np.sqrt(1.0 / hidden_size)
-  return jax.random.uniform(
+  w = jax.random.uniform(
       rng, shape=(param_count,), dtype=jnp.float32, minval=-k, maxval=k)
+  if forget_gate_bias is not None:
+    # Each layer has 8 * hidden_size bias entries; the forget gate is the second
+    # gate in the b_hh part of w (see docstring of this module).
+    num_directions = 2 if bidirectional else 1
+    for i in range(num_layers * num_directions):
+      forget_gate_slice = slice((-8 * i - 3) * hidden_size,
+                                (-8 * i - 2) * hidden_size)
+      w = w.at[forget_gate_slice].set(forget_gate_bias)
+  return w
 
 
 def unpack_lstm_weights(
