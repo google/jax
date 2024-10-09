@@ -1212,6 +1212,15 @@ persistent_cache_min_entry_size_bytes = int_state(
           '  filesystem being used for the cache. '
           '* > 0: the actual minimum size desired; no overrides.'))
 
+# TODO: Change default to all when xla_gpu_kernel_cache_file issues are fixed.
+persistent_cache_enable_xla_caches = optional_string_state(
+    name='jax_persistent_cache_enable_xla_caches',
+    default='xla_gpu_per_fusion_autotune_cache_dir',
+    help=('When the persistent cache is enabled, additional XLA caching will '
+          'also be enabled automatically. This option can be used to configure'
+          'which XLA caching methods will be enabled.'),
+)
+
 compilation_cache_include_metadata_in_key = bool_state(
     name='jax_compilation_cache_include_metadata_in_key',
     default=False,
