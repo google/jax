@@ -302,6 +302,12 @@ def setup_repos_ubuntu(rocm_version_str):
 
 def setup_repos_el8(rocm_version_str):
 
+    rv = parse_version(rocm_version_str)
+
+    # if X.Y.0 -> repo url version should be X.Y
+    if rv.rev == 0:
+        rocm_version_str = "%d.%d" % (rv.major, rv.minor)
+
     with open("/etc/yum.repos.d/rocm.repo", "w") as rfd:
         rfd.write(
             """
