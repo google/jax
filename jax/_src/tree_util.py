@@ -539,6 +539,11 @@ class Partial(functools.partial):
   """
 
   def __new__(klass, func, *args, **kw):
+    if tree_structure(func) != tree_structure(0):
+      warnings.warn(
+        "`jax.tree_util.Partial` treats its callable argument as static, and should "
+        "probably not be called on a PyTree."
+      )
     # In Python 3.10+, if func is itself a functools.partial instance,
     # functools.partial.__new__ would merge the arguments of this Partial
     # instance with the arguments of the func. We box func in a class that does
