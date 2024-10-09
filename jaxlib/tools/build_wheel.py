@@ -109,7 +109,9 @@ _XLA_EXTENSION_STUBS = [
     "pytree.pyi",
     "transfer_guard_lib.pyi",
 ]
-_OPTIONAL_XLA_EXTENSION_STUBS = []
+_OPTIONAL_XLA_EXTENSION_STUBS = [
+    "guard_lib.pyi",  # Will be required on xla_extension_version >= 291
+]
 
 
 def patch_copy_xla_extension_stubs(dst_dir):
