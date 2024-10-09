@@ -40,7 +40,8 @@ class RegularGridInterpolator:
     values: N-dimensional array specifying the grid values.
     method: interpolation method, either ``"linear"`` or ``"nearest"``.
     bounds_error: not implemented by JAX
-    fill_value: value returned for points outside the grid, defaults to NaN.
+    fill_value: value returned for points outside the grid. If None, values outside the
+      grid are extrapolated. Defaults to NaN.
 
   Returns:
     interpolator: callable interpolation object.
