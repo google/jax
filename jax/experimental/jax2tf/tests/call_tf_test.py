@@ -871,6 +871,19 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
       jax2tf.call_tf(tf_fun)(jax_array_on_gpu)
 
 
+  @_parameterized_jit
+  def test_jit_input_pruning_and_side_effects(self, with_jit=False):
+    def enqueue(x, y):
+      tf.raw_ops.InfeedEnqueue(input=x) 
+      return y
+
+    call_tf_enqueue = _maybe_jit(with_jit, jax2tf.call_tf(enqueue))
+
+    y = call_tf_enqueue(1, 2)
+    self.assertEqual(y, 2)
+    x = tf.raw_ops.InfeedDequeue(dtype=tf.int32, shape=())
+    self.assertEqual(x, 1)
+
 class RoundTripToJaxTest(tf_test_util.JaxToTfTestCase):
   "Reloading output of jax2tf into JAX with call_tf"
 
