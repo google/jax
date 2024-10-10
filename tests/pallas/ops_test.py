@@ -917,10 +917,6 @@ class OpsTest(PallasBaseTest):
     if jtu.test_device_matches(["tpu"]) and dtype == "float16":
       self.skipTest("float16 is not supported on TPU")
 
-    # TODO: skipped due to https://github.com/jax-ml/jax/issues/24030
-    if jtu.test_device_matches(["tpu"]) and dtype == "bool":
-      self.skipTest("Not supported on TPU")
-
     @functools.partial(
         self.pallas_call, out_shape=jax.ShapeDtypeStruct((8,), jnp.bool_),
         grid=1)
