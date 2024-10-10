@@ -498,10 +498,10 @@ def matmul(
 
 We do a transpose inside of the `matmul` function (`y = y.swapaxes(0, 1)`). This is because inside of a JIT-ted JAX computation, dimension ordering is purely *logical*, not physical, so rearranging dimensions does not imply a
 physical layout difference. However, when we pass an array into a `pallas_call`, we do enforce a major-to-minor dimension ordering constraint. By transposing `y` inside of the `matmul` function, we are requesting that `y` be in a
-transposed layout `(n, k)` instead of the usual `(k, n)`. The user will still pass in the array in the (logical) `(n, k)` dimension, however.
+transposed layout `(n, k)` instead of the usual `(k, n)`. The user will still pass in the array in the (logical) `(k, n)` dimension, however.
 
-Note: to benchmark the transpose, we actually want `y` to be in the physical transposed layout when we pass it into the kernel, so we don't measure relayout time. In the wrapper function, we will (logically) transpose it back to `(n, k)`
-before passing it into `matmul` because `matmul` expects a logical `(n, k)` dimension ordering.
+Note: to benchmark the transpose, we actually want `y` to be in the physical transposed layout when we pass it into the kernel, so we don't measure relayout time. In the wrapper function, we will (logically) transpose it back to `(k, n)`
+before passing it into `matmul` because `matmul` expects a logical `(k, n)` dimension ordering.
 
 ```{code-cell} ipython3
 :id: AcBMHhKLhkDp
