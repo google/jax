@@ -127,7 +127,7 @@ class MemRefTransform:
   def apply(self, ref: ir.Value) -> ir.Value:
     raise NotImplementedError("Subclasses should override this method")
 
-  def transform_index(self, idx: Sequence[ir.Value]) -> tuple[ir.Value, ...]:
+  def transform_index(self, idx: Sequence[ir.Value], shape: Sequence[int]) -> tuple[ir.Value, ...]:
     raise NotImplementedError("Subclasses should override this method")
 
   def transform_shape(self, shape: Sequence[int]) -> tuple[int, ...]:
@@ -165,7 +165,8 @@ class TileTransform(MemRefTransform):
     )
     return utils.memref_transpose(ref, permutation)
 
-  def transform_index(self, idx: Sequence[ir.Value]) -> tuple[ir.Value, ...]:
+  def transform_index(self, idx: Sequence[ir.Value], shape: Sequence[int]) -> tuple[ir.Value, ...]:
+    del shape
     index = ir.IndexType.get()
     tiling_rank = len(self.tiling)
     return (
@@ -211,11 +212,42 @@ class TransposeTransform(MemRefTransform):
   def apply(self, ref: ir.Value) -> ir.Value:
     return utils.memref_transpose(ref, self.permutation)
 
-  def transform_index(self, idx: Sequence[ir.Value]) -> tuple[ir.Value, ...]:
+  def transform_index(self, idx: Sequence[ir.Value], shape: Sequence[int]) -> tuple[ir.Value, ...]:
     return tuple(idx[p] for p in self.permutation)
 
   def transform_shape(self, shape: Sequence[int]) -> tuple[int, ...]:
     return tuple(shape[p] for p in self.permutation)
+
+
+@dataclasses.dataclass(frozen=True)
+class ReshapeTransform(MemRefTransform):
+  """Transposes memref dimensions."""
+  shape: tuple[int, ...]
+
+  def apply(self, ref: ir.Value) -> ir.Value:
+    return utils.memref_reshape(ref, self.shape)
+
+  def transform_index(self, idx: Sequence[ir.Value], shape: Sequence[int]) -> tuple[ir.Value, ...]:
+    index = ir.IndexType.get()
+    idx_1d = c(0, index)
+    elems = 1
+    for i, dim in zip(idx, shape):
+      idx_1d = arith.addi(idx_1d, arith.muli(i, c(elems, index)))
+      elems *= dim
+
+    ret = []
+    for dim in self.shape:
+      assert elems % dim == 0
+      elems //= dim
+      ret.append(arith.divui(idx_1d, c(elems, index)))
+
+    return tuple(ret)
+
+  def transform_shape(self, shape: Sequence[int]) -> tuple[int, ...]:
+    if math.prod(shape) != math.prod(self.shape):
+      raise ValueError(f"Incompatible shapes {shape} and {self.shape}")
+
+    return self.shape
 
 
 OnDeviceProfiler = profiler.OnDeviceProfiler
@@ -388,7 +420,7 @@ class LaunchContext:
     )
     slice_shape = tuple(slice_shape)
     for t in gmem_transform:
-      dyn_base_indices = t.transform_index(dyn_base_indices)
+      dyn_base_indices = t.transform_index(dyn_base_indices, slice_shape)
       slice_shape = t.transform_shape(slice_shape)
     for dim, squeezed in enumerate(is_squeezed):
       if squeezed:

@@ -466,6 +466,35 @@ class WGMMATest(TestCase):
     np.testing.assert_array_equal(iota, expected)
 
   @parameterized.named_parameters(
+      ("drop_1s", (1, 1, 5, 1, 1, 2, 1, 1, 16), (5, 1, 2, 16)),
+      ("add_1s", (5, 1, 2, 16), (5, 1, 1, 2, 16)),
+      ("fold", (1, 5, 2, 1, 16), (1, 10, 1, 16)),
+      ("un", (1, 10, 1, 16), (1, 5, 2, 1, 16)),
+  )
+  def test_reshape_transform(self, in_shape, out_shape):
+    def kernel(ctx, inp, out, smem):
+      smem_ref, barrier = smem
+      ctx.async_copy(
+          src_ref=inp,
+          dst_ref=smem_ref,
+          gmem_transform=mgpu.ReshapeTransform(out_shape),
+          barrier=barrier,
+      )
+      barrier.wait()
+      copy(smem_ref, out)
+
+    inp = self.prng.uniform(-1, 1, in_shape).astype(jnp.float32)
+    out = mgpu.as_gpu_kernel(
+        kernel,
+        (1, 1, 1),
+        (128, 1, 1),
+        (jax.ShapeDtypeStruct(in_shape, jnp.float32),),
+        jax.ShapeDtypeStruct(out_shape, jnp.float32),
+        (jax.ShapeDtypeStruct(out_shape, jnp.float32), mgpu.TMABarrier()),
+    )(inp)
+    np.testing.assert_array_equal(out, inp.reshape(out_shape))
+
+  @parameterized.named_parameters(
       ("bf16_i8", jnp.bfloat16, jnp.int8),
       ("i8_bf16", jnp.int8, jnp.bfloat16),
       ("i8_i8", jnp.int8, jnp.int8),
