@@ -214,6 +214,12 @@ jax_py_test(
 jax_multiplatform_test(
     name = "memories_test",
     srcs = ["memories_test.py"],
+    enable_configs = [
+        "cpu_shardy",
+        "gpu_2gpu_shardy",
+        "tpu_v3_2x2_shardy",
+        "tpu_v4_2x2_shardy",
+    ],
     shard_count = {
         "tpu": 5,
     },

@@ -588,8 +588,14 @@ def _tpu_gpu_device_put_lowering(ctx, *xs, devices, srcs, copy_semantics):
     if (isinstance(device, (Sharding, TransferToMemoryKind)) and
         device.memory_kind is not None):
       if isinstance(device, Sharding):
-        x = mlir.wrap_with_sharding_op(
-            ctx, x, out_aval, device._to_xla_hlo_sharding(aval.ndim).to_proto())
+        if config.use_shardy_partitioner.value:
+          x = mlir.wrap_with_sharding_op(
+              ctx, x, out_aval,
+              device._to_sdy_sharding(aval.ndim))
+        else:
+          x = mlir.wrap_with_sharding_op(
+              ctx, x, out_aval,
+              device._to_xla_hlo_sharding(aval.ndim).to_proto())
       x = mlir.wrap_with_memory_kind(x, device.memory_kind, out_aval)
       return x
     return x
