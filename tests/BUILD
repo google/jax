@@ -1490,6 +1490,7 @@ jax_multiplatform_test(
     srcs = ["cudnn_fusion_test.py"],
     enable_backends = [],
     enable_configs = [
+        "gpu_a100",
         "gpu_h100",
     ],
     tags = ["multiaccelerator"],
