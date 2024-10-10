@@ -2576,7 +2576,7 @@ def get_logical_mesh_ids(mesh_shape):
 def create_compile_options(
     computation, mesh, spmd_lowering, tuple_args, auto_spmd_lowering,
     allow_prop_to_inputs, allow_prop_to_outputs, backend,
-    np_dev, pmap_nreps, compiler_options):
+    np_dev, pmap_nreps, compiler_options, use_shardy_partitioner):
   if pmap_nreps > 1:
     num_replicas, num_partitions = pmap_nreps, 1
   elif spmd_lowering:
@@ -2599,7 +2599,8 @@ def create_compile_options(
       num_partitions=num_partitions,
       device_assignment=xla_device_assignment,
       use_spmd_partitioning=spmd_lowering,
-      use_shardy_partitioner=config.use_shardy_partitioner.value,
+      use_shardy_partitioner=config.use_shardy_partitioner.value
+      or use_shardy_partitioner,
       use_auto_spmd_partitioning=auto_spmd_lowering,
       env_options_overrides=compiler_options,
       fdo_profile=fdo_profile,
@@ -2625,8 +2626,8 @@ def _cached_compilation(computation, name, mesh, spmd_lowering,
                         tuple_args, auto_spmd_lowering, allow_prop_to_inputs,
                         allow_prop_to_outputs, host_callbacks, backend,
                         da, pmap_nreps, compiler_options_keys,
-                        compiler_options_values,
-                        pgle_profiler):
+                        compiler_options_values, pgle_profiler,
+                        use_shardy_partitioner):
   # One would normally just write: dev = np.array(device_assignment)
   # The formulation below is substantially faster if there are many devices.
   dev = np.vectorize(lambda i: da[i], otypes=[object])(np.arange(len(da)))
@@ -2639,7 +2640,7 @@ def _cached_compilation(computation, name, mesh, spmd_lowering,
   compile_options = create_compile_options(
       computation, mesh, spmd_lowering, tuple_args, auto_spmd_lowering,
       allow_prop_to_inputs, allow_prop_to_outputs, backend,
-      dev, pmap_nreps, compiler_options)
+      dev, pmap_nreps, compiler_options, use_shardy_partitioner)
 
   with dispatch.log_elapsed_time(
       "Finished XLA compilation of {fun_name} in {elapsed_time:.9f} sec",
@@ -2806,7 +2807,8 @@ class UnloadedMeshExecutable:
                compiler_options=None,
                pgle_profiler: profiler.PGLEProfiler | None = None,
                intermediate_shardings: Sequence[JSharding] | None = None,
-               context_mesh: mesh_lib.Mesh | None = None
+               context_mesh: mesh_lib.Mesh | None = None,
+               use_shardy_partitioner: bool = False
   ) -> MeshExecutable:
     if shape_poly_state is not None and shape_poly_state.uses_dim_vars:
       hlo = mlir.refine_polymorphic_shapes(hlo)
@@ -2836,7 +2838,8 @@ class UnloadedMeshExecutable:
         hlo, name, mesh, spmd_lowering,
         tuple_args, auto_spmd_lowering, allow_prop_to_inputs,
         allow_prop_to_outputs, tuple(host_callbacks), backend, da, pmap_nreps,
-        compiler_options_keys, compiler_options_values, pgle_profiler)
+        compiler_options_keys, compiler_options_values, pgle_profiler,
+        use_shardy_partitioner)
 
     if auto_spmd_lowering:
       assert mesh is not None
