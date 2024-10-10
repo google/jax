@@ -340,7 +340,30 @@ def tree_map(f: Callable[..., Any],
              is_leaf: Callable[[Any], bool] | None = None) -> Any:
   """Alias of :func:`jax.tree.map`."""
   leaves, treedef = tree_flatten(tree, is_leaf)
-  all_leaves = [leaves] + [treedef.flatten_up_to(r) for r in rest]
+  all_leaves = [leaves]
+  for i, r in enumerate(rest):
+    try:
+      all_leaves.append(treedef.flatten_up_to(r))
+    except ValueError :
+      # check for pytree structure mismatch errors, for a better error message
+      component = lambda p: 'the tree root' if not p else f'the key path {keystr(p)}'
+      errs = list(equality_errors(tree, r))
+      if errs:
+        (path, ty1, ty2, explanation, x1, x2), *_ = errs
+        nargs = '' if len(rest) == 1 else f' applied to {len(rest)+1} tree arguments'
+        first_arg = ' (argument index 0)' if len(rest) > 1 else ''
+        second_arg = (f'the tree at argument index {i+1}' if i > 0 else
+                      'the second tree')
+        s1, s2 = str(x1), str(x2)
+        values = f':\n{s1}\nvs\n{s2}' if max(len(s1), len(s2)) < 100 else '.'
+        msg = (
+            f'in tree_map{nargs}, at {component(path)} the first '
+            f'tree{first_arg} has a {ty1} but {second_arg} has a {ty2}, '
+            f'so {explanation}{values}')
+        if len(errs) > 1:
+          msg += '\n\nThere were other mismatches in these two trees.'
+        raise ValueError(msg) from None
+      raise
   return treedef.unflatten(f(*xs) for xs in zip(*all_leaves))
 
 
@@ -643,8 +666,9 @@ def equality_errors_pytreedef(
   """Like `equality_errors` but invoked on PyTreeDef."""
   # TODO(mattjj): make equality_errors not print type name, avoid metaclass
   leaf = type("LeafMeta", (type,), dict(__repr__=lambda _: "pytree leaf"))("Leaf", (), {})()
-  return equality_errors(tree_unflatten(tree1, [leaf] * tree1.num_leaves),
-                         tree_unflatten(tree2, [leaf] * tree2.num_leaves))
+  return ((path, ty1, ty2, explanation) for path, ty1, ty2, explanation, _, _
+          in equality_errors(tree_unflatten(tree1, [leaf] * tree1.num_leaves),
+                             tree_unflatten(tree2, [leaf] * tree2.num_leaves)))
 
 # TODO(mattjj): maybe share some logic with _prefix_error?
 def _equality_errors(path, t1, t2, is_leaf):
@@ -654,7 +678,8 @@ def _equality_errors(path, t1, t2, is_leaf):
 
   # The trees may disagree because they are different types:
   if type(t1) != type(t2):
-    yield path, str(type(t1)), str(type(t2)), 'their Python types differ'
+    yield path, str(type(t1)), str(type(t2)), 'their Python types differ', \
+        t1, t2
     return  # no more errors to find
 
   # Or they may disagree because their roots have different numbers or keys of
@@ -665,7 +690,7 @@ def _equality_errors(path, t1, t2, is_leaf):
       yield (path,
              f'{type(t1).__name__} of length {len(t1)}',
              f'{type(t2).__name__} of length {len(t2)}',
-             'the lengths do not match')
+             'the lengths do not match', t1, t2)
       return  # no more errors to find
   t1_children, t1_meta = flatten_one_level(t1)
   t2_children, t2_meta = flatten_one_level(t2)
@@ -684,7 +709,8 @@ def _equality_errors(path, t1, t2, is_leaf):
            f'{type(t2)} with {len(t2_children)} child'
            f'{"ren" if len(t2_children) > 1 else ""}',
            'the numbers of children do not match' +
-           (diff and f', with the symmetric difference of key sets: {{{diff}}}')
+           (diff and f', with the symmetric difference of key sets: {{{diff}}}'),
+           t1, t2
            )
     return  # no more errors to find
 
@@ -693,7 +719,7 @@ def _equality_errors(path, t1, t2, is_leaf):
     yield (path,
            f'{type(t1)} with pytree metadata {t1_meta}',
            f'{type(t2)} with pytree metadata {t2_meta}',
-           'the pytree node metadata does not match')
+           'the pytree node metadata does not match', t1, t2)
     return  # no more errors to find
 
   # If the root types and numbers of children agree, there must be a mismatch in

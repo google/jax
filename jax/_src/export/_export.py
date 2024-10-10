@@ -1183,7 +1183,7 @@ def call(exported: Exported) -> Callable[..., jax.Array]:
           ("\n".join(
              f"   - {shape_poly.args_kwargs_path_to_str(path)} is a {thing1} in the invocation and a "
              f"{thing2} when exported, so {explanation}.\n"
-             for path, thing1, thing2, explanation
+             for path, thing1, thing2, explanation, _, _
              in tree_util.equality_errors(in_args, exp_in_args))))
       raise ValueError(msg)
 
