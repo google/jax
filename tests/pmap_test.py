@@ -2057,7 +2057,7 @@ class PythonPmapTest(jtu.JaxTestCase):
   def test_axis_env_length(self):
     f = lambda x: jax.pmap(g)(jnp.array([x]))[0]
     def g(x):
-      assert len(core.thread_local_state.trace_state.axis_env) == 1
+      assert len(core.get_axis_env().axis_names()) == 1
       return x
     jax.grad(f)(3.)  # doesn't fail
 

@@ -608,7 +608,6 @@ def __array_module__(self, types):
     return NotImplemented
 
 
-@core.stash_axis_env()
 @partial(jax.jit, static_argnums=(1,2,3))
 def _multi_slice(self: Array,
                  start_indices: tuple[tuple[int, ...]],

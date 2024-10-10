@@ -1089,7 +1089,8 @@ def shard_device_array(x, devices, indices, sharding):
   if sharding.is_fully_replicated:
     shards = [x] * len(devices)
   else:
-    shards = x._multi_slice(start_indices, limit_indices, removed_dims)
+    with core.set_current_trace(core.EvalTrace()):
+      shards = x._multi_slice(start_indices, limit_indices, removed_dims)
   aval = api_util.shaped_abstractify(x)
   return pxla.batched_device_put(aval, sharding, shards, devices)
 

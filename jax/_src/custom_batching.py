@@ -138,9 +138,9 @@ def maybe_bdim_at_front(x, bdim):
 # axes instead of accepting and matching a given spec of output axes. Assumes
 # `f` is pytree-flattened
 def vmap_unrestricted(f: lu.WrappedFun, *args, in_axes, axis_name, axis_size):
-  f, out_axes = batching.batch_subtrace(f)
-  f = batching._batch_outer(f, axis_name, axis_size, in_axes,
-                            batching.BatchTrace, None)
+  axis_data = batching.AxisData(axis_name, axis_size, None)
+  tag = core.TraceTag()
+  f, out_axes = batching.batch_subtrace(f, tag, axis_data, in_axes)
   outs = f.call_wrapped(*args)
   return outs, out_axes()
 

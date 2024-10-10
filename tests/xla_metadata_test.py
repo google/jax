@@ -20,7 +20,6 @@ correctly propagated to the jaxpr and mlir.
 from absl.testing import absltest
 import jax
 from jax._src import config
-from jax._src import dispatch
 from jax._src import test_util as jtu
 from jax._src.lax import lax
 from jax.experimental.xla_metadata import set_xla_metadata
@@ -65,7 +64,7 @@ class XlaMetadataTest(jtu.JaxTestCase):
 
   def test_f_nonjitted(self):
     def f_add(a, b):
-      return dispatch.apply_primitive(lax.add_p, a, b)
+      return lax.add(a, b)
 
     arg1 = jnp.arange(2)
     with set_xla_metadata(a="b"):
@@ -126,7 +125,7 @@ class XlaMetadataTest(jtu.JaxTestCase):
 
   def test_attr_caching_nonjit(self):
     def f_add(a, b):
-      return dispatch.apply_primitive(lax.add_p, a, b)
+      return lax.add(a, b)
 
     arg1 = jnp.arange(2)
     arg2 = jnp.arange(2) + 1

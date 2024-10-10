@@ -152,22 +152,22 @@ def jet(fun, primals, series):
 
 @lu.transformation
 def jet_fun(order, primals, series):
-  with core.new_main(JetTrace) as main:
-    main.order = order
-    out_primals, out_terms = yield (main, primals, series), {}
-    del main
+  tag = core.TraceTag()
+  out_primals, out_terms = yield (tag, order, primals, series), {}
   out_terms = [[jnp.zeros_like(p)] * order if s is zero_series else s
                for p, s in zip(out_primals, out_terms)]
   yield out_primals, out_terms
 
 @lu.transformation
-def jet_subtrace(main, primals, series):
-  trace = JetTrace(main, core.cur_sublevel())
-  in_tracers = map(partial(JetTracer, trace), primals, series)
-  ans = yield in_tracers, {}
-  out_tracers = map(trace.full_raise, ans)
-  out_primals, out_terms = unzip2((t.primal, t.terms) for t in out_tracers)
-  yield out_primals, out_terms
+def jet_subtrace(tag, order, primals, series):
+  with core.take_current_trace() as parent_trace:
+    trace = JetTrace(tag, parent_trace, order)
+    in_tracers = map(partial(JetTracer, trace), primals, series)
+    with core.set_current_trace(trace):
+       ans = yield in_tracers, {}
+
+    out_primals, out_terms = unzip2(map(trace.to_primal_terms_pair, ans))
+    yield out_primals, out_terms
 
 @lu.transformation_with_aux
 def traceable(in_tree_def, *primals_and_series):
@@ -198,33 +198,44 @@ class JetTracer(core.Tracer):
 
 class JetTrace(core.Trace):
 
-  def pure(self, val):
-    return JetTracer(self, val, zero_series)
+  def __init__(self, tag, parent_trace, order):
+    self.tag = tag
+    self.parent_trace = parent_trace
+    self.order = order
 
-  def lift(self, val):
-    return JetTracer(self, val, zero_series)
-
-  def sublift(self, val):
-    return JetTracer(self, val.primal, val.terms)
+  def to_primal_terms_pair(self, val):
+    if isinstance(val, JetTracer) and val._trace.tag is self.tag:
+      return val.primal, val.terms
+    else:
+      return val, zero_series
 
   def process_primitive(self, primitive, tracers, params):
-    order = self.main.order              # pytype: disable=attribute-error
-    primals_in, series_in = unzip2((t.primal, t.terms) for t in tracers)
+    order = self.order              # pytype: disable=attribute-error
+    primals_in, series_in = unzip2(map(self.to_primal_terms_pair, tracers))
+
+    if all(t is zero_series for t in series_in):
+      primal_out = primitive.bind_with_trace(self.parent_trace, primals_in, params)
+      if primitive.multiple_results:
+        return [JetTracer(self, p, zero_series) for p in primal_out]
+      else:
+        return JetTracer(self, primal_out, zero_series)
+
     series_in = [[zero_term] * order if s is zero_series else s
                  for s in series_in]
-    # TODO(mattjj): avoid always instantiating zeros
-    series_in = [[jnp.zeros(np.shape(x), dtype=jnp.result_type(x))
-                  if t is zero_term else t for t in series]
-                 for x, series in zip(primals_in, series_in)]
-    rule = jet_rules[primitive]
-    primal_out, terms_out = rule(primals_in, series_in, **params)
+    with core.set_current_trace(self.parent_trace):
+      # TODO(mattjj): avoid always instantiating zeros
+      series_in = [[jnp.zeros(np.shape(x), dtype=jnp.result_type(x))
+                    if t is zero_term else t for t in series]
+                   for x, series in zip(primals_in, series_in)]
+      rule = jet_rules[primitive]
+      primal_out, terms_out = rule(primals_in, series_in, **params)
     if not primitive.multiple_results:
       return JetTracer(self, primal_out, terms_out)
     else:
       return [JetTracer(self, p, ts) for p, ts in zip(primal_out, terms_out)]
 
   def process_call(self, call_primitive, f, tracers, params):
-    primals_in, series_in = unzip2((t.primal, t.terms) for t in tracers)
+    primals_in, series_in = unzip2(map(self.to_primal_terms_pair, tracers))
     primals_and_series, in_tree_def = tree_flatten((primals_in, series_in))
     f_jet, out_tree_def = traceable(jet_subtrace(f, self.main), in_tree_def)
     update_params = call_param_updaters.get(call_primitive)
@@ -233,17 +244,6 @@ class JetTrace(core.Trace):
     result = call_primitive.bind(f_jet, *primals_and_series, **new_params)
     primals_out, series_out = tree_unflatten(out_tree_def(), result)
     return [JetTracer(self, p, ts) for p, ts in zip(primals_out, series_out)]
-
-  def post_process_call(self, call_primitive, out_tracers, params):
-    primals, series = unzip2((t.primal, t.terms) for t in out_tracers)
-    out, treedef = tree_flatten((primals, series))
-    del primals, series
-    main = self.main
-    def todo(x):
-      primals, series = tree_unflatten(treedef, x)
-      trace = JetTrace(main, core.cur_sublevel())
-      return map(partial(JetTracer, trace), primals, series)
-    return out, todo
 
   def process_custom_jvp_call(self, primitive, fun, jvp, tracers, *,
                               symbolic_zeros):
