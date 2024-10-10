@@ -562,6 +562,13 @@ LogicalResult EnqueueDMAOp::verify() {
           "device_id or core_id is specified");
     }
   }
+  // TODO(b/369517284): Add proper support for local SMEM DMAs.
+  auto src_memory_space = dyn_cast_if_present<tpu::MemorySpaceAttr>(
+      getSource().getType().getMemorySpace());
+  if (src_memory_space &&
+      src_memory_space.getValue() == tpu::MemorySpace::smem) {
+    return emitOpError("DMAs with an SMEM source are not fully supported");
+  }
   return success();
 }
 
