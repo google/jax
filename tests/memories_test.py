@@ -16,26 +16,27 @@ import copy
 import functools
 import math
 import re
-from absl.testing import absltest
-from absl.testing import parameterized
-from absl import flags
 import unittest
 
+from absl import flags
+from absl.testing import absltest
+from absl.testing import parameterized
 import jax
 from jax import lax
+from jax._src import config
 from jax._src import test_util as jtu
 from jax._src import xla_bridge as xb
+from jax._src.layout import DeviceLocalLayout as DLL, Layout
 from jax._src.lib import xla_extension_version
-from jax._src import config
-from jax.ad_checkpoint import checkpoint_name, checkpoint as new_checkpoint
-import jax.numpy as jnp
-from jax.ad_checkpoint import Offloadable, remat, Recompute
 from jax._src.sharding import common_devices_indices_map
-from jax._src.sharding_impls import (NamedSharding, PositionalSharding,
-                                     SingleDeviceSharding, GSPMDSharding,
-                                     TransferToMemoryKind, PartitionSpec as P)
+from jax._src.sharding_impls import ( GSPMDSharding,NamedSharding, PartitionSpec as P, PositionalSharding,
+                                     SingleDeviceSharding,
+                                     TransferToMemoryKind)
+from jax.ad_checkpoint import checkpoint_name, checkpoint as new_checkpoint
+from jax.ad_checkpoint import Offloadable, Recompute, remat
 from jax.experimental.compute_on import compute_on
 from jax.experimental.shard_map import shard_map
+import jax.numpy as jnp
 import numpy as np
 
 config.parse_flags_with_absl()
@@ -1461,6 +1462,46 @@ class ComputeOffload(jtu.BufferDonationTestCase):
         in_shardings=(sharding, p_sharding),
         out_shardings=(sharding, p_sharding),
         donate_argnums=(0, 1),
+    )
+    x_out, y_out = jit_fn(x, y)
+    self.assertArraysEqual(x_out, x1 * x1)
+    self.assertArraysEqual(y_out, y1 + y1)
+
+  def test_compute_offload_with_donation2(self):
+    sharding = jax.sharding.SingleDeviceSharding(jax.devices()[0])
+    p_sharding = jax.sharding.SingleDeviceSharding(
+        jax.devices()[0], memory_kind="pinned_host"
+    )
+
+    @compute_on("device_host")
+    @jax.jit
+    def host_fn(x_in, y_in):
+      return x_in * x_in, y_in + y_in
+
+    def test_fn(x_in, y_in):
+      x_out, y_out = host_fn(x_in, y_in)
+      return x_out, y_out
+
+    x = jnp.arange(0, 1024, dtype=jnp.float32)
+    x = jnp.reshape(x, (16, 64))
+    y = jnp.arange(0, 1024, dtype=jnp.float32)
+    y = jnp.reshape(y, (16, 64))
+    custom_dll = DLL(major_to_minor=(0, 1), _tiling=((8, 128),))
+    custom_dll_linear = DLL(major_to_minor=(0, 1), _tiling=((1,),))
+    x = jax.device_put(x, Layout(custom_dll, sharding))
+    y = jax.device_put(y, Layout(custom_dll_linear, p_sharding))
+
+    x1 = jnp.arange(0, 1024, dtype=jnp.float32)
+    x1 = jnp.reshape(x1, (16, 64))
+    y1 = jnp.arange(0, 1024, dtype=jnp.float32)
+    y1 = jnp.reshape(y1, (16, 64))
+
+    jit_fn = jax.jit(
+        test_fn,
+        out_shardings=(
+            Layout(custom_dll, sharding),
+            Layout(custom_dll, p_sharding),
+        ),
     )
     x_out, y_out = jit_fn(x, y)
     self.assertArraysEqual(x_out, x1 * x1)
