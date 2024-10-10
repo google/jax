@@ -176,10 +176,15 @@ def flash_attention(
         f"KV sequence length mismatch: got {kv_seq_len} and {kv_seq_len_v}"
     )
   if ab is not None:
-    if ab.shape != (batch_size, num_heads, q_seq_len, kv_seq_len):
+    if ab.shape not in [
+      (batch_size, num_heads, q_seq_len, kv_seq_len),
+      (batch_size, 1, q_seq_len, kv_seq_len),
+      (1, num_heads, q_seq_len, kv_seq_len),
+      (1, 1, q_seq_len, kv_seq_len),
+    ]:
       raise ValueError(
-          f"Attention bias shape mismatch: expected ({batch_size=},"
-          f" {num_heads=}, {q_seq_len=}, {kv_seq_len=}), got {ab.shape}"
+        "Attention bias shape mismatch: expected to broadcast to "
+        f"({batch_size=}, {num_heads=}, {q_seq_len=}, {kv_seq_len=})"
       )
   if segment_ids is not None:
     if segment_ids.q.shape != (batch_size, q_seq_len):
@@ -665,7 +670,12 @@ def _flash_attention_impl(
       next_q_index = q_seq_index
       next_kv_index = kv_seq_index
 
-    return (batch_index, head_index, next_q_index, next_kv_index)
+    return (
+      batch_index if ab.shape[0] != 1 else 0,
+      head_index if ab.shape[1] != 1 else 0,
+      next_q_index,
+      next_kv_index,
+    )
 
   def o_index_map(batch_index, head_index, q_seq_index, _):
     return (batch_index, head_index, q_seq_index, 0)
@@ -1042,7 +1052,12 @@ def _flash_attention_bwd_dkv(
   assert di.ndim == len(di_spec.block_shape)
 
   def ab_index_map(batch_index, head_index, kv_seq_index, q_seq_index):
-    return (batch_index, head_index, q_seq_index, kv_seq_index)
+    return (
+      batch_index if ab.shape[0] != 1 else 0,
+      head_index if ab.shape[1] != 1 else 0,
+      q_seq_index,
+      kv_seq_index,
+    )
 
   dab_spec = (
       pl.BlockSpec((1, 1, block_q_major, block_k_major), ab_index_map)
@@ -1389,7 +1404,12 @@ def _flash_attention_bwd_dq(
   assert di.ndim == len(di_spec.block_shape)
 
   def ab_index_map(batch_index, head_index, q_seq_index, kv_seq_index):
-    return (batch_index, head_index, q_seq_index, kv_seq_index)
+    return (
+      batch_index if ab.shape[0] != 1 else 0,
+      head_index if ab.shape[1] != 1 else 0,
+      q_seq_index,
+      kv_seq_index,
+    )
 
   dab_spec = (
       pl.BlockSpec((1, 1, block_q_major, block_k_major), ab_index_map)
