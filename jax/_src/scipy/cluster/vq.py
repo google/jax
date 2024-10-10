@@ -70,5 +70,5 @@ def vq(obs: ArrayLike, code_book: ArrayLike, check_finite: bool = True) -> tuple
       raise ValueError("ndim different than 1 or 2 are not supported")
   dist = vmap(lambda ob: jnp.linalg.norm(ob[None] - cb_arr, axis=-1))(obs_arr)
   code = jnp.argmin(dist, axis=-1)
-  dist_min = vmap(operator.getitem)(dist, code)
+  dist_min = vmap(operator.getitem)(dist, code)  # type: ignore[call-overload]
   return code, dist_min

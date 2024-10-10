@@ -174,7 +174,7 @@ class ufunc:
     if where is not None:
       raise NotImplementedError(f"where argument of {self}")
     call = self.__static_props['call'] or self._call_vectorized
-    return call(*args)
+    return call(*args)  # type: ignore[arg-type]
 
   @partial(jax.jit, static_argnames=['self'])
   def _call_vectorized(self, *args):

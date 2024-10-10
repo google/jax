@@ -1288,7 +1288,7 @@ def flip(m: ArrayLike, axis: int | Sequence[int] | None = None) -> Array:
             [6, 5]]], dtype=int32)
   """
   util.check_arraylike("flip", m)
-  return _flip(asarray(m), reductions._ensure_optional_axes(axis))
+  return _flip(asarray(m), reductions._ensure_optional_axes(axis))  # type: ignore[arg-type]
 
 @partial(jit, static_argnames=('axis',))
 def _flip(m: Array, axis: int | tuple[int, ...] | None = None) -> Array:
@@ -2203,7 +2203,7 @@ def squeeze(a: ArrayLike, axis: int | Sequence[int] | None = None) -> Array:
     Array([0, 1, 2], dtype=int32)
   """
   util.check_arraylike("squeeze", a)
-  return _squeeze(asarray(a), _ensure_index_tuple(axis) if axis is not None else None)
+  return _squeeze(asarray(a), _ensure_index_tuple(axis) if axis is not None else None)  # type: ignore[arg-type]
 
 @partial(jit, static_argnames=('axis',), inline=True)
 def _squeeze(a: Array, axis: tuple[int, ...]) -> Array:
@@ -8032,7 +8032,7 @@ def delete(
     obj = asarray(obj).ravel()
     obj = clip(where(obj < 0, obj + a.shape[axis], obj), 0, a.shape[axis])
     obj = sort(obj)
-    obj -= arange(len(obj))  # type: ignore[arg-type,operator]
+    obj -= arange(len(obj))
     i = arange(a.shape[axis] - obj.size)
     i += (i[None, :] >= obj[:, None]).sum(0)
     return a[(slice(None),) * axis + (i,)]
@@ -11944,8 +11944,8 @@ def digitize(x: ArrayLike, bins: ArrayLike, right: bool = False,
   kwds: dict[str, str] = {} if method is None else {'method': method}
   return where(
     bins_arr[-1] >= bins_arr[0],
-    searchsorted(bins_arr, x, side=side, **kwds),
-    bins_arr.shape[0] - searchsorted(bins_arr[::-1], x, side=side, **kwds)
+    searchsorted(bins_arr, x, side=side, **kwds),  # type: ignore[arg-type]
+    bins_arr.shape[0] - searchsorted(bins_arr[::-1], x, side=side, **kwds)  # type: ignore[arg-type]
   )
 
 

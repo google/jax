@@ -168,7 +168,7 @@ def _cumprod(self: Array, axis: reductions.Axis = None, dtype: DTypeLike | None 
 
   Refer to :func:`jax.numpy.cumprod` for the full documentation.
   """
-  return reductions.cumprod(self, axis=axis, dtype=dtype, out=out)
+  return reductions.cumprod(self, axis=axis, dtype=dtype, out=out)  # type: ignore[arg-type]
 
 def _cumsum(self: Array, axis: reductions.Axis = None, dtype: DTypeLike | None = None,
             out: None = None) -> Array:
@@ -176,7 +176,7 @@ def _cumsum(self: Array, axis: reductions.Axis = None, dtype: DTypeLike | None =
 
   Refer to :func:`jax.numpy.cumsum` for the full documentation.
   """
-  return reductions.cumsum(self, axis=axis, dtype=dtype, out=out)
+  return reductions.cumsum(self, axis=axis, dtype=dtype, out=out)  # type: ignore[arg-type]
 
 def _diagonal(self: Array, offset: int = 0, axis1: int = 0, axis2: int = 1) -> Array:
   """Return the specified diagonal from the array.
