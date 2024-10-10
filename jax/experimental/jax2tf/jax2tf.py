@@ -119,6 +119,10 @@ def _sanitize_scope_name(name):
 # Line below is different externally and internally.
 allow_enable_xla_false = lambda: True
 
+# TODO(b/353437398): Deprecate support for `native_serialization=False`.
+# Line below is different externally and internally.
+allow_native_serialization_false = lambda: True
+
 # A value suitable in a TF tracing context: tf.Tensor, tf.Variable,
 # or Python scalar or numpy.ndarray. (A tf.EagerTensor is a tf.Tensor.)
 TfVal = Any
@@ -332,28 +336,38 @@ def convert(fun_jax: Callable,
     tuple/lists/dicts thereof), and returns TfVals as outputs, and uses
     only TensorFlow ops and thus can be called from a TensorFlow program.
   """
-  if not enable_xla:
-    if allow_enable_xla_false():
-      warnings.warn("jax2tf.convert with enable_xla=False is deprecated.",
-                    DeprecationWarning,
-                    stacklevel=2)
-    else:
-      raise ValueError("jax2tf.convert with enable_xla=False is not supported.")
-
   if native_serialization is DEFAULT_NATIVE_SERIALIZATION:
     if not enable_xla:
       native_serialization = False
     else:
       native_serialization = config.jax2tf_default_native_serialization.value
 
-  if not native_serialization:
-    warnings.warn(
-        "jax2tf.convert with native_serialization=False is deprecated.",
-        DeprecationWarning,
-        stacklevel=2)
-  if native_serialization and not enable_xla:
-    raise ValueError(
-        "native_serialization is not supported with enable_xla=False")
+  if not enable_xla:
+    if allow_enable_xla_false():
+      warnings.warn(
+          "jax2tf.convert with enable_xla=False has been deprecated "
+          "since July 2024.",
+          DeprecationWarning,
+          stacklevel=2)
+      if native_serialization:
+        raise ValueError(
+            "native_serialization is not supported with enable_xla=False")
+    else:
+      raise ValueError(
+          "jax2tf.convert with enable_xla=False has been deprecated "
+          "since July 2024 and it is not supported anymore.")
+
+  elif not native_serialization:
+    if allow_native_serialization_false():
+      warnings.warn(
+          "jax2tf.convert with native_serialization=False has been deprecated "
+          "since July 2024.",
+          DeprecationWarning,
+          stacklevel=2)
+    else:
+      raise ValueError(
+          "jax2tf.convert with native_serialization=False has been deprecated "
+          "since July 2024 and it is not supported anymore.")
 
   if not native_serialization and polymorphic_constraints:
     raise ValueError(

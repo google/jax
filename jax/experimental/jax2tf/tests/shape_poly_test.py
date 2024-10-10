@@ -1032,7 +1032,7 @@ class ShapePolyTest(tf_test_util.JaxToTfTestCase):
     self.assertAllClose(f_jax(x), restored_f(x))
 
   @jtu.ignore_warning(
-      message="jax2tf.convert with native_serialization=False is deprecated"
+      message="jax2tf.convert with native_serialization=False has been deprecated"
   )
   def test_readme_examples(self):
     """Some of the examples from the README."""
@@ -1124,31 +1124,6 @@ class ShapePolyTest(tf_test_util.JaxToTfTestCase):
     x45 = np.ones((4, 5), dtype=np.float32)
     # JAX with static shapes sees that x.shape[0] != x.shape[1]
     self.assertEqual(jnp.sum(x45), f2_jax(x45))
-
-    # In graph serialization eager mode, we catch the broken assumption b >= 1
-    with self.assertRaisesRegex(
-        tf.errors.InvalidArgumentError,
-        re.escape(
-          "Found inconsistency between dimension size args[0].shape[1] (= 5) "
-          "and the specification 'b' (= 4)")):
-      jax2tf.convert(f2_jax, polymorphic_shapes=["b, b"],
-                     native_serialization=False)(x45)
-
-    # In graph serialization graph mode we also catch it (except on TPU, where
-    # the behavior is as for jit_compile=1)
-
-    f2_tf = tf.function(
-        jax2tf.convert(f2_jax, polymorphic_shapes=["b, b"],
-                       native_serialization=False),
-        autograph=False,
-    ).get_concrete_function(tf.TensorSpec([None, None], dtype=np.float32))
-    if jtu.test_device_matches(["tpu"]):
-      self.assertEqual(1. + jnp.sum(x45), f2_tf(x45))
-    else:
-      with self.assertRaisesRegex(
-          tf.errors.InvalidArgumentError,
-          r"Found inconsistency"):
-        _ = f2_tf(x45)
 
     # We also catch the error with native serialization
     with self.assertRaisesRegex(

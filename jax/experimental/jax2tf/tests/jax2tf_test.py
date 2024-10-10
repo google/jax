@@ -79,7 +79,7 @@ class Jax2TfTest(tf_test_util.JaxToTfTestCase):
   def setUp(self):
     super().setUp()
     self.warning_ctx = jtu.ignore_warning(
-        message="jax2tf.convert with native_serialization=False is deprecated"
+        message="jax2tf.convert with native_serialization=False has been deprecated"
     )
     self.warning_ctx.__enter__()
 
@@ -1695,7 +1695,7 @@ class Jax2tfWithCustomPRNGTest(tf_test_util.JaxToTfTestCase):
   def setUp(self):
     super().setUp()
     self.warning_ctx = jtu.ignore_warning(
-        message="jax2tf.convert with native_serialization=False is deprecated"
+        message="jax2tf.convert with native_serialization=False has been deprecated"
     )
     self.warning_ctx.__enter__()
 
@@ -1736,7 +1736,7 @@ class Jax2TfVersioningTest(tf_test_util.JaxToTfTestCase):
     super().setUp()
 
   @jtu.ignore_warning(
-      message="jax2tf.convert with native_serialization=False is deprecated"
+      message="jax2tf.convert with native_serialization=False has been deprecated"
   )
   def test_simple(self):
     self.ConvertAndCompare(jnp.sin, 0.7)
