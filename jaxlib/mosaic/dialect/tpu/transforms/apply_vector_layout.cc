@@ -5385,9 +5385,6 @@ FailureOr<std::pair<VectorLayout, xla::Array<Value>>> changeOffsets(
   }
 
   if (row_diff != 0) {
-    if (col_diff != 0) {
-      return emitError(loc, "Not implemented: Row and column offset changes");
-    }
     const SmallVector<int64_t> implicit_shape =
         src.implicitShape(vty.getShape());
     if (implicit_shape[implicit_shape.size() - 2] != 1) {
