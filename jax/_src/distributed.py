@@ -42,7 +42,11 @@ class State:
                  local_device_ids: int | Sequence[int] | None = None,
                  cluster_detection_method: str | None = None,
                  initialization_timeout: int = 300,
-                 coordinator_bind_address: str | None = None):
+                 coordinator_bind_address: str | None = None,
+                 service_heartbeat_interval_seconds: int = 10,
+                 service_max_missing_heartbeats: int = 10,
+                 client_heartbeat_interval_seconds: int = 10,
+                 client_max_missing_heartbeats: int = 10):
     coordinator_address = (coordinator_address or
                            os.environ.get('JAX_COORDINATOR_ADDRESS'))
     if isinstance(local_device_ids, int):
@@ -107,7 +111,9 @@ class State:
           'Starting JAX distributed service on %s', coordinator_bind_address
       )
       self.service = xla_extension.get_distributed_runtime_service(
-          coordinator_bind_address, num_processes)
+          coordinator_bind_address, num_processes,
+          heartbeat_interval=service_heartbeat_interval_seconds,
+          max_missing_heartbeats=service_max_missing_heartbeats)
 
     self.num_processes = num_processes
 
@@ -115,7 +121,9 @@ class State:
       raise RuntimeError('distributed.initialize should only be called once.')
 
     self.client = xla_extension.get_distributed_runtime_client(
-        coordinator_address, process_id, init_timeout=initialization_timeout)
+        coordinator_address, process_id, init_timeout=initialization_timeout,
+        heartbeat_interval=client_heartbeat_interval_seconds,
+        max_missing_heartbeats=client_max_missing_heartbeats)
     logger.info('Connecting to JAX distributed service on %s', coordinator_address)
     self.client.connect()
 
