@@ -71,7 +71,7 @@ jax.profiler.save_device_memory_profile("memory.prof")
 If we first run the program above and then execute
 
 ```shell
-pprof --web memory.prof
+pprof --http=: memory.prof
 ```
 
 `pprof` opens a web browser containing the following visualization of the device
@@ -128,7 +128,7 @@ If we simply visualize the device memory profile at the end of execution
 `anotherfunc` accumulates more device memory allocations:
 
 ```shell
-pprof --web memory9.prof
+pprof --http=: memory9.prof
 ```
 
 ![Device memory profile at end of execution](_static/device_memory_profile_leak1.svg)
@@ -142,7 +142,7 @@ across loop iterations, we can identify why the memory usage of the
 program increases over time:
 
 ```shell
-pprof --web --diff_base memory1.prof memory9.prof
+pprof --http=: --diff_base memory1.prof memory9.prof
 ```
 
 ![Device memory profile at end of execution](_static/device_memory_profile_leak2.svg)
