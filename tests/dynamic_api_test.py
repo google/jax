@@ -1759,6 +1759,20 @@ class JumbleTest(jtu.JaxTestCase):
       self.assertRegex(str(result_jumble.aval), regex)
       self.assertAllClose(result_jumble.data.shape, (3, 512, 128))
 
+@jtu.with_config(jax_dynamic_shapes=True)
+class TestGatherDynamic(jtu.JaxTestCase):
+
+  def test_gather_dynamic(self):
+
+    @jax.jit
+    def index(sz, idx):
+      r = jnp.ones((sz, 3, sz + 1), dtype=int)
+      return r[idx, 2, idx]
+
+    with self.assertRaises(KeyError):
+      index(1, 1)
+
+
 def jumble_map(f):
   def mapped(*jumbles):
     return jax.vmap(f, in_axes=batching.jumble_axis, out_axes=batching.jumble_axis,
