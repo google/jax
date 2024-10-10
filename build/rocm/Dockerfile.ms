@@ -5,8 +5,14 @@ FROM ubuntu:20.04 AS rocm_base
 RUN --mount=type=cache,target=/var/cache/apt \
     apt-get update && apt-get install -y python3 python-is-python3
 
+# Install bzip2 and sqlite3 packages
+RUN apt-get update && apt-get install -y \
+    sqlite3 libsqlite3-dev \
+    libbz2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Add target file to help determine which device(s) to build for
-ARG GPU_DEVICE_TARGETS="gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100"
+ARG GPU_DEVICE_TARGETS="gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100"
 ENV GPU_DEVICE_TARGETS=${GPU_DEVICE_TARGETS}
 
 # Install ROCm
@@ -70,6 +76,7 @@ FROM rocm_base AS rt_build
 ARG JAX_VERSION
 ARG JAX_COMMIT
 ARG XLA_COMMIT
+ARG JAX_USE_CLANG
 
 LABEL com.amdgpu.rocm_version="$ROCM_VERSION" \
       com.amdgpu.python_version="$PYTHON_VERSION" \
@@ -77,7 +84,15 @@ LABEL com.amdgpu.rocm_version="$ROCM_VERSION" \
       com.amdgpu.jax_commit="$JAX_COMMIT" \
       com.amdgpu.xla_commit="$XLA_COMMIT"
 
+
+# Create a directory to copy and retain the wheels in the image.
+RUN mkdir -p /rocm_jax_wheels
+
 RUN --mount=type=cache,mode=0755,target=/root/.cache/pip \
     --mount=type=bind,source=wheelhouse,target=/wheelhouse \
-    pip install --find-links /wheelhouse jax jaxlib jax_rocm60_plugin jax_rocm60_pjrt
+    cp /wheelhouse/* /rocm_jax_wheels/ && \
+    ls -lah /wheelhouse && \
+    pip3 install wheelhouse/*none*.whl wheelhouse/*jaxlib*.whl && \
+    pip3 install wheelhouse/*rocm60*.whl
+
 

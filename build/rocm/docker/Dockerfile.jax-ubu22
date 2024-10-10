@@ -3,8 +3,14 @@ FROM ubuntu:22.04
 RUN --mount=type=cache,target=/var/cache/apt \
     apt-get update && apt-get install -y python3 python-is-python3
 
+# Install bzip2 and sqlite3 packages
+RUN apt-get update && apt-get install -y \
+    sqlite3 libsqlite3-dev \
+    libbz2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Add target file to help determine which device(s) to build for
-ARG GPU_DEVICE_TARGETS="gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100"
+ARG GPU_DEVICE_TARGETS="gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100"
 ENV GPU_DEVICE_TARGETS=${GPU_DEVICE_TARGETS}
 
 # Install ROCM
@@ -61,4 +67,6 @@ LABEL com.amdgpu.rocm_version="$ROCM_VERSION" \
 
 RUN --mount=type=cache,mode=0755,target=/root/.cache/pip \
     --mount=type=bind,source=wheelhouse,target=/wheelhouse \
-    pip3 install --find-links /wheelhouse jax jaxlib jax_rocm60_plugin jax_rocm60_pjrt
+    ls -lah /wheelhouse && \
+    pip3 install wheelhouse/*none*.whl wheelhouse/*jaxlib*.whl && \
+    pip3 install wheelhouse/*rocm60*.whl

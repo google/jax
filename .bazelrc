@@ -148,11 +148,18 @@ build:win_clang --extra_toolchains=@local_config_cc//:cc-toolchain-x64_windows-c
 build:win_clang --extra_execution_platforms=//jax/tools/toolchains:x64_windows-clang-cl
 build:win_clang --compiler=clang-cl
 
-# Configs for building ROCM
-build:rocm --crosstool_top=@local_config_rocm//crosstool:toolchain
-build:rocm --define=using_rocm=true --define=using_rocm_hipcc=true
-build:rocm --repo_env TF_NEED_ROCM=1
-build:rocm --action_env TF_ROCM_AMDGPU_TARGETS="gfx900,gfx906,gfx908,gfx90a,gfx1030"
+build:rocm_base --crosstool_top=@local_config_rocm//crosstool:toolchain
+build:rocm_base --define=using_rocm=true --define=using_rocm_hipcc=true
+build:rocm_base --repo_env TF_NEED_ROCM=1
+build:rocm_base --action_env TF_ROCM_AMDGPU_TARGETS="gfx900,gfx906,gfx908,gfx90a,gfx940,gfx941,gfx942,gfx1030,gfx1100"
+
+# Build with hipcc for ROCm and clang for the host.
+build:rocm --config=rocm_base
+build:rocm --action_env=TF_ROCM_CLANG="1"
+build:rocm --action_env=CLANG_COMPILER_PATH="/usr/lib/llvm-18/bin/clang"
+build:rocm --copt=-Wno-gnu-offsetof-extensions
+build:rocm --copt=-Qunused-arguments
+build:rocm --action_env=TF_HIPCC_CLANG="1"
 
 # #############################################################################
 # Cache options below.
