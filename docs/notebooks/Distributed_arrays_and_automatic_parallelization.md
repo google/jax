@@ -5,27 +5,34 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.4
+    jupytext_version: 1.16.1
 kernelspec:
   display_name: Python 3
   name: python3
 ---
 
-+++ {"id": "PxHrg4Cjuapm"}
++++ {"id": "dnbZdHiXD9Xa"}
 
-# Distributed arrays and automatic parallelization
+(distributed-arrays-and-automatic-parallelization)=
+# Automatic and semi-automated parallelization with `jax.jit`
 
-<!--* freshness: { reviewed: '2024-04-16' } *-->
+<!--* freshness: { reviewed: '2024-10-01' } *-->
 
-+++ {"id": "pFtQjv4SzHRj"}
 
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jax-ml/jax/blob/main/docs/notebooks/Distributed_arrays_and_automatic_parallelization.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/jax-ml/jax/blob/main/docs/notebooks/Distributed_arrays_and_automatic_parallelization.ipynb)
+In this tutorial, you will learn about automatic and semi-automated parallelism for Single-Program Multi-Data (SPMD) code in JAX indepth. For automatic parallelism, you use {func}`jax.jit`, and for semi-automated parallelism - {func}`jax.jit` and {func}`jax.lax.with_sharding_constraint`. You'll also learn about how using {class}`jax.Array`s together with {func}`jax.jit` can provide automatic compiler-based parallelization.
 
-This tutorial discusses parallelism via `jax.Array`, the unified array object model available in JAX v0.4.1 and newer.
+{class}`jax.Array` is a unified datatype for representing arrays or a unified array object model. With SPMD, you can transform a function, such as the forward pass of a neural network, written for one device into a function that can run in parallel on multiple devices, such as several GPUs or Google TPUs.
+
+**Note:** If you are new to {class}`jax.Array` and JAX parallelism, check out {ref}`sharded-computation`, which also goes through the basics {func}`jax.experimental.shard_map.shard_map` for manual parallelism with manual control.
+
+**Warning:** To run the code in this tutorial, you need 8 devices, such as the TPU v2-8 available on Google Colab.
+
++++ {"id": "sjbPo1b9gpUz"}
+
+## Setup and first example
 
 ```{code-cell}
-:id: FNxScTfq3vGF
-
+:id: mcO9pfbkD9Xv
 
 from typing import Optional
 
@@ -35,28 +42,20 @@ import jax
 import jax.numpy as jnp
 ```
 
-+++ {"id": "eyHMwyEfQJcz"}
++++ {"id": "axjoeT9hD9X1"}
 
-⚠️ WARNING: The notebook requires 8 devices to run.
+**Warning:** ⚠️ To run the code, you need 8 devices, such as the TPU v2-8 available on Google Colab.
 
 ```{code-cell}
-:id: IZMLqOUV3vGG
+:id: n2JIbznnD9X2
 
 if len(jax.local_devices()) < 8:
   raise Exception("Notebook requires 8 devices to run")
 ```
 
-+++ {"id": "3f37ca93"}
++++ {"id": "9GCx28cQhc3n"}
 
-## Intro and a quick example
-
-By reading this tutorial notebook, you'll learn about `jax.Array`, a unified 
-datatype for representing arrays, even with physical storage spanning multiple
-devices. You'll also learn about how using `jax.Array`s together with `jax.jit`
-can provide automatic compiler-based parallelization.
-
-Before we think step by step, here's a quick example.
-First, we'll create a `jax.Array` sharded across multiple devices:
+Before exploring and explaining each step required to distribute a value across several devices and perform a computation, run this lightly-annotated and simple end-to-end example:
 
 ```{code-cell}
 :id: Gf2lO4ii3vGG
@@ -65,41 +64,45 @@ from jax.experimental import mesh_utils
 from jax.sharding import Mesh, PartitionSpec as P, NamedSharding
 ```
 
++++ {"id": "b7NA0V7zjg54"}
+
+Create a {mod}`jax.sharding.Sharding` object to distribute a value across devices:
+
 ```{code-cell}
 :id: q-XBTEoy3vGG
 
-# Create a Sharding object to distribute a value across devices:
 mesh = Mesh(devices=mesh_utils.create_device_mesh((4, 2)),
             axis_names=('x', 'y'))
 ```
+
++++ {"id": "UVthGlBgjmty"}
+
+Create an array of random values with {func}`jax.random.normal` and use {func}`jax.device_put` to distribute it across devices:
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 166
+  height: 217
 id: vI39znW93vGH
-outputId: 4f702753-8add-4b65-a4af-0f18f098cc46
+outputId: b85613de-1d51-43c7-dac1-ff50bc600436
 ---
-# Create an array of random values:
 x = jax.random.normal(jax.random.key(0), (8192, 8192))
-# and use jax.device_put to distribute it across devices:
 y = jax.device_put(x, NamedSharding(mesh, P('x', 'y')))
 jax.debug.visualize_array_sharding(y)
 ```
 
 +++ {"id": "jZ0ZY9Um9Jg4"}
 
-Next, we'll apply a computation to it and visualize how the result values are
-stored across multiple devices too:
+Next, apply a computation to it and visualize how the result values are stored across multiple devices too using {func}`jax.debug.visualize_array_sharding`:
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 166
+  height: 217
 id: -qCnHZl83vGI
-outputId: 0e131c23-5765-43ae-f232-6417ae1acbb2
+outputId: e608a945-1af7-473e-c2d4-ba2bb6604ea2
 ---
 z = jnp.sin(y)
 jax.debug.visualize_array_sharding(z)
@@ -107,15 +110,14 @@ jax.debug.visualize_array_sharding(z)
 
 +++ {"id": "5qccVQoE9tEi"}
 
-The evaluation of the `jnp.sin` application was automatically parallelized
-across the devices on which the input values (and output values) are stored:
+The evaluation of the {func}`jnp.sin` application was automatically parallelized across the devices on which the input values (and output values) are stored:
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
 id: _VTzN0r03vGI
-outputId: c03eecab-4c86-4dac-d776-5fc72cbb5273
+outputId: 81451598-d0f2-4682-cba4-e698ae12a400
 ---
 # `x` is present on a single device
 %timeit -n 5 -r 5 jnp.sin(x).block_until_ready()
@@ -126,28 +128,28 @@ outputId: c03eecab-4c86-4dac-d776-5fc72cbb5273
 colab:
   base_uri: https://localhost:8080/
 id: QuzhU1g63vGI
-outputId: 8135cca0-871b-4b6a-a7e5-02e78c2028c7
+outputId: e5a88656-316f-4db7-de0c-79253a2e32c7
 ---
 # `y` is sharded across 8 devices.
 %timeit -n 5 -r 5 jnp.sin(y).block_until_ready()
 ```
 
++++ {"id": "kpyZYSqph8iV"}
+
+Notice the time difference.
+
+Let's review each of these pieces in more detail!
+
 +++ {"id": "xWknFQbQ-bzV"}
 
-Now let's look at each of these pieces in more detail!
 
-
-## `Sharding` describes how array values are laid out in memory across devices
-
-+++ {"id": "W6HsXauGxL6w"}
-
-### Sharding basics, and the `NamedSharding` subclass
+## JAX `Sharding` and `NamedSharding` subclass
 
 +++ {"id": "NWDyp_EjVHkg"}
 
-To parallelize computation across multiple devices, we first must lay out input data across multiple devices.
+To parallelize computation across multiple devices, you need to first lay out input data across multiple devices.
 
-In JAX, `Sharding` objects describe distributed memory layouts. They can be used with `jax.device_put` to produce a value with distributed layout.
+As covered in {ref}`sharded-computation`'s {ref}`key-concept-data-sharding` section, every {class}`jax.Array` has an associated {mod}`jax.sharding.Sharding` object. `Sharding` objects describe distributed memory layouts. That is, `Sharding` describes how `jax.Array` values are laid out in memory across devices. They can be used with {func}`jax.device_put` to produce a value with distributed layout.
 
 For example, here's a value with a single-device `Sharding`:
 
@@ -162,26 +164,26 @@ x = jax.random.normal(jax.random.key(0), (8192, 8192))
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 199
+  height: 200
 id: vNRabO2J3vGJ
-outputId: 40fd7172-a16c-4dd8-e2e1-17bb3afe5409
+outputId: a49ebf66-9cf1-4137-e58f-c96e70874c92
 ---
 jax.debug.visualize_array_sharding(x)
 ```
 
 +++ {"id": "HhCjhK0zXIqX"}
 
-Here, we're using the `jax.debug.visualize_array_sharding` function to show where the value `x` is stored in memory. All of `x` is stored on a single device, so the visualization is pretty boring!
+Here, you called the {func}`jax.debug.visualize_array_sharding` function to show where the value `x` is stored in memory. All of `x` is stored on a single device, so the visualization is pretty boring!
 
-But we can shard `x` across multiple devices by using `jax.device_put` and a `Sharding` object. First, we make a `numpy.ndarray` of `Devices` using `mesh_utils.create_device_mesh`, which takes hardware topology into account for the `Device` order:
+But you can shard `x` across multiple devices by using {func}`jax.device_put` and a `Sharding` object. First, create a `numpy.ndarray` of `Devices` using {func}`jax.experimental.mesh_utils.create_device_mesh`, which takes hardware topology into account for the `Device` order:
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 166
+  height: 217
 id: zpB1JxyK3vGN
-outputId: 8e385462-1c2c-4256-c38a-84299d3bd02c
+outputId: 86b612a3-da86-4b9a-c797-90d293c320a8
 ---
 from jax.sharding import Mesh, PartitionSpec, NamedSharding
 from jax.experimental import mesh_utils
@@ -196,7 +198,7 @@ jax.debug.visualize_array_sharding(y)
 
 +++ {"id": "OW_Cc92G1-nr"}
 
-We can define a helper function to make things simpler:
+Define a helper function to make things simpler:
 
 ```{code-cell}
 :id: 8g0Md2Gd3vGO
@@ -216,9 +218,9 @@ def mesh_sharding(
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 166
+  height: 217
 id: zp3MfS4Y3vGO
-outputId: 032fdd7e-19a1-45da-e1ad-b3227fa43ee6
+outputId: 0bf995da-8a36-4e2c-d679-abf32ee3974c
 ---
 y = jax.device_put(x, mesh_sharding(P('a', 'b')))
 jax.debug.visualize_array_sharding(y)
@@ -226,15 +228,15 @@ jax.debug.visualize_array_sharding(y)
 
 +++ {"id": "xZ88riVm1mv5"}
 
-Here, we use `P('a', 'b')` to express that the first and second axes of `x` should be sharded over the device mesh axes `'a'` and `'b'`, respectively. We can easily switch to `P('b', 'a')` to shard the axes of `x` over different devices:
+Here, `P('a', 'b')` is used to express that the first and second axes of `x` should be sharded over the device mesh axes `'a'` and `'b'`, respectively. You can easily switch to `P('b', 'a')` to shard the axes of `x` over different devices:
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 199
+  height: 217
 id: FigK5Zsa3vGO
-outputId: e488d073-9d02-4376-a6af-19d6d5509c7d
+outputId: 6e3b82a4-7d0e-44f8-a929-dfa00b201bc7
 ---
 y = jax.device_put(x, mesh_sharding(P('b', 'a')))
 jax.debug.visualize_array_sharding(y)
@@ -244,9 +246,9 @@ jax.debug.visualize_array_sharding(y)
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 166
+  height: 217
 id: hI-HD0xN3vGO
-outputId: b0c2e863-3aee-4417-b45f-21b2187f6ef7
+outputId: ab2bbd16-806b-43e8-d065-8b58237d1dc0
 ---
 # This `None` means that `x` is not sharded on its second dimension,
 # and since the Mesh axis name 'b' is not mentioned, shards are
@@ -257,17 +259,17 @@ jax.debug.visualize_array_sharding(y)
 
 +++ {"id": "AqcAsNUgXCZz"}
 
-Here, because `P('a', None)` doesn't mention the `Mesh` axis name `'b'`, we get replication over the axis `'b'`. The `None` here is just acting as a placeholder to line up against the second axis of the value `x`, without expressing sharding over any mesh axis. (As a shorthand, trailing `None`s can be omitted, so that `P('a', None)` means the same thing as `P('a')`. But it doesn't hurt to be explicit!)
+Here, because `P('a', None)` doesn't mention the `Mesh` axis name `'b'`, you get replication over the axis `'b'`. The `None` here is just acting as a placeholder to line up against the second axis of the value `x`, without expressing sharding over any mesh axis. (As a shorthand, trailing `None`s can be omitted, so that `P('a', None)` means the same thing as `P('a')`. But it doesn't hurt to be explicit!)
 
-To shard only over the second axis of `x`, we can use a `None` placeholder in the `PartitionSpec`:
+To shard only over the second axis of `x`, you can use a `None` placeholder in the {mod}`jax.sharding.PartitionSpec`:
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 199
+  height: 200
 id: EXBExMQC3vGP
-outputId: c80e6177-12a6-40ef-b4e4-934dad22da3d
+outputId: 7a27b292-c829-489d-8be8-d56ba71f552e
 ---
 y = jax.device_put(x, mesh_sharding(P(None, 'b')))
 jax.debug.visualize_array_sharding(y)
@@ -277,9 +279,9 @@ jax.debug.visualize_array_sharding(y)
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 199
+  height: 200
 id: PjUpG8uz3vGP
-outputId: a0f59dc5-b509-4b8b-bd22-bcd69f696763
+outputId: f788993e-4072-41ed-d65f-ae114bd6b94f
 ---
 y = jax.device_put(x, mesh_sharding(P(None, 'a')))
 jax.debug.visualize_array_sharding(y)
@@ -293,9 +295,9 @@ For a fixed mesh, we can even partition one logical axis of `x` over multiple de
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 298
+  height: 284
 id: fVcPbDUA3vGP
-outputId: da3f435d-dfc1-4a41-ec90-691cd7c748a0
+outputId: 64656a33-cdd9-4910-bde7-5be981faa5db
 ---
 y = jax.device_put(x, mesh_sharding(P(('a', 'b'), None)))
 jax.debug.visualize_array_sharding(y)
@@ -303,7 +305,7 @@ jax.debug.visualize_array_sharding(y)
 
 +++ {"id": "c1tTFudr3Ae7"}
 
-Using `NamedSharding` makes it easy to define a device mesh once and give its axes names, then just refer to those names in `PartitionSpec`s for each `device_put` as needed.
+Using {mod}`jax.sharding.NamedSharding` makes it easy to define a device mesh once and give its axes names, then just refer to those names in {mod}`jax.sharding.PartitionSpec`s for each {func}`jax.device_put` as needed.
 
 +++ {"id": "rhWzHgGf4mkg"}
 
@@ -311,7 +313,7 @@ Using `NamedSharding` makes it easy to define a device mesh once and give its ax
 
 +++ {"id": "JukoaRhl4tXJ"}
 
-With sharded input data, the compiler can give us parallel computation. In particular, functions decorated with `jax.jit` can operate over sharded arrays without copying data onto a single device. Instead, computation follows sharding: based on the sharding of the input data, the compiler decides shardings for intermediates and output values, and parallelizes their evaluation, even inserting communication operations as necessary.
+With sharded input data, the compiler can give us parallel computation. In particular, functions decorated with {func}`jax.jit` can operate over sharded arrays without copying data onto a single device. Instead, computation follows sharding: based on the sharding of the input data, the compiler decides shardings for intermediates and output values, and parallelizes their evaluation, even inserting communication operations as necessary.
 
 For example, the simplest computation is an elementwise one:
 
@@ -326,9 +328,9 @@ mesh = Mesh(devices, axis_names=('a', 'b'))
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 349
+  height: 453
 id: LnT0vWjc3vGQ
-outputId: 8e642049-61eb-458d-af79-ac449b58d11b
+outputId: 392b5afb-8fe3-4ab8-e745-2b75136925a7
 ---
 x = jax.device_put(x, NamedSharding(mesh, P('a', 'b')))
 print('input sharding:')
@@ -341,19 +343,19 @@ jax.debug.visualize_array_sharding(y)
 
 +++ {"id": "7tY2gVRfazaT"}
 
-Here for the elementwise operation `jnp.sin` the compiler chose the output sharding to be the same as the input. Moreover, the compiler automatically parallelized the computation, so that each device computed its output shard from its input shard in parallel.
+Here for the elementwise operation {func}`jnp.sin` the compiler chose the output sharding to be the same as the input. Moreover, the compiler automatically parallelized the computation, so that each device computed its output shard from its input shard in parallel.
 
-In other words, even though we wrote the `jnp.sin` computation as if a single machine were to execute it, the compiler splits up the computation for us and executes it on multiple devices.
+In other words, even though you wrote the {func}`jnp.sin` computation as if a single machine were to execute it, the compiler splits up the computation for us and executes it on multiple devices.
 
-We can do the same for more than just elementwise operations too. Consider a matrix multiplication with sharded inputs:
+You can do the same for more than just elementwise operations too. Consider a matrix multiplication with sharded inputs:
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 548
+  height: 655
 id: Dq043GkP3vGQ
-outputId: 3eff7b67-d7f0-4212-c9d3-2cc271ac1f98
+outputId: 48ce38ed-0064-4ea8-86c8-d27f09b3c15c
 ---
 y = jax.device_put(x, NamedSharding(mesh, P('a', None)))
 z = jax.device_put(x, NamedSharding(mesh, P(None, 'b')))
@@ -371,15 +373,15 @@ jax.debug.visualize_array_sharding(w)
 
 Here the compiler chose the output sharding so that it could maximally parallelize the computation: without needing communication, each device already has the input shards it needs to compute its output shard.
 
-How can we be sure it's actually running in parallel? We can do a simple timing experiment:
+To be sure it's actually running in parallel, you can do a simple timing experiment.
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 199
+  height: 200
 id: QjQ5u8qh3vGQ
-outputId: 0aefc170-833c-4a6a-e003-5990d3db31d9
+outputId: 63e7f30a-6b95-4c1c-e787-9d2e1c4d3e35
 ---
 x_single = jax.device_put(x, jax.devices()[0])
 jax.debug.visualize_array_sharding(x_single)
@@ -390,7 +392,7 @@ jax.debug.visualize_array_sharding(x_single)
 colab:
   base_uri: https://localhost:8080/
 id: 8tn8lOj73vGR
-outputId: d9898c93-7afc-416b-8c40-4d9551613cd0
+outputId: a85ab204-054d-43ff-b7f6-3a1999c858f3
 ---
 np.allclose(jnp.dot(x_single, x_single),
             jnp.dot(y, z))
@@ -401,7 +403,7 @@ np.allclose(jnp.dot(x_single, x_single),
 colab:
   base_uri: https://localhost:8080/
 id: D7PpZwhR3vGR
-outputId: 4901a11b-2354-4d26-a897-b88def07a716
+outputId: e3e14a6a-5652-4d00-ec76-a26552e63421
 ---
 %timeit -n 5 -r 5 jnp.dot(x_single, x_single).block_until_ready()
 ```
@@ -411,7 +413,7 @@ outputId: 4901a11b-2354-4d26-a897-b88def07a716
 colab:
   base_uri: https://localhost:8080/
 id: rgo_yVHF3vGR
-outputId: e51216cf-b073-4250-d422-67f9fd72f6aa
+outputId: 2043bea9-2ca4-4a0b-cd9a-b1a6a92e0afb
 ---
 %timeit -n 5 -r 5 jnp.dot(y, z).block_until_ready()
 ```
@@ -424,9 +426,9 @@ Even copying a sharded `Array` produces a result with the sharding of the input:
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 166
+  height: 217
 id: f1Zw-2lH3vGR
-outputId: 43d7a642-fde4-47a6-901f-dfdc64d6a613
+outputId: f6755237-1eec-4fce-a06c-e3bde520f95f
 ---
 w_copy = jnp.copy(w)
 jax.debug.visualize_array_sharding(w_copy)
@@ -434,7 +436,7 @@ jax.debug.visualize_array_sharding(w_copy)
 
 +++ {"id": "3qfPjJdhgerc"}
 
-So computation follows data placement: when we explicitly shard data with `jax.device_put`, and apply functions to that data, the compiler attempts to parallelize the computation and decide the output sharding. This policy for sharded data is a generalization of [JAX's policy of following explicit device placement](https://jax.readthedocs.io/en/latest/faq.html#controlling-data-and-computation-placement-on-devices).
+The _computation follows data placement_: when you explicitly shard data with {func}`jax.device_put`, and apply functions to that data, the compiler attempts to parallelize the computation and decide the output sharding. This policy for sharded data is a generalization of [JAX's policy of following explicit device placement](https://jax.readthedocs.io/en/latest/faq.html#controlling-data-and-computation-placement-on-devices).
 
 +++ {"id": "QRB95LaWuT80"}
 
@@ -459,7 +461,7 @@ def print_exception(e):
 colab:
   base_uri: https://localhost:8080/
 id: DHh0N3vn3vGS
-outputId: 8c4652f7-c484-423b-ad78-182134280187
+outputId: 08e9a479-0062-4227-d4f8-f18218c9a76e
 ---
 sharding1 = NamedSharding(Mesh(jax.devices()[:4], 'x'), P('x'))
 sharding2 = NamedSharding(Mesh(jax.devices()[4:], 'x'), P('x'))
@@ -475,7 +477,7 @@ except ValueError as e: print_exception(e)
 colab:
   base_uri: https://localhost:8080/
 id: Im7DkoOl3vGS
-outputId: 1b6fcd7a-762b-4366-a96d-aea63bad7fe0
+outputId: b72459b3-15dc-4c22-9b90-53c8bca92f37
 ---
 devices = jax.devices()
 permuted_devices = [devices[i] for i in [0, 1, 2, 3, 6, 7, 4, 5]]
@@ -491,19 +493,19 @@ except ValueError as e: print_exception(e)
 
 +++ {"id": "6ZYcK8eXrn0p"}
 
-We say arrays that have been explicitly placed or sharded with `jax.device_put` are _committed_ to their device(s), and so won't be automatically moved. See the [device placement FAQ](https://jax.readthedocs.io/en/latest/faq.html#controlling-data-and-computation-placement-on-devices) for more information.
+Arrays that have been explicitly placed or sharded with {func}`jax.device_put` are _committed_ to their device(s), and therefore they won't be automatically moved. Refer to the [device placement FAQ](https://jax.readthedocs.io/en/latest/faq.html#controlling-data-and-computation-placement-on-devices) for more information.
 
-When arrays are _not_ explicitly placed or sharded with `jax.device_put`, they are placed _uncommitted_ on the default device.
+When arrays are _not_ explicitly placed or sharded with {func}`jax.device_put`, they are placed _uncommitted_ on the default device.
 Unlike committed arrays, uncommitted arrays can be moved and resharded automatically: that is, uncommitted arrays can be arguments to a computation even if other arguments are explicitly placed on different devices.
 
-For example, the output of `jnp.zeros`, `jnp.arange`, and `jnp.array` are uncommitted:
+For example, the output of {func}`jnp.zeros`, {func}`jnp.arange`, and {func}`jnp.array` are uncommitted:
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
 id: _QvtKL8r3vGS
-outputId: 761b1208-fe4b-4c09-a7d2-f62152183ef0
+outputId: e876716d-c945-4f12-dc2c-72e387f784e7
 ---
 y = jax.device_put(x, sharding1)
 y + jnp.ones_like(y)
@@ -513,11 +515,11 @@ print('no error!')
 
 +++ {"id": "dqMKl79NaIWF"}
 
-## Constraining shardings of intermediates in `jit`ted code
+## Semi-automated parallelization: Constraining shardings of intermediates in `jit`ted code
 
 +++ {"id": "g4LrDDcJwkHc"}
 
-While the compiler will attempt to decide how a function's intermediate values and outputs should be sharded, we can also give it hints using `jax.lax.with_sharding_constraint`. Using `jax.lax.with_sharding_constraint` is much like `jax.device_put`, except we use it inside staged-out (i.e. `jit`-decorated) functions:
+While the compiler will attempt to decide how a function's intermediate values and outputs should be sharded, you can also give it hints using {func}`jax.lax.with_sharding_constraint`. Using {func}`jax.lax.with_sharding_constraint` is much like {func}`jax.device_put`, except you use it inside staged-out (i.e. `jit`-decorated) functions:
 
 ```{code-cell}
 :id: jniSFm5V3vGT
@@ -546,9 +548,9 @@ def f(x):
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 347
+  height: 417
 id: zYFS-n4r3vGT
-outputId: 0ac96b8f-ed23-4413-aed9-edd00a841c37
+outputId: 1d44785c-10c9-4534-a9fd-b5777744e27f
 ---
 jax.debug.visualize_array_sharding(x)
 y = f(x)
@@ -569,9 +571,9 @@ def f(x):
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 347
+  height: 400
 id: AiRFtVsR3vGT
-outputId: 2edacc2c-ac80-4519-c9d1-bee364a22b31
+outputId: ebc5bec2-2694-401e-a9a9-0d65ed1891d5
 ---
 jax.debug.visualize_array_sharding(x)
 y = f(x)
@@ -580,7 +582,7 @@ jax.debug.visualize_array_sharding(y)
 
 +++ {"id": "_Y1P5wLTzJSz"}
 
-By adding `with_sharding_constraint`, we've constrained the sharding of the output. In addition to respecting the annotation on a particular intermediate, the compiler will use annotations to decide shardings for other values.
+By adding {func}`jax.lax.with_sharding_constraint`, you constrained the sharding of the output. In addition to respecting the annotation on a particular intermediate, the compiler will use annotations to decide shardings for other values.
 
 It's often a good practice to annotate the outputs of computations, for example based on how the values are ultimately consumed.
 
@@ -594,7 +596,7 @@ It's often a good practice to annotate the outputs of computations, for example 
 
 +++ {"id": "3ii_UPkG3gzP"}
 
-We can use `jax.device_put` and `jax.jit`'s computation-follows-sharding features to parallelize computation in neural networks. Here are some simple examples, based on this basic neural network:
+You can use {func}`jax.device_put` and {func}`jax.jit`'s computation-follows-sharding features to parallelize computation in neural networks. Here are some simple examples, based on this basic neural network:
 
 ```{code-cell}
 :id: mEKF3zIF3vGU
@@ -679,7 +681,7 @@ params = jax.device_put(params, replicated_sharding)
 colab:
   base_uri: https://localhost:8080/
 id: MUb-QE2b3vGV
-outputId: 5a27f007-c572-44f8-9f49-6e745ee739e8
+outputId: e04ed664-12bc-47a5-f1a1-fc8123d726f7
 ---
 loss_jit(params, batch)
 ```
@@ -689,7 +691,7 @@ loss_jit(params, batch)
 colab:
   base_uri: https://localhost:8080/
 id: HUkw0u413vGV
-outputId: 07e481a1-97fb-4bd0-d754-cb6d8317bff6
+outputId: ddda3db4-91c4-436e-eb9b-bb6ad465267f
 ---
 step_size = 1e-5
 
@@ -706,7 +708,7 @@ print(loss_jit(params, batch))
 colab:
   base_uri: https://localhost:8080/
 id: paCw6Zaj3vGV
-outputId: ad4cce34-3a6a-4d44-9a86-477a7fee4841
+outputId: 05320478-a0cc-42f6-dffe-f46b3e2c2d62
 ---
 %timeit -n 5 -r 5 gradfun(params, batch)[0][0].block_until_ready()
 ```
@@ -723,7 +725,7 @@ params_single = jax.device_put(params, jax.devices()[0])
 colab:
   base_uri: https://localhost:8080/
 id: Z1wgUKXk3vGV
-outputId: d66767b7-3f17-482f-b811-919bb1793277
+outputId: 12ecfa42-5a2e-413b-ae71-4a2e9ffb83e4
 ---
 %timeit -n 5 -r 5 gradfun(params_single, batch_single)[0][0].block_until_ready()
 ```
@@ -742,9 +744,9 @@ mesh = Mesh(mesh_utils.create_device_mesh((4, 2)), ('batch', 'model'))
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 314
+  height: 417
 id: sgIWCjJK3vGW
-outputId: 8cb0f19f-3942-415c-c57a-31bb81784f46
+outputId: 764ef948-126c-4ef4-ef5b-66e3e6a01670
 ---
 batch = jax.device_put(batch, NamedSharding(mesh, P('batch', None)))
 jax.debug.visualize_array_sharding(batch[0])
@@ -781,9 +783,9 @@ params = (W1, b1), (W2, b2), (W3, b3), (W4, b4)
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 199
+  height: 200
 id: _lSJ63sh3vGW
-outputId: bcd3e33e-36b5-4787-9cd2-60623fd6e5fa
+outputId: bbcc4885-6e41-4df8-ee20-e6f91e452a72
 ---
 jax.debug.visualize_array_sharding(W2)
 ```
@@ -792,9 +794,9 @@ jax.debug.visualize_array_sharding(W2)
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 199
+  height: 217
 id: fxkfWYkk3vGW
-outputId: 59e60b16-fe37-47d4-8214-96096ffbd79c
+outputId: bd52faa4-3f03-4ecb-e645-c850af0b934c
 ---
 jax.debug.visualize_array_sharding(W3)
 ```
@@ -804,7 +806,7 @@ jax.debug.visualize_array_sharding(W3)
 colab:
   base_uri: https://localhost:8080/
 id: uPCVs-_k3vGW
-outputId: 618516e9-9736-4ca0-dd22-09d094ce57a2
+outputId: fccc6e94-bd25-4ca6-dfcc-f6f498057b30
 ---
 print(loss_jit(params, batch))
 ```
@@ -825,7 +827,7 @@ for _ in range(30):
 colab:
   base_uri: https://localhost:8080/
 id: c9Sbl69e3vGX
-outputId: 2ee3d432-7172-46ca-e01a-614e83345808
+outputId: a62b0f60-0bfe-4710-93cf-aab4f9e15d6d
 ---
 print(loss_jit(params, batch))
 ```
@@ -834,9 +836,9 @@ print(loss_jit(params, batch))
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 380
+  height: 400
 id: lkAF0dAb3vGX
-outputId: 6c1e317e-cded-4af4-8080-0de835fa4c71
+outputId: 79a49eda-74cc-404f-8ddd-ca613c0b1924
 ---
 (W1, b1), (W2, b2), (W3, b3), (W4, b4) = params
 jax.debug.visualize_array_sharding(W2)
@@ -848,7 +850,7 @@ jax.debug.visualize_array_sharding(W3)
 colab:
   base_uri: https://localhost:8080/
 id: I1Npor3i3vGX
-outputId: 479c4d81-cb0b-40a5-89ba-394c10dc3297
+outputId: 3d15965f-4596-46ed-e632-32cd15d26ffd
 ---
 %timeit -n 10 -r 10 gradfun(params, batch)[0][0].block_until_ready()
 ```
@@ -859,13 +861,15 @@ outputId: 479c4d81-cb0b-40a5-89ba-394c10dc3297
 
 +++ {"id": "OTfoXNnxFYDJ"}
 
-### Generating random numbers
+### PRNG implementation in JAX is not automatically partitionable
 
-JAX comes with a functional, deterministic [random number generator](https://jax.readthedocs.io/en/latest/jep/263-prng.html). It underlies the various sampling functions in the [`jax.random` module](https://jax.readthedocs.io/en/latest/jax.random.html), such as `jax.random.uniform`.
+JAX comes with a functional, deterministic [random number generator](https://jax.readthedocs.io/en/latest/jep/263-prng.html). It underlies the various sampling functions in the {mod}`jax.random`, such as {func}`jax.random.uniform`.
 
 JAX's random numbers are produced by a counter-based PRNG, so in principle, random number generation should be a pure map over counter values. A pure map is a trivially partitionable operation in principle. It should require no cross-device communication, nor any redundant computation across devices.
 
-However, the existing stable RNG implementation is not automatically partitionable, for historical reasons.
+However, the existing stable PRNG implementation in JAX is not automatically partitionable, for historical reasons.
+
+Consider the following example, where a function draws random uniform numbers and adds them to the input, elementwise:
 
 +++ {"id": "ht_zYFVXNrjN"}
 
@@ -893,23 +897,23 @@ On a partitioned input, the function `f` produces output that is also partitione
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 67
+  height: 50
 id: Oi97rpLz3vGY
-outputId: 9dd63254-a483-4847-c0f5-5a4367bf08e9
+outputId: 185de801-6f64-44c9-a85b-e5d5ac1e9bc9
 ---
 jax.debug.visualize_array_sharding(f(key, x))
 ```
 
 +++ {"id": "WnjlWDUYLkp6"}
 
-But if we inspect the compiled computation for `f` on this partitioned input, we see that it does involve some communication:
+But if you inspect the compiled computation for `f` on this partitioned input, notice that it does involve some communication:
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
 id: 64wIZuSJ3vGY
-outputId: fa166d45-ca9c-457a-be84-bcc9236d0730
+outputId: 341460da-bd02-413e-f2c2-36b98ec1f8a6
 ---
 f_exe = f.lower(key, x).compile()
 print('Communicating?', 'collective-permute' in f_exe.as_text())
@@ -917,14 +921,14 @@ print('Communicating?', 'collective-permute' in f_exe.as_text())
 
 +++ {"id": "AXp9i8fbL8DD"}
 
-One way to work around this is to configure JAX with the experimental upgrade flag `jax_threefry_partitionable`. With the flag on, the "collective permute" operation is now gone from the compiled computation:
+One way to work around this is to configure JAX with the experimental upgrade flag `'jax_threefry_partitionable'` in {func}`jax.config.update`. With the flag on, the "collective permute" operation is now gone from the compiled computation:
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
 id: 1I7bqxA63vGY
-outputId: 756e0a36-ff14-438f-bbd4-3ef03f97a47b
+outputId: 6f982597-b3fc-4095-803a-2a9928d55186
 ---
 jax.config.update('jax_threefry_partitionable', True)
 f_exe = f.lower(key, x).compile()
@@ -939,23 +943,23 @@ The output is still partitioned:
 ---
 colab:
   base_uri: https://localhost:8080/
-  height: 67
+  height: 50
 id: zHPJzdn23vGY
-outputId: 3332de0f-4827-4f0b-b9ef-69249b7c6bc6
+outputId: 3399084f-d6a4-4646-9286-e6c338f06809
 ---
 jax.debug.visualize_array_sharding(f(key, x))
 ```
 
 +++ {"id": "kaK--hPmSPpV"}
 
-One caveat to the `jax_threefry_partitionable` option, however, is that _the random values produced may be different than without the flag set_, even though they were generated by the same random key:
+One caveat to the `'jax_threefry_partitionable'` option, however, is that _the random values produced may be different than without the flag set_, even though they were generated by the same random key:
 
 ```{code-cell}
 ---
 colab:
   base_uri: https://localhost:8080/
 id: nBUHBBal3vGY
-outputId: 4b9be948-ccab-4a31-a06f-37ec9c7b5235
+outputId: d11a93c6-c7fb-4a81-fba2-3d94c5ac0e3d
 ---
 jax.config.update('jax_threefry_partitionable', False)
 print('Stable:')
@@ -969,4 +973,14 @@ print(f(key, x))
 
 +++ {"id": "8BDPqgOrTMfK"}
 
-In `jax_threefry_partitionable` mode, the JAX PRNG remains deterministic, but its implementation is new (and under development). The random values generated for a given key will be the same at a given JAX version (or a given commit on the `main` branch), but may vary across releases.
+In `'jax_threefry_partitionable'` mode, the JAX PRNG remains deterministic, but its implementation is new (and under development). The random values generated for a given key will be the same at a given JAX version (or a given commit on the `main` branch), but may vary across releases.
+
++++ {"id": "K5cowA5lj5_e"}
+
+## Next steps
+
+This tutorial serves as a brief introduction of sharded and parallel computation in JAX.
+
+To learn about each SPMD method in-depth, check out these docs:
+- {ref}`distributed-arrays-and-automatic-parallelization`
+- {doc}`../notebooks/shard_map`

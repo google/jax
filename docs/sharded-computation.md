@@ -21,20 +21,19 @@ This tutorial serves as an introduction to device parallelism for Single-Program
 The tutorial covers three modes of parallel computation:
 
 - _Automatic parallelism via {func}`jax.jit`_: The compiler chooses the optimal computation strategy (a.k.a. "the compiler takes the wheel").
-- _Semi-automated parallelism_ using {func}`jax.jit` and {func}`jax.lax.with_sharding_constraint`
-- _Fully manual parallelism with manual control using {func}`jax.experimental.shard_map.shard_map`_: `shard_map` enables per-device code and explicit communication collectives
+- _Semi-automated parallelism_ using {func}`jax.jit` and {func}`jax.lax.with_sharding_constraint`.
+- _Fully manual parallelism with manual control using {func}`jax.experimental.shard_map.shard_map`_: `shard_map` enables per-device code and explicit communication collectives.
 
 Using these schools of thought for SPMD, you can transform a function written for one device into a function that can run in parallel on multiple devices.
 
 If you are running these examples in a Google Colab notebook, make sure that your hardware accelerator is the latest Google TPU by checking your notebook settings: **Runtime** > **Change runtime type** > **Hardware accelerator** > **TPU v2** (which provides eight devices to work with).
 
 ```{code-cell}
-:outputId: 18905ae4-7b5e-4bb9-acb4-d8ab914cb456
-
 import jax
 jax.devices()
 ```
 
+(key-concept-data-sharding)=
 ## Key concept: Data sharding
 
 Key to all of the distributed computation approaches below is the concept of *data sharding*, which describes how data is laid out on the available devices.
@@ -49,7 +48,7 @@ In the simplest cases, arrays are sharded on a single device, as demonstrated be
 import jax.numpy as jnp
 arr = jnp.arange(32.0).reshape(4, 8)
 arr.devices()
-```
+```I
 
 ```{code-cell}
 :outputId: 536f773a-7ef4-4526-c58b-ab4d486bf5a1
@@ -304,5 +303,5 @@ layer_sharded(x, weights, bias)
 This tutorial serves as a brief introduction of sharded and parallel computation in JAX.
 
 To learn about each SPMD method in-depth, check out these docs:
-- {doc}`../notebooks/Distributed_arrays_and_automatic_parallelization`
+- {ref}`distributed-arrays-and-automatic-parallelization`
 - {doc}`../notebooks/shard_map`
