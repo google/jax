@@ -97,7 +97,9 @@ TiledLayoutAttr getMemRefLayout(Value ref) {
 LogicalResult verifyDivisibleIndex(Value tiled_index, int64_t tiling, int dim,
                                    Operation *op) {
   if (!isGuaranteedDivisible(tiled_index, tiling)) {
-    return op->emitOpError("cannot statically prove that index in dimension ")
+    return op->emitOpError(
+               "Not implemented: Cannot statically prove that index in "
+               "dimension ")
            << dim << " is a multiple of " << tiling;
   }
   return success();
