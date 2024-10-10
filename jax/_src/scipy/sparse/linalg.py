@@ -190,7 +190,7 @@ def _shapes(pytree):
 
 
 def _isolve(_isolve_solve, A, b, x0=None, *, tol=1e-5, atol=0.0,
-            maxiter=None, M=None, check_symmetric=False):
+            maxiter=None, M=None, symmetric=False):
   if x0 is None:
     x0 = tree_map(jnp.zeros_like, b)
 
@@ -218,11 +218,6 @@ def _isolve(_isolve_solve, A, b, x0=None, *, tol=1e-5, atol=0.0,
   isolve_solve = partial(
       _isolve_solve, x0=x0, tol=tol, atol=atol, maxiter=maxiter, M=M)
 
-  # real-valued positive-definite linear operators are symmetric
-  def real_valued(x):
-    return not issubclass(x.dtype.type, np.complexfloating)
-  symmetric = all(map(real_valued, tree_leaves(b))) \
-    if check_symmetric else False
   x = lax.custom_linear_solve(
       A, b, solve=isolve_solve, transpose_solve=isolve_solve,
       symmetric=symmetric)
@@ -230,7 +225,8 @@ def _isolve(_isolve_solve, A, b, x0=None, *, tol=1e-5, atol=0.0,
   return x, info
 
 
-def cg(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None):
+def cg(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None,
+       assume_ipart_is_zero: bool = False):
   """Use Conjugate Gradient iteration to solve ``Ax = b``.
 
   The numerics of JAX's ``cg`` should exact match SciPy's ``cg`` (up to
@@ -277,15 +273,36 @@ def cg(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None):
       inverse of A.  Effective preconditioning dramatically improves the
       rate of convergence, which implies that fewer iterations are needed
       to reach a given error tolerance.
+  assume_ipart_is_zero : bool, optional
+      Whether the linear operator dtype can be assumed to have imag(A)=0.
+      Defaults to False for complex-value systems.
 
   See also
   --------
   scipy.sparse.linalg.cg
   jax.lax.custom_linear_solve
   """
+  if assume_ipart_is_zero:
+    # Don't need to check for symmetry if we assume the imaginary part is zero.
+    symmetric = True
+  else:
+    # real-valued positive-definite linear operators are symmetric.
+    def real_valued(x):
+      return not issubclass(jnp.result_type(x).type, np.complexfloating)
+
+    try:
+      # Prefer to use the dtype of the operator, if available.
+      if callable(A) and x0 is not None:
+        symmetric = all(map(real_valued,
+                            tree_leaves(jax.eval_shape(A, x0))))
+      else:
+          symmetric = real_valued(A)
+    except TypeError:
+      # fall back to the RHS.
+      symmetric = all(map(real_valued, tree_leaves(b)))
   return _isolve(_cg_solve,
                  A=A, b=b, x0=x0, tol=tol, atol=atol,
-                 maxiter=maxiter, M=M, check_symmetric=True)
+                 maxiter=maxiter, M=M, symmetric=symmetric)
 
 
 def _safe_normalize(x, thresh=None):
@@ -704,7 +721,8 @@ def gmres(A, b, x0=None, *, tol=1e-5, atol=0.0, restart=20, maxiter=None,
   return x, info
 
 
-def bicgstab(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None):
+def bicgstab(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None,
+             symmetric=False):
   """Use Bi-Conjugate Gradient Stable iteration to solve ``Ax = b``.
 
   The numerics of JAX's ``bicgstab`` should exact match SciPy's
@@ -752,6 +770,10 @@ def bicgstab(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None):
       inverse of A.  Effective preconditioning dramatically improves the
       rate of convergence, which implies that fewer iterations are needed
       to reach a given error tolerance.
+  symmetric : bool, optional
+      Whether the linear operator is symmetric. If true then it is assumed
+      A @ b == A.T @ b, i.e. matvec == vecmat. When this is true, reverse
+      mode differentiation is cheaper.
 
   See also
   --------
@@ -761,4 +783,4 @@ def bicgstab(A, b, x0=None, *, tol=1e-5, atol=0.0, maxiter=None, M=None):
 
   return _isolve(_bicgstab_solve,
                  A=A, b=b, x0=x0, tol=tol, atol=atol,
-                 maxiter=maxiter, M=M)
+                 maxiter=maxiter, M=M, symmetric=symmetric)
