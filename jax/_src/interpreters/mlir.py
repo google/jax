@@ -836,6 +836,12 @@ def register_lowering(prim: core.Primitive, rule: LoweringRule,
   if platform is None:
     _lowerings[prim] = rule
   else:
+    if not xb.is_known_platform(platform):
+      known_platforms = sorted(list(xb.known_platforms()))
+      raise NotImplementedError(
+          f"Registering an MLIR lowering rule for primitive {prim}"
+          f" for an unknown platform {platform}. Known platforms are:"
+          f" {', '.join(known_platforms)}.")
     # For backward compatibility reasons, we allow rules to be registered
     # under "gpu" even though the platforms are now called "cuda" and "rocm".
     # TODO(phawkins): fix up users to specify either "cuda" or "rocm" and remove
