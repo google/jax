@@ -76,10 +76,10 @@ jax::HessenbergDecomposition<ffi::DataType::F64>::FnType dgehrd_;
 jax::HessenbergDecomposition<ffi::DataType::C64>::FnType cgehrd_;
 jax::HessenbergDecomposition<ffi::DataType::C128>::FnType zgehrd_;
 
-jax::Sytrd<float>::FnType ssytrd_;
-jax::Sytrd<double>::FnType dsytrd_;
-jax::Sytrd<std::complex<float>>::FnType chetrd_;
-jax::Sytrd<std::complex<double>>::FnType zhetrd_;
+jax::TridiagonalReduction<ffi::DataType::F32>::FnType ssytrd_;
+jax::TridiagonalReduction<ffi::DataType::F64>::FnType dsytrd_;
+jax::TridiagonalReduction<ffi::DataType::C64>::FnType chetrd_;
+jax::TridiagonalReduction<ffi::DataType::C128>::FnType zhetrd_;
 
 }  // extern "C"
 
@@ -212,6 +212,22 @@ static_assert(
         jax::ComplexGeev<std::complex<double>>::FnType>,
     JAX_KERNEL_FNTYPE_MISMATCH_MSG);
 static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::F32>::FnType,
+                   jax::Sytrd<float>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::F64>::FnType,
+                   jax::Sytrd<double>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::C64>::FnType,
+                   jax::Sytrd<std::complex<float>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
+    std::is_same_v<jax::TridiagonalReduction<ffi::DataType::C128>::FnType,
+                   jax::Sytrd<std::complex<double>>::FnType>,
+    JAX_KERNEL_FNTYPE_MISMATCH_MSG);
+static_assert(
     std::is_same_v<jax::HessenbergDecomposition<ffi::DataType::F32>::FnType,
                    jax::Gehrd<float>::FnType>,
     JAX_KERNEL_FNTYPE_MISMATCH_MSG);
@@ -330,6 +346,11 @@ static auto init = []() -> int {
   AssignKernelFn<EigenvalueDecomposition<ffi::DataType::F64>>(dgeev_);
   AssignKernelFn<EigenvalueDecompositionComplex<ffi::DataType::C64>>(cgeev_);
   AssignKernelFn<EigenvalueDecompositionComplex<ffi::DataType::C128>>(zgeev_);
+
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::F32>>(ssytrd_);
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::F64>>(dsytrd_);
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::C64>>(chetrd_);
+  AssignKernelFn<TridiagonalReduction<ffi::DataType::C128>>(zhetrd_);
 
   AssignKernelFn<HessenbergDecomposition<ffi::DataType::F32>>(sgehrd_);
   AssignKernelFn<HessenbergDecomposition<ffi::DataType::F64>>(dgehrd_);
