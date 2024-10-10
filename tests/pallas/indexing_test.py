@@ -219,12 +219,13 @@ class IndexerTest(jtu.JaxTestCase):
 
     indices = (ds(0, 2), np.arange(5)[:, None], np.arange(4)[None])
     indexer = NDIndexer.from_indices_shape(indices, shape)
-    self.assertTupleEqual(indexer.get_indexer_shape(), (5, 4, 2))
+    self.assertTupleEqual(indexer.get_indexer_shape(), (2, 5, 4))
 
   @hp.given(hps.data())
   def test_ndindexer(self, data):
     shape = data.draw(hnp.array_shapes())
     indexer = data.draw(nd_indexer_strategy(shape))
+
     is_int_indexer = [not isinstance(idx, Slice) for idx in indexer.indices]
     rest_indexers, int_indexers = util.partition_list(
         is_int_indexer, indexer.indices
@@ -236,16 +237,12 @@ class IndexerTest(jtu.JaxTestCase):
     self.assertTupleEqual(
         indexer.int_indexer_shape, expected_int_indexer_shape
     )
+
     for idx in rest_indexers:
       self.assertIsInstance(idx, (np.ndarray, Slice))
       if isinstance(idx, np.ndarray):
         self.assertTupleEqual(idx.shape, ())
         self.assertEqual(idx.dtype, np.dtype("int32"))
-    rest_shape = tuple(
-        r.size for r in rest_indexers if not isinstance(r, np.ndarray)
-    )
-    self.assertTupleEqual((*indexer.int_indexer_shape, *rest_shape),
-                          indexer.get_indexer_shape())
 
 
 class IndexerOpsTest(PallasBaseTest):

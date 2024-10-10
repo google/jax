@@ -251,11 +251,21 @@ class NDIndexer:
     return cls(indices, shape, int_indexer_shape, validate=True)
 
   def get_indexer_shape(self) -> tuple[int | Array, ...]:
-    _, slice_indexers, _ = unpack_ndindexer(self)
-    slice_shape = [s.size for s in slice_indexers]
-    # In NDIndexers, the int_indexer_shape is *always* at the front of the
-    # result.
-    return (*self.int_indexer_shape, *slice_shape)
+    is_int_indexing, slice_indexers, _ = unpack_ndindexer(self)
+
+    slice_shape = tuple(s.size for s in slice_indexers)
+    all_int_indexers_adjacent = bool(
+        np.all(np.diff(np.where(is_int_indexing)[0]) == 1)
+    )
+    if not all_int_indexers_adjacent:
+      return self.int_indexer_shape + slice_shape
+
+    has_int_indexers = any(is_int_indexing)
+    if has_int_indexers:
+      pos = is_int_indexing.index(True)
+      return slice_shape[:pos] + self.int_indexer_shape + slice_shape[pos:]
+
+    return slice_shape
 
   def transform_shape(self, shape: None | tuple[int | Array, ...]) -> None | tuple[int | Array, ...]:
     del shape  # Unused

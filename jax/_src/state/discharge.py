@@ -255,33 +255,96 @@ def _maybe_convert_to_dynamic_slice(
   return starts, sizes, squeeze_dims
 
 
-def _convert_to_array_indexer(indexer: indexing.NDIndexer
-                              ) -> tuple[int | Array, ...]:
+# In this code, indexing is handled in three ways: `slice`, `dynamic_slice`,
+# and gather. For the gather case, the goal is to create a gather array,
+# which means that we need to convert all other types of indexers into integer
+# array indexers. This is done by looping over all indexers and checking if
+# they are not integer array indexers, and if not, performing the conversion.
+# However, during this process, the indexing semantics may change.
+# Specifically, according to the indexing rules of NumPy, when there are
+# integer array indexers separated by other indexers, the axes corresponding
+# to the integer array indexers need to be moved to the front. After we convert
+# all other indexers to integer array indexers, the distinction between integer
+# array indexers and other types of indexers is lost. As a result, it becomes
+# impossible to determine which axes should be moved to the front. In this
+# case, we need to transpose the target array before the gather operation
+# and then transpose the result back after the gather operation.
+def _maybe_transpose_before_gather(
+    indexer: indexing.NDIndexer
+) -> tuple[int, ...] | None:
+  is_int_indexing, _, _ = indexing.unpack_ndindexer(indexer)
+
+  all_int_indexers_adjacent = bool(
+      np.all(np.diff(np.where(is_int_indexing)[0]) == 1)
+  )
+  if all_int_indexers_adjacent:
+    return None  # no transpose needed
+
+  int_indexer_idxs: list[int] = []
+  non_int_indexer_idxs: list[int] = []
+  for i, is_int_index in enumerate(is_int_indexing):
+    (int_indexer_idxs if is_int_index else non_int_indexer_idxs).append(i)
+  transpose_order = (*int_indexer_idxs, *non_int_indexer_idxs)
+  return transpose_order
+
+
+def _perform_transpose_before_gather(
+    target_arr: Array, indexer: indexing.NDIndexer, transpose_order: tuple[int, ...]
+) -> tuple[Array, indexing.NDIndexer]:
+  new_target_arr = target_arr.transpose(transpose_order)
+  reordered_indices = tuple(indexer.indices[i] for i in transpose_order)
+  new_indexer = indexing.NDIndexer(
+      indices=reordered_indices,
+      shape=indexer.shape,
+      int_indexer_shape=indexer.int_indexer_shape,
+  )
+  return new_target_arr, new_indexer
+
+
+def _convert_to_gather_arrays(
+    indexer: indexing.NDIndexer
+) -> tuple[Array, ...]:
   # This is the general gather case. We need to create the gather arrays.
-  is_integer_indexer, _, integer_indexer = (
-      indexing.unpack_ndindexer(indexer)
-  )
   total_shape = indexer.get_indexer_shape()
-  int_indexer_shape = indexer.int_indexer_shape
-  slice_shape = total_shape[len(int_indexer_shape):]
-  slice_dims = tuple(
-      i + len(int_indexer_shape) for i in range(len(slice_shape))
-  )
-  slice_dim_iter = iter(slice_dims)
-  slice_indexer: list[Array] = []
-  for idx, is_int_index in zip(indexer.indices, is_integer_indexer):
-    if not is_int_index:
-      assert isinstance(idx, indexing.Slice)
-      slice_indices = lax.broadcasted_iota(
-          np.dtype("int32"), total_shape, next(slice_dim_iter)
-      ) * idx.stride + idx.start
-      slice_indexer.append(slice_indices)
-      integer_indexer = tuple(
-          lax.expand_dims(idx, (-1,)) for idx in integer_indexer
+  is_int_indexing, _, _ = indexing.unpack_ndindexer(indexer)
+
+  if any(is_int_indexing):
+    n_idxers = len(indexer.indices)
+    int_indexer_shape = indexer.int_indexer_shape
+    n_int_indexers = sum(1 for p in is_int_indexing if p)
+    last_int_index_idx = n_idxers - 1 - is_int_indexing[::-1].index(True)
+    n_slice_index_dims_after_int = n_idxers - last_int_index_idx - 1
+
+  def get_idx_in_shape_after_indexing(i):
+    if not any(is_int_indexing):
+      return i
+
+    if i < n_idxers - n_slice_index_dims_after_int - n_int_indexers:
+      return i
+    if i < n_idxers - n_slice_index_dims_after_int:
+      raise ValueError
+    return i - n_int_indexers + len(int_indexer_shape)
+
+  arrs = []
+  for i, idxer in enumerate(indexer.indices):
+    if isinstance(idxer, indexing.Slice):
+      idx_in_shape_after_indexing = get_idx_in_shape_after_indexing(i)
+      arr = (
+          lax.iota(np.int32, total_shape[idx_in_shape_after_indexing])
+          * idxer.stride
+          + idxer.start
       )
-      continue
-  assert next(slice_dim_iter, None) is None
-  return tuple(merge_lists(is_integer_indexer, slice_indexer, integer_indexer))
+      diff = len(total_shape) - idx_in_shape_after_indexing - 1
+      arr = arr.reshape(arr.shape + (1,) * diff)
+      arrs.append(arr)
+    elif isinstance(idxer, (np.ndarray, Array)):
+      diff = n_idxers - 1 - last_int_index_idx
+      arr = idxer.reshape(idxer.shape + (1,) * diff)
+      arrs.append(arr)
+    else:
+      raise ValueError(f"Invalid type of idxer: {type(idxer).__name__}")
+
+  return tuple(arrs)
 
 
 @register_discharge_rule(get_p)
@@ -293,22 +356,11 @@ def _get_discharge_rule(
   y = _get_discharge(x, idx, tree)
   return (None,) * (len(idx) + 1), y
 
-def _prepend_gather(x, indexer):
-  # NumPy advanced int indexing won't prepend w/ only one dim, so add dummy.
-  return x[None][(np.array(0, 'int32'), *indexer)]
-
-def _prepend_scatter(x, indexer, val, *, add=False):
-  # NumPy advanced int indexing won't prepend w/ only one dim, so add dummy.
-  # However, since this is scatter, we need to remove the 1-sized dimension
-  # we added at the front.
-  if add:
-    return x[None].at[(0, *indexer)].add(val)[0]
-  return x[None].at[(0, *indexer)].set(val)[0]
 
 def _bitcast_array(x, bitcaster: RefBitcaster):
   return bitcast(x, bitcaster.dtype)
 
-def _index_array(x, indexer):
+def _index_array(x, indexer: indexing.NDIndexer):
   if _is_trivial_indexer(indexer):
     return x
   # Try the three APIs in the following order: `lax.slice`,
@@ -318,13 +370,16 @@ def _index_array(x, indexer):
   # If everything in the indexer is a slice or ()-shaped, we can also
   # use `lax.dynamic_slice` with 1-sized slices for ()-shaped indices.
   # We need to squeeze out the 1-sized slices at the end.
-  elif maybe_slice := _maybe_convert_to_dynamic_slice(indexer):
-    starts, sizes, squeeze_dims = maybe_slice
+  elif maybe_dynamic_slice := _maybe_convert_to_dynamic_slice(indexer):
+    starts, sizes, squeeze_dims = maybe_dynamic_slice
     y = lax_slicing.dynamic_slice(x, starts, sizes)
     x = lax.squeeze(y, squeeze_dims)
   else:
-    indexer = _convert_to_array_indexer(indexer)
-    x = x[None][(np.array(0, "int32"), *indexer)]
+    transpose_order = _maybe_transpose_before_gather(indexer)
+    if transpose_order is not None:
+      x, indexer = _perform_transpose_before_gather(x, indexer, transpose_order)
+    arrays = _convert_to_gather_arrays(indexer)
+    x = x[arrays]
   return x
 
 
@@ -348,7 +403,8 @@ def transform_swap_array(x, transforms, val):
     transforms = []
   result = x
   result_val = val
-  # Compute updated "val" (result).
+
+  # Compute updated `val`, which is stored in `result`
   _results = [x]
   for transform in transforms:
     if isinstance(transform, indexing.NDIndexer):
@@ -364,15 +420,21 @@ def transform_swap_array(x, transforms, val):
         result_old = lax_slicing.dynamic_slice(result, starts, sizes)
         result = lax.squeeze(result_old, squeeze_dims)
       else:
-        indexer = _convert_to_array_indexer(indexer)
-        result = _prepend_gather(result, indexer)
+        transpose_order = _maybe_transpose_before_gather(indexer)
+        if transpose_order is not None:
+          result, indexer = _perform_transpose_before_gather(
+              result, indexer, transpose_order
+          )
+        arrays = _convert_to_gather_arrays(indexer)
+        result = result[arrays]
+        # TODO(ayx): why we don't need to transpose back here?
       _results.append(result)
     elif isinstance(transform, RefBitcaster):
       _results.append(_bitcast_array(result, transform))
     else:
       raise NotImplementedError(f"Unsupported transform: {transform}")
 
-  # Compute updated "x" (result_val)
+  # Compute updated `x`, which is stored in `result_val`
   for i, transform in reversed(list(enumerate(transforms))):
     if isinstance(transform, indexing.NDIndexer):
       indexer = transform
@@ -385,11 +447,21 @@ def transform_swap_array(x, transforms, val):
             _results[i], result_val, starts
         )
       else:
-        indexer = _convert_to_array_indexer(indexer)
-        result_val = _prepend_scatter(_results[i], indexer, result_val)
+        target = _results[i]
+        transpose_order = _maybe_transpose_before_gather(indexer)
+        if transpose_order is not None:
+          target, indexer = _perform_transpose_before_gather(
+              target, indexer, transpose_order
+          )
+        arrays = _convert_to_gather_arrays(indexer)
+        result_val = target.at[arrays].set(result_val)  # pytype: disable=attribute-error
+        if transpose_order is not None:
+          transpose_order_inversed = np.argsort(transpose_order)
+          result_val = result_val.transpose(transpose_order_inversed)
     else:
       raise NotImplementedError(f"Unsupported transform: {transform}")
   return result, result_val
+
 
 def _get_discharge(x, idx, tree):
   transforms = tree_util.tree_unflatten(tree, idx)
@@ -422,8 +494,10 @@ def _addupdate_discharge(x, val, idx, tree):
   if len(transforms) > 1:
     raise NotImplementedError("Only single indexer is supported.")
   indexer = transforms[0]
+
   if _is_trivial_indexer(indexer):
     return x + val
+
   # If everything in the indexer is a slice or ()-shaped, we can also
   # use `lax.dynamic_slice` with 1-sized slices for ()-shaped indices.
   # We need to squeeze out the 1-sized slices at the end.
@@ -433,8 +507,17 @@ def _addupdate_discharge(x, val, idx, tree):
     val = lax.expand_dims(val, squeeze_dims)
     y = lax_slicing.dynamic_update_slice(x, x_old + val, starts)
     return y
-  indexer = _convert_to_array_indexer(indexer)
-  return _prepend_scatter(x, indexer, val, add=True)
+
+  transpose_order = _maybe_transpose_before_gather(indexer)
+  if transpose_order is not None:
+    x, indexer = _perform_transpose_before_gather(x, indexer, transpose_order)
+  arrays = _convert_to_gather_arrays(indexer)
+  x = x.at[arrays].add(val)
+  if transpose_order is not None:
+    transpose_order_inversed = np.argsort(transpose_order)
+    x = x.transpose(transpose_order_inversed)
+  return x
+
 
 @weakref_lru_cache
 def _cached_closed_jaxpr_discharge(closed_jaxpr):

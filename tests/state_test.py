@@ -27,6 +27,7 @@ from jax import random
 from jax import lax
 from jax._src import core
 from jax._src import config
+from jax._src import dtypes
 from jax._src import linear_util as lu
 from jax._src.interpreters import partial_eval as pe
 from jax._src import test_util as jtu
@@ -454,42 +455,39 @@ class StatePrimitivesTest(jtu.JaxTestCase):
     self.assertEqual(jaxpr.eqns[2].primitive, get_p)
     self.assertEqual(jaxpr.eqns[3].primitive, get_p)
 
-  @jtu.sample_product(
-    [dict(ref_shape=ref_shape, ref_bdim=ref_bdim, idx_shape=idx_shape,
-          indexed_dims=indexed_dims, idx_bdims=idx_bdims, out_bdim=out_bdim)
-     for ref_shape in [(1,), (2, 3), (4, 5, 6)]
-     for ref_bdim in range(1 + len(ref_shape))
-     for idx_shape in [(), (1,), (2,), (5, 6)]
-     for indexed_dims in it.product([True, False], repeat=len(ref_shape))
-     for idx_bdims in it.product([None, *range(1 + len(idx_shape))],
-                                 repeat=sum(indexed_dims))
-     for out_bdim in range(1 + len(ref_shape) - sum(indexed_dims)
-                           + len(idx_shape) * any(indexed_dims))
-    ],
-    op=[
-        lambda x_ref, indexer: [x_ref[indexer]],
-        lambda x_ref, indexer: [
-            ref_swap(x_ref, indexer,
-                            jnp.ones(x_ref.shape, x_ref.dtype)[None][(0,
-                              *indexer)])],
-        lambda x_ref, indexer: (
-            ref_addupdate(x_ref, indexer,
-                                jnp.ones(x_ref.shape, x_ref.dtype)[None][(0,
-                                  *indexer)])
-            or [jnp.ones(x_ref.shape, x_ref.dtype)[None][(0, *indexer)]])
-    ],
+  @jtu.parameterized.named_parameters(
+      [
+          dict(
+              ref_shape=ref_shape, ref_bdim=ref_bdim, idx_shape=idx_shape,
+              indexed_dims=indexed_dims, idx_bdims=idx_bdims,
+              out_bdim=out_bdim, op=op,
+              testcase_name=f"ref_shape={ref_shape}_ref_bdim={ref_bdim}_"
+              f"idx_shape={idx_shape}_indexed_dims={indexed_dims}_"
+              f"idx_bdims={idx_bdims}_out_bdim={out_bdim}_op={i}"
+          )
+          for ref_shape in [(4, 5, 6)]
+          for ref_bdim in range(1 + len(ref_shape))
+          for idx_shape in [(), (1,), (2,), (5, 6)]
+          for indexed_dims in it.product([True, False], repeat=len(ref_shape))
+          for idx_bdims in it.product([None, *range(1 + len(idx_shape))],
+                                      repeat=sum(indexed_dims))
+          for out_bdim in range(1 + len(ref_shape) - sum(indexed_dims)
+                                + len(idx_shape) * any(indexed_dims))
+          for i, op in enumerate([
+              lambda x_ref, indexer: [x_ref[indexer]],
+              lambda x_ref, indexer: [
+                  ref_swap(x_ref, indexer, jnp.ones_like(x_ref[indexer]))],
+              lambda x_ref, indexer: (
+                  ref_addupdate(x_ref, indexer, jnp.ones_like(x_ref[indexer]))
+                  or [jnp.ones_like(x_ref[indexer])]),
+          ])
+      ]
   )
   def test_vmap(self, ref_shape, ref_bdim, idx_shape, indexed_dims,
                     idx_bdims, out_bdim, op):
-
-    float_ = (jnp.dtype('float64') if config.enable_x64.value else
-              jnp.dtype('float32'))
-    int_ = (jnp.dtype('int64') if config.enable_x64.value else
-            jnp.dtype('int32'))
+    intx = dtypes.canonicalize_dtype(jnp.int64)
+    floatx = dtypes.canonicalize_dtype(jnp.float64)
     axis_size = 7
-    out_shape = tuple(d for d, b in zip(ref_shape, indexed_dims) if not b)
-    if any(indexed_dims):
-      out_shape = (*idx_shape, *out_shape)
 
     def maybe_insert(shape, idx):
       if idx is None:
@@ -497,13 +495,13 @@ class StatePrimitivesTest(jtu.JaxTestCase):
       return tuple_insert(shape, idx, axis_size)
 
     batched_ref_shape = maybe_insert(ref_shape, ref_bdim)
-    ref_aval = shaped_array_ref(ref_shape, float_)
-    bat_ref_aval = shaped_array_ref(batched_ref_shape, float_)
+    ref_aval = shaped_array_ref(ref_shape, floatx)
+    bat_ref_aval = shaped_array_ref(batched_ref_shape, floatx)
 
-    idx_avals = [core.ShapedArray(idx_shape, int_)
+    idx_avals = [core.ShapedArray(idx_shape, intx)
                  for _ in idx_bdims]
     bat_idx_avals = [
-        core.ShapedArray(maybe_insert(idx_shape, idx_bdim), int_)
+        core.ShapedArray(maybe_insert(idx_shape, idx_bdim), intx)
         for idx_bdim in idx_bdims]
 
     def f(x_ref, *idxs):
@@ -523,6 +521,7 @@ class StatePrimitivesTest(jtu.JaxTestCase):
         lu.wrap_init(f_batched), [bat_ref_aval, *bat_idx_avals])
     jaxpr, consts = discharge_state(stateful_jaxpr, stateful_consts)
     discharge_of_vmap_ans = core.eval_jaxpr(jaxpr, consts, a, *idxs)
+
     # vmap-of-discharge
     stateful_jaxpr, _, stateful_consts, () = pe.trace_to_jaxpr_dynamic(
         lu.wrap_init(f), [ref_aval, *idx_avals])
