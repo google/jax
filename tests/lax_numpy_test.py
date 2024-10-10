@@ -893,6 +893,7 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
   @jtu.sample_product(
     dtype=[dt for dt in float_dtypes if dt not in [jnp.float16, jnp.bfloat16]],
     shape=[shape for shape in one_dim_array_shapes if shape != (1,)],
+    num_rhs=[1, 5],
     deg=[1, 2, 3],
     rcond=[None, -1, 10e-3, 10e-5, 10e-10],
     full=[False, True],
@@ -900,12 +901,13 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     cov=[False, True, "unscaled"],
   )
   @jax.default_matmul_precision("float32")
-  def testPolyfit(self, shape, dtype, deg, rcond, full, w, cov):
+  def testPolyfit(self, shape, num_rhs, dtype, deg, rcond, full, w, cov):
     rng = jtu.rand_default(self.rng())
     tol_spec = {np.float32: 1e-3, np.float64: 1e-13, np.complex64: 1e-5}
     tol = jtu.tolerance(dtype, tol_spec)
     _w = lambda a: abs(a) if w else None
-    args_maker = lambda: [rng(shape, dtype), rng(shape, dtype), rng(shape, dtype)]
+    rhs_shape = shape + (num_rhs,) if num_rhs > 1 else shape
+    args_maker = lambda: [rng(shape, dtype), rng(rhs_shape, dtype), rng(shape, dtype)]
     jnp_fun = lambda x, y, a: jnp.polyfit(x, y, deg=deg, rcond=rcond, full=full, w=_w(a), cov=cov)
     np_fun = jtu.ignore_warning(
       message="Polyfit may be poorly conditioned*")(lambda x, y, a: np.polyfit(x, y, deg=deg, rcond=rcond, full=full, w=_w(a), cov=cov))

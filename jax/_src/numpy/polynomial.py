@@ -138,7 +138,7 @@ def polyfit(x: ArrayLike, y: ArrayLike, deg: int, rcond: float | None = None,
     rcond: Relative condition number of the fit. Default value is ``len(x) * eps``.
        It must be specified statically.
     full: Switch that controls the return value. Default is ``False`` which
-      restricts the return value to the array of polynomail coefficients ``p``.
+      restricts the return value to the array of polynomial coefficients ``p``.
       If ``True``, the function returns a tuple ``(p, resids, rank, s, rcond)``.
       It must be specified statically.
     w: Array of weights of shape ``(M,)``. If None, all data points are considered
@@ -146,8 +146,8 @@ def polyfit(x: ArrayLike, y: ArrayLike, deg: int, rcond: float | None = None,
       unsquared residual of :math:`y_i - \widehat{y}_i` at :math:`x_i`, where
       :math:`\widehat{y}_i` is the fitted value of :math:`y_i`. Default is None.
     cov: Boolean or string. If ``True``, returns the covariance matrix scaled
-      by ``resids/(M-deg-1)`` along with ploynomial coefficients. If
-      ``cov='unscaled'``, returns the unscaaled version of covariance matrix.
+      by ``resids/(M-deg-1)`` along with polynomial coefficients. If
+      ``cov='unscaled'``, returns the unscaled version of covariance matrix.
       Default is ``False``. ``cov`` is ignored if ``full=True``. It must be
       specified statically.
 
@@ -216,7 +216,7 @@ def polyfit(x: ArrayLike, y: ArrayLike, deg: int, rcond: float | None = None,
 
     >>> p, C = jnp.polyfit(x, y, 2, cov=True)
     >>> p.shape, C.shape
-    ((3, 3), (3, 3, 1))
+    ((3, 3), (3, 3, 3))
   """
   if w is None:
     check_arraylike("polyfit", x, y)
@@ -272,15 +272,14 @@ def polyfit(x: ArrayLike, y: ArrayLike, deg: int, rcond: float | None = None,
     Vbase = linalg.inv(dot(lhs.T, lhs))
     Vbase /= outer(scale, scale)
     if cov == "unscaled":
-      fac = 1
+      fac = array([1.0])
     else:
       if len(x_arr) <= order:
         raise ValueError("the number of data points must exceed order "
                             "to scale the covariance matrix")
       fac = resids / (len(x_arr) - order)
-      fac = fac[0] #making np.array() of shape (1,) to int
     if y_arr.ndim == 1:
-      return c, Vbase * fac
+      return c, Vbase * fac[0]
     else:
       return c, Vbase[:, :, np.newaxis] * fac
   else:
