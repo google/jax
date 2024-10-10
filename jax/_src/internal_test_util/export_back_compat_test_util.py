@@ -243,6 +243,7 @@ data_{datetime.date.today().strftime('%Y_%m_%d')} = dict(
       os.makedirs(output_dir)
     output_file = os.path.join(output_dir, f"{self._testMethodName}.py")
     logging.info("Writing the updated testdata at %s", output_file)
+    print(updated_testdata)
     with open(output_file, "w") as f:
       f.write(updated_testdata)
 

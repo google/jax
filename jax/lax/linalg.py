@@ -30,6 +30,7 @@ from jax._src.lax.linalg import (
   qr_p,
   svd,
   svd_p,
+  SvdAlgorithm,
   triangular_solve,
   triangular_solve_p,
   tridiagonal,

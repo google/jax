@@ -971,6 +971,8 @@ _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
     # eigh on GPU
     "cusolver_syevd_ffi", "hipsolver_syevd_ffi",
     # svd on GPU
+    "cusolver_gesvd_ffi", "cusolver_gesvdj_ffi",
+    "hipsolver_gesvd_ffi", "hipsolver_gesvdj_ffi",
     # lu on TPU
     "LuDecomposition",
     # ApproxTopK on TPU

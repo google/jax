@@ -49,7 +49,6 @@ from jax._src.export import shape_poly_decision
 from jax._src.lax import lax as lax_internal
 from jax._src.lax import control_flow as lax_control_flow
 from jax._src.lib import xla_client
-from jax._src.lib import version as jaxlib_version
 import numpy as np
 
 config.parse_flags_with_absl()
@@ -2882,6 +2881,28 @@ _POLY_SHAPE_TEST_HARNESSES = [
       ]
     ],
     [
+      PolyHarness(  # pylint: disable=g-complex-comprehension
+          "svd", f"shape={jtu.format_shape_dtype_string(shape, dtype)}_poly={poly}_{full_matrices=}_{compute_uv=}",
+          lambda x, full_matrices, compute_uv: lax.linalg.svd(x, full_matrices=full_matrices, compute_uv=compute_uv),
+          arg_descriptors=[RandArg(shape, dtype), StaticArg(full_matrices), StaticArg(compute_uv)],
+          polymorphic_shapes=[poly],
+          symbolic_constraints=constraints)
+      for dtype in {np.float32, np.float64, np.complex64, np.complex128} & jtu.supported_dtypes()
+      for compute_uv in [True, False]
+      for full_matrices in ([True, False] if compute_uv else [True])
+      for shape, poly, constraints in [
+          ((2, 0, 4), "b, ...", ()),
+          ((2, 4, 0), "b, ...", ()),
+          ((2, 3, 4, 4), "b1, b2, ...", ()),
+          ((2, 3, 4, 5), "b1, b2, ...", ()),
+          ((2, 3, 8, 4), "b1, b2, ...", ()),
+          # The constraints listed here are only for the GPU implementation
+          # which selects an algorithm based on the size of the matrix.
+          ((5, 4), "m, n", ["n <= m", "m <= 32", "n <= 32"]),
+          ((2, 3, 4, 5), "b1, b2, m, n", ["m <= n", "m <= 32", "n <= 32"]),
+      ]
+    ],
+    [
       # The random primitive tests, with threefry (both partitionable and
       # non-partitionable), and unsafe_rbg.
       [
@@ -3498,23 +3519,6 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
     # We do not expect the associative scan error on TPUs
     if harness.expect_error == expect_error_associative_scan and jtu.test_device_matches(["tpu"]):
       harness.expect_error = None
-
-    # Exclude some harnesses that are known to fail for native serialization
-    # Set of harness.group_name:platform that are implemented with custom call
-    custom_call_harnesses = {
-        "vmap_svd:gpu",
-    }
-    name_device_key = f"{harness.group_name}:{jtu.device_under_test()}"
-    if name_device_key in custom_call_harnesses:
-      raise unittest.SkipTest("native serialization with shape polymorphism not implemented for custom calls; b/261671778")
-
-    # This list keeps track of the minimum jaxlib version that supports shape
-    # polymorphism for some new primitives as we add them. This check is
-    # required so that we can still run the test suite with older versions of
-    # jaxlib.
-    version_gated = {}
-    if version_gated.get(name_device_key, jaxlib_version) > jaxlib_version:
-      raise unittest.SkipTest(f"shape polymorphism not supported by jaxlib version {jaxlib_version}")
 
     if harness.group_name == "schur" and not jtu.test_device_matches(["cpu"]):
       raise unittest.SkipTest("schur decomposition is only implemented on CPU.")
