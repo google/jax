@@ -101,6 +101,7 @@ Automatic differentiation
     custom_gradient
     closure_convert
     checkpoint
+    remat
 
 ``custom_jvp``
 ~~~~~~~~~~~~~~
