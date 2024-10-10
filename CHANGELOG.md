@@ -119,6 +119,12 @@ See the 0.4.33 release notes for more details.
     to support the use of the new {ref}`ffi-tutorial` to interface with custom
     C++ and CUDA code from JAX.
 
+* Breaking changes
+  * Fixed a numerical issue in the gradients produced by `jax.remat`. This may
+    cause ``f(x) != jax.value_and_grad(f)(x)[0]`` (due to numerical differences)
+    for more functions f than previously. See
+    https://github.com/google/jax/pull/22244 for more information.
+
 * Changes
   * `jax_enable_memories` flag is set to `True` by default.
   * {mod}`jax.numpy` now supports v2023.12 of the Python Array API Standard.
