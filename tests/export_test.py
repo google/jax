@@ -905,13 +905,21 @@ class JaxExportTest(jtu.JaxTestCase):
       for dtype in dtypes._jax_types if dtype != np.dtype("bool")
   ])
   def test_poly_numeric_dtypes(self, dtype=np.int32):
-    if str(dtype) in {"float8_e4m3b11fnuz",
-                      "float8_e4m3fnuz",
-                      "float8_e5m2fnuz",
-                      "int2",
-                      "int4",
-                      "uint2",
-                      "uint4"}:
+    unsupported_dtypes = {
+      "float8_e4m3b11fnuz",
+      "float8_e4m3fnuz",
+      "float8_e5m2fnuz",
+      "int2",
+      "int4",
+      "uint2",
+      "uint4",
+    }
+    # TODO: Remove once minimum_jaxlib_version is 0.4.35+
+    # TODO: Remove "cpu" check once xla::GetDefaultStablehloVersion() is 1.7.0+
+    if not (jtu.device_under_test() == "cpu" and jax._src.lib.version >= (0, 4, 35)):
+      unsupported_dtypes.add("float8_e3m4")
+      unsupported_dtypes.add("float8_e4m3")
+    if str(dtype) in unsupported_dtypes:
       self.skipTest(f"TODO: serialization not supported for {str(dtype)}")
     @jax.jit
     def f_jax(x):

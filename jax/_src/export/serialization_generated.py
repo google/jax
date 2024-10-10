@@ -52,6 +52,8 @@ class DType:
     bf16 = 14
     i4 = 15
     ui4 = 16
+    f8_e3m4 = 24
+    f8_e4m3 = 23
     f8_e4m3b11fnuz = 17
     f8_e4m3fn = 18
     f8_e4m3fnuz = 19

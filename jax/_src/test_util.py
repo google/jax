@@ -1433,10 +1433,22 @@ class _LazyDtypes:
 
   @_cached_property
   def custom_floats(self):
-    return [np.dtype(t) for t in [
-      _dtypes.bfloat16, _dtypes.float8_e4m3b11fnuz,
-      _dtypes.float8_e4m3fn, _dtypes.float8_e4m3fnuz,
-      _dtypes.float8_e5m2, _dtypes.float8_e5m2fnuz]]
+    float_dtypes = [
+      _dtypes.bfloat16,
+      _dtypes.float8_e4m3b11fnuz,
+      _dtypes.float8_e4m3fn,
+      _dtypes.float8_e4m3fnuz,
+      _dtypes.float8_e5m2,
+      _dtypes.float8_e5m2fnuz,
+    ]
+    # TODO: Remove lib.version check once minimum_jaxlib_version is 0.4.35+
+    # TODO: Remove "cpu" check once xla::GetDefaultStablehloVersion() is 1.7.0+
+    if device_under_test() == "cpu" and jax._src.lib.version >= (0, 4, 35):
+      if _dtypes.float8_e3m4 is not None:
+        float_dtypes += [_dtypes.float8_e3m4]
+      if _dtypes.float8_e4m3 is not None:
+        float_dtypes += [_dtypes.float8_e4m3]
+    return [np.dtype(t) for t in float_dtypes]
 
   @_cached_property
   def floating(self):

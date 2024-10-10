@@ -210,6 +210,10 @@ int8 = _make_scalar_type(np.int8)
 int16 = _make_scalar_type(np.int16)
 int32 = _make_scalar_type(np.int32)
 int64 = _make_scalar_type(np.int64)
+if dtypes.float8_e3m4 is not None:
+  float8_e3m4 = _make_scalar_type(dtypes.float8_e3m4)
+if dtypes.float8_e4m3 is not None:
+  float8_e4m3 = _make_scalar_type(dtypes.float8_e4m3)
 float8_e4m3fn = _make_scalar_type(dtypes.float8_e4m3fn)
 float8_e4m3fnuz = _make_scalar_type(dtypes.float8_e4m3fnuz)
 float8_e5m2 = _make_scalar_type(dtypes.float8_e5m2)

@@ -90,6 +90,14 @@ default_gradient_tolerance = {
   np.dtype(np.complex128): 1e-5,
 }
 
+# TODO: make this unconditional when ml_dtypes>=0.5.0 is required
+if _dtypes.float8_e3m4 is not None:
+  _default_tolerance[np.dtype(_dtypes.float8_e3m4)] = 1e-1
+  default_gradient_tolerance[np.dtype(_dtypes.float8_e3m4)] = 1e-1
+if _dtypes.float8_e4m3 is not None:
+  _default_tolerance[np.dtype(_dtypes.float8_e4m3)] = 1e-1
+  default_gradient_tolerance[np.dtype(_dtypes.float8_e4m3)] = 1e-1
+
 def is_python_scalar(val):
   return not isinstance(val, np.generic) and isinstance(val, (bool, int, float, complex))
 
@@ -106,6 +114,12 @@ def _assert_numpy_allclose(a, b, atol=None, rtol=None, err_msg=''):
     _dtypes.float8_e5m2fnuz,
     _dtypes.bfloat16,
   ]
+
+  if _dtypes.float8_e4m3 is not None:
+    custom_float_dtypes.insert(0, _dtypes.float8_e4m3)
+  if _dtypes.float8_e3m4 is not None:
+    custom_float_dtypes.insert(0, _dtypes.float8_e3m4)
+
   def maybe_upcast(x):
     if x.dtype in custom_float_dtypes:
       return x.astype(np.float32)

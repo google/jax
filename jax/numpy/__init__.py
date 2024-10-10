@@ -273,6 +273,15 @@ try:
 except ImportError:
   pass
 
+# TODO: Remove the try-except once we upgrade to ml_dtypes 0.5.0
+try:
+  from jax._src.numpy.lax_numpy import (
+    float8_e3m4 as float8_e3m4,
+    float8_e4m3 as float8_e4m3,
+  )
+except ImportError:
+  pass
+
 from jax._src.numpy.array_api_metadata import (
   __array_api_version__ as __array_api_version__,
   __array_namespace_info__ as __array_namespace_info__,

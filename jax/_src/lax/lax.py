@@ -942,11 +942,15 @@ class DotAlgorithmPreset(enum.Enum):
           DotAlgorithmPreset.ANY_F8_ANY_F8_ANY |
           DotAlgorithmPreset.ANY_F8_ANY_F8_ANY_FAST_ACCUM
       ):
-        fp8_dtypes = (np.dtype(dtypes.float8_e4m3b11fnuz),
+        fp8_dtypes = [np.dtype(dtypes.float8_e4m3b11fnuz),
                       np.dtype(dtypes.float8_e4m3fn),
                       np.dtype(dtypes.float8_e4m3fnuz),
                       np.dtype(dtypes.float8_e5m2),
-                      np.dtype(dtypes.float8_e5m2fnuz))
+                      np.dtype(dtypes.float8_e5m2fnuz)]
+        if dtypes.float8_e3m4 is not None:
+          fp8_dtypes += [np.dtype(dtypes.float8_e3m4)]
+        if dtypes.float8_e4m3 is not None:
+          fp8_dtypes += [np.dtype(dtypes.float8_e4m3)]
         if lhs_dtype not in fp8_dtypes or rhs_dtype not in fp8_dtypes:
           raise ValueError(
               f"The dot algorithm '{self}' requires both inputs to have float8 "
@@ -3485,6 +3489,10 @@ def _dot_general_lower(ctx, lhs, rhs, *, dimension_numbers,
   def _is_fp8_mixed_precision_matmul(_lhs_dtypes, _rhs_dtypes):
     fp8_dtypes = (dtypes.float8_e4m3fn, dtypes.float8_e5m2,
                   dtypes.float8_e5m2fnuz, dtypes.float8_e4m3fnuz)
+    if dtypes.float8_e3m4 is not None:
+      fp8_dtypes += (dtypes.float8_e3m4,)
+    if dtypes.float8_e4m3 is not None:
+      fp8_dtypes += (dtypes.float8_e4m3,)
     return _lhs_dtypes in fp8_dtypes and _rhs_dtypes in fp8_dtypes
   del preferred_element_type  # Implied by the output aval
   lhs_aval, rhs_aval = ctx.avals_in
