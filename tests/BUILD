@@ -1338,6 +1338,17 @@ jax_multiplatform_test(
 )
 
 jax_multiplatform_test(
+    name = "colocated_python_test",
+    srcs = ["colocated_python_test.py"],
+    env = {
+        "XLA_FLAGS": "--xla_force_host_platform_device_count=8",
+    },
+    deps = [
+        "//jax:experimental_colocated_python",
+    ],
+)
+
+jax_multiplatform_test(
     name = "experimental_rnn_test",
     srcs = ["experimental_rnn_test.py"],
     disable_configs = [
