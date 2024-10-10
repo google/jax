@@ -866,12 +866,10 @@ class _IndexUpdateRef:
 
     See :mod:`jax.ops` for details.
     """
-    return ufuncs.divide(
-      self.array,
-      scatter._scatter_update(lax_numpy.ones_like(self.array), self.index, values,
-                              lax.scatter_mul,
-                              indices_are_sorted=indices_are_sorted,
-                              unique_indices=unique_indices, mode=mode))
+    return scatter._scatter_update(self.array, self.index, ufuncs.reciprocal(values),
+                                   lax.scatter_mul,
+                                   indices_are_sorted=indices_are_sorted,
+                                   unique_indices=unique_indices, mode=mode)
 
   def power(self, values, *, indices_are_sorted=False, unique_indices=False,
             mode=None):
