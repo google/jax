@@ -569,7 +569,12 @@ def parse_indices(
       is_squeezed.append(False)
     elif isinstance(idx, DynamicSlice):
       base_indices.append(idx.base)
-      slice_shape.append(idx.length)
+      length = idx.length
+      if isinstance(length, ir.Value) and length.owner.name == "arith.constant":
+        length = int(length.owner.attributes["value"])
+      elif not isinstance(length, int):
+        raise ValueError(f"Expected an integer length, got {length}")
+      slice_shape.append(length)
       is_squeezed.append(False)
     elif isinstance(idx, ir.Value):
       if not ir.IndexType.isinstance(idx.type):
