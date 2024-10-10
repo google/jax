@@ -19,6 +19,7 @@ from typing import Any
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
+from jax._src import core as jax_core
 from jax._src import test_util as jtu
 from jax._src.state import discharge as state_discharge
 from jax.experimental import pallas as pl
@@ -869,6 +870,19 @@ class PallasCallStatefulAsyncTest(parameterized.TestCase):
         copy_done(x_ref, y_ref, fut)
       _, y = state_discharge.run_state(body)((x, y))
       return y
+    x = jax.random.normal(jax.random.key(0), (4, 8, 128), dtype=jnp.float32)
+    y = f(x)
+    np.testing.assert_array_equal(y, x[2])
+
+  def test_basic_stateful_async_slice_to_buffer_with_mutable_array(self):
+    @jax.jit
+    def f(x):
+      x_ref = jax_core.mutable_array(x)
+      y_ref = jax_core.mutable_array(jnp.ones(x.shape[1:], x.dtype))
+      copy_start, copy_done = make_stateful_async_slice(2)
+      fut = copy_start(x_ref, y_ref)
+      copy_done(x_ref, y_ref, fut)
+      return y_ref[...]
     x = jax.random.normal(jax.random.key(0), (4, 8, 128), dtype=jnp.float32)
     y = f(x)
     np.testing.assert_array_equal(y, x[2])

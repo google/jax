@@ -687,10 +687,36 @@ state_discharge.register_discharge_rule(dma_start_p)(dma_start_discharge_rule)
 dma_wait_p = jax_core.Primitive('dma_wait')
 dma_wait_p.multiple_results = True
 
-@dma_wait_p.def_abstract_eval
-def _dma_wait_abstract_eval(*args, tree, device_id_type):
-  del args, tree, device_id_type
-  return []
+@dma_wait_p.def_effectful_abstract_eval
+def _dma_wait_abstract_eval(*args, tree, _):
+  (
+      _,
+      src_transforms_avals,
+      _,
+      _,
+      dst_sem_aval,
+      dst_sem_transforms_avals,
+      src_sem_aval,
+      src_sem_transforms_avals,
+      _,
+  ) = tree_util.tree_unflatten(tree, args)
+  dst_sem_shape = dst_sem_aval.shape
+  if dst_sem_transforms_avals:
+    dst_sem_shape = dst_sem_transforms_avals[-1].get_indexer_shape()
+  if dst_sem_shape:
+    raise ValueError(
+        f"Cannot wait on a non-()-shaped semaphore: {dst_sem_shape}"
+    )
+  if src_sem_aval is not None:
+    src_sem_shape = src_sem_aval.shape
+    if src_sem_transforms_avals:
+      src_sem_shape = src_sem_transforms_avals[-1].get_indexer_shape()
+    if src_sem_shape:
+      raise ValueError(
+          f"Cannot wait on a non-()-shaped semaphore: {src_sem_shape}"
+      )
+  n_src_transforms = len(tree_util.tree_leaves(src_transforms_avals))
+  return [], {state.ReadEffect(0), state.WriteEffect(n_src_transforms + 1)}
 
 def _dma_wait_pp_eqn(eqn: jax_core.JaxprEqn,
                      context: jax_core.JaxprPpContext,

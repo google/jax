@@ -334,19 +334,34 @@ pallas_call_p.def_impl(_pallas_call_impl)
 
 
 def _pallas_call_abstract_eval(
-    *avals, out_avals: tuple[jax_core.AbstractValue, ...], **_
+    *avals, out_avals: tuple[jax_core.AbstractValue, ...], jaxpr, **_
 ):
   del avals
   # Make sure we don't return ShapedArrayWithMemorySpace to the outside world.
-  return [
+  out_avals = [
       jax_core.ShapedArray(a.shape, a.dtype, a.weak_type)
       if isinstance(a, pallas_core.ShapedArrayWithMemorySpace)
       else a
       for a in out_avals
   ]
+  # Jaxpr effects might include things like debug_print, or potentially Ref
+  # reads/writes (from closed over Refs).
+  num_refs = len(jaxpr.constvars)
+  effs = set()
+  for eff in jaxpr.effects:
+    if not isinstance(eff, effects.JaxprInputEffect):
+      effs.add(eff)
+      continue
+    # Only add a JaxprInputRef if it corresponds to a closed-over Ref
+    if eff.input_index < num_refs:
+      # We don't need to shift the index of the JaxprInputRef because consts
+      # are leading in the Jaxpr and are the leading inputs to the primitive,
+      # so their indices should correspond.
+      effs.add(eff)
+  return out_avals, effs
 
 
-pallas_call_p.def_abstract_eval(_pallas_call_abstract_eval)
+pallas_call_p.def_effectful_abstract_eval(_pallas_call_abstract_eval)
 
 
 def _pallas_call_jvp_rule(
