@@ -391,6 +391,7 @@ def TPU_ConcatenateOp : TPU_Op<"concatenate", [Pure]> {
   let assemblyFormat = [{
     $sources `in` $dimension attr-dict `:` type($sources) `->` type($output)
   }];
+  let hasVerifier = 1;
 }
 
 def TPU_BitcastOp : TPU_Op<"bitcast", [Pure]> {

@@ -52,6 +52,7 @@
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/types/span.h"
+#include "third_party/llvm/llvm-project/llvm/include/llvm/ADT/ArrayRef.h"
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/include/mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/include/mlir/Dialect/Vector/IR/VectorOps.h"
@@ -2522,54 +2523,141 @@ LogicalResult tpu_concatenate_rule(RewriteContext &ctx, Operation &op,
   TPU_ASSERT_OP(
       llvm::all_of(layouts_in, [](const Layout &l) { return l.has_value(); }));
   TPU_ASSERT_OP(layouts_out.front().has_value());
-  const VectorLayout &layout = *layouts_out.front();
-  for (const Layout &l : layouts_in) {
-    if (l != layout) {
-      return op.emitOpError("Not implemented: Inconsistent layouts");
-    }
-  }
   OpBuilder builder(&op);
   auto concatenate_op = cast<tpu::ConcatenateOp>(op);
   const VectorType res_ty = concatenate_op.getResult().getType();
-  const uint32_t dimension = concatenate_op.getDimension();
-  if (dimension - res_ty.getRank() >= -2) {
-    if (!layout.hasNativeTiling(ctx.target_shape) ||
-        layout.offsets() != LayoutOffsets{0, 0}) {
-      return op.emitOpError(
-          "Not implemented: Only native tiling with offset (0, 0) is supported "
-          "when concatenation along tiling dims.");
-    }
-    // Check if the concat dim size of src and res is aligned to native tiling.
-    auto check_aligned = [&](const VectorType &vty) {
-      auto i = dimension - res_ty.getRank();
-      return vty.getRank() >= 2 &&
-             *(vty.getShape().end() + i) % *(layout.tiling().end() + i) == 0;
-    };
-    bool is_aligned = check_aligned(res_ty);
-    int op_idx = 0;
-    while (is_aligned && op_idx < op.getNumOperands()) {
-      auto vty = dyn_cast<VectorType>(op.getOperand(op_idx++).getType());
-      is_aligned = check_aligned(vty);
-    }
-    if (!is_aligned) {
-      return op.emitOpError(
-          "Not implemented: Only aligned shapes are supported when "
-          "concatenation along tiling dims");
-    }
+  uint32_t dimension = concatenate_op.getDimension();
+  SmallVector<xla::Array<Value>> operand_vregs;
+  operand_vregs.reserve(op.getNumOperands());
+
+  std::optional<int64_t> tiling_dim;
+  auto res_layout = layouts_out.front();
+
+  TPU_ASSERT_OP(res_layout.has_value());
+  if (res_layout->implicit_dim() != VectorLayout::ImplicitDim::kNone) {
+    return op.emitOpError("Not implemented: implicit dim");
+  }
+  auto num_untiled_dims = res_ty.getRank() - res_layout->layout_rank();
+
+  if (dimension >= num_untiled_dims) {
+    tiling_dim = dimension - num_untiled_dims;
   }
 
-  SmallVector<xla::Array<Value>> tiles;
-  tiles.reserve(concatenate_op->getNumOperands());
-  for (Value operand : concatenate_op.getOperands()) {
+  // Op level invariants on layouts, other op level invariants are checked in
+  // the verifier.
+  for (int i = 0; i < op.getNumOperands(); ++i) {
+    auto operand = op.getOperand(i);
+    if (!layouts_in[i].has_value()) {
+      return op.emitOpError("Not implemented: Expected input layout");
+    }
+    auto const &layout = *layouts_in[i];
+
+    if (layout.implicit_dim() != VectorLayout::ImplicitDim::kNone) {
+      return op.emitOpError("Not implemented: implicit dim");
+    }
+
     FAILUREOR_ASSIGN_OR_RETURN(
-        xla::Array<Value> t,
+        xla::Array<Value> vreg_array,
         disassemble(builder, layout, cast<TypedValue<VectorType>>(operand),
                     ctx.target_shape));
-    tiles.emplace_back(std::move(t));
+    operand_vregs.push_back(std::move(vreg_array));
   }
-  const xla::Array<Value> res_tiles = concatenate(tiles, dimension);
-  op.replaceAllUsesWith(
-      assemble(builder, res_ty, layout, res_tiles, ctx.target_shape));
+
+  CHECK_EQ(operand_vregs.size(), op.getNumOperands());
+  SmallVector<int64_t> vreg_array_shape =
+      res_layout->tileArrayShape(res_ty.getShape(), ctx.target_shape);
+
+  // Fill out out_vregs with nulls, to avoid a problem with where we have to
+  // blend with a vreg that has not been written to yet.
+  xla::Array<Value> out_vregs(vreg_array_shape, nullptr);
+
+  auto boundIdxConst =
+      std::bind(IdxConst, std::placeholders::_1, builder, op.getLoc());
+
+  // Handle the untiled concatenation case.
+  if (!tiling_dim.has_value()) {
+    out_vregs = concatenate(operand_vregs, dimension);
+  } else {
+    if (res_layout->offsets()[tiling_dim.value()] != 0) {
+      return op.emitOpError("Not implemented: result non-zero offset.");
+    }
+    if (!res_layout->hasNativeTiling(ctx.target_shape)) {
+      return op.emitOpError("Not implemented: Non native tiling in concat.");
+    }
+
+    int64_t offset_at_dim = 0;
+    {
+      for (int i = 0; i < op.getNumOperands(); ++i) {
+        auto operand = op.getOperand(i);
+        auto const &layout = *layouts_in[i];
+        auto vty = cast<VectorType>(operand.getType());
+        auto shape = vty.getShape();
+
+        auto starting_point = offset_at_dim;
+        auto offset_amount =
+            starting_point % layout.tiling()[tiling_dim.value()];
+        if (offset_amount != layout.offsets()[tiling_dim.value()]) {
+          return op.emitOpError(
+              "Not implemented: Relayout not called, unaligned dims "
+              "concatenated "
+              "without proper offsets. Ensure that infer_vector_layout pass "
+              "was "
+              "called.");
+        }
+        offset_at_dim += shape[dimension];
+      }
+    }
+
+    // Tiled concatenation logic.
+    int64_t offset = 0;
+    for (size_t i = 0; i < operand_vregs.size(); ++i) {
+      auto &vreg = operand_vregs[i];
+      const auto &layout = layouts_in[i];
+      const int64_t operand_offset = *layout->offsets()[tiling_dim.value()];
+      if (operand_offset != 0) {
+        // We are offset, so we must blend with the previous vreg.
+        // Or, to frame it in an another way, the prior vreg
+        // stored its entire dim size in the offset, but only wrote the
+        // last dime partially.
+        offset -= 1;
+      }
+
+      const auto bitwidth = res_ty.getElementTypeBitWidth();
+      const int packing = res_layout->packing();
+
+      SmallVector<int64_t> out_idx;
+      vreg.Each([&](absl::Span<const int64_t> idx, Value *v) {
+        out_idx.assign(idx.begin(), idx.end());
+        out_idx[dimension] += offset;
+        if (idx[dimension] == 0 && operand_offset != 0) {
+          Value mask;
+          const VectorType vmask_ty = getNativeVregOrVmaskType(
+              builder.getI1Type(), bitwidth, ctx.target_shape);
+          if (tiling_dim.value() == 0) {  // sublane
+            mask = builder.create<tpu::CreateMaskOp>(
+                op.getLoc(), vmask_ty,
+                ArrayRef<Value>{boundIdxConst(0), boundIdxConst(0)},
+                ArrayRef<Value>{boundIdxConst(operand_offset * packing),
+                                boundIdxConst(layout->tiling()[1])});
+          } else {  // lane
+            mask = builder.create<tpu::CreateMaskOp>(
+                op.getLoc(), vmask_ty,
+                ArrayRef<Value>{boundIdxConst(0), boundIdxConst(0)},
+                ArrayRef<Value>{boundIdxConst(layout->tiling()[0]),
+                                boundIdxConst(operand_offset * packing)});
+          }
+          // Blend the current value with the existing value in the output.
+          *v = builder.create<arith::SelectOp>(op.getLoc(), mask,
+                                               out_vregs(out_idx), *v);
+        }
+        out_vregs(out_idx) = *v;
+      });
+      offset += vreg.dim(dimension);
+    }
+  }
+  auto assembled =
+      assemble(builder, res_ty, *res_layout, out_vregs, ctx.target_shape);
+  op.replaceAllUsesWith(assembled);
   op.erase();
   return success();
 }

@@ -772,21 +772,66 @@ class VectorLayoutInferer {
     }
     auto res_ty = op.getResult().getType();
     int8_t bitwidth = res_ty.getElementTypeBitWidth();
-    auto layout = getLayout(op.getSources().front());
-    // When concatenating vectors with replicated offsets, we want to reset the
-    // replicated offset to zero. Because we are not sure if the replicated
-    // value from each vector are same.
-    layout = VectorLayout(
-        layout->bitwidth(),
-        {layout->offsets()[0].value_or(0), layout->offsets()[1].value_or(0)},
-        layout->tiling(), layout->implicit_dim());
-    if (dimension >= res_rank - 2) {
-      layout = VectorLayout(bitwidth, {0, 0}, nativeTiling(bitwidth),
-                            ImplicitDim::kNone);
+
+    std::optional<int64_t> tiling_dim;
+    if (dimension == res_ty.getRank() - 1) {
+      tiling_dim = 1;
+    } else if (dimension == res_ty.getRank() - 2) {
+      tiling_dim = 0;
     }
-    SmallVector<Layout> in_layouts(op->getNumOperands(), layout);
-    setLayout(op, in_layouts, layout);
-    return success();
+
+    if (tiling_dim.has_value()) {
+      int64_t starting_point = 0;
+
+      auto first_layout = getLayout(op.getSources().front());
+      auto op_layouts = getLayoutFromOperands(op);
+      SmallVector<Layout> in_layouts;
+      in_layouts.reserve(op.getSources().size());
+
+      auto native_tiling = nativeTiling(bitwidth);
+
+      for (int i = 0; i < op.getSources().size(); ++i) {
+        // Compute the offset per source.
+        // Ex: for a cat of (10, 128), (10, 128) on dim 0, where the
+        // vreg_sice for that dim is 8, the first source starts at
+        // offset 0, and overflows the vreg
+        // by 2, so the offset for the second input is 2.
+        auto op_shape =
+            cast<VectorType>(op.getSources()[i].getType()).getShape();
+        auto offset_amount = starting_point % native_tiling[tiling_dim.value()];
+        auto op_layout = op_layouts[i];
+        SmallVector<int64_t> in_idx{op_layout->offsets()[0].value_or(0),
+                                    op_layout->offsets()[1].value_or(0)};
+        in_idx[tiling_dim.value()] = offset_amount;
+        starting_point += op_shape[dimension];
+        in_layouts.push_back(VectorLayout(bitwidth, {in_idx[0], in_idx[1]},
+                                          native_tiling, ImplicitDim::kNone));
+      }
+      SmallVector<int64_t> res_layout_offsets(
+          {first_layout->offsets()[0].value_or(0),
+           first_layout->offsets()[1].value_or(0)});
+      res_layout_offsets[tiling_dim.value()] = 0;
+      // TODO(mvoz): A tiny optimization we could do here later is to
+      // no-op setting tiling when sublane dim size is aligned to sublane
+      // tiling.
+      auto res_layout =
+          VectorLayout(bitwidth, {res_layout_offsets[0], res_layout_offsets[1]},
+                       native_tiling, ImplicitDim::kNone);
+      setLayout(op, in_layouts, res_layout);
+      return success();
+    } else {
+      auto layout = getLayout(op.getSources().front());
+      // When concatenating vectors with replicated offsets, we want to reset
+      // the replicated offset to zero. Because we are not sure if the
+      // replicated value from each vector are same.
+      layout = VectorLayout(
+          layout->bitwidth(),
+          {layout->offsets()[0].value_or(0), layout->offsets()[1].value_or(0)},
+          layout->tiling(), layout->implicit_dim());
+      SmallVector<Layout> in_layouts(op->getNumOperands(), layout);
+      setLayout(op, in_layouts, layout);
+      return success();
+    }
   }
 
   LogicalResult infer(tpu::LoadOp op) {
