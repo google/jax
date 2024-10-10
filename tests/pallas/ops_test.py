@@ -810,7 +810,7 @@ class OpsTest(PallasBaseTest):
     # TODO(b/370578663): implement these lowerings on TPU
     if jtu.test_device_matches(["tpu"]) and fn in (
         jnp.abs, jnp.acos, jnp.acosh, jnp.asin, jnp.asinh, jnp.atan,
-        jnp.atanh, jnp.cbrt, jnp.cos, jnp.cosh, jnp.expm1, jnp.log1p,
+        jnp.atanh, jnp.cbrt, jnp.cos, jnp.cosh, jnp.expm1,
         jnp.sin, jnp.sinh, jnp.tan, lax.rsqrt,
     ):
       self.skipTest(f"{fn.__name__} not implemented on TPU")
