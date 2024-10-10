@@ -1146,6 +1146,37 @@ class TreePrefixErrorsTest(jtu.JaxTestCase):
     with self.assertRaisesRegex(ValueError, expected):
       raise e('in_axes')
 
+  def test_curly_braces_in_keys_no_children(self):
+    e, = prefix_errors({"{oops}": {}}, {})
+    expected = ("pytree structure error: different numbers of pytree children "
+                "at key path\n"
+                "    in_axes")
+    with self.assertRaisesRegex(ValueError, expected):
+      raise e('in_axes')
+
+  def test_curly_braces_in_keys_list_length(self):
+    e, = prefix_errors({"{oops}": []}, {"{oops}": [{}]})
+    expected = ("pytree structure error: different lengths of list "
+                "at key path\n"
+                r"    in_axes\['{oops}'\]")
+    with self.assertRaisesRegex(ValueError, expected):
+      raise e('in_axes')
+
+  def test_curly_braces_in_keys_different_lengths(self):
+    e, = prefix_errors({"{oops}": {}}, {"{oops}": 1})
+    expected = ("pytree structure error: different types at key path\n"
+                r"    in_axes\['{oops}'\]")
+    with self.assertRaisesRegex(ValueError, expected):
+      raise e('in_axes')
+
+  def test_curly_braces_in_keys_different_metadata(self):
+    e, = prefix_errors({"{oops}": {"{a}": 1}}, {"{oops}": {"{b}": 1}})
+    expected = ("pytree structure error: different pytree metadata "
+                "at key path\n"
+                r"    in_axes\['{oops}'\]")
+    with self.assertRaisesRegex(ValueError, expected):
+      raise e('in_axes')
+
 
 class TreeAliasTest(jtu.JaxTestCase):
   """Simple smoke-tests for tree_util aliases under jax.tree"""
