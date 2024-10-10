@@ -45,24 +45,6 @@ def make_disjunction_regexp(*parts: str) -> re.Pattern[str]:
   else:
     return re.compile("(" + "|".join(parts) + ")")
 
-# TODO(necula): Failures to be investigated (on GPU).
-_known_failures_gpu = make_disjunction_regexp(
-    # Failures on GPU due to failure to export custom call targets, these
-    # involve GPU custom call targets withoutbackwards compatibility tests.
-    "custom_linear_solve_",
-    "lu_",
-    "svd_",
-    "tridiagonal_solve_",
-)
-
-# Some primitive lowering rules need the GPU backend to be able to create
-# CUDA lowering.
-_skip_cuda_lowering_unless_have_gpus = make_disjunction_regexp(
-    "svd_", "lu_", "eigh_", "qr_", "custom_linear_", "tridiagonal_solve_",
-    # TODO(b/350111820): random should work once we enable FFI threefry2x32
-    "random_",
-)
-
 
 class PrimitiveTest(jtu.JaxTestCase):
 
@@ -104,10 +86,6 @@ class PrimitiveTest(jtu.JaxTestCase):
       self.skipTest("Eigenvalues are sorted and it is not correct to compare "
                     "decompositions for equality.")
 
-    if (jtu.device_under_test() == "gpu"
-        and _known_failures_gpu.search(harness.fullname)):
-      self.skipTest("failure to be investigated")
-
     if harness.params.get("enable_xla", False):
       self.skipTest("enable_xla=False is not relevant")
 
@@ -118,11 +96,9 @@ class PrimitiveTest(jtu.JaxTestCase):
     for l in harness.jax_unimplemented:
       if l.filter(dtype=harness.dtype):
         unimplemented_platforms = unimplemented_platforms.union(l.devices)
-    if (_skip_cuda_lowering_unless_have_gpus.search(harness.fullname)
-        and all(d.platform != "gpu" for d in self.devices)):
-      unimplemented_platforms.add("gpu")
 
-    logging.info("Harness is not implemented on %s", unimplemented_platforms)
+    if unimplemented_platforms:
+      logging.info("Harness is not implemented on %s", unimplemented_platforms)
 
     # Tolerances.
     tol = None
