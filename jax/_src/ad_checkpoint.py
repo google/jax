@@ -147,6 +147,8 @@ def save_from_both_policies(policy_1, policy_2):
   return policy
 
 
+# Please update the file docs/gradient-checkpointing.md with any new
+# policies to keep the doc in sync.
 checkpoint_policies = types.SimpleNamespace(
     everything_saveable=everything_saveable,
     nothing_saveable=nothing_saveable,
