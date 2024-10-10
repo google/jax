@@ -1897,6 +1897,10 @@ def _pjit_cached_lower_jaxpr_to_fun(ctx, name, jaxpr, effects, in_shardings,
   if func is None:
     arg_shardings = [None if is_unspecified(i) else i for i in in_shardings]
     result_shardings = [None if is_unspecified(o) else o for o in out_shardings]
+    arg_memory_kinds = [None if is_unspecified(i) else i.memory_kind
+                        for i in in_shardings]
+    result_memory_kinds = [None if is_unspecified(o) else o.memory_kind
+                           for o in out_shardings]
     # TODO(b/228598865): inlined calls cannot have shardings set directly on the
     # inputs or outputs because they are lost during MLIR->HLO conversion.
     # using_sharding_annotation=False means we add an identity operation instead.
@@ -1904,7 +1908,9 @@ def _pjit_cached_lower_jaxpr_to_fun(ctx, name, jaxpr, effects, in_shardings,
         mod_ctx, name, jaxpr, effects, ctx.name_stack,
         arg_shardings=arg_shardings, result_shardings=result_shardings,
         use_sharding_annotations=False, api_name=api_name,
-        arg_layouts=in_layouts, result_layouts=out_layouts)
+        arg_layouts=in_layouts, result_layouts=out_layouts,
+        arg_memory_kinds=arg_memory_kinds,
+        result_memory_kinds=result_memory_kinds)
     mod_ctx.cached_primitive_lowerings[key] = func
   return func
 
