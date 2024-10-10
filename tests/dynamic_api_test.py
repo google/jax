@@ -1759,6 +1759,24 @@ class JumbleTest(jtu.JaxTestCase):
       self.assertRegex(str(result_jumble.aval), regex)
       self.assertAllClose(result_jumble.data.shape, (3, 512, 128))
 
+@jtu.with_config(jax_dynamic_shapes=True)
+class TestCleanUpDeadVariables(jtu.JaxTestCase):
+
+  def test_jaxpr_generation(self):
+
+    @jax.jit
+    def add_ones_dynamic(size):
+      a = jnp.ones(size)
+      b = jnp.ones(size)
+      return a + b
+
+    # Even though the program is not a valid HLO program
+    # it shouldn't trigger the KeyError in lowering.
+    msg = 'can.t be translated to XLA HLO'
+    with self.assertRaisesRegex(Exception, msg):
+      add_ones_dynamic(1)
+
+
 def jumble_map(f):
   def mapped(*jumbles):
     return jax.vmap(f, in_axes=batching.jumble_axis, out_axes=batching.jumble_axis,

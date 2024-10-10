@@ -3391,8 +3391,22 @@ def last_used(jaxpr: Jaxpr) -> dict[Var, JaxprEqn | None]:
   """Returns a mapping from every var in jaxpr to what equation uses it last."""
   last_used: dict[Var, JaxprEqn | None] = {
       v: None for v in jaxpr.outvars if not isinstance(v, Literal)}
+  for out in jaxpr.outvars:
+    for elem in out.aval.shape:
+      if not isinstance(elem, Literal):
+        last_used[elem] = None
+
   for eqn in reversed(jaxpr.eqns):
+    for v in eqn.outvars:
+      for elem in v.aval.shape:
+        if not isinstance(elem, Literal) and elem not in last_used:
+          last_used[elem] = eqn
+
     for v in eqn.invars:
+      for elem in v.aval.shape:
+        if not isinstance(elem, Literal) and elem not in last_used:
+          last_used[elem] = eqn
+
       if not isinstance(v, Literal) and v not in last_used:
         last_used[v] = eqn
   return last_used
