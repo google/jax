@@ -22,6 +22,8 @@ from jax._src.pallas.mosaic.core import semaphore
 from jax._src.pallas.mosaic.core import SemaphoreType
 from jax._src.pallas.mosaic.core import TPUMemorySpace
 from jax._src.pallas.mosaic.core import TPUCompilerParams
+from jax._src.pallas.mosaic.core import runtime_assert_enabled
+from jax._src.pallas.mosaic.core import _ENABLE_RUNTIME_ASSERT as enable_runtime_assert
 from jax._src.pallas.mosaic.lowering import LoweringException
 from jax._src.pallas.mosaic.pipeline import ARBITRARY
 from jax._src.pallas.mosaic.pipeline import BufferedRef

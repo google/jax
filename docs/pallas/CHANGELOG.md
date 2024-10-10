@@ -32,6 +32,8 @@ Remember to align the itemized text with the first line of an item within a list
   * {func}`jax.experimental.pallas.pallas_call` now accepts `scratch_shapes`,
     a PyTree specifying backend-specific temporary objects needed by the
     kernel, for example, buffers, synchronization primitives etc.
+  * {func}`checkify.check` can now be used to insert runtime asserts when
+    pallas_call is called with `debug=True`.
 
 ## Released with jax 0.4.33 (September 16, 2024)
 

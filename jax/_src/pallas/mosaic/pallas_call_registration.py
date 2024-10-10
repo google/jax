@@ -151,7 +151,7 @@ def pallas_call_tpu_lowering_rule(
   mlir_ctx.load_all_available_dialects()
   tpu.register_dialect(mlir_ctx)
   def lower_module(for_verification: bool):
-    if for_verification:
+    if for_verification or tpu_core.runtime_assert_enabled():
       mlir_ctx.allow_unregistered_dialects = True
     with mlir_ctx, ir.Location.unknown(mlir_ctx):
       dimension_semantics = mosaic_params.get("dimension_semantics", None)
