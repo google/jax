@@ -201,16 +201,16 @@ def checkpoint(fun: Callable, *, prevent_cse: bool = True,
       from the default of storing all intermediate linearization points to
       recomputing them. Its arguments and return value should be arrays,
       scalars, or (nested) standard Python containers (tuple/list/dict) thereof.
-    prevent_cse: Optional, boolean keyword-only argument indicating whether to
-      prevent common subexpression elimination (CSE) optimizations in the HLO
-      generated from differentiation. This CSE prevention has costs because it
-      can foil other optimizations, and because it can incur high overheads on
-      some backends, especially GPU. The default is True because otherwise,
-      under a :func:`~jax.jit` or :func:`~jax.pmap`, CSE can defeat the purpose
-      of this decorator.
-      But in some settings, like when used inside a :func:`~jax.lax.scan`, this
-      CSE prevention mechanism is unnecessary, in which case ``prevent_cse`` can
-      be set to False.
+    prevent_cse: Optional boolean, default True. Indicates whether to apply
+      :func:`~jax.lax.optimization_barrier` to the input of rematerialized
+      computation. The main purpose of these optimization barriers is to prevent
+      common subexpression elimination (CSE) optimizations by XLA. CSE can be
+      undesirable because it can effectively undo rematerialization. However,
+      these optimization barriers can have other costs because they can foil
+      other optimizations, like collective pipelining. In some settings, like
+      when used inside a :func:`~jax.lax.scan`, or when the forward and backward
+      passes are in distinct XLA computations, this CSE prevention mechanism is
+      unnecessary, in which case ``prevent_cse`` can be set to False.
     static_argnums: Optional, int or sequence of ints, a keyword-only argument
       indicating which argument values on which to specialize for tracing and
       caching purposes. Specifying arguments as static can avoid
