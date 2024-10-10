@@ -15,6 +15,7 @@ repos:
   - id: check-merge-conflict
   - id: check-toml
   - id: check-yaml
+    exclude: examples/k8s/svc-acct.yaml
   - id: end-of-file-fixer
     # only include python files
     files: \.py$

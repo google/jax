@@ -1,0 +1,105 @@
+name: Distributed run using K8s Jobset
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: write # to cancel previous workflows
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash -ex -o pipefail {0}
+
+jobs:
+
+  distributed-initialize:
+    runs-on: ubuntu-22.04
+    outputs:
+      TAG: ${{ steps.metadata.outputs.tags }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # ratchet:actions/checkout@v4
+        with:
+          path: jax
+
+      - name: Start Minikube cluster
+        uses: medyagh/setup-minikube@d8c0eb871f6f455542491d86a574477bd3894533 # ratchet:medyagh/setup-minikube@v0.0.18
+
+      - name: Install K8s Jobset
+        run: |
+          kubectl apply --server-side -f https://github.com/kubernetes-sigs/jobset/releases/download/v0.6.0/manifests.yaml
+
+      - name: Build image
+        run: |
+          cat > Dockerfile <<EOF
+          FROM ubuntu:22.04
+          ADD jax /opt/jax
+          RUN apt-get update && apt-get install -y python-is-python3 python3-pip
+          RUN pip install -e /opt/jax[k8s]
+          EOF
+
+          minikube image build -t local/jax:latest .
+
+      - name: Create service account for K8s job introspection
+        run: |
+          kubectl apply -f jax/examples/k8s/svc-acct.yaml
+
+      - name: Prepare test job
+        run: |
+          export VERSION=v4.44.3
+          export BINARY=yq_linux_amd64
+          wget https://github.com/mikefarah/yq/releases/download/${VERSION}/${BINARY} -O /usr/bin/yq && chmod +x /usr/bin/yq
+
+          cat jax/examples/k8s/example.yaml |\
+            yq '.spec.replicatedJobs[0].template.spec.template.spec.containers[0].image = "local/jax:latest"' |\
+            yq '.spec.replicatedJobs[0].template.spec.template.spec.containers[0].imagePullPolicy = "Never"' |\
+            tee example.yaml
+
+      - name: Submit test job
+        run: |
+          kubectl apply -f example.yaml
+
+      - name: Check job status
+        shell: bash -e -o pipefail {0}
+        run: |
+          while true; do
+            status=$(kubectl get jobset example -o yaml | yq .status.conditions[0].type)
+            timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+            echo "[$timestamp] Checking job status..."
+
+            if [ "$status" == "Completed" ]; then
+              echo "[$timestamp] Job has completed successfully!"
+              exit 0
+            elif [ "$status" == "Failed" ]; then
+              echo "[$timestamp] Job has failed!"
+              exit 1
+            else
+              echo "[$timestamp] Job is still running. Current pod status:"
+              kubectl get pods --no-headers
+              echo "[$timestamp] Waiting for 3 seconds before checking again..."
+              sleep 3
+            fi
+          done
+
+      - name: Examine individual pod outputs
+        if: "!cancelled()"
+        run: |
+          set +x
+          kubectl get pods --no-headers | awk '{print $1}' | while read -s pod; do
+            echo "========================================"
+            echo "Pod $pod output:"
+            echo "----------------------------------------"
+            kubectl logs $pod
+            echo "========================================"
+          done

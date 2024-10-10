@@ -35,15 +35,17 @@ class K8sCluster(clusters.ClusterEnv):
       try:
         import kubernetes as k8s  # pytype: disable=import-error
       except ImportError as e:
-        warnings.warn(textwrap.fill(
-            "Kubernetes environment detected, but the `kubernetes` package is "
-            "not installed to enable automatic bootstrapping in this "
-            "environment. To enable automatic boostrapping, please install "
-            "jax with the [k8s] extra. For example:"
-            "    pip install jax[k8s]"
-            " OR"
-            "    pip install jax[k8s,<MORE-EXTRAS...>]"
-        ))
+        warnings.warn(
+          '\n'.join([
+            textwrap.fill(
+              "Kubernetes environment detected, but the `kubernetes` package "
+              "is not installed to enable automatic bootstrapping in this "
+              "environment. To enable automatic boostrapping, please install "
+              "jax with the [k8s] extra. For example:"),
+            "    pip install jax[k8s]",
+            "    pip install jax[k8s,<MORE-EXTRAS...>]",
+          ])
+        )
         return False
 
       k8s.config.load_incluster_config()

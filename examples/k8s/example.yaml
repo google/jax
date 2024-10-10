@@ -1,0 +1,40 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: example
+spec:
+  replicatedJobs:
+  - name: workers
+    template:
+      spec:
+        parallelism: 2
+        completions: 2
+        backoffLimit: 0
+        template:
+          spec:
+            serviceAccountName: training-job-sa
+            restartPolicy: Never
+            imagePullSecrets: 
+            - name: null
+            containers:
+            - name: main
+              image: PLACEHOLDER
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: 900m
+                  nvidia.com/gpu: null
+                limits:
+                  cpu: 1
+                  nvidia.com/gpu: null
+              command: 
+                - python
+              args:
+                - -c
+                - |
+                  import jax
+                  jax.distributed.initialize()
+                  print(jax.devices())
+                  print(jax.local_devices())
+                  assert jax.process_count() > 1
+                  assert len(jax.devices()) > len(jax.local_devices())
