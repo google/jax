@@ -223,15 +223,6 @@ class Exported:
     # do not want the entire serialized module to end up in locations.
     return f"Exported(fun_name={self.fun_name}, ...)"
 
-  # For backwards compatibility
-  # TODO(necula): remove after September 2024.
-  @property
-  def in_shardings(self):
-    return self.in_shardings_hlo
-  @property
-  def out_shardings(self):
-    return self.out_shardings_hlo
-
   def in_shardings_jax(
       self,
       mesh: sharding.Mesh) -> Sequence[sharding.Sharding | None]:
