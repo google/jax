@@ -1044,21 +1044,25 @@ def _mapped_axis_size(fn, tree, vals, dims, name):
   args, kwargs = tree_unflatten(tree, vals)
   try:
     ba = inspect.signature(fn).bind(*args, **kwargs)
+    signature_parameters: list[str] = list(ba.signature.parameters.keys())
   except (TypeError, ValueError):
-    ba = None
-  if ba is None:
-    args_paths = [f'args{keystr(p)} '
-                  f'of type {_get_argument_type(x)}'
-                  for p, x in generate_key_paths(args)]
-    kwargs_paths = [f'kwargs{keystr(p)} '
-                    f'of type {_get_argument_type(x)}'
-                    for p, x in generate_key_paths(kwargs)]
-    key_paths = [*args_paths, *kwargs_paths]
-  else:
-    key_paths = [f'argument {name}{keystr(p)} '
-                 f'of type {_get_argument_type(x)}'
-                 for name, arg in ba.arguments.items()
-                 for p, x in generate_key_paths(arg)]
+    signature_parameters = None
+
+  def arg_name(i, key_path):
+    if signature_parameters is None:
+      return f"args{keystr(key_path)}"
+    else:
+      return f"argument {signature_parameters[i]}"
+
+  args_paths = [
+    f"{arg_name(i, p)} of type {_get_argument_type(x)}"
+    for i, (p, x) in enumerate(generate_key_paths(args))
+  ]
+  kwargs_paths = [
+    f"kwargs{keystr(p)} of type {_get_argument_type(x)}"
+    for p, x in generate_key_paths(kwargs)
+  ]
+  key_paths = [*args_paths, *kwargs_paths]
   all_sizes = [_get_axis_size(name, np.shape(x), d) if d is not None else None
                for x, d in zip(vals, dims)]
   size_counts = collections.Counter(s for s in all_sizes if s is not None)
