@@ -29,6 +29,11 @@ def rms_norm_ref(x, eps=1e-5):
 
 
 class RmsNormTests(jtu.JaxTestCase):
+  def setUp(self):
+    super().setUp()
+    if not jtu.test_device_matches(["cpu"]):
+      self.skipTest("Unsupported platform")
+
   def test_basic(self):
     x = jnp.linspace(-0.5, 0.5, 15)
     self.assertAllClose(rms_norm.rms_norm(x), rms_norm_ref(x))

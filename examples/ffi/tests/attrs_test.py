@@ -24,6 +24,11 @@ jax.config.parse_flags_with_absl()
 
 
 class AttrsTests(jtu.JaxTestCase):
+  def setUp(self):
+    super().setUp()
+    if not jtu.test_device_matches(["cpu"]):
+      self.skipTest("Unsupported platform")
+
   def test_array_attr(self):
     self.assertEqual(attrs.array_attr(5), jnp.arange(5).sum())
     self.assertEqual(attrs.array_attr(3), jnp.arange(3).sum())
