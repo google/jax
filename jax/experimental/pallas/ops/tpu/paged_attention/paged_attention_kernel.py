@@ -461,7 +461,7 @@ def paged_attention(
     raise ValueError("`page_indices` and `q` must have the same batch size")
   if lengths.dtype != jnp.int32:
     raise ValueError(
-        "The dtype of `lengths` must be int32. Got {lengths.dtype}"
+        f"The dtype of `lengths` must be int32. Got {lengths.dtype}"
     )
 
   # TODO(dinghua): get the actual cores per chip once there's an official API.
