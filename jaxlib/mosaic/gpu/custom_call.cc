@@ -37,8 +37,11 @@ limitations under the License.
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/synchronization/mutex.h"
 #include "llvm/include/llvm/ADT/SmallVector.h"
+#include "llvm/include/llvm/MC/MCSubtargetInfo.h"
+#include "llvm/include/llvm/MC/TargetRegistry.h"
 #include "llvm/include/llvm/Support/CodeGen.h"
 #include "llvm/include/llvm/Support/TargetSelect.h"
 #include "mlir/include/mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
@@ -89,8 +92,82 @@ namespace {
 using MosaicInitFunc = void(void****);
 using MosaicHostFunc = void(void**);
 
+absl::StatusOr<std::pair<std::string, std::string>> GetSmAndPtxIsaVersion() {
+  // Assumes driver has been initialized and a context exists. XLA already has
+  // some utilities to query this, but we try to stay runtime-agnostic, so we
+  // build our own here.
+  CUdevice device;
+  if (cuCtxGetDevice(&device) != CUDA_SUCCESS) {
+    return absl::InternalError("Failed to get device for current context");
+  }
+  int major = 0;
+  if (cuDeviceGetAttribute(&major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+                           device) != CUDA_SUCCESS) {
+    return absl::InternalError("Failed to get major compute capability");
+  }
+  int minor = 0;
+  if (cuDeviceGetAttribute(&minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+                           device) != CUDA_SUCCESS) {
+    return absl::InternalError("Failed to get minor compute capability");
+  }
+  // "base" compute capability as reported by the driver.
+  // For example for a Hopper H200 GPU this would return sm_90, and never
+  // sm_90a.
+  std::string sm_base = "sm_" + std::to_string(major) + std::to_string(minor);
+
+  const std::string triple = "nvptx64-nvidia-cuda";
+  std::string error;
+  const llvm::Target* target =
+      llvm::TargetRegistry::lookupTarget(triple, error);
+  if (target == nullptr) {
+    return absl::InternalError(absl::StrFormat(
+        "Failed to lookup LLVM target based on triple %s: %s", triple, error));
+  }
+
+  // Check if there's a variant of the current SM that ends in "a"
+  // (has architecture-specific capabilities)
+  const char* sm_arch_specific = nullptr;
+  {
+    // generic subtarget
+    const llvm::MCSubtargetInfo* subtarget_info =
+        target->createMCSubtargetInfo(triple, "", "");
+    if (subtarget_info == nullptr) {
+      return absl::InternalError(absl::StrFormat(
+          "Failed to get generic LLVM subtarget info for triple %s", triple));
+    }
+    for (const llvm::SubtargetSubTypeKV& subtype :
+         subtarget_info->getAllProcessorDescriptions()) {
+      if (absl::StartsWith(subtype.Key, sm_base) &&
+          absl::EndsWith(subtype.Key, "a")) {
+        sm_arch_specific = subtype.Key;
+        break;
+      }
+    }
+  }
+
+  const std::string sm = sm_arch_specific ? sm_arch_specific : sm_base;
+
+  const llvm::MCSubtargetInfo* subtarget_info =
+      target->createMCSubtargetInfo(triple, sm, "");
+  if (subtarget_info == nullptr) {
+    return absl::InternalError(
+        absl::StrFormat("Failed to get LLVM subtarget info for sm %s", sm));
+  }
+
+  for (const llvm::SubtargetFeatureKV& feature :
+       subtarget_info->getEnabledProcessorFeatures()) {
+    if (absl::StartsWith(feature.Key, "ptx")) {
+      std::string ptx_isa = feature.Key;
+      return std::make_pair(sm, ptx_isa);
+    }
+  }
+  return absl::InternalError(absl::StrFormat(
+      "Failed to find a PTX ISA LLVM subtarget feature for %s", sm));
+}
+
 mlir::FailureOr<mlir::OpPassManager> GetPassPipeline(
-    mlir::MLIRContext* ctx, mlir::gpu::CompilationTarget target) {
+    mlir::MLIRContext* ctx, mlir::gpu::CompilationTarget target,
+    const std::string& sm, const std::string& ptx_isa) {
   static bool register_once = []() {
     llvm::InitializeNativeTarget();
     llvm::InitializeNativeTarget();
@@ -131,7 +208,9 @@ mlir::FailureOr<mlir::OpPassManager> GetPassPipeline(
         convert-scf-to-cf,
         convert-nvvm-to-llvm,
         expand-strided-metadata,
-        nvvm-attach-target{O=3 chip=sm_90a fast=false features=+ptx80 ftz=false  module= triple=nvptx64-nvidia-cuda},
+        nvvm-attach-target{O=3 chip=)" +
+      sm + R"( fast=false features=+)" + ptx_isa +
+      R"( ftz=false  module= triple=nvptx64-nvidia-cuda},
         lower-affine,
         convert-arith-to-llvm{index-bitwidth=0},
         convert-index-to-llvm{index-bitwidth=64},
@@ -251,7 +330,8 @@ class TemporaryDirectory {
   std::string path;
 };
 
-void DumpCompilationOutput(mlir::ModuleOp module) {
+void DumpCompilationOutput(mlir::ModuleOp module, const std::string& sm,
+                           const std::string& ptx_isa) {
   bool dump_ptx = getenv("MOSAIC_GPU_DUMP_PTX") != nullptr;
   bool dump_ptxas = getenv("MOSAIC_GPU_DUMP_PTXAS") != nullptr;
   bool dump_sass = getenv("MOSAIC_GPU_DUMP_SASS") != nullptr;
@@ -260,8 +340,8 @@ void DumpCompilationOutput(mlir::ModuleOp module) {
   }
 
   module = module.clone();  // Prevent accidental modification.
-  auto passes = GetPassPipeline(module.getContext(),
-                                mlir::gpu::CompilationTarget::Assembly);
+  auto passes = GetPassPipeline(
+      module.getContext(), mlir::gpu::CompilationTarget::Assembly, sm, ptx_isa);
   if (mlir::failed(passes) ||
       mlir::failed(RunPasses(std::move(*passes), module))) {
     return;
@@ -297,7 +377,7 @@ void DumpCompilationOutput(mlir::ModuleOp module) {
     // Run ptxas to generate SASS.
     std::vector<const char*> ptxas_args = {
         "ptxas",          "--opt-level",   "3",
-        "--gpu-name",     "sm_90a",        "--output-file",
+        "--gpu-name",     sm.c_str(),      "--output-file",
         elf_path.c_str(), ptx_path.c_str()};
     if (dump_ptxas) {
       ptxas_args.push_back("-v");
@@ -321,9 +401,15 @@ void DumpCompilationOutput(mlir::ModuleOp module) {
 
 absl::StatusOr<std::unique_ptr<mlir::ExecutionEngine>> Compile(
     mlir::ModuleOp module) {
-  DumpCompilationOutput(module);
-  auto passes = GetPassPipeline(module.getContext(),
-                                mlir::gpu::CompilationTarget::Binary);
+  auto sm_and_ptx_isa = GetSmAndPtxIsaVersion();
+  if (!sm_and_ptx_isa.ok()) {
+    return sm_and_ptx_isa.status();
+  }
+  const std::string sm = sm_and_ptx_isa.value().first;
+  const std::string ptx_isa = sm_and_ptx_isa.value().second;
+  DumpCompilationOutput(module, sm, ptx_isa);
+  auto passes = GetPassPipeline(
+      module.getContext(), mlir::gpu::CompilationTarget::Binary, sm, ptx_isa);
   if (mlir::failed(passes)) {
     return absl::InternalError("Failed to construct pass pipeline");
   }
