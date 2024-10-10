@@ -25,8 +25,8 @@ import threading
 from typing import Any, Generic, NamedTuple, NoReturn, Protocol, TypeVar, cast
 
 from jax._src import lib
+from jax._src.lib import guard_lib
 from jax._src.lib import jax_jit
-from jax._src.lib import transfer_guard_lib
 from jax._src.lib import xla_client
 from jax._src import logging_config
 
@@ -1596,7 +1596,7 @@ jax_xla_profile_version = int_state(
 @contextlib.contextmanager
 def explicit_device_put_scope() -> Iterator[None]:
   """Indicates that the current context is an explicit device_put*() call."""
-  state = transfer_guard_lib.thread_local_state()
+  state = guard_lib.thread_local_state()
   prev = state.explicit_device_put
   state.explicit_device_put = True
   try:
@@ -1607,7 +1607,7 @@ def explicit_device_put_scope() -> Iterator[None]:
 @contextlib.contextmanager
 def explicit_device_get_scope() -> Iterator[None]:
   """Indicates that the current context is an explicit device_get() call."""
-  state = transfer_guard_lib.thread_local_state()
+  state = guard_lib.thread_local_state()
   prev = state.explicit_device_get
   state.explicit_device_get = True
   try:
@@ -1616,19 +1616,19 @@ def explicit_device_get_scope() -> Iterator[None]:
     state.explicit_device_get = prev
 
 def _update_transfer_guard(state, key, val):
-  """Applies the transfer guard level within transfer_guard_lib."""
+  """Applies the transfer guard level within guard_lib."""
   if val is None:
     setattr(state, key, None)
   elif val == 'allow':
-    setattr(state, key, transfer_guard_lib.TransferGuardLevel.ALLOW)
+    setattr(state, key, guard_lib.TransferGuardLevel.ALLOW)
   elif val == 'log':
-    setattr(state, key, transfer_guard_lib.TransferGuardLevel.LOG)
+    setattr(state, key, guard_lib.TransferGuardLevel.LOG)
   elif val == 'disallow':
-    setattr(state, key, transfer_guard_lib.TransferGuardLevel.DISALLOW)
+    setattr(state, key, guard_lib.TransferGuardLevel.DISALLOW)
   elif val == 'log_explicit':
-    setattr(state, key, transfer_guard_lib.TransferGuardLevel.LOG_EXPLICIT)
+    setattr(state, key, guard_lib.TransferGuardLevel.LOG_EXPLICIT)
   elif val == 'disallow_explicit':
-    setattr(state, key, transfer_guard_lib.TransferGuardLevel.DISALLOW_EXPLICIT)
+    setattr(state, key, guard_lib.TransferGuardLevel.DISALLOW_EXPLICIT)
   else:
     assert False, f'Invalid transfer guard level {val}'
 
@@ -1637,45 +1637,46 @@ transfer_guard_host_to_device = optional_enum_state(
     enum_values=[
         'allow', 'log', 'disallow', 'log_explicit', 'disallow_explicit'
     ],
-    # The default is applied by transfer_guard_lib. Use None here to avoid
-    # accidentally overriding --jax_transfer_guard.
+    # The default is applied by guard_lib. Use None here to avoid accidentally
+    # overriding --jax_transfer_guard.
     default=None,
     help=('Select the transfer guard level for host-to-device transfers. '
           'Default is "allow".'),
     update_global_hook=lambda val: _update_transfer_guard(
-        transfer_guard_lib.global_state(), 'host_to_device', val),
+        guard_lib.global_state(), 'host_to_device', val),
     update_thread_local_hook=lambda val: _update_transfer_guard(
-        transfer_guard_lib.thread_local_state(), 'host_to_device', val))
+        guard_lib.thread_local_state(), 'host_to_device', val))
 
 transfer_guard_device_to_device = optional_enum_state(
     name='jax_transfer_guard_device_to_device',
     enum_values=[
         'allow', 'log', 'disallow', 'log_explicit', 'disallow_explicit'
     ],
-    # The default is applied by transfer_guard_lib. Use None here to avoid
-    # accidentally overriding --jax_transfer_guard.
+    # The default is applied by guard_lib. Use None here to avoid accidentally
+    # overriding --jax_transfer_guard.
     default=None,
     help=('Select the transfer guard level for device-to-device transfers. '
           'Default is "allow".'),
     update_global_hook=lambda val: _update_transfer_guard(
-        transfer_guard_lib.global_state(), 'device_to_device', val),
+        guard_lib.global_state(), 'device_to_device', val),
     update_thread_local_hook=lambda val: _update_transfer_guard(
-        transfer_guard_lib.thread_local_state(), 'device_to_device', val))
+        guard_lib.thread_local_state(), 'device_to_device', val))
 
 transfer_guard_device_to_host = optional_enum_state(
     name='jax_transfer_guard_device_to_host',
     enum_values=[
         'allow', 'log', 'disallow', 'log_explicit', 'disallow_explicit'
     ],
-    # The default is applied by transfer_guard_lib. Use None here to avoid
+    # The default is applied by guard_lib. Use None here to avoid
     # accidentally overriding --jax_transfer_guard.
     default=None,
     help=('Select the transfer guard level for device-to-host transfers. '
           'Default is "allow".'),
     update_global_hook=lambda val: _update_transfer_guard(
-        transfer_guard_lib.global_state(), 'device_to_host', val),
+        guard_lib.global_state(), 'device_to_host', val
+    ),
     update_thread_local_hook=lambda val: _update_transfer_guard(
-        transfer_guard_lib.thread_local_state(), 'device_to_host', val))
+        guard_lib.thread_local_state(), 'device_to_host', val))
 
 def _update_all_transfer_guard_global(val):
   for name in ('jax_transfer_guard_host_to_device',
@@ -1688,8 +1689,8 @@ _transfer_guard = optional_enum_state(
     enum_values=[
         'allow', 'log', 'disallow', 'log_explicit', 'disallow_explicit'
     ],
-    # The default is applied by transfer_guard_lib. Use None here to avoid
-    # accidentally overriding --jax_transfer_guard_*.
+    # The default is applied by guard_lib. Use None here to avoid accidentally
+    # overriding --jax_transfer_guard_*.
     default=None,
     help=('Select the transfer guard level for all transfers. This option is '
           'set-only; the transfer guard level for a specific direction should '
@@ -1717,6 +1718,52 @@ def transfer_guard(new_val: str) -> Iterator[None]:
     stack.enter_context(_transfer_guard(new_val))
     yield
 
+
+if lib.xla_extension_version < 291:
+
+  def array_garbage_collection_guard(_val):
+    raise NotImplementedError(
+        'jaxlib version is too low for garbage collection guard'
+    )
+
+else:
+  def _update_garbage_collection_guard(state, key, val):
+    """Applies the transfer guard level within guard_lib."""
+    if val is None:
+      setattr(state, key, None)
+    elif val == 'allow':
+      setattr(state, key, guard_lib.GarbageCollectionGuardLevel.ALLOW)
+    elif val == 'log':
+      setattr(state, key, guard_lib.GarbageCollectionGuardLevel.LOG)
+    elif val == 'fatal':
+      setattr(state, key, guard_lib.GarbageCollectionGuardLevel.FATAL)
+    else:
+      assert False, f'Invalid garbage collection guard level {val}'
+
+  array_garbage_collection_guard = optional_enum_state(
+      name='jax_array_garbage_collection_guard',
+      enum_values=['allow', 'log', 'fatal'],
+      # The default is applied by guard_lib.
+      default=None,
+      help=(
+          'Select garbage collection guard level for "jax.Array" objects.\nThis'
+          ' option can be used to control what happens when a "jax.Array"'
+          ' object is garbage collected. It is desirable for "jax.Array"'
+          ' objects to be freed by Python reference couting rather than garbage'
+          ' collection in order to avoid device memory being held by the arrays'
+          ' until garbage collection occurs.\n\nValid values are:\n * "allow":'
+          ' do not log garbage collection of "jax.Array" objects.\n * "log":'
+          ' log an error when a "jax.Array" is garbage collected.\n * "fatal":'
+          ' fatal error if a "jax.Array" is garbage collected.\nDefault is'
+          ' "allow".'
+      ),
+      update_global_hook=lambda val: _update_garbage_collection_guard(
+          guard_lib.global_state(), 'garbage_collect_array', val
+      ),
+      update_thread_local_hook=lambda val: _update_garbage_collection_guard(
+          guard_lib.thread_local_state(), 'garbage_collect_array', val
+      ),
+  )
 
 def _update_debug_log_modules(module_names_str: str | None):
   logging_config.disable_all_debug_logging()

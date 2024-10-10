@@ -1200,6 +1200,11 @@ jax_multiplatform_test(
 )
 
 jax_multiplatform_test(
+    name = "garbage_collection_guard_test",
+    srcs = ["garbage_collection_guard_test.py"],
+)
+
+jax_multiplatform_test(
     name = "name_stack_test",
     srcs = ["name_stack_test.py"],
 )
