@@ -352,8 +352,7 @@ def _bcast_select_n(pred, *cases):
     pred = lax.broadcast_in_dim(pred, np.shape(cases[0]), idx)
   return lax.select_n(pred, *cases)
 
-def _cond_batching_rule(spmd_axis_name, axis_size, axis_name, main_type, args,
-                        dims, branches):
+def _cond_batching_rule(axis_data, main_type, args, dims, branches):
   index, *ops = args
   index_dim, *op_dims = dims
   # TODO(sharadmv): clean this up by adding a specific blocklist
@@ -375,15 +374,14 @@ def _cond_batching_rule(spmd_axis_name, axis_size, axis_name, main_type, args,
     # optimizations to XLA.
     # TODO(mattjj,frostig): assumes branches are side-effect-free, revise!
     index, *ops = (
-        batching.bdim_at_front(x, d, axis_size) for x, d in zip(args, dims))
+        batching.bdim_at_front(x, d, axis_data.size) for x, d in zip(args, dims))
 
     in_batched  = [True] * len(branches[0].in_avals)
     out_batched = [True] * len(branches[0].out_avals)
 
     branches_batched = [
         batching.batch_jaxpr(
-            jaxpr, axis_size, in_batched, out_batched, axis_name, spmd_axis_name,
-            main_type)[0]
+            jaxpr, axis_data, in_batched, out_batched, main_type)[0]
         for jaxpr in branches]
 
     branch_outs = []
@@ -401,13 +399,11 @@ def _cond_batching_rule(spmd_axis_name, axis_size, axis_name, main_type, args,
            for b, x, d in zip(ops_bat, ops, op_dims)]
 
     branches_out_bat = [
-        batching.batch_jaxpr(jaxpr, axis_size, ops_bat, False, axis_name,
-                             spmd_axis_name, main_type)[1]
+        batching.batch_jaxpr(jaxpr, axis_data, ops_bat, False, main_type)[1]
         for jaxpr in branches]
     out_bat = [any(bat) for bat in zip(*branches_out_bat)]
     branches_batched = tuple(
-        batching.batch_jaxpr(jaxpr, axis_size, ops_bat, out_bat, axis_name,
-                             spmd_axis_name, main_type)[0]
+        batching.batch_jaxpr(jaxpr, axis_data, ops_bat, out_bat, main_type)[0]
         for jaxpr in branches)
 
     out_dims = [0 if b else batching.not_mapped for b in out_bat]
@@ -811,7 +807,7 @@ ad.primitive_jvps[cond_p] = _cond_jvp
 ad.reducing_transposes[cond_p] = _cond_transpose
 pe.custom_partial_eval_rules[cond_p] = _cond_partial_eval
 batching.spmd_axis_primitive_batchers[cond_p] = _cond_batching_rule
-batching.axis_primitive_batchers[cond_p] = partial(_cond_batching_rule, None)
+batching.axis_primitive_batchers[cond_p] = _cond_batching_rule
 xla.register_initial_style_primitive(cond_p)
 core.custom_typechecks[cond_p] = partial(_cond_typecheck, False)
 core.axis_substitution_rules[cond_p] = _cond_axis_substitution

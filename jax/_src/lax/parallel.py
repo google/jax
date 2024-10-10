@@ -536,8 +536,10 @@ def _reduction_batcher(prim, vals_in, dims_in, *, axes, axis_index_groups):
   return vals_out, [d if d is batching.not_mapped else 0 for d in dims_in]
 
 def _batched_reduction_collective(
-    prim, if_unmapped, axis_size, frame_name, _, vals_in, dims_in, axes,
+    prim, if_unmapped, axis_data, _, vals_in, dims_in, axes,
     axis_index_groups):
+  axis_size = axis_data.size
+  frame_name = axis_data.name
   assert prim.multiple_results
   assert frame_name in axes
   # Note that we have a choice here. We can either unfuse the reduction into one
@@ -765,7 +767,9 @@ def _ppermute_transpose_rule(t, x, perm, axis_name):
   inverse_perm = list(zip(dsts, srcs))
   return [ppermute(t, axis_name=axis_name, perm=inverse_perm)]
 
-def _ppermute_batcher(axis_size, frame_name, _, vals_in, dims_in, axis_name, perm):
+def _ppermute_batcher(axis_data, _, vals_in, dims_in, axis_name, perm):
+  axis_size = axis_data.size
+  frame_name = axis_data.name
   (v,), (d,) = vals_in, dims_in
   if not isinstance(axis_name, (tuple, list)):
     axis_name = (axis_name,)
@@ -799,7 +803,9 @@ def _pbroadcast_transpose_rule(t, x, source, axis_name):
   tsum = psum(t, axis_name)
   return [lax.select(is_source, lax.full_like(t, tsum), lax.full_like(t, 0))]
 
-def _pbroadcast_batcher(axis_size, frame_name, _, vals_in, dims_in, axis_name, source):
+def _pbroadcast_batcher(axis_data, _, vals_in, dims_in, axis_name, source):
+  axis_size = axis_data.size
+  frame_name = axis_data.name
   (v,), (d,) = vals_in, dims_in
   if not isinstance(axis_name, (tuple, list)):
     axis_name = (axis_name,)
@@ -914,9 +920,11 @@ def _all_to_all_batcher(vals_in, dims_in, *, axis_name, split_axis, concat_axis,
   )
   return result, d
 
-def _all_to_all_batched_collective(axis_size, frame_name, _, vals_in, dims_in,
+def _all_to_all_batched_collective(axis_data, _, vals_in, dims_in,
                                    axis_name, split_axis, concat_axis,
                                    axis_index_groups, tiled):
+  axis_size = axis_data.size
+  frame_name = axis_data.name
   if axis_index_groups is not None:
     raise NotImplementedError("Please open a feature request!")
   x, = vals_in
@@ -1157,9 +1165,11 @@ def _all_gather_batcher(vals_in, dims_in, *, all_gather_dimension, axis_name, ax
       tiled=tiled)
   return result, d
 
-def _all_gather_batched_collective(frame_size, frame_name, _, vals_in, dims_in,
+def _all_gather_batched_collective(axis_data, _, vals_in, dims_in,
                                    all_gather_dimension, axis_name,
                                    axis_index_groups, axis_size, tiled):
+  frame_size = axis_data.size
+  frame_name = axis_data.name
   if axis_index_groups is not None:
     raise NotImplementedError("axis_index_groups not supported in vmap")
   assert axis_size == frame_size, "axis size doesn't match"
@@ -1289,9 +1299,11 @@ def _reduce_scatter_batcher(vals_in, dims_in, *, scatter_dimension, axis_name,
       tiled=tiled)
   return result, d
 
-def _reduce_scatter_collective(frame_size, frame_name, _, vals_in, dims_in,
+def _reduce_scatter_collective(axis_data, _, vals_in, dims_in,
                                scatter_dimension, axis_name,
                                axis_index_groups, axis_size, tiled):
+  frame_size = axis_data.size
+  frame_name = axis_data.name
   if axis_index_groups is not None:
     raise NotImplementedError("axis_index_groups not supported in vmap")
   assert axis_size == frame_size, "axis size doesn't match"
@@ -1537,7 +1549,9 @@ def _pgather_batcher(vals_in, dims_in, *, axes):
   else:
     assert False  # This shouldn't get called anyway
 
-def _pgather_collective_batcher(axis_size, frame_name, _, vals_in, dims_in, *, axes):
+def _pgather_collective_batcher(axis_data, _, vals_in, dims_in, *, axes):
+  axis_size = axis_data.size
+  frame_name = axis_data.name
   src, idx = vals_in
   dsrc, didx = dims_in
   if dsrc is batching.not_mapped:

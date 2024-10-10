@@ -921,18 +921,16 @@ def _custom_vjp_call_jaxpr_jvp(
 ad.primitive_jvps[custom_vjp_call_jaxpr_p] = _custom_vjp_call_jaxpr_jvp
 
 def _custom_vjp_call_jaxpr_vmap(
-    spmd_axis_name, axis_size, axis_name, main_type, args, in_dims, *,
+    axis_data, main_type, args, in_dims, *,
     fun_jaxpr: core.ClosedJaxpr,
     fwd_jaxpr_thunk: Callable[..., tuple[core.Jaxpr, Sequence[Any]]],
     num_consts: int, bwd: Callable, out_trees: Callable, symbolic_zeros: bool):
   args = [batching.moveaxis(x, d, 0) if d is not not_mapped and d != 0
           else x for x, d in zip(args, in_dims)]
-
   in_batched = [d is not not_mapped for d in in_dims]
   _, args_batched = split_list(in_batched, [num_consts])
   batched_fun_jaxpr, out_batched = batching.batch_jaxpr(
-      fun_jaxpr, axis_size, in_batched, False, axis_name, spmd_axis_name,
-      main_type)
+      fun_jaxpr, axis_data, in_batched, False, main_type)
   out_dims1 = [0 if b else not_mapped for b in out_batched]
   out_dims2 = []
 
@@ -940,16 +938,14 @@ def _custom_vjp_call_jaxpr_vmap(
   def batched_fwd_jaxpr_thunk(*zeros):
     fwd_jaxpr = core.ClosedJaxpr(*fwd_jaxpr_thunk(*zeros))  # consts can be tracers
     batched_fwd_jaxpr, out_batched = batching.batch_jaxpr(
-        fwd_jaxpr, axis_size, args_batched, False, axis_name, spmd_axis_name,
-        main_type)
+        fwd_jaxpr, axis_data, args_batched, False, main_type)
     out_dims2.append([0 if b else not_mapped for b in out_batched])
     return batched_fwd_jaxpr.jaxpr, batched_fwd_jaxpr.consts
 
   fwd_args_batched = [0 if b else not_mapped for b in args_batched]
   fwd_out_dims = lambda: out_dims2[0]
   batched_bwd = batching.batch_custom_vjp_bwd(
-      bwd, axis_name, axis_size, fwd_out_dims, fwd_args_batched, main_type,
-      spmd_axis_name)
+      bwd, axis_data, fwd_out_dims, fwd_args_batched, main_type)
 
   batched_outs = custom_vjp_call_jaxpr_p.bind(
       *args, fun_jaxpr=batched_fun_jaxpr,
@@ -959,8 +955,8 @@ def _custom_vjp_call_jaxpr_vmap(
   return batched_outs, out_dims
 batching.spmd_axis_primitive_batchers[custom_vjp_call_jaxpr_p] = \
     _custom_vjp_call_jaxpr_vmap
-batching.axis_primitive_batchers[custom_vjp_call_jaxpr_p] = partial(
-    _custom_vjp_call_jaxpr_vmap, None)
+batching.axis_primitive_batchers[custom_vjp_call_jaxpr_p] = \
+    _custom_vjp_call_jaxpr_vmap
 
 xla.register_initial_style_primitive(custom_vjp_call_jaxpr_p)
 
@@ -1532,7 +1528,7 @@ def _remat_opt_abstract_eval(*args, fwd_jaxpr: core.ClosedJaxpr, **_):
   return fwd_jaxpr.out_avals, fwd_jaxpr.effects
 
 def _remat_opt_vmap(
-    spmd_axis_name, axis_size, axis_name, main_type, args, in_dims,
+    axis_data, main_type, args, in_dims,
     *,
     num_consts: int,
     num_res: int,
@@ -1544,8 +1540,7 @@ def _remat_opt_vmap(
 
   in_batched = [d is not not_mapped for d in in_dims]
   batched_fwd_jaxpr, out_batched = batching.batch_jaxpr(
-      fwd_jaxpr, axis_size, in_batched, False,
-      axis_name, spmd_axis_name, main_type)
+      fwd_jaxpr, axis_data, in_batched, False, main_type)
   extra_consts = batched_fwd_jaxpr.consts
   batched_fwd_jaxpr = pe.close_jaxpr(
       pe.convert_constvars_jaxpr(batched_fwd_jaxpr.jaxpr))
@@ -1557,8 +1552,7 @@ def _remat_opt_vmap(
   def batched_fun_jaxpr_thunk():
     fun_jaxpr = core.ClosedJaxpr(*fun_jaxpr_thunk())
     batched_fun_jaxpr, out_batched = batching.batch_jaxpr(
-        fun_jaxpr, axis_size, prim_batched, False, axis_name, spmd_axis_name,
-        main_type)
+        fun_jaxpr, axis_data, prim_batched, False, main_type)
     return batched_fun_jaxpr.jaxpr, batched_fun_jaxpr.consts
 
   batched_outs = remat_opt_p.bind(*extra_consts, *args,
@@ -1667,7 +1661,7 @@ xla.register_initial_style_primitive(remat_opt_p)
 mlir.register_lowering(remat_opt_p, mlir.lower_fun(
     _remat_opt_impl, multiple_results=True))
 batching.spmd_axis_primitive_batchers[remat_opt_p] = _remat_opt_vmap
-batching.axis_primitive_batchers[remat_opt_p] = partial(_remat_opt_vmap, None)
+batching.axis_primitive_batchers[remat_opt_p] = _remat_opt_vmap
 ad.primitive_jvps[remat_opt_p] = _remat_opt_jvp
 ad.primitive_transposes[remat_opt_p] = _remat_opt_transpose
 pe.dce_rules[remat_opt_p] = _remat_opt_dce

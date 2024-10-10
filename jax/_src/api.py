@@ -989,10 +989,10 @@ def vmap(fun: F,
     axis_size_ = (axis_size if axis_size is not None else
                   _mapped_axis_size(fun, in_tree, args_flat, in_axes_flat, "vmap"))
     try:
+      axis_data = batching.AxisData(axis_name, axis_size_, spmd_axis_name)
       out_flat = batching.batch(
-          flat_fun, axis_name, axis_size_, in_axes_flat,
-          lambda: flatten_axes("vmap out_axes", out_tree(), out_axes),
-          spmd_axis_name=spmd_axis_name
+          flat_fun, axis_data, in_axes_flat,
+          lambda: flatten_axes("vmap out_axes", out_tree(), out_axes)
       ).call_wrapped(*args_flat)
     except batching.SpecMatchError as e:
       out_axes_flat = flatten_axes("vmap out_axes", out_tree(), out_axes)

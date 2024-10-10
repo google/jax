@@ -1431,7 +1431,7 @@ def _shard_map_batch(
   fun, out_dims = batching.batch_subtrace(fun, trace.main, tuple(in_dims))
   new_in_names = [{ax + (d is not batching.not_mapped and d <= ax): names[ax]  # type: ignore
                    for ax in names} for names, d in zip(in_names, in_dims)]
-  spmd_axis_name = trace.spmd_axis_name
+  spmd_axis_name = trace.axis_data.spmd_name
   if spmd_axis_name is not None:
     used = {n for names in in_names for ns in names.values() for n in ns}
     if not config.disable_vmap_shmap_error.value and set(spmd_axis_name) & used:
@@ -1460,7 +1460,7 @@ def _shard_map_batch_post_process(trace, out_tracers, mesh, in_names,
   def todo(vals):
     trace = m.with_cur_sublevel()
     return map(partial(batching.BatchTracer, trace), vals, dims, srcs)
-  out_names_transform = partial(_batch_out_names, trace.spmd_axis_name, dims)
+  out_names_transform = partial(_batch_out_names, trace.axis_data.spmd_name, dims)
   return vals, (todo, out_names_transform)
 batching.BatchTrace.post_process_shard_map = _shard_map_batch_post_process
 

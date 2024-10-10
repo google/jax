@@ -1937,14 +1937,13 @@ def _pjit_lowering(ctx, *args, name, jaxpr, in_shardings,
 mlir.register_lowering(pjit_p, _pjit_lowering)
 
 
-def _pjit_batcher(spmd_axis_name, axis_size, axis_name, main_type,
+def _pjit_batcher(axis_data, main_type,
                   vals_in, dims_in, jaxpr, in_shardings, out_shardings,
                   in_layouts, out_layouts, resource_env, donated_invars, name,
                   keep_unused, inline):
   segment_lens, dims_in = batching.indirectify_ragged_axes(dims_in)
   new_jaxpr, axes_out = batching.batch_jaxpr2(
-      jaxpr, axis_size, dims_in, axis_name=axis_name,
-      spmd_axis_name=spmd_axis_name, main_type=main_type)
+      jaxpr, axis_data, dims_in, main_type=main_type)
 
   if resource_env is not None:
     mesh = resource_env.physical_mesh
@@ -1953,11 +1952,11 @@ def _pjit_batcher(spmd_axis_name, axis_size, axis_name, main_type,
 
   # TODO(axch): prepend with Nones (?) to account for new segment_lens inputs
   in_shardings = tuple(
-      _pjit_batcher_for_sharding(i, axis_in, spmd_axis_name, mesh, aval.ndim)
+      _pjit_batcher_for_sharding(i, axis_in, axis_data.spmd_name, mesh, aval.ndim)
       if axis_in is not None else i
       for axis_in, i, aval in zip(dims_in, in_shardings, new_jaxpr.in_avals))
   out_shardings = tuple(
-      _pjit_batcher_for_sharding(o, axis_out, spmd_axis_name, mesh, aval.ndim)
+      _pjit_batcher_for_sharding(o, axis_out, axis_data.spmd_name, mesh, aval.ndim)
       if axis_out is not None else o
       for axis_out, o, aval in zip(axes_out, out_shardings, new_jaxpr.out_avals))
   # TODO(yashkatariya): Figure out layouts should change under vmap.
@@ -1984,7 +1983,7 @@ def _pjit_batcher(spmd_axis_name, axis_size, axis_name, main_type,
   return vals_out, resolved_axes_out
 
 batching.spmd_axis_primitive_batchers[pjit_p] = _pjit_batcher
-batching.axis_primitive_batchers[pjit_p] = partial(_pjit_batcher, None)
+batching.axis_primitive_batchers[pjit_p] = _pjit_batcher
 
 def _pjit_batcher_for_sharding(
     s: sharding.Sharding | UnspecifiedValue,
@@ -2536,8 +2535,9 @@ mlir.register_lowering(sharding_constraint_p,
 
 
 def _sharding_constraint_batcher(
-    spmd_axis_name, axis_size, axis_name, main_type, vals_in,
+    axis_data, main_type, vals_in,
     dims_in, sharding, layout, resource_env, unconstrained_dims):
+  spmd_axis_name = axis_data.spmd_name
   if spmd_axis_name is not None and isinstance(sharding, NamedSharding):
     used = {n for ns in sharding.spec
             for n in (ns if isinstance(ns, tuple) else (ns,))}
@@ -2575,8 +2575,7 @@ def _sharding_constraint_batcher(
       unconstrained_dims=unconstrained_dims)
   return y, d
 batching.spmd_axis_primitive_batchers[sharding_constraint_p] = _sharding_constraint_batcher
-batching.axis_primitive_batchers[sharding_constraint_p] = partial(
-    _sharding_constraint_batcher, None)
+batching.axis_primitive_batchers[sharding_constraint_p] = _sharding_constraint_batcher
 
 # -------------------- helpers --------------------
 
