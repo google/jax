@@ -1,4 +1,5 @@
 absl-py
+ai-edge-litert
 build
 cloudpickle
 colorama>=0.4.4

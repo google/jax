@@ -22,6 +22,7 @@ from typing import Any
 from jax.experimental import jax2tf
 import tensorflow as tf
 import tensorflowjs as tfjs
+from ai_edge_litert import interpreter as tfl_interpreter # type: ignore[import-not-found]
 
 from jax.experimental.jax2tf.tests.model_harness import ModelHarness
 
@@ -68,7 +69,7 @@ def jax2tflite(harness: ModelHarness, use_flex_ops: bool = False):
   tflite_model = converter.convert()
 
   # Construct an interpreter for doing a numerical comparison.
-  interpreter = tf.lite.Interpreter(model_content=tflite_model)
+  interpreter = tfl_interpreter.Interpreter(model_content=tflite_model)
   interpreter.allocate_tensors()
 
   inputs = interpreter.get_input_details()

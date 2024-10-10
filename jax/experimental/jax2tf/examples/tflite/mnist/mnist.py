@@ -22,7 +22,8 @@ from jax.experimental.jax2tf.examples import mnist_lib
 import numpy as np
 
 import tensorflow as tf
-import tensorflow_datasets as tfds  # type: ignore[import-not-found]
+from ai_edge_litert import interpreter as tfl_interpreter # type: ignore[import-not-found]
+import tensorflow_datasets as tfds # type: ignore[import-not-found]
 
 _TFLITE_FILE_PATH = flags.DEFINE_string(
     'tflite_file_path',
@@ -42,7 +43,7 @@ _NUM_EPOCHS = flags.DEFINE_integer(
 # A helper function to evaluate the TF Lite model using "test" dataset.
 def evaluate_tflite_model(tflite_model, test_ds):
   # Initialize TFLite interpreter using the model.
-  interpreter = tf.lite.Interpreter(model_content=tflite_model)
+  interpreter = tfl_interpreter.Interpreter(model_content=tflite_model)
   interpreter.allocate_tensors()
   input_tensor_index = interpreter.get_input_details()[0]['index']
   output = interpreter.tensor(interpreter.get_output_details()[0]['index'])
