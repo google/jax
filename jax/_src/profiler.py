@@ -115,6 +115,11 @@ def start_trace(log_dir: os.PathLike | str, create_perfetto_link: bool = False,
       want to generate a Perfetto-compatible trace without blocking the
       process.
   """
+
+  jax_profile_output = os.getenv('JAX_PROFILE')
+  if jax_profile_output:
+    log_dir = jax_profile_output
+
   with _profile_state.lock:
     if _profile_state.profile_session is not None:
       raise RuntimeError("Profile has already been started. "
