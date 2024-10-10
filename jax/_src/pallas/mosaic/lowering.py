@@ -1980,6 +1980,12 @@ lowering_rules[lax.exp_p] = _exp_lowering_rule
 
 
 def _pow_lowering_rule(ctx: LoweringRuleContext, x, y):
+  # jax accepts float base (x) and integer/float exponent (y), and integer
+  # exponent is casted to float.
+  if jnp.issubdtype(ctx.avals_in[1].dtype, jnp.integer):
+    return lower_fun(
+        lambda x, y: jnp.power(x, y.astype(x.dtype)), multiple_results=False
+    )(ctx, x, y)
   if not isinstance(x, ir.Value) and x == 2.:
     return math.Exp2Op(y).result
   x, y = _bcast(x, y, ctx.avals_in[0], ctx.avals_in[1], ctx.avals_out[0])

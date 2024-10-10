@@ -846,9 +846,6 @@ class OpsTest(PallasBaseTest):
       ("float64", "float64"),
   )
   def test_pow(self, x_dtype, y_dtype):
-    if jtu.test_device_matches(["tpu"]):
-      self.skipTest("TODO: Error on TPU")
-
     if not jax.config.x64_enabled and jnp.dtype(x_dtype).itemsize == 8:
       self.skipTest("64-bit types require x64_enabled")
 
