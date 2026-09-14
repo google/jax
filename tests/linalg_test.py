@@ -2317,6 +2317,58 @@ class ScipyLinalgTest(jtu.JaxTestCase):
       [1, 4, 5, 6],
       [2, 1, 4, 5],
       [3, 2, 1, 4]], dtype=np.float32))
+  def testToeplitzNaNPropagation(self):
+    # Regression test for https://github.com/jax-ml/jax/issues/38636
+    # NaN in column/row should only appear at the diagonal position it maps to,
+    # not bleed into the whole matrix. The old conv-based implementation used
+    # arithmetic (NaN + x = NaN) instead of pure indexing, poisoning all outputs.
+    column = np.array([np.nan, np.inf, -0.0], dtype=np.float32)
+    row = np.array([np.nan, 2.0, 3.0], dtype=np.float32)
+    expected = np.array([
+        [np.nan, 2.0,    3.0 ],
+        [np.inf, np.nan, 2.0 ],
+        [-0.0,   np.inf, np.nan],
+    ], dtype=np.float32)
+    out = np.asarray(jsp.linalg.toeplitz(
+        jnp.asarray(column), jnp.asarray(row)))
+    self.assertTrue(
+        np.array_equal(out, expected, equal_nan=True),
+        msg=f"toeplitz NaN propagation: got\n{out}\nexpected\n{expected}")
+    # Exactly 3 NaNs on the main diagonal, none elsewhere
+    self.assertEqual(np.sum(np.isnan(out)), 3,
+                     msg="Expected exactly 3 NaNs (main diagonal only)")
+
+    # Also verify: a single NaN in c[0] only populates the main diagonal.
+    c2 = np.array([np.nan, 1.0, 2.0], dtype=np.float32)
+    r2 = np.array([np.nan, 3.0, 4.0], dtype=np.float32)
+    out2 = np.asarray(jsp.linalg.toeplitz(jnp.asarray(c2), jnp.asarray(r2)))
+    # Non-diagonal entries must be finite (no NaN bleed)
+    diag_mask = np.eye(3, dtype=bool)
+    self.assertTrue(np.all(np.isfinite(out2[~diag_mask])),
+                    msg=f"Off-diagonal entries should be finite, got\n{out2}")
+    self.assertTrue(np.all(np.isnan(out2[diag_mask])),
+                    msg=f"Diagonal entries should be NaN, got\n{out2}")
+
+  def testHankelNaNPropagation(self):
+    # Companion regression for https://github.com/jax-ml/jax/issues/38636:
+    # hankel also used conv_general_dilated_patches (same root cause).
+    c = np.array([np.nan, 1.0, 2.0], dtype=np.float32)
+    r = np.array([np.nan, 4.0, 5.0], dtype=np.float32)
+    # hankel[i,j] = v[i+j], where v = [c[0], c[1], c[2], r[1], r[2]]
+    # = [NaN, 1, 2, 4, 5]
+    # Only hankel[0,0] (v[0]) should be NaN.
+    expected = np.array([
+        [np.nan, 1.0, 2.0],
+        [1.0,    2.0, 4.0],
+        [2.0,    4.0, 5.0],
+    ], dtype=np.float32)
+    out = np.asarray(jsp.linalg.hankel(jnp.asarray(c), jnp.asarray(r)))
+    self.assertTrue(
+        np.array_equal(out, expected, equal_nan=True),
+        msg=f"hankel NaN propagation: got\n{out}\nexpected\n{expected}")
+    self.assertEqual(np.sum(np.isnan(out)), 1,
+                     msg="Expected exactly 1 NaN at [0,0] only")
+
   def testHankelConstructionWithKnownCases(self):
     # r=None should default to zeros_like(c)
     c = np.array([1, 2, 3], dtype=np.float32)

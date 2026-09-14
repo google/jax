@@ -2495,13 +2495,10 @@ def _toeplitz(c: Array, r: Array) -> Array:
   nrows, = r.shape
   if ncols == 0 or nrows == 0:
     return jnp.empty((ncols, nrows), dtype=jnp.promote_types(c.dtype, r.dtype))
-  nelems = ncols + nrows - 1
   elems = jnp.concatenate((c[::-1], r[1:]))
-  patches = lax.conv_general_dilated_patches(
-      elems.reshape((1, nelems, 1)),
-      (nrows,), (1,), 'VALID', dimension_numbers=('NTC', 'IOT', 'NTC'),
-      precision=lax.Precision.HIGHEST)[0]
-  return jnp.flip(patches, axis=0)
+  i = jnp.arange(ncols - 1, -1, -1)[:, None]
+  j = jnp.arange(nrows)[None, :]
+  return elems[i + j]
 
 def hankel(c: ArrayLike, r: ArrayLike | None = None) -> Array:
   r"""Construct a Hankel matrix.
@@ -2563,11 +2560,9 @@ def _hankel(c: Array, r: Array) -> Array:
   if ncols == 0 or nrows == 0:
     return jnp.empty((ncols, nrows), dtype=jnp.result_type(c, r))
   v = jnp.concatenate((c, r[1:]))
-  return lax.conv_general_dilated_patches(
-      v.reshape((1, ncols + nrows - 1, 1)),
-      (nrows,), (1,), 'VALID',
-      dimension_numbers=('NTC', 'IOT', 'NTC'),
-      precision=lax.Precision.HIGHEST)[0]
+  i = jnp.arange(ncols)[:, None]
+  j = jnp.arange(nrows)[None, :]
+  return v[i + j]
 
 
 def circulant(c: ArrayLike) -> Array:
