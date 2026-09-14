@@ -2495,13 +2495,13 @@ def _toeplitz(c: Array, r: Array) -> Array:
   nrows, = r.shape
   if ncols == 0 or nrows == 0:
     return jnp.empty((ncols, nrows), dtype=jnp.promote_types(c.dtype, r.dtype))
-  nelems = ncols + nrows - 1
+  # Build the matrix by gathering from the flattened diagonals. Selecting
+  # entries (rather than a conv, where 0 * inf == nan) keeps non-finite values
+  # confined to the cells they actually belong to.
   elems = jnp.concatenate((c[::-1], r[1:]))
-  patches = lax.conv_general_dilated_patches(
-      elems.reshape((1, nelems, 1)),
-      (nrows,), (1,), 'VALID', dimension_numbers=('NTC', 'IOT', 'NTC'),
-      precision=lax.Precision.HIGHEST)[0]
-  return jnp.flip(patches, axis=0)
+  i = lax.broadcasted_iota(np.int32, (ncols, nrows), 0)
+  j = lax.broadcasted_iota(np.int32, (ncols, nrows), 1)
+  return elems[ncols - 1 + j - i]
 
 def hankel(c: ArrayLike, r: ArrayLike | None = None) -> Array:
   r"""Construct a Hankel matrix.
@@ -2562,12 +2562,11 @@ def _hankel(c: Array, r: Array) -> Array:
   nrows, = r.shape
   if ncols == 0 or nrows == 0:
     return jnp.empty((ncols, nrows), dtype=jnp.result_type(c, r))
+  # Gather from the anti-diagonals instead of convolving; see _toeplitz.
   v = jnp.concatenate((c, r[1:]))
-  return lax.conv_general_dilated_patches(
-      v.reshape((1, ncols + nrows - 1, 1)),
-      (nrows,), (1,), 'VALID',
-      dimension_numbers=('NTC', 'IOT', 'NTC'),
-      precision=lax.Precision.HIGHEST)[0]
+  i = lax.broadcasted_iota(np.int32, (ncols, nrows), 0)
+  j = lax.broadcasted_iota(np.int32, (ncols, nrows), 1)
+  return v[i + j]
 
 
 def circulant(c: ArrayLike) -> Array:

@@ -2331,6 +2331,32 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     out2 = jsp.linalg.hankel(c, r2)
     self.assertAllClose(out1, out2)
 
+  def testToeplitzNonFiniteValues(self):
+    # https://github.com/jax-ml/jax/issues/38636: non-finite entries must not
+    # leak into cells that select a different, finite input value.
+    c = np.array([np.nan, np.inf, -0.0], dtype=np.float32)
+    r = np.array([np.nan, 2.0, 3.0], dtype=np.float32)
+    expected = np.array([
+      [np.nan, 2.0, 3.0],
+      [np.inf, np.nan, 2.0],
+      [-0.0, np.inf, np.nan]], dtype=np.float32)
+    actual = np.asarray(jsp.linalg.toeplitz(c, r))
+    self.assertArraysEqual(actual, expected)
+    self.assertTrue(np.signbit(actual[2, 0]))  # -0.0 sign preserved
+
+  def testHankelNonFiniteValues(self):
+    # https://github.com/jax-ml/jax/issues/38635: non-finite entries must not
+    # leak into cells that select a different, finite input value.
+    c = np.array([np.nan, np.inf, -0.0], dtype=np.float32)
+    r = np.array([np.nan, 2.0, 3.0], dtype=np.float32)
+    expected = np.array([
+      [np.nan, np.inf, -0.0],
+      [np.inf, -0.0, 2.0],
+      [-0.0, 2.0, 3.0]], dtype=np.float32)
+    actual = np.asarray(jsp.linalg.hankel(c, r))
+    self.assertArraysEqual(actual, expected)
+    self.assertTrue(np.signbit(actual[0, 2]))  # -0.0 sign preserved
+
   @jtu.sample_product(
      cshape = [(3,), (0,), (2, 3), (1, 2, 3)],
      rshape = [(4,), (0,), (1, 4), (2, 4), (1, 1, 4)],
