@@ -19,7 +19,7 @@ Implements ufuncs for jax.numpy.
 from __future__ import annotations
 
 from collections.abc import Callable
-from functools import partial
+import math
 import operator
 from typing import Any
 
@@ -3933,15 +3933,8 @@ def sinc(x: ArrayLike, /) -> Array:
     ...   jnp.sinc(x)
     Array([-0.   ,  0.637,  1.   ,  0.637, -0.   ], dtype=float32)
 
-    Compare this to the naive approach to computing the function, which is
-    undefined at zero:
-
-    >>> with jnp.printoptions(precision=3, suppress=True):
-    ...   jnp.sin(jnp.pi * x) / (jnp.pi * x)
-    Array([-0.   ,  0.637,    nan,  0.637, -0.   ], dtype=float32)
-
-    JAX defines a custom gradient rule for sinc to allow accurate evaluation
-    of the gradient at zero even for higher-order derivatives:
+    Evaluating ``jnp.sinc`` via a series expansion around zero ensures that
+    derivatives of all orders are accurate and well-behaved:
 
     >>> f = jnp.sinc
     >>> for i in range(1, 6):
@@ -3956,7 +3949,6 @@ def sinc(x: ArrayLike, /) -> Array:
   """
   x = ensure_arraylike("sinc", x)
   x, = promote_dtypes_inexact(x)
-  eq_zero = lax.eq(x, _lax_const(x, 0))
   if dtypes.issubdtype(x.dtype, np.complexfloating):
     eq_inf = lax.bitwise_and(
         lax.eq(lax.abs(lax.real(x)), _lax_const(lax.real(x), np.inf)),
@@ -3965,23 +3957,37 @@ def sinc(x: ArrayLike, /) -> Array:
   else:
     eq_inf = lax.eq(lax.abs(x), _lax_const(x, np.inf))
   pi_x = lax.mul(_lax_const(x, np.pi), x)
-  safe_pi_x = _where(lax.bitwise_or(eq_zero, eq_inf), _lax_const(x, 1), pi_x)
-  result = _where(eq_zero, _sinc_maclaurin(0, pi_x),
-                  lax.div(lax.sin(safe_pi_x), safe_pi_x))
-  return _where(eq_inf, _lax_const(x, 0), result)
+  safe_pi_x = _where(eq_inf, _lax_const(x, 1), pi_x)
 
+  # Use a Taylor series when |u| < 1, where sin(u)/u loses precision.
+  # 1.0 may look arbitrary, but it has been carefully chosen.
+  abs_u = lax.abs(safe_pi_x)
+  use_series = lax.lt(abs_u, _lax_const(abs_u, 1.0))
 
-@partial(custom_jvp, nondiff_argnums=(0,))
-def _sinc_maclaurin(k, x):
-  # compute the kth derivative of x -> sin(x)/x evaluated at zero (since we
-  # compute the monomial term in the jvp rule)
-  # TODO(mattjj): see https://github.com/jax-ml/jax/issues/10750
-  if k % 2:
-    return x * 0
+  # Keep both branches finite everywhere so autodiff does not produce NaNs.
+  radius = _lax_const(safe_pi_x, 1.0)
+  if dtypes.issubdtype(x.dtype, np.complexfloating):
+    safe_u = radius
   else:
-    return x * 0 + _lax_const(x, (-1) ** (k // 2) / (k + 1))
+    safe_u = _where(
+        lax.ge(safe_pi_x, _lax_const(safe_pi_x, 0)), radius, lax.neg(radius)
+    )
+  u_series = _where(use_series, safe_pi_x, _lax_const(safe_pi_x, 0))
+  u_direct = _where(use_series, safe_u, safe_pi_x)
 
-@_sinc_maclaurin.defjvp
-def _sinc_maclaurin_jvp(k, primals, tangents):
-  (x,), (t,) = primals, tangents
-  return _sinc_maclaurin(k, x), _sinc_maclaurin(k + 1, x) * t
+  # Taylor coefficients of sin(u)/u in u**2, descending to machine precision.
+  coeffs = []
+  eps = float(dtypes.finfo(x.dtype).eps)
+  for k in range(100):
+    mag = 1.0 / math.factorial(2 * k + 1)
+    coeffs.insert(0, (-1)**k * mag)
+    if mag <= eps:
+      break
+
+  u_sq = lax.square(u_series)
+  series = _lax_const(safe_pi_x, coeffs[0])
+  for c in coeffs[1:]:
+    series = lax.add(lax.mul(series, u_sq), _lax_const(safe_pi_x, c))
+
+  result = _where(use_series, series, lax.div(lax.sin(u_direct), u_direct))
+  return _where(eq_inf, _lax_const(x, 0), result)

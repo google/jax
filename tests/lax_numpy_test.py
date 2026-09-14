@@ -6585,6 +6585,163 @@ class NumpyGradTests(jtu.JaxTestCase):
     # tests for a bug almost introduced in #5077
     jax.grad(lambda x: jnp.sinc(x).sum())(jnp.arange(10.))  # doesn't crash
 
+  @jtu.sample_product(dtype=float_dtypes)
+  def testSincValuesAndDerivativesMatchGoldenValues(self, dtype):
+    dtype = dtypes.canonicalize_dtype(dtype)
+    # high-precision mpmath goldens at powers of two (2**-120 .. 2**-4) and
+    # 2**(1/4) intervals across the transition and oscillatory region
+    # (2**-3 .. 2**2) for (log2_x, sinc(x), sinc'(x), sinc''(x)).
+    log2_x, golden_sinc, golden_grad, golden_hess = np.array([
+        (-120, 1.0, -2.475021699910683e-36, -3.289868133696453),
+        (-96, 1.0, -4.152397366408871e-29, -3.289868133696453),
+        (-64, 1.0, -1.783441088872263e-19, -3.289868133696453),
+        (-48, 1.0, -1.1687959520033263e-14, -3.289868133696453),
+        (-32, 1.0, -7.659821151048999e-10, -3.289868133696453),
+        (-24, 0.9999999999999941, -1.960914214668537e-07, -3.289868133696418),
+        (-18, 0.999999999976063, -1.2549850973698437e-05, -3.289868133554704),
+        (-14, 0.9999999938721431, -0.00020079761484378345, -3.2898680974087386),
+        (-11, 0.9999996078172032, -0.0016063805466594802, -3.2898658112830708),
+        (-8, 0.9999749004870501, -0.01285085386381706, -3.289719500551548),
+        (-6, 0.9995984531496791, -0.05139180444842791, -3.287490323129415),
+        (-4, 0.9935868511442058, -0.20482513185560508, -3.2519049395380084),
+        (-3, 0.9744953584044327, -0.4049266071451671, -3.1390579638268665),
+        (-2.75, 0.9640460556535115, -0.4784590728782278, -3.077400886068054),
+        (-2.5, 0.9493827312062388, -0.5638313300825778, -2.991008671082188),
+        (-2.25, 0.9288725666198132, -0.6619091739275776, -2.8704279786000853),
+        (-2, 0.9003163161571061, -0.7728381398822342, -2.703060757258859),
+        (-1.75, 0.8608185962765801, -0.895375535746403, -2.472594379830703),
+        (-1.5, 0.8067004676006325, -1.0258270375114296, -2.1588604490013372),
+        (-1.25, 0.7335523120505203, -1.1564480721710653, -1.7388460252150448),
+        (-1, 0.6366197723675814, -1.2732395447351628, -1.1902271282389358),
+        (-0.75, 0.5118615521284148, -1.3533576055684473, -0.4997367913196013),
+        (-0.5, 0.358187786013244, -1.3631429916067606, 0.3203788631154632),
+        (-0.25, 0.1814264072061399, -1.259472977092697, 1.2049415839890403),
+        (0, 0.0, -1.0, 2.0),
+        (0.25, -0.14989849927669527, -0.5706151643176645, 2.4390953805062283),
+        (0.5, -0.21695429437747638, -0.034861105122772545, 2.190554106287116),
+        (0.75, -0.15923068319329656, 0.41610624440256594, 1.0767073451924325),
+        (1, 0.0, 0.5, -0.5),
+        (1.25, 0.12418762576408406, 0.10450843139660537, -1.3135635031272366),
+        (1.5, 0.057765239856828916, -0.32384833871505264, -0.34112470913952947),
+        (1.75, -0.08607593793814002, -0.09795616807038414, 0.9077805419160128),
+        (2, 0.0, 0.25, -0.125),
+    ]).T
+
+    finfo = dtypes.finfo(dtype)
+    tol = 8 * float(finfo.eps)
+
+    # sinc and sinc'' are even; sinc' is odd: cover +/- inputs.
+    pos_x = 2.0 ** log2_x
+    x = np.concatenate([pos_x, -pos_x])
+    expected_sinc = np.concatenate([golden_sinc, golden_sinc])
+    expected_grad = np.concatenate([golden_grad, -golden_grad])
+    expected_hess = np.concatenate([golden_hess, golden_hess])
+
+    # Filter out inputs that underflow to subnormal in this dtype.
+    valid = np.abs(x) >= float(finfo.tiny)
+    x = x[valid].astype(dtype)
+    expected_sinc = expected_sinc[valid].astype(dtype)
+    expected_grad = expected_grad[valid].astype(dtype)
+    expected_hess = expected_hess[valid].astype(dtype)
+
+    actual_sinc = jnp.sinc(x)
+    actual_grad = jax.vmap(jax.grad(jnp.sinc))(x)
+    actual_hess = jax.vmap(jax.grad(jax.grad(jnp.sinc)))(x)
+
+    self.assertAllClose(actual_sinc, expected_sinc, rtol=tol, atol=tol)
+    self.assertAllClose(actual_grad, expected_grad, rtol=tol, atol=tol)
+    self.assertAllClose(actual_hess, expected_hess, rtol=tol, atol=tol)
+
+    # Sinc value and first derivative at x=0.
+    scalar = np.dtype(dtype).type
+    self.assertEqual(jnp.sinc(scalar(0.0)), 1.0)
+    self.assertEqual(jax.grad(jnp.sinc)(scalar(0.0)), 0.0)
+
+    # Second derivative at x=0 is -pi**2 / 3.
+    actual_dd0 = jax.grad(jax.grad(jnp.sinc))(scalar(0.0))
+    expected_dd0 = scalar(-np.pi ** 2 / 3)
+    self.assertAllClose(actual_dd0, expected_dd0, rtol=tol, atol=0)
+
+  @jtu.sample_product(dtype=float_dtypes)
+  def testSincValuesAndDerivativesLargeMagnitude(self, dtype):
+    dtype = dtypes.canonicalize_dtype(dtype)
+    finfo = dtypes.finfo(dtype)
+    tol = 64 * float(finfo.eps)
+
+    scalar = np.dtype(dtype).type
+    max_k = int(np.floor(np.log2(float(finfo.max) / np.pi)))
+    end_near = scalar(min(10.0, float(finfo.max) / np.pi))
+    pos_x = jnp.concatenate([
+        jnp.linspace(scalar(1.1), end_near, 30),
+        scalar(2.0) ** jnp.linspace(scalar(3.25), scalar(max_k), 30),
+    ])
+    x = jnp.concatenate([pos_x, -pos_x])
+
+    actual_sinc = jnp.sinc(x)
+    actual_grad = jax.vmap(jax.grad(jnp.sinc))(x)
+    actual_hess = jax.vmap(jax.grad(jax.grad(jnp.sinc)))(x)
+
+    pi = scalar(np.pi)
+    pi_x = pi * x
+    expected_sinc = jnp.sin(pi_x) / pi_x
+    expected_grad = (jnp.cos(pi_x) - expected_sinc) / x
+    expected_hess = -pi ** 2 * expected_sinc - scalar(2.0) * expected_grad / x
+
+    self.assertAllClose(actual_sinc, expected_sinc, rtol=tol, atol=tol)
+    self.assertAllClose(actual_grad, expected_grad, rtol=tol, atol=tol)
+    self.assertAllClose(actual_hess, expected_hess, rtol=tol, atol=tol)
+
+  @jtu.sample_product(dtype=float_dtypes)
+  def testSincDerivativeParity(self, dtype):
+    dtype = dtypes.canonicalize_dtype(dtype)
+    # Test that sinc' is odd and sinc'' is even.
+    finfo = dtypes.finfo(dtype)
+    min_k = int(np.ceil(np.log2(float(finfo.tiny))))
+    max_k = int(np.floor(np.log2(float(finfo.max) / np.pi)))
+    ks = np.arange(min_k, max_k + 1, max(1, (max_k - min_k) // 32))
+    x = (2.0 ** ks).astype(dtype)
+
+    grad = jax.vmap(jax.grad(jnp.sinc))
+    hess = jax.vmap(jax.grad(jax.grad(jnp.sinc)))
+
+    self.assertAllClose(grad(-x), -grad(x), atol=0, rtol=0)  # f'(-x) == -f'(x)
+    self.assertAllClose(hess(-x), hess(x), atol=0, rtol=0)  # f''(-x) == f''(x)
+
+  @jtu.sample_product(dtype=complex_dtypes)
+  def testSincComplexValuesAndDerivatives(self, dtype):
+    finfo = dtypes.finfo(dtype)
+    tol = 32 * float(finfo.eps)
+
+    grad_fn = lambda z: jax.jvp(jnp.sinc, (z,), (dtype(1.0),))[1]
+    hess_fn = lambda z: jax.jvp(grad_fn, (z,), (dtype(1.0),))[1]
+
+    # Values at zero
+    actual_sinc_zero = jnp.sinc(dtype(0.0))
+    actual_grad_zero = grad_fn(dtype(0.0))
+    actual_hess_zero = hess_fn(dtype(0.0))
+    expected_hess_zero = dtype(-np.pi ** 2 / 3)
+
+    self.assertEqual(actual_sinc_zero, 1.0)
+    self.assertEqual(actual_grad_zero, 0.0)
+    self.assertAllClose(
+        actual_hess_zero, expected_hess_zero, rtol=tol, atol=0
+    )
+
+    # An asymmetric complex point with power-of-two parts inside the series
+    # branch (|pi*z| < 1), ensuring both real and imag components are probed.
+    z = 0.125 + 0.0625j
+    pi_z = np.pi * z
+    sinc_f64 = np.sin(pi_z) / pi_z
+    grad_f64 = (np.cos(pi_z) - sinc_f64) / z
+    expected_sinc = dtype(sinc_f64)
+    expected_grad = dtype(grad_f64)
+
+    actual_sinc = jnp.sinc(dtype(z))
+    actual_grad = grad_fn(dtype(z))
+
+    self.assertAllClose(actual_sinc, expected_sinc, rtol=tol, atol=0)
+    self.assertAllClose(actual_grad, expected_grad, rtol=tol, atol=0)
+
   def testTakeAlongAxisIssue1521(self):
     # https://github.com/jax-ml/jax/issues/1521
     idx = jnp.repeat(jnp.arange(3), 10).reshape((30, 1))

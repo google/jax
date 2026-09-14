@@ -51,6 +51,10 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
     fabricating a phantom slice for fully-empty inputs.
 
 * Bug fixes
+  * {func}`jax.numpy.sinc` now uses a Taylor series near zero, giving
+    accurate derivatives of all orders. Previously, autodiff of the
+    `sin(πx)/(πx)` quotient suffered catastrophic cancellation near zero
+    ({jax-issue}`#34139`, {jax-issue}`#10750`).
   * Fixed a bug where {func}`jax.numpy.linalg.cond` returned NaN instead of
     infinity for singular matrices when `p` is `None` or `2`, matching NumPy
     and the other norms.
