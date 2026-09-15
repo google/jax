@@ -25,10 +25,13 @@ from typing import Any
 
 import numpy as np
 
+from jax._src import ad_util
 from jax._src import core
 from jax._src import dtypes
 from jax._src.api import Inline, jit
 from jax._src.custom_derivatives import custom_jvp
+from jax._src.hijax import HiPrim, linearize_from_jvp, vjp_from_jvp
+from jax._src.interpreters import ad, batching
 from jax._src.lax import lax
 from jax._src.lax import other as lax_other
 from jax._src.typing import Array, ArrayLike
@@ -39,7 +42,7 @@ from jax._src.numpy.ufunc_api import ufunc
 from jax._src.numpy.util import (
    check_arraylike, ensure_arraylike, promote_args, promote_args_inexact,
    promote_args_numeric, promote_dtypes_inexact, promote_dtypes_numeric,
-   promote_shapes, _where, check_no_float0s)
+   promote_shapes, _where, _broadcast_arrays, check_no_float0s)
 from jax._src.util import set_module
 
 
@@ -51,6 +54,13 @@ _INT_DTYPES = {
   16: np.int16,
   32: np.int32,
   64: np.int64,
+}
+
+_UINT_DTYPES = {
+  8: np.uint8,
+  16: np.uint16,
+  32: np.uint32,
+  64: np.uint64,
 }
 
 def _constant_like(x, const):
@@ -3057,13 +3067,127 @@ def signbit(x: ArrayLike, /) -> Array:
   return lax.convert_element_type(x >> (info.nexp + info.nmant), np.bool_)
 
 
-def _normalize_float(x):
-  info = dtypes.finfo(dtypes.dtype(x))
-  int_type = _INT_DTYPES[info.bits]
-  cond = lax.abs(x) < info.tiny
-  x1 = _where(cond, x * _lax_const(x, 1 << info.nmant), x)
-  x2 = _where(cond, int_type(-info.nmant), int_type(0))
-  return lax.bitcast_convert_type(x1, int_type), x2
+def _flush_subnormals(x: Array) -> Array:
+  """Flushes subnormal floating-point inputs to signed zero (±0.0).
+
+  Zeros out the mantissa bits whenever the biased exponent is zero, leaving
+  only the sign bit. Normal numbers, ±0.0, ±inf, and NaN are unchanged.
+  """
+  dtype = dtypes.dtype(x)
+  info = dtypes.finfo(dtype)
+  uint_type = _UINT_DTYPES[info.bits]
+  u = lax.bitcast_convert_type(x, uint_type)
+  exp_mask = uint_type((1 << info.nexp) - 1) << uint_type(info.nmant)
+  sign_mask = uint_type(1 << (info.bits - 1))
+  is_zero_or_sub = lax.eq(u & exp_mask, uint_type(0))
+  return lax.bitcast_convert_type(
+      lax.select(is_zero_or_sub, u & sign_mask, u), dtype
+  )
+
+
+def _ldexp_impl(x: Array, n: Array) -> Array:
+  """Bit-exact implementation of ldexp (x * 2**n) for normal numbers."""
+  # Flush subnormals at entry so any subnormal input becomes ±0.0.
+  x = _flush_subnormals(x)
+  dtype = dtypes.dtype(x)
+  info = dtypes.finfo(dtype)
+  uint_type = _UINT_DTYPES[info.bits]
+
+  # Extract IEEE 754 sign, biased exponent, and mantissa bits.
+  u = lax.bitcast_convert_type(x, uint_type)
+  exp_mask = uint_type((1 << info.nexp) - 1)
+  mant_mask = uint_type((1 << info.nmant) - 1)
+  sign_mask = uint_type(1 << (info.bits - 1))
+
+  sign = u & sign_mask
+  exp = (u >> uint_type(info.nmant)) & exp_mask
+  mant = u & mant_mask
+
+  is_zero_or_sub = lax.eq(exp, uint_type(0))
+  is_inf_or_nan = lax.eq(exp, exp_mask)
+
+  # Scaling x by 2**n adds n to the biased exponent: new_exp = exp + n.
+  # To prevent integer wrap-around when n is extreme (e.g. exp + INT32_MAX
+  # wrapping around to negative and returning 0.0 instead of inf, or 64-bit n
+  # truncating to 0), clamp n to [-max_shift, max_shift]. Any shift of this
+  # magnitude is guaranteed to overflow or underflow every normal float.
+  max_shift = 1 << (info.nexp + 1)
+  is_signed = dtypes.issubdtype(n.dtype, np.signedinteger)
+  if dtypes.iinfo(n.dtype).bits < 32:
+    # Widen narrow integers so max_shift (up to 4096) fits in the type.
+    n = lax.convert_element_type(n, np.int32 if is_signed else np.uint32)
+  low = _lax_const(n, -max_shift if is_signed else 0)
+  n_i32 = lax.convert_element_type(
+      lax.clamp(low, n, _lax_const(n, max_shift)), np.int32
+  )
+
+  new_exp = lax.convert_element_type(exp, np.int32) + n_i32
+
+  # Assemble bit patterns for normal output and overflow (±inf).
+  inf_bits = sign | (exp_mask << uint_type(info.nmant))
+  norm_exp_bits = lax.convert_element_type(new_exp, uint_type) << uint_type(
+      info.nmant
+  )
+  norm_bits = sign | norm_exp_bits | mant
+
+  # Under FTZ semantics:
+  # - new_exp <= 0 underflows/flushes to signed zero (±0.0, i.e. `sign`).
+  # - new_exp >= exp_mask overflows to signed infinity (`inf_bits`).
+  # - 1 <= new_exp < exp_mask is a normal float (`norm_bits`).
+  res_bits = lax.select(
+      new_exp <= np.int32(0),
+      sign,
+      lax.select(new_exp >= np.int32(exp_mask), inf_bits, norm_bits),
+  )
+  # Preserve ±inf/NaN inputs as-is, and map ±0.0 inputs to ±0.0.
+  out_bits = lax.select(
+      is_inf_or_nan,
+      u,
+      lax.select(is_zero_or_sub, sign, res_bits),
+  )
+  return lax.bitcast_convert_type(out_bits, dtype)
+
+
+class Ldexp(HiPrim):
+  x1_aval: core.ShapedArray
+  x2_aval: core.ShapedArray
+
+  def __init__(self, x1_aval: core.ShapedArray, x2_aval: core.ShapedArray):
+    self.in_avals = (x1_aval, x2_aval)
+    self.out_aval = x1_aval.update(weak_type=False)
+    self.params = dict(x1_aval=x1_aval, x2_aval=x2_aval)
+    super().__init__()
+
+  def expand(self, x1, x2):  # pyrefly: ignore[bad-override]
+    return _ldexp_impl(x1, x2)
+
+  def jvp(self, primals, tangents):
+    x1, x2 = primals
+    x1_dot, _ = tangents
+    out_dot = (
+        ad_util.Zero(self.out_aval.to_tangent_aval())
+        if isinstance(x1_dot, ad_util.Zero)
+        else ldexp(x1_dot, x2)
+    )
+    return self(x1, x2), out_dot
+
+  def transpose(self, out_bar, x1_accum, x2):  # pyrefly: ignore[bad-override]
+    if isinstance(x1_accum, ad.GradAccum) and not isinstance(
+        out_bar, ad_util.Zero
+    ):
+      x1_accum.accum(ldexp(out_bar, x2))
+
+  lin, linearized = linearize_from_jvp
+  vjp_fwd, vjp_bwd_retval = vjp_from_jvp
+
+  def batch(self, axis_data, args, dims):
+    x1, x2 = args
+    d1, d2 = dims
+    if d1 != d2:
+      x1 = batching.bdim_at_front(x1, d1, axis_data.size)
+      x2 = batching.bdim_at_front(x2, d2, axis_data.size)
+      d1 = 0
+    return Ldexp(core.typeof(x1), core.typeof(x2))(x1, x2), d1
 
 
 @export
@@ -3073,9 +3197,8 @@ def ldexp(x1: ArrayLike, x2: ArrayLike, /) -> Array:
 
   JAX implementation of :func:`numpy.ldexp`.
 
-  Note that XLA does not provide an ``ldexp`` operation, so this
-  is implemneted in JAX via a standard multiplication and
-  exponentiation.
+  Note that subnormal inputs and underflowing outputs are flushed to signed
+  zero.
 
   Args:
     x1: real-valued input array.
@@ -3109,20 +3232,95 @@ def ldexp(x1: ArrayLike, x2: ArrayLike, /) -> Array:
   x2_dtype = x2.dtype
   if (dtypes.issubdtype(x1_dtype, np.complexfloating)
       or dtypes.issubdtype(x2_dtype, np.inexact)):
-    raise ValueError(f"ldexp not supported for input types {(x1_dtype, x2_dtype)}")
+    raise ValueError(
+        f"ldexp not supported for input types {(x1_dtype, x2_dtype)}"
+    )
   x1, = promote_args_inexact("ldexp", x1)
-  x2 = lax.convert_element_type(x2, x1.dtype)
+  if x2.dtype == np.bool_:
+    x2 = lax.convert_element_type(x2, np.int32)
+  x1, x2 = promote_shapes("ldexp", x1, x2)
+  x1, x2 = _broadcast_arrays(x1, x2)
+  x1 = lax._convert_element_type(x1, x1.dtype, weak_type=False)
+  x2 = lax._convert_element_type(x2, x2.dtype, weak_type=False)
+  return Ldexp(core.typeof(x1), core.typeof(x2))(x1, x2)
 
-  # Split off the exponent to avoid overflow for small x1 and large x2.
-  m, e = frexp(x1)
-  e = (e.astype(x2.dtype) + x2).astype(x1.dtype)
 
-  # exponent may overflow by 1 and still have a finite result.
-  m = _where(e > 0, m * 2, m)
-  e = _where(e > 0, e - 1, e)
+def _frexp_impl(x: Array) -> tuple[Array, Array]:
+  """Bit-exact implementation of frexp for normal floating-point numbers."""
+  # Flush subnormals at entry so any subnormal input becomes ±0.0.
+  x = _flush_subnormals(x)
+  dtype = dtypes.dtype(x)
+  info = dtypes.finfo(dtype)
+  uint_type = _UINT_DTYPES[info.bits]
 
-  x = m * (2 ** e.astype(m.dtype))
-  return _where(isinf(x1) | (x1 == 0), x1, x)
+  # Bitcast float to unsigned integer to inspect IEEE 754 fields:
+  # [sign (1 bit) | biased exponent (nexp bits) | mantissa (nmant bits)]
+  u = lax.bitcast_convert_type(x, uint_type)
+  exp_mask = uint_type((1 << info.nexp) - 1)
+  mant_mask = uint_type((1 << info.nmant) - 1)
+  sign_mask = uint_type(1 << (info.bits - 1))
+  bias = info.maxexp - 1
+
+  sign = u & sign_mask
+  exp = (u >> uint_type(info.nmant)) & exp_mask
+  mant = u & mant_mask
+
+  # After _flush_subnormals, exp == 0 indicates ±0.0 and exp == exp_mask
+  # indicates ±inf or NaN.
+  is_zero_or_sub = lax.eq(exp, uint_type(0))
+  is_inf_or_nan = lax.eq(exp, exp_mask)
+
+  # Replace exp with (bias - 1) so |m| lies in [0.5, 1.0).
+  m_norm_bits = sign | (uint_type(bias - 1) << uint_type(info.nmant)) | mant
+  m_bits = lax.select(
+      is_inf_or_nan,
+      u,  # Preserve ±inf and NaN payloads
+      lax.select(is_zero_or_sub, sign, m_norm_bits),  # ±0.0 -> ±0.0
+  )
+  # The remaining power of 2 is e = (exp - bias) + 1 = exp - (bias - 1).
+  e = lax.select(
+      is_inf_or_nan | is_zero_or_sub,
+      lax.full_like(u, 0, dtype=np.int32),  # 0 for ±0.0, ±inf, NaN
+      lax.convert_element_type(exp, np.int32) - np.int32(bias - 1),
+  )
+  return lax.bitcast_convert_type(m_bits, dtype), e
+
+
+class Frexp(HiPrim):
+  x_aval: core.ShapedArray
+
+  def __init__(self, x_aval: core.ShapedArray):
+    self.in_avals = (x_aval,)
+    self.out_aval = (
+        x_aval.update(weak_type=False),
+        core.ShapedArray(x_aval.shape, np.dtype(np.int32), weak_type=False),
+    )
+    self.params = dict(x_aval=x_aval)
+    super().__init__()
+
+  def expand(self, x):  # pyrefly: ignore[bad-override]
+    return _frexp_impl(x)
+
+  def jvp(self, primals, tangents):
+    x, = primals
+    x_dot, = tangents
+    m, e = self(x)
+    m_aval, e_aval = self.out_aval
+    m_dot = (
+        ad_util.Zero(m_aval.to_tangent_aval())
+        if isinstance(x_dot, ad_util.Zero)
+        else ldexp(x_dot, -e)
+    )
+    return (m, e), (m_dot, ad_util.Zero(e_aval.to_tangent_aval()))
+
+  lin, linearized = linearize_from_jvp
+  vjp_fwd, vjp_bwd_retval = vjp_from_jvp
+
+  def batch(self, axis_data, args, dims):
+    del axis_data
+    x, = args
+    d, = dims
+    return Frexp(core.typeof(x))(x), (d, d)
 
 
 @export
@@ -3131,6 +3329,8 @@ def frexp(x: ArrayLike, /) -> tuple[Array, Array]:
   """Split floating point values into mantissa and twos exponent.
 
   JAX implementation of :func:`numpy.frexp`.
+
+  Note that subnormal inputs are flushed to signed zero.
 
   Args:
     x: real-valued array
@@ -3162,34 +3362,8 @@ def frexp(x: ArrayLike, /) -> tuple[Array, Array]:
   x, = promote_dtypes_inexact(x)
   if dtypes.issubdtype(x.dtype, np.complexfloating):
     raise TypeError("frexp does not support complex-valued inputs")
-  return _frexp(x)
-
-@custom_jvp
-def _frexp(x):
-  dtype = dtypes.dtype(x)
-  info = dtypes.finfo(dtype)
-  mask = (1 << info.nexp) - 1
-  bias = 1 - info.minexp
-
-  x1, x2 = _normalize_float(x)
-  x2 += ((x1 >> info.nmant) & mask) - bias + 1
-  x1 &= ~(mask << info.nmant)
-  x1 |= (bias - 1) << info.nmant
-  x1 = lax.bitcast_convert_type(x1, dtype)
-
-  cond = isinf(x) | isnan(x) | (x == 0)
-  x2 = _where(cond, lax._zeros(x2), x2)
-  return _where(cond, x, x1), lax.convert_element_type(x2, np.int32)
-
-
-@_frexp.defjvp
-def _frexp_jvp(primals, tangents):
-  x, = primals
-  t, = tangents
-  m, e = frexp(x)
-  mdot = t * exp2(-e.astype(t.dtype))
-  edot = lax.full_like(e, fill_value=0, dtype=dtypes.float0)
-  return (m, e), (mdot, edot)
+  x = lax._convert_element_type(x, x.dtype, weak_type=False)
+  return Frexp(core.typeof(x))(x)
 
 
 @export

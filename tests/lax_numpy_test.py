@@ -49,6 +49,7 @@ from jax._src import core
 from jax._src import dtypes
 from jax._src import test_util as jtu
 from jax._src.lax import lax as lax_internal
+from jax._src.numpy import ufuncs as jnp_ufuncs
 from jax._src.util import safe_zip, tuple_update
 
 config.parse_flags_with_absl()
@@ -2551,6 +2552,118 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     self._CheckAgainstNumpy(np_frexp, jnp.frexp, args_maker,
                             check_dtypes=np.issubdtype(dtype, np.inexact))
     self._CompileAndCheck(jnp.frexp, args_maker)
+
+  def _np_ftz(self, x):
+    info = dtypes.finfo(x.dtype)
+    with jtu.ignore_warning(category=RuntimeWarning), np.errstate(all="ignore"):
+      zero = np.copysign(np.float32(0.0), x.astype(np.float32)).astype(x.dtype)
+      return np.where(np.abs(x) < info.tiny, zero, x)
+
+  @parameterized.parameters(*float_dtypes, jnp.float8_e5m2)
+  @jtu.ignore_warning(category=RuntimeWarning)
+  def testFlushSubnormals(self, dtype):
+    if dtype == np.float64 and not config.enable_x64.value:
+      self.skipTest("Only run float64 testcase when float64 is enabled.")
+    info = dtypes.finfo(dtype)
+    x = self._sample_float_inputs(dtype)
+    out = np.asarray(jax.jit(jnp_ufuncs._flush_subnormals)(x))
+    expected = self._np_ftz(x)
+    not_nan = ~np.isnan(expected)
+    uint_dtype = f"uint{info.bits}"
+    self.assertArraysEqual(
+        out[not_nan].view(uint_dtype), expected[not_nan].view(uint_dtype)
+    )
+    self.assertTrue(np.all(np.isnan(out[~not_nan])))
+
+  def _sample_float_inputs(self, dtype):
+    info = dtypes.finfo(dtype)
+    if info.bits <= 16:
+      return np.arange(1 << info.bits, dtype=f"uint{info.bits}").view(dtype)
+    tiny = info.tiny
+    return np.array([
+        0.0, -0.0, tiny * 0.25, -tiny * 0.25, tiny, -tiny,
+        0.5, -0.5, 1.0, -1.5, 3.14159, info.max, -info.max,
+        np.inf, -np.inf, np.nan,
+    ], dtype=dtype)
+
+  @parameterized.parameters(*float_dtypes, jnp.float8_e5m2)
+  @jtu.ignore_warning(category=RuntimeWarning)
+  def testFrexpBitExact(self, dtype):
+    if dtype == np.float64 and not config.enable_x64.value:
+      self.skipTest("Only run float64 testcase when float64 is enabled.")
+    info = dtypes.finfo(dtype)
+    x = self._sample_float_inputs(dtype)
+    m_jax, e_jax = jax.jit(jnp.frexp)(x)
+
+    x_ftz = self._np_ftz(x)
+    work_dtype = (
+        np.float32 if dtype in (jnp.bfloat16, jnp.float8_e5m2) else dtype
+    )
+    with np.errstate(all="ignore"):
+      m_np, e_np = np.frexp(x_ftz.astype(work_dtype))
+      m_np = m_np.astype(dtype)
+
+    not_nan = ~np.isnan(m_np)
+    uint_dtype = f"uint{info.bits}"
+    self.assertArraysEqual(
+        m_jax[not_nan].view(uint_dtype), m_np[not_nan].view(uint_dtype)
+    )
+    self.assertTrue(np.all(np.isnan(m_jax[~not_nan])))
+    self.assertArraysEqual(e_jax, e_np.astype(np.int32))
+
+  @parameterized.parameters(*float_dtypes, jnp.float8_e5m2)
+  @jtu.ignore_warning(category=RuntimeWarning)
+  def testLdexpBitExact(self, dtype):
+    if dtype == np.float64 and not config.enable_x64.value:
+      self.skipTest("Only run float64 testcase when float64 is enabled.")
+    info = dtypes.finfo(dtype)
+    x = self._sample_float_inputs(dtype)
+    shifts = np.array(
+        [-3000, -300, -35, -15, -1, 0, 1, 15, 35, 300, 3000], dtype=np.int32
+    )
+    x_grid, n_grid = np.meshgrid(x, shifts, indexing="ij")
+    out_jax = np.asarray(jax.jit(jnp.ldexp)(x_grid, n_grid))
+
+    x_ftz = self._np_ftz(x_grid)
+    with np.errstate(all="ignore"):
+      val_f64 = np.ldexp(x_ftz.astype(np.float64), n_grid)
+      zero_f64 = np.copysign(0.0, val_f64)
+      out_np = np.where(
+          np.abs(val_f64) < float(info.tiny), zero_f64, val_f64
+      ).astype(dtype)
+
+    not_nan = ~np.isnan(out_np)
+    uint_dtype = f"uint{info.bits}"
+    self.assertArraysEqual(
+        out_jax[not_nan].view(uint_dtype), out_np[not_nan].view(uint_dtype)
+    )
+    self.assertTrue(np.all(np.isnan(out_jax[~not_nan])))
+
+    # Verify boolean, narrow, and wide integer exponent dtypes.
+    for exp_dtype in [
+        np.bool_, np.int8, np.int16, np.int32, np.int64,
+        np.uint8, np.uint16, np.uint32, np.uint64,
+    ]:
+      n_val = exp_dtype(1 if exp_dtype == np.bool_ else 3)
+      expected = np.array(3.0 if exp_dtype == np.bool_ else 12.0, dtype=dtype)
+      res = jax.jit(jnp.ldexp)(np.array(1.5, dtype=dtype), n_val)
+      self.assertArraysEqual(res, expected)
+
+    with self.assertRaises(ValueError):
+      jnp.ldexp(np.array(1.0, dtype=dtype), 1.0)
+
+    x_b = jnp.array([[1.5, 2.0], [3.0, 4.0]], dtype=dtype)
+    n_b = jnp.array([[1, 2], [3, 4]], dtype=jnp.int32)
+    for in_axes, expected in [
+        ((0, 0), jnp.ldexp(x_b, n_b)),
+        ((0, None), jnp.ldexp(x_b, n_b[0:1])),
+        ((None, 0), jnp.ldexp(x_b[0:1], n_b)),
+        ((1, 0), jnp.ldexp(x_b.T, n_b)),
+    ]:
+      self.assertAllClose(jax.vmap(jnp.ldexp, in_axes=in_axes)(
+          x_b if in_axes[0] is not None else x_b[0],
+          n_b if in_axes[1] is not None else n_b[0],
+      ), expected)
 
   @jtu.sample_product(
     [dict(shape=shape, axis1=axis1, axis2=axis2)
@@ -6632,7 +6745,24 @@ class NumpyGradTests(jtu.JaxTestCase):
   def testGradLdexp(self, n, dtype):
     rng = jtu.rand_default(self.rng())
     x = rng((10,), dtype)
-    check_grads(lambda x: jnp.ldexp(x, n), (x,), 1)
+    check_grads(lambda x: jnp.ldexp(x, n), (x,), 2, ["fwd", "rev"])
+    n_arr = jnp.full((10,), n, dtype=jnp.int32)
+    check_grads(lambda x: jnp.ldexp(x, n_arr), (x,), 2, ["fwd", "rev"])
+    _, f_vjp = jax.vjp(jnp.ldexp, x, n_arr)
+    x_bar, n_bar = f_vjp(jnp.ones_like(x))
+    self.assertAllClose(x_bar, jnp.full_like(x, 2.0 ** n))
+    self.assertEqual(n_bar.dtype, dtypes.float0)
+
+  @parameterized.parameters(jnp.float32, jnp.float64)
+  def testGradLdexpZero(self, dtype):
+    if dtype == jnp.float64 and not config.enable_x64.value:
+      self.skipTest("Only run float64 testcase when float64 is enabled.")
+    # Derivative of x * 2^n at x = 0.0 must be 2^n (previously returned 1.0).
+    for n in [-3, 0, 3, 10]:
+      g = jax.grad(lambda x: jnp.ldexp(x, n))(dtype(0.0))
+      expected = dtype(2.0 ** n)
+      self.assertEqual(g, expected)
+      check_grads(lambda x: jnp.ldexp(x, n), (dtype(0.0),), 2, ["fwd", "rev"])
 
   @jtu.sample_product(
     n=range(-4, 5),
@@ -6641,7 +6771,10 @@ class NumpyGradTests(jtu.JaxTestCase):
   def testGradFrexp(self, n, dtype):
     rng = jtu.rand_default(self.rng())
     x = rng((10,), dtype) * 2 ** n
-    check_grads(lambda x: jnp.frexp(x)[0], (x,), 1)
+    check_grads(lambda x: jnp.frexp(x)[0], (x,), 2, ["fwd", "rev"])
+    (m, e), f_vjp = jax.vjp(jnp.frexp, x)
+    x_bar, = f_vjp((jnp.ones_like(m), jnp.zeros_like(e, dtype=dtypes.float0)))
+    self.assertAllClose(x_bar, jnp.ldexp(jnp.ones_like(m), -e))
 
 
 class NumpySignaturesTest(jtu.JaxTestCase):
